@@ -12,6 +12,10 @@ description = "Encrypted SQLite storage with platform keychain integration"
 name = "marty_secure_storage"
 crate-type = ["rlib"]
 
+[features]
+default = []
+sqlcipher = ["rusqlite/bundled-sqlcipher"]
+
 [dependencies]
 # Database
 rusqlite = { workspace = true }
@@ -23,6 +27,8 @@ directories = { workspace = true }
 # Crypto
 blake3 = { workspace = true }
 rand = { workspace = true }
+aes-gcm = { workspace = true }
+base64 = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -30,9 +36,20 @@ serde_json = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+
+# Time
+chrono = { workspace = true }
 
 # UUID
 uuid = { workspace = true }
 
+# Encoding
+hex = "0.4"
+
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true }
