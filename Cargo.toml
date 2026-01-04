@@ -1,0 +1,116 @@
+[workspace]
+members = ["marty-crypto", "marty-verification", "marty-secure-storage"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Marty Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-org/marty-core"
+rust-version = "1.75"
+
+[workspace.dependencies]
+# Crypto and certificates
+x509-cert = { version = "0.2", features = ["pem", "builder"] }
+der = { version = "0.7", features = ["pem", "derive"] }
+const-oid = "0.9"
+sha1 = { version = "0.10", features = ["oid"] }
+sha2 = "0.10"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "ecdh"] }
+p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "ecdh"] }
+p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "arithmetic"] }
+ecdsa = "0.16"
+elliptic-curve = "0.13"
+pem-rfc7468 = "0.7"
+signature = "2.0"
+
+# RSA support
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+
+# PKCS standards
+pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
+pkcs5 = { version = "0.7", features = ["pbes2"] }
+spki = { version = "0.7", features = ["pem"] }
+
+# CMS/CRL/OCSP (PKCS#7, X.509 extensions)
+cms = "0.2"
+x509-ocsp = "0.2"
+
+# Symmetric encryption
+aes-gcm = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+des = "0.8"
+
+# Key derivation
+hkdf = "0.12"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+
+# Additional crypto
+hmac = "0.12"
+cmac = "0.7"
+cipher = { version = "0.4", features = ["block-padding"] }
+
+# Ed25519 and X25519
+ed25519-dalek = { version = "2.1", features = ["rand_core", "pem"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+
+# Ed448 (for eMRTD Active Authentication)
+ed448-goldilocks-plus = "0.16"
+
+# PKCS#12 (for key/cert bundle parsing)
+p12 = "0.6"
+
+# Random number generation
+rand = "0.8"
+rand_core = "0.6"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ciborium = "0.2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Caching
+moka = { version = "0.12", features = ["future"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-error = "0.2"
+
+# Database (for marty-secure-storage)
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher"] }
+keyring = "3.6"
+directories = "5.0"
+blake3 = "1.5"
+
+# UUID
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+
+# Internal crates
+marty-crypto = { path = "marty-crypto" }
+marty-verification = { path = "marty-verification" }
+marty-secure-storage = { path = "marty-secure-storage" }
+
+# Test/dev dependencies
+rcgen = "0.13"
+tempfile = "3.14"
+proptest = "1.5"
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+
+[profile.dev]
+opt-level = 0
+debug = true

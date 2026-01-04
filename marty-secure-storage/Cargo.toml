@@ -1,0 +1,38 @@
+[package]
+name = "marty-secure-storage"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Encrypted SQLite storage with platform keychain integration"
+
+[lib]
+name = "marty_secure_storage"
+crate-type = ["rlib"]
+
+[dependencies]
+# Database
+rusqlite = { workspace = true }
+
+# Keychain
+keyring = { workspace = true }
+directories = { workspace = true }
+
+# Crypto
+blake3 = { workspace = true }
+rand = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# UUID
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

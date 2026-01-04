@@ -1,0 +1,42 @@
+[package]
+name = "marty-verification"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Trust chain verification for mDL (IACA) and eMRTD (CSCA)"
+
+[lib]
+name = "marty_verification"
+crate-type = ["rlib"]
+
+[features]
+default = ["iaca", "csca"]
+iaca = []           # AAMVA mDL verification
+csca = []           # ePassport/eMRTD verification
+aamva-client = ["reqwest", "tokio", "moka"]
+icao-client = ["reqwest", "tokio", "moka"]
+full = ["iaca", "csca", "aamva-client", "icao-client"]
+
+[dependencies]
+marty-crypto = { workspace = true }
+
+# Async runtime (optional for PKD clients)
+tokio = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+moka = { workspace = true, optional = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+ciborium = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
