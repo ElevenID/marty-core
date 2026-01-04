@@ -19,7 +19,8 @@ csca = []           # ePassport/eMRTD verification
 python = ["pyo3"]   # Python bindings
 aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka"]
-full = ["iaca", "csca", "aamva-client", "icao-client"]
+serde = []
+full = ["iaca", "csca", "aamva-client", "icao-client", "serde"]
 
 [dependencies]
 # Internal crate
