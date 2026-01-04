@@ -16,27 +16,71 @@ crate-type = ["rlib"]
 default = ["iaca", "csca"]
 iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
+python = ["pyo3"]   # Python bindings
 aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka"]
 full = ["iaca", "csca", "aamva-client", "icao-client"]
 
 [dependencies]
+# Internal crate
 marty-crypto = { workspace = true }
 
-# Async runtime (optional for PKD clients)
-tokio = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }
-moka = { workspace = true, optional = true }
+# Re-export crypto types
+x509-cert = { workspace = true }
+der = { workspace = true }
+const-oid = { workspace = true }
+spki = { workspace = true }
+pkcs8 = { workspace = true }
+pem-rfc7468 = { workspace = true }
+cms = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+p256 = { workspace = true }
+p384 = { workspace = true }
+p521 = { workspace = true }
+elliptic-curve = { workspace = true }
+rand = { workspace = true }
+rsa = { workspace = true }
+signature = { workspace = true }
+hmac = { workspace = true }
+ecdsa = { workspace = true }
+ed25519-dalek = { workspace = true }
+
+# SSI
+ssi = { version = "0.12.0", features = ["w3c", "ed25519", "secp256r1"] }
+bs58 = "0.4.0"
+iref = "3.2.2"
+futures = "0.3"
+flate2 = "1.0"
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 ciborium = { workspace = true }
+base64 = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tracing-error = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Optional async dependencies
+tokio = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+moka = { workspace = true, optional = true }
+
+# Optional Python bindings
+pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"], optional = true }
+
+# mDoc/mDL support
+isomdl = "0.2.0"
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true }
+rcgen = { workspace = true }
