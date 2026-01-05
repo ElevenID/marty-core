@@ -1,0 +1,70 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "marty-biometrics"
+dynamic = ["version"]
+description = "Biometric verification for the Marty ecosystem"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.11"
+authors = [
+    { name = "Marty Team" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Typing :: Typed",
+]
+keywords = ["biometrics", "face-verification", "liveness", "identity", "security"]
+
+dependencies = []
+
+[project.optional-dependencies]
+ffi = []  # The Rust extension is built-in when using maturin
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "mypy>=1.8",
+    "ruff>=0.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/ElevenID/marty-core"
+Documentation = "https://github.com/ElevenID/marty-core/tree/main/marty-biometrics#readme"
+Repository = "https://github.com/ElevenID/marty-core.git"
+Issues = "https://github.com/ElevenID/marty-core/issues"
+
+[tool.maturin]
+# Build the Python module from Cargo.toml
+python-source = "python"
+module-name = "marty_biometrics._marty_biometrics"
+features = ["python"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

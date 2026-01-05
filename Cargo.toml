@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-crypto", "marty-verification", "marty-secure-storage"]
+members = ["marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics"]
 resolver = "2"
 
 [workspace.package]
@@ -100,6 +100,7 @@ base64 = "0.22"
 marty-crypto = { path = "marty-crypto" }
 marty-verification = { path = "marty-verification" }
 marty-secure-storage = { path = "marty-secure-storage" }
+marty-biometrics = { path = "marty-biometrics" }
 
 # Test/dev dependencies
 rcgen = "0.13"
