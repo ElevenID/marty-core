@@ -103,9 +103,8 @@ impl Ed25519VerifyingKey {
             .try_into()
             .map_err(|_| CryptoError::internal("Invalid public key length".to_string()))?;
 
-        let key = VerifyingKey::from_bytes(&bytes_array).map_err(|e| {
-            CryptoError::internal(format!("Invalid Ed25519 public key: {}", e))
-        })?;
+        let key = VerifyingKey::from_bytes(&bytes_array)
+            .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 public key: {}", e)))?;
 
         Ok(Self { key })
     }
@@ -216,14 +215,12 @@ pub fn verify_ed25519_spki(
         let bytes_array: [u8; PUBLIC_KEY_LENGTH] = public_key_der
             .try_into()
             .map_err(|_| CryptoError::internal("Invalid public key length".to_string()))?;
-        VerifyingKey::from_bytes(&bytes_array).map_err(|e| {
-            CryptoError::internal(format!("Invalid Ed25519 public key: {}", e))
-        })?
+        VerifyingKey::from_bytes(&bytes_array)
+            .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 public key: {}", e)))?
     } else {
         // Try SPKI DER format
-        VerifyingKey::from_public_key_der(public_key_der).map_err(|e| {
-            CryptoError::internal(format!("Invalid Ed25519 SPKI public key: {}", e))
-        })?
+        VerifyingKey::from_public_key_der(public_key_der)
+            .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 SPKI public key: {}", e)))?
     };
 
     if signature.len() != SIGNATURE_LENGTH {

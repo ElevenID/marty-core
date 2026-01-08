@@ -710,9 +710,7 @@ fn get_schema_version(conn: &Connection) -> Result<i32, StorageError> {
             |row| row.get(0),
         )
         .optional()?;
-    Ok(version
-        .and_then(|v| v.parse::<i32>().ok())
-        .unwrap_or(0))
+    Ok(version.and_then(|v| v.parse::<i32>().ok()).unwrap_or(0))
 }
 
 fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), StorageError> {

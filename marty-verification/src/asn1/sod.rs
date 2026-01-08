@@ -12,8 +12,8 @@ use cms::signed_data::SignedData;
 use der::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use marty_crypto::HashAlgorithm;
 use crate::{VerificationError, VerificationResult};
+use marty_crypto::HashAlgorithm;
 
 /// Parsed Document Security Object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,12 +356,8 @@ pub fn verify_sod_signature(sod_der: &[u8]) -> VerificationResult<bool> {
 
         let signature = signer_info.signature.as_bytes();
 
-        let valid = marty_crypto::verify_signature(
-            algorithm,
-            &public_key_der,
-            &data_to_verify,
-            signature,
-        )?;
+        let valid =
+            marty_crypto::verify_signature(algorithm, &public_key_der, &data_to_verify, signature)?;
 
         if valid {
             return Ok(true);

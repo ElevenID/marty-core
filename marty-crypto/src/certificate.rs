@@ -24,9 +24,8 @@ pub struct CertificateInfo {
 
 /// Load a certificate from PEM-encoded data.
 pub fn load_certificate_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
-    let cert = Certificate::from_pem(pem_data).map_err(|e| {
-        CryptoError::pem_error(format!("Failed to parse PEM certificate: {}", e))
-    })?;
+    let cert = Certificate::from_pem(pem_data)
+        .map_err(|e| CryptoError::pem_error(format!("Failed to parse PEM certificate: {}", e)))?;
 
     cert.to_der()
         .map_err(|e| CryptoError::der_error(format!("Failed to encode certificate: {}", e)))
@@ -34,9 +33,8 @@ pub fn load_certificate_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
 
 /// Load a certificate from DER-encoded data and validate it.
 pub fn load_certificate_der(der_data: &[u8]) -> CryptoResult<Certificate> {
-    Certificate::from_der(der_data).map_err(|e| {
-        CryptoError::der_error(format!("Failed to parse DER certificate: {}", e))
-    })
+    Certificate::from_der(der_data)
+        .map_err(|e| CryptoError::der_error(format!("Failed to parse DER certificate: {}", e)))
 }
 
 /// Extract information from a DER-encoded certificate.
@@ -271,10 +269,7 @@ fn format_x509_time(time: &x509_cert::time::Time) -> String {
 }
 
 /// Verify that a certificate was signed by another certificate (issuer).
-pub fn verify_certificate_signature(
-    cert_der: &[u8],
-    issuer_der: &[u8],
-) -> CryptoResult<bool> {
+pub fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -> CryptoResult<bool> {
     let cert = load_certificate_der(cert_der)?;
     let issuer = load_certificate_der(issuer_der)?;
 

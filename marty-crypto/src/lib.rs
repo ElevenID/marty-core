@@ -260,7 +260,8 @@ pub fn verify_signature(
             ed25519::verify_ed25519_spki(public_key_der, message, signature)
         }
         SignatureAlgorithm::Ed448 => ed448::verify_ed448_spki(public_key_der, message, signature),
-        SignatureAlgorithm::RsaPkcs1Sha1 => {
+        SignatureAlgorithm::RsaPkcs1Sha1 =>
+        {
             #[allow(deprecated)]
             rsa::verify_pkcs1_sha1(public_key_der, message, signature)
         }

@@ -121,9 +121,8 @@ pub fn iso9796_verify(
     hash_alg: Iso9796HashAlgorithm,
 ) -> CryptoResult<bool> {
     // Parse the RSA public key
-    let public_key = RsaPublicKey::from_public_key_der(public_key_der).map_err(|e| {
-        CryptoError::crypto_error(format!("Failed to parse RSA public key: {}", e))
-    })?;
+    let public_key = RsaPublicKey::from_public_key_der(public_key_der)
+        .map_err(|e| CryptoError::crypto_error(format!("Failed to parse RSA public key: {}", e)))?;
 
     match scheme {
         Iso9796Scheme::Scheme1 => iso9796_scheme1_verify(&public_key, message, signature),
@@ -295,9 +294,8 @@ pub fn iso9796_recover_message(
     scheme: Iso9796Scheme,
     hash_alg: Option<Iso9796HashAlgorithm>,
 ) -> CryptoResult<Vec<u8>> {
-    let public_key = RsaPublicKey::from_public_key_der(public_key_der).map_err(|e| {
-        CryptoError::crypto_error(format!("Failed to parse RSA public key: {}", e))
-    })?;
+    let public_key = RsaPublicKey::from_public_key_der(public_key_der)
+        .map_err(|e| CryptoError::crypto_error(format!("Failed to parse RSA public key: {}", e)))?;
 
     let k = public_key.n().bits().div_ceil(8);
 

@@ -6,22 +6,27 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::error::{codes as error_codes, VerificationError, VerificationResult};
+use crate::verification::ChainValidator;
 use base64::{engine::general_purpose, Engine as _};
 use const_oid::ObjectIdentifier;
 use der::Decode;
+use p256::ecdsa::{
+    signature::Signer, signature::Verifier, Signature as P256Signature,
+    SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey,
+};
+use p256::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
+use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+use p384::ecdsa::{
+    Signature as P384Signature, SigningKey as P384SigningKey, VerifyingKey as P384VerifyingKey,
+};
+use p384::{PublicKey as P384PublicKey, SecretKey as P384SecretKey};
 use pkcs8::PrivateKeyInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use p256::ecdsa::{signature::Signer, signature::Verifier, Signature as P256Signature, SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey};
-use p256::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
-use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
-use p384::ecdsa::{Signature as P384Signature, SigningKey as P384SigningKey, VerifyingKey as P384VerifyingKey};
-use p384::{PublicKey as P384PublicKey, SecretKey as P384SecretKey};
 use spki::SubjectPublicKeyInfoRef;
 use x509_cert::Certificate;
-use crate::error::{codes as error_codes, VerificationError, VerificationResult};
-use crate::verification::ChainValidator;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DataGroup {
@@ -201,7 +206,10 @@ fn parse_iso_to_epoch(s: &str) -> Option<u64> {
                 let day: u32 = date_parts[2].parse().ok()?;
                 let hour: u32 = time_parts[0].parse().ok()?;
                 let minute: u32 = time_parts[1].parse().ok()?;
-                let second: u32 = time_parts.get(2).and_then(|s| s.split('.').next()?.parse().ok()).unwrap_or(0);
+                let second: u32 = time_parts
+                    .get(2)
+                    .and_then(|s| s.split('.').next()?.parse().ok())
+                    .unwrap_or(0);
 
                 let days = (year - 1970) as i64 * 365
                     + ((year - 1969) / 4) as i64
@@ -224,7 +232,11 @@ fn days_before_month(month: u32, leap: bool) -> u32 {
     const DAYS: [u32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     const DAYS_LEAP: [u32; 12] = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
     let idx = (month.saturating_sub(1)) as usize;
-    if leap { DAYS_LEAP.get(idx).copied().unwrap_or(0) } else { DAYS.get(idx).copied().unwrap_or(0) }
+    if leap {
+        DAYS_LEAP.get(idx).copied().unwrap_or(0)
+    } else {
+        DAYS.get(idx).copied().unwrap_or(0)
+    }
 }
 
 fn b64_encode(bytes: &[u8]) -> String {
@@ -306,7 +318,9 @@ fn decode_pem_body(pem: &str) -> VerificationResult<Vec<u8>> {
         b64.push_str(line);
     }
     if b64.is_empty() {
-        return Err(VerificationError::dtc_invalid("PEM payload missing".to_string()));
+        return Err(VerificationError::dtc_invalid(
+            "PEM payload missing".to_string(),
+        ));
     }
     general_purpose::STANDARD
         .decode(b64.as_bytes())
@@ -379,21 +393,21 @@ fn parse_p256_signing_key(pem: &str) -> VerificationResult<P256SigningKey> {
     if let Ok(key) = pkcs8 {
         return Ok(key);
     }
-    let pkcs8_err = pkcs8.err().unwrap_or_else(|| "unknown PKCS#8 error".to_string());
-    let der = decode_pem_body(pem)
-        .map_err(|e| {
-            VerificationError::dtc_invalid(format!(
-                "PKCS#8 parse failed: {}; SEC1 decode failed: {}",
-                pkcs8_err, e
-            ))
-        })?;
-    let secret = P256SecretKey::from_sec1_der(&der)
-        .map_err(|e| {
-            VerificationError::dtc_invalid(format!(
-                "PKCS#8 parse failed: {}; SEC1 parse failed: {}",
-                pkcs8_err, e
-            ))
-        })?;
+    let pkcs8_err = pkcs8
+        .err()
+        .unwrap_or_else(|| "unknown PKCS#8 error".to_string());
+    let der = decode_pem_body(pem).map_err(|e| {
+        VerificationError::dtc_invalid(format!(
+            "PKCS#8 parse failed: {}; SEC1 decode failed: {}",
+            pkcs8_err, e
+        ))
+    })?;
+    let secret = P256SecretKey::from_sec1_der(&der).map_err(|e| {
+        VerificationError::dtc_invalid(format!(
+            "PKCS#8 parse failed: {}; SEC1 parse failed: {}",
+            pkcs8_err, e
+        ))
+    })?;
     Ok(P256SigningKey::from(secret))
 }
 
@@ -402,21 +416,21 @@ fn parse_p384_signing_key(pem: &str) -> VerificationResult<P384SigningKey> {
     if let Ok(key) = pkcs8 {
         return Ok(key);
     }
-    let pkcs8_err = pkcs8.err().unwrap_or_else(|| "unknown PKCS#8 error".to_string());
-    let der = decode_pem_body(pem)
-        .map_err(|e| {
-            VerificationError::dtc_invalid(format!(
-                "PKCS#8 parse failed: {}; SEC1 decode failed: {}",
-                pkcs8_err, e
-            ))
-        })?;
-    let secret = P384SecretKey::from_sec1_der(&der)
-        .map_err(|e| {
-            VerificationError::dtc_invalid(format!(
-                "PKCS#8 parse failed: {}; SEC1 parse failed: {}",
-                pkcs8_err, e
-            ))
-        })?;
+    let pkcs8_err = pkcs8
+        .err()
+        .unwrap_or_else(|| "unknown PKCS#8 error".to_string());
+    let der = decode_pem_body(pem).map_err(|e| {
+        VerificationError::dtc_invalid(format!(
+            "PKCS#8 parse failed: {}; SEC1 decode failed: {}",
+            pkcs8_err, e
+        ))
+    })?;
+    let secret = P384SecretKey::from_sec1_der(&der).map_err(|e| {
+        VerificationError::dtc_invalid(format!(
+            "PKCS#8 parse failed: {}; SEC1 parse failed: {}",
+            pkcs8_err, e
+        ))
+    })?;
     Ok(P384SigningKey::from(secret))
 }
 
@@ -455,33 +469,22 @@ fn parse_p384_verifying_key(pem: &str) -> VerificationResult<P384VerifyingKey> {
     Ok(P384VerifyingKey::from(public_key))
 }
 
-fn verify_ecdsa(
-    payload: &[u8],
-    sig_b64: &str,
-    public_key_pem: &str,
-) -> VerificationResult<bool> {
-    let sig_bytes = b64_decode(sig_b64).ok_or_else(|| {
-        VerificationError::dtc_invalid("Invalid signature base64".to_string())
-    })?;
+fn verify_ecdsa(payload: &[u8], sig_b64: &str, public_key_pem: &str) -> VerificationResult<bool> {
+    let sig_bytes = b64_decode(sig_b64)
+        .ok_or_else(|| VerificationError::dtc_invalid("Invalid signature base64".to_string()))?;
 
     match detect_curve_from_public_key_pem(public_key_pem)? {
         EcCurve::P256 => {
             let vk = parse_p256_verifying_key(public_key_pem)?;
             let sig = P256Signature::from_der(&sig_bytes).map_err(|e| {
-                VerificationError::dtc_signature_invalid(format!(
-                    "Invalid P-256 signature: {}",
-                    e
-                ))
+                VerificationError::dtc_signature_invalid(format!("Invalid P-256 signature: {}", e))
             })?;
             Ok(vk.verify(payload, &sig).is_ok())
         }
         EcCurve::P384 => {
             let vk = parse_p384_verifying_key(public_key_pem)?;
             let sig = P384Signature::from_der(&sig_bytes).map_err(|e| {
-                VerificationError::dtc_signature_invalid(format!(
-                    "Invalid P-384 signature: {}",
-                    e
-                ))
+                VerificationError::dtc_signature_invalid(format!("Invalid P-384 signature: {}", e))
             })?;
             Ok(vk.verify(payload, &sig).is_ok())
         }
@@ -498,8 +501,8 @@ fn public_key_bytes_from_pem(pem: &str) -> VerificationResult<Vec<u8>> {
 
 fn public_key_bytes_from_cert_pem(pem: &str) -> VerificationResult<Vec<u8>> {
     let der = decode_pem_body(pem)?;
-    let cert = Certificate::from_der(&der)
-        .map_err(|e| VerificationError::dtc_invalid(e.to_string()))?;
+    let cert =
+        Certificate::from_der(&der).map_err(|e| VerificationError::dtc_invalid(e.to_string()))?;
     Ok(cert
         .tbs_certificate
         .subject_public_key_info
@@ -568,9 +571,8 @@ fn record_check(
 }
 
 pub fn create_dtc_json(input: &str) -> VerificationResult<String> {
-    let record: DtcRecord = serde_json::from_str(input).map_err(|e| {
-        VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e))
-    })?;
+    let record: DtcRecord = serde_json::from_str(input)
+        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
     let norm = normalize_record(record);
     serde_json::to_string(&norm).map_err(|e| {
         VerificationError::dtc_invalid(format!("Failed to serialize DTC payload: {}", e))
@@ -579,9 +581,8 @@ pub fn create_dtc_json(input: &str) -> VerificationResult<String> {
 
 pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
     // Accept optional signing_key_pem and signer_public_key_pem in the JSON envelope
-    let value: Value = serde_json::from_str(input).map_err(|e| {
-        VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e))
-    })?;
+    let value: Value = serde_json::from_str(input)
+        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
     let signing_key = value
         .get("signing_key_pem")
         .and_then(|v| v.as_str())
@@ -592,9 +593,8 @@ pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
         .and_then(|v| v.as_str())
         .unwrap_or("rust-dtc");
 
-    let mut record: DtcRecord = serde_json::from_value(value.clone()).map_err(|e| {
-        VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e))
-    })?;
+    let mut record: DtcRecord = serde_json::from_value(value.clone())
+        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
     let norm = normalize_record(record.clone());
     let payload = canonical_payload(&norm)?;
     let sig_b64 = sign_ecdsa(&payload, &signing_key)?;
@@ -613,12 +613,10 @@ pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
 }
 
 pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
-    let value: Value = serde_json::from_str(input).map_err(|e| {
-        VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e))
-    })?;
-    let record: DtcRecord = serde_json::from_value(value.clone()).map_err(|e| {
-        VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e))
-    })?;
+    let value: Value = serde_json::from_str(input)
+        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
+    let record: DtcRecord = serde_json::from_value(value.clone())
+        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
     let norm = normalize_record(record.clone());
 
     let mut checks: Vec<Value> = Vec::new();
@@ -627,7 +625,11 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
     let mut is_valid = true;
     let signer_public_key_pem = value
         .get("signer_public_key_pem")
-        .or_else(|| value.get("signature_info").and_then(|s| s.get("signer_public_key_pem")))
+        .or_else(|| {
+            value
+                .get("signature_info")
+                .and_then(|s| s.get("signer_public_key_pem"))
+        })
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
@@ -730,7 +732,10 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
                     &mut error_codes_out,
                     "TemporalValidation",
                     false,
-                    Some(format!("DTC not yet valid (valid_from: {})", record.dtc_valid_from)),
+                    Some(format!(
+                        "DTC not yet valid (valid_from: {})",
+                        record.dtc_valid_from
+                    )),
                     Some(error_codes::DTC_NOT_YET_VALID),
                 );
             } else {
@@ -893,7 +898,11 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
                     "Type2Profile",
                     ok,
                     details,
-                    if ok { None } else { Some(error_codes::DTC_MISSING_FIELD) },
+                    if ok {
+                        None
+                    } else {
+                        Some(error_codes::DTC_MISSING_FIELD)
+                    },
                 );
             } else {
                 is_valid = false;
@@ -932,7 +941,11 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
                     "Type3Profile",
                     ok,
                     details,
-                    if ok { None } else { Some(error_codes::DTC_MISSING_FIELD) },
+                    if ok {
+                        None
+                    } else {
+                        Some(error_codes::DTC_MISSING_FIELD)
+                    },
                 );
             } else {
                 is_valid = false;
@@ -954,14 +967,23 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
     let trust_anchors: Vec<String> = value
         .get("trust_anchors_pem")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|x| x.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|x| x.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     let cert_chain: Vec<String> = value
         .get("certificate_chain_pem")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|s| s.as_str().map(|x| x.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(|x| x.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
-    if let (Some(pub_pem), Some(leaf_pem)) = (signer_public_key_pem.as_deref(), cert_chain.first()) {
+    if let (Some(pub_pem), Some(leaf_pem)) = (signer_public_key_pem.as_deref(), cert_chain.first())
+    {
         match (
             public_key_bytes_from_pem(pub_pem),
             public_key_bytes_from_cert_pem(leaf_pem),
@@ -1057,6 +1079,9 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
     });
 
     serde_json::to_string(&resp).map_err(|e| {
-        VerificationError::dtc_invalid(format!("Failed to serialize DTC verification result: {}", e))
+        VerificationError::dtc_invalid(format!(
+            "Failed to serialize DTC verification result: {}",
+            e
+        ))
     })
 }

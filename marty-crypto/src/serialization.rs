@@ -26,9 +26,8 @@ pub fn load_private_key_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
     // Try PKCS#8 format first
     if pem_data.contains("BEGIN PRIVATE KEY") {
         // Use SecretDocument for owned PKCS#8 private key
-        let (label, doc) = pem_rfc7468::decode_vec(pem_data.as_bytes()).map_err(|e| {
-            CryptoError::pem_error(format!("Failed to parse PKCS#8 PEM: {}", e))
-        })?;
+        let (label, doc) = pem_rfc7468::decode_vec(pem_data.as_bytes())
+            .map_err(|e| CryptoError::pem_error(format!("Failed to parse PKCS#8 PEM: {}", e)))?;
         if label != "PRIVATE KEY" {
             return Err(CryptoError::pem_error("Expected PRIVATE KEY label"));
         }
@@ -79,13 +78,12 @@ fn load_rsa_private_key_pkcs1_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
     use pkcs8::EncodePrivateKey;
     use rsa::pkcs1::DecodeRsaPrivateKey;
 
-    let key = rsa::RsaPrivateKey::from_pkcs1_pem(pem_data).map_err(|e| {
-        CryptoError::pem_error(format!("Failed to parse PKCS#1 RSA key: {}", e))
-    })?;
+    let key = rsa::RsaPrivateKey::from_pkcs1_pem(pem_data)
+        .map_err(|e| CryptoError::pem_error(format!("Failed to parse PKCS#1 RSA key: {}", e)))?;
 
-    let doc = key.to_pkcs8_der().map_err(|e| {
-        CryptoError::encoding_error(format!("Failed to convert to PKCS#8: {}", e))
-    })?;
+    let doc = key
+        .to_pkcs8_der()
+        .map_err(|e| CryptoError::encoding_error(format!("Failed to convert to PKCS#8: {}", e)))?;
 
     Ok(doc.as_bytes().to_vec())
 }
@@ -93,9 +91,8 @@ fn load_rsa_private_key_pkcs1_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
 /// Load a private key from DER format (PKCS#8).
 pub fn load_private_key_der(der_data: &[u8]) -> CryptoResult<Vec<u8>> {
     // Validate it's a valid PKCS#8 structure
-    let _info = pkcs8::PrivateKeyInfo::from_der(der_data).map_err(|e| {
-        CryptoError::der_error(format!("Failed to parse private key DER: {}", e))
-    })?;
+    let _info = pkcs8::PrivateKeyInfo::from_der(der_data)
+        .map_err(|e| CryptoError::der_error(format!("Failed to parse private key DER: {}", e)))?;
 
     Ok(der_data.to_vec())
 }
@@ -195,9 +192,8 @@ pub fn raw_private_key_to_pkcs8(raw_key: &[u8], key_type: &str) -> CryptoResult<
 pub fn raw_public_key_to_spki(raw_key: &[u8], key_type: &str) -> CryptoResult<Vec<u8>> {
     match key_type {
         "EC_P256" | "P256" | "secp256r1" => {
-            let point = p256::EncodedPoint::from_bytes(raw_key).map_err(|e| {
-                CryptoError::key_error(format!("Invalid P-256 public key: {}", e))
-            })?;
+            let point = p256::EncodedPoint::from_bytes(raw_key)
+                .map_err(|e| CryptoError::key_error(format!("Invalid P-256 public key: {}", e)))?;
             let public_key = p256::PublicKey::from_encoded_point(&point)
                 .into_option()
                 .ok_or_else(|| CryptoError::key_error("Invalid P-256 public key point"))?;
@@ -208,9 +204,8 @@ pub fn raw_public_key_to_spki(raw_key: &[u8], key_type: &str) -> CryptoResult<Ve
             Ok(doc.as_bytes().to_vec())
         }
         "EC_P384" | "P384" | "secp384r1" => {
-            let point = p384::EncodedPoint::from_bytes(raw_key).map_err(|e| {
-                CryptoError::key_error(format!("Invalid P-384 public key: {}", e))
-            })?;
+            let point = p384::EncodedPoint::from_bytes(raw_key)
+                .map_err(|e| CryptoError::key_error(format!("Invalid P-384 public key: {}", e)))?;
             let public_key = p384::PublicKey::from_encoded_point(&point)
                 .into_option()
                 .ok_or_else(|| CryptoError::key_error("Invalid P-384 public key point"))?;
@@ -243,16 +238,14 @@ pub fn pkcs8_to_raw_private_key(pkcs8_der: &[u8]) -> CryptoResult<(Vec<u8>, Stri
     match key_type.as_str() {
         "EC_P256" => {
             use pkcs8::DecodePrivateKey;
-            let secret = p256::SecretKey::from_pkcs8_der(pkcs8_der).map_err(|e| {
-                CryptoError::key_error(format!("Failed to parse P-256 key: {}", e))
-            })?;
+            let secret = p256::SecretKey::from_pkcs8_der(pkcs8_der)
+                .map_err(|e| CryptoError::key_error(format!("Failed to parse P-256 key: {}", e)))?;
             Ok((secret.to_bytes().to_vec(), key_type))
         }
         "EC_P384" => {
             use pkcs8::DecodePrivateKey;
-            let secret = p384::SecretKey::from_pkcs8_der(pkcs8_der).map_err(|e| {
-                CryptoError::key_error(format!("Failed to parse P-384 key: {}", e))
-            })?;
+            let secret = p384::SecretKey::from_pkcs8_der(pkcs8_der)
+                .map_err(|e| CryptoError::key_error(format!("Failed to parse P-384 key: {}", e)))?;
             Ok((secret.to_bytes().to_vec(), key_type))
         }
         "Ed25519" => {
@@ -268,9 +261,7 @@ pub fn pkcs8_to_raw_private_key(pkcs8_der: &[u8]) -> CryptoResult<(Vec<u8>, Stri
             } else if private_bytes.len() == 32 {
                 private_bytes
             } else {
-                return Err(CryptoError::key_error(
-                    "Invalid Ed25519 private key format",
-                ));
+                return Err(CryptoError::key_error("Invalid Ed25519 private key format"));
             };
             Ok((seed.to_vec(), key_type))
         }
@@ -301,21 +292,18 @@ pub fn spki_to_raw_public_key(spki_der: &[u8]) -> CryptoResult<(Vec<u8>, String)
 
 /// Load a public key from PEM format (SPKI).
 pub fn load_public_key_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
-    let info = SubjectPublicKeyInfoOwned::from_pem(pem_data).map_err(|e| {
-        CryptoError::pem_error(format!("Failed to parse public key PEM: {}", e))
-    })?;
+    let info = SubjectPublicKeyInfoOwned::from_pem(pem_data)
+        .map_err(|e| CryptoError::pem_error(format!("Failed to parse public key PEM: {}", e)))?;
 
-    info.to_der().map_err(|e| {
-        CryptoError::encoding_error(format!("Failed to encode public key: {}", e))
-    })
+    info.to_der()
+        .map_err(|e| CryptoError::encoding_error(format!("Failed to encode public key: {}", e)))
 }
 
 /// Load a public key from DER format (SPKI).
 pub fn load_public_key_der(der_data: &[u8]) -> CryptoResult<Vec<u8>> {
     // Validate it's a valid SPKI structure
-    let _info = SubjectPublicKeyInfoOwned::from_der(der_data).map_err(|e| {
-        CryptoError::der_error(format!("Failed to parse public key DER: {}", e))
-    })?;
+    let _info = SubjectPublicKeyInfoOwned::from_der(der_data)
+        .map_err(|e| CryptoError::der_error(format!("Failed to parse public key DER: {}", e)))?;
 
     Ok(der_data.to_vec())
 }
@@ -342,9 +330,8 @@ pub fn extract_public_key(private_key_der: &[u8]) -> CryptoResult<Vec<u8>> {
     match key_type.as_str() {
         "EC_P256" => {
             use pkcs8::DecodePrivateKey;
-            let secret = p256::SecretKey::from_pkcs8_der(private_key_der).map_err(|e| {
-                CryptoError::key_error(format!("Failed to parse P-256 key: {}", e))
-            })?;
+            let secret = p256::SecretKey::from_pkcs8_der(private_key_der)
+                .map_err(|e| CryptoError::key_error(format!("Failed to parse P-256 key: {}", e)))?;
             let public = secret.public_key();
             use pkcs8::EncodePublicKey;
             let doc = public.to_public_key_der().map_err(|e| {
@@ -354,9 +341,8 @@ pub fn extract_public_key(private_key_der: &[u8]) -> CryptoResult<Vec<u8>> {
         }
         "EC_P384" => {
             use pkcs8::DecodePrivateKey;
-            let secret = p384::SecretKey::from_pkcs8_der(private_key_der).map_err(|e| {
-                CryptoError::key_error(format!("Failed to parse P-384 key: {}", e))
-            })?;
+            let secret = p384::SecretKey::from_pkcs8_der(private_key_der)
+                .map_err(|e| CryptoError::key_error(format!("Failed to parse P-384 key: {}", e)))?;
             let public = secret.public_key();
             use pkcs8::EncodePublicKey;
             let doc = public.to_public_key_der().map_err(|e| {
@@ -366,9 +352,8 @@ pub fn extract_public_key(private_key_der: &[u8]) -> CryptoResult<Vec<u8>> {
         }
         "RSA" => {
             use pkcs8::DecodePrivateKey;
-            let private = rsa::RsaPrivateKey::from_pkcs8_der(private_key_der).map_err(|e| {
-                CryptoError::key_error(format!("Failed to parse RSA key: {}", e))
-            })?;
+            let private = rsa::RsaPrivateKey::from_pkcs8_der(private_key_der)
+                .map_err(|e| CryptoError::key_error(format!("Failed to parse RSA key: {}", e)))?;
             let public = rsa::RsaPublicKey::from(&private);
             use pkcs8::EncodePublicKey;
             let doc = public.to_public_key_der().map_err(|e| {
@@ -392,9 +377,7 @@ pub fn extract_public_key(private_key_der: &[u8]) -> CryptoResult<Vec<u8>> {
                 } else if private_bytes.len() == 32 {
                     private_bytes
                 } else {
-                    return Err(CryptoError::key_error(
-                        "Invalid Ed25519 private key format",
-                    ));
+                    return Err(CryptoError::key_error("Invalid Ed25519 private key format"));
                 };
 
                 let signing_key = ed25519_dalek::SigningKey::from_bytes(
@@ -563,9 +546,7 @@ mod tests {
     #[test]
     fn test_pem_roundtrip_private_key() {
         // Generate a P-256 key using our keygen
-        let generated =
-            crate::keygen::generate_keypair(crate::keygen::KeyType::EcdsaP256)
-                .unwrap();
+        let generated = crate::keygen::generate_keypair(crate::keygen::KeyType::EcdsaP256).unwrap();
 
         // The keygen returns GeneratedKey struct
         assert!(!generated.private_key.is_empty());
@@ -575,9 +556,7 @@ mod tests {
     #[test]
     fn test_detect_key_type() {
         // Generate keys and test detection
-        let generated =
-            crate::keygen::generate_keypair(crate::keygen::KeyType::EcdsaP256)
-                .unwrap();
+        let generated = crate::keygen::generate_keypair(crate::keygen::KeyType::EcdsaP256).unwrap();
 
         assert!(!generated.private_key.is_empty());
     }

@@ -111,7 +111,10 @@ impl CryptoError {
         Self::SignatureVerification(msg.into())
     }
 
-    pub fn invalid_signature_with_context(context: impl Into<String>, msg: impl Into<String>) -> Self {
+    pub fn invalid_signature_with_context(
+        context: impl Into<String>,
+        msg: impl Into<String>,
+    ) -> Self {
         Self::SignatureVerification(format!("{}: {}", context.into(), msg.into()))
     }
 

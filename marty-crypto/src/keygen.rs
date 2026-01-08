@@ -292,16 +292,16 @@ fn generate_rsa(bits: usize) -> CryptoResult<GeneratedKey> {
 
     // Serialize private key to PKCS#1 DER
     use rsa::pkcs1::EncodeRsaPrivateKey;
-    let private_der = private_key.to_pkcs1_der().map_err(|e| {
-        CryptoError::internal(format!("RSA private key encoding failed: {}", e))
-    })?;
+    let private_der = private_key
+        .to_pkcs1_der()
+        .map_err(|e| CryptoError::internal(format!("RSA private key encoding failed: {}", e)))?;
 
     // Serialize public key to PKCS#1 DER
     use rsa::pkcs1::EncodeRsaPublicKey;
     let public_key = private_key.to_public_key();
-    let public_der = public_key.to_pkcs1_der().map_err(|e| {
-        CryptoError::internal(format!("RSA public key encoding failed: {}", e))
-    })?;
+    let public_der = public_key
+        .to_pkcs1_der()
+        .map_err(|e| CryptoError::internal(format!("RSA public key encoding failed: {}", e)))?;
 
     let key_type = match bits {
         2048 => KeyType::Rsa2048,
@@ -335,9 +335,9 @@ pub fn generate_rsa_pem(bits: usize) -> CryptoResult<(String, String)> {
     })?;
 
     let public_key = private_key.to_public_key();
-    let public_pem = public_key.to_pkcs1_pem(LineEnding::LF).map_err(|e| {
-        CryptoError::internal(format!("RSA public key PEM encoding failed: {}", e))
-    })?;
+    let public_pem = public_key
+        .to_pkcs1_pem(LineEnding::LF)
+        .map_err(|e| CryptoError::internal(format!("RSA public key PEM encoding failed: {}", e)))?;
 
     Ok((private_pem.to_string(), public_pem))
 }

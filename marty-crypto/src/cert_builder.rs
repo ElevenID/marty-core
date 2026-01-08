@@ -64,9 +64,7 @@ use crate::{CryptoError, CryptoResult};
 /// Convert a Unix duration to x509_cert::time::Time.
 ///
 /// Uses GeneralizedTime for dates after 2049, UtcTime for earlier dates.
-fn duration_to_x509_time(
-    duration: std::time::Duration,
-) -> CryptoResult<x509_cert::time::Time> {
+fn duration_to_x509_time(duration: std::time::Duration) -> CryptoResult<x509_cert::time::Time> {
     use der::asn1::GeneralizedTime;
 
     let gt = GeneralizedTime::from_unix_duration(duration)
@@ -205,9 +203,7 @@ impl DistinguishedName {
             &der::asn1::PrintableString::new(&name_str)
                 .map_err(|e| CryptoError::internal(format!("Invalid name string: {}", e)))?
                 .to_der()
-                .map_err(|e| {
-                    CryptoError::internal(format!("Failed to encode name: {}", e))
-                })?,
+                .map_err(|e| CryptoError::internal(format!("Failed to encode name: {}", e)))?,
         )
         .map_err(|e| CryptoError::internal(format!("Failed to parse name: {}", e)))
     }
@@ -344,31 +340,23 @@ impl CertificateBuilderConfig {
         }
     }
 
-    fn build_self_signed_with_p256_key(
-        &self,
-        private_key_pem: &str,
-    ) -> CryptoResult<Vec<u8>> {
+    fn build_self_signed_with_p256_key(&self, private_key_pem: &str) -> CryptoResult<Vec<u8>> {
         use p256::pkcs8::DecodePrivateKey;
 
-        let signing_key = P256SigningKey::from_pkcs8_pem(private_key_pem).map_err(|e| {
-            CryptoError::internal(format!("Failed to parse P-256 key: {}", e))
-        })?;
+        let signing_key = P256SigningKey::from_pkcs8_pem(private_key_pem)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse P-256 key: {}", e)))?;
         let verifying_key = signing_key.verifying_key();
         let public_key_bytes = verifying_key.to_sec1_bytes().to_vec();
 
         self.build_certificate_with_ecdsa_p256(&signing_key, &public_key_bytes)
     }
 
-    fn build_self_signed_with_p384_key(
-        &self,
-        private_key_pem: &str,
-    ) -> CryptoResult<Vec<u8>> {
+    fn build_self_signed_with_p384_key(&self, private_key_pem: &str) -> CryptoResult<Vec<u8>> {
         use p384::ecdsa::SigningKey as P384SigningKey;
         use p384::pkcs8::DecodePrivateKey;
 
-        let signing_key = P384SigningKey::from_pkcs8_pem(private_key_pem).map_err(|e| {
-            CryptoError::internal(format!("Failed to parse P-384 key: {}", e))
-        })?;
+        let signing_key = P384SigningKey::from_pkcs8_pem(private_key_pem)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse P-384 key: {}", e)))?;
         let verifying_key = signing_key.verifying_key();
         let public_key_bytes = verifying_key.to_sec1_bytes().to_vec();
 
@@ -384,15 +372,11 @@ impl CertificateBuilderConfig {
         self.build_certificate_with_rsa(&private_key)
     }
 
-    fn build_self_signed_with_ed25519_key(
-        &self,
-        private_key_pem: &str,
-    ) -> CryptoResult<Vec<u8>> {
+    fn build_self_signed_with_ed25519_key(&self, private_key_pem: &str) -> CryptoResult<Vec<u8>> {
         use ed25519_dalek::pkcs8::DecodePrivateKey;
 
-        let signing_key = Ed25519SigningKey::from_pkcs8_pem(private_key_pem).map_err(|e| {
-            CryptoError::internal(format!("Failed to parse Ed25519 key: {}", e))
-        })?;
+        let signing_key = Ed25519SigningKey::from_pkcs8_pem(private_key_pem)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse Ed25519 key: {}", e)))?;
         let verifying_key = signing_key.verifying_key();
 
         self.build_certificate_with_ed25519(&signing_key, verifying_key.as_bytes())
@@ -490,9 +474,7 @@ impl CertificateBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Get public key SPKI
@@ -516,9 +498,7 @@ impl CertificateBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Get public key bytes
@@ -542,16 +522,13 @@ impl CertificateBuilderConfig {
         };
 
         // Generate RSA key pair
-        let private_key = RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| {
-            CryptoError::internal(format!("Failed to generate RSA key: {}", e))
-        })?;
+        let private_key = RsaPrivateKey::new(&mut OsRng, bits)
+            .map_err(|e| CryptoError::internal(format!("Failed to generate RSA key: {}", e)))?;
 
         // Encode private key to PEM
         let private_key_pem = private_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Build the certificate
@@ -610,9 +587,7 @@ impl CertificateBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         let public_key_bytes = verifying_key.to_sec1_bytes().to_vec();
@@ -648,9 +623,7 @@ impl CertificateBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         let public_key_bytes = verifying_key.to_sec1_bytes().to_vec();
@@ -674,9 +647,8 @@ impl CertificateBuilderConfig {
         use rsa::{pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey as _, RsaPrivateKey};
 
         // Parse issuer private key
-        let issuer_signing_key = RsaPrivateKey::from_pkcs8_pem(issuer_key_pem).map_err(|e| {
-            CryptoError::internal(format!("Failed to parse RSA issuer key: {}", e))
-        })?;
+        let issuer_signing_key = RsaPrivateKey::from_pkcs8_pem(issuer_key_pem)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse RSA issuer key: {}", e)))?;
 
         // Generate new RSA key pair for this certificate
         let bits = match self.key_type {
@@ -686,16 +658,13 @@ impl CertificateBuilderConfig {
             _ => 2048,
         };
 
-        let private_key = RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| {
-            CryptoError::internal(format!("Failed to generate RSA key: {}", e))
-        })?;
+        let private_key = RsaPrivateKey::new(&mut OsRng, bits)
+            .map_err(|e| CryptoError::internal(format!("Failed to generate RSA key: {}", e)))?;
 
         // Encode private key to PEM
         let private_key_pem = private_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Build certificate signed by issuer
@@ -732,9 +701,7 @@ impl CertificateBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Build certificate signed by issuer
@@ -780,17 +747,14 @@ impl CertificateBuilderConfig {
         let signer = EcdsaP256Signer(signing_key.clone());
 
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     /// Internal: build certificate with P-384.
@@ -826,17 +790,14 @@ impl CertificateBuilderConfig {
         let signer = EcdsaP384Signer(signing_key.clone());
 
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     /// Internal: build certificate with RSA.
@@ -864,9 +825,9 @@ impl CertificateBuilderConfig {
 
         // Get public key SPKI
         let public_key = private_key.to_public_key();
-        let spki_der = public_key.to_public_key_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode public key: {}", e))
-        })?;
+        let spki_der = public_key
+            .to_public_key_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode public key: {}", e)))?;
 
         let spki = SubjectPublicKeyInfoOwned::from_der(spki_der.as_bytes())
             .map_err(|e| CryptoError::internal(format!("Failed to parse SPKI: {}", e)))?;
@@ -878,17 +839,14 @@ impl CertificateBuilderConfig {
         let signer = RsaSha256Signer::new(private_key.clone());
 
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     /// Internal: build self-signed certificate with Ed25519.
@@ -922,17 +880,14 @@ impl CertificateBuilderConfig {
         let signer = Ed25519Signer::new(signing_key.clone());
 
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     // ========================================================================
@@ -956,17 +911,14 @@ impl CertificateBuilderConfig {
 
         // Use issuer's name directly
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     /// Build certificate signed by P-384 issuer key.
@@ -985,17 +937,14 @@ impl CertificateBuilderConfig {
         let signer = EcdsaP384Signer(issuer_key.clone());
 
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     /// Build certificate signed by RSA issuer key.
@@ -1013,9 +962,9 @@ impl CertificateBuilderConfig {
 
         // Build subject's public key SPKI
         let public_key = subject_key.to_public_key();
-        let spki_der = public_key.to_public_key_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode public key: {}", e))
-        })?;
+        let spki_der = public_key
+            .to_public_key_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode public key: {}", e)))?;
 
         let spki = SubjectPublicKeyInfoOwned::from_der(spki_der.as_bytes())
             .map_err(|e| CryptoError::internal(format!("Failed to parse SPKI: {}", e)))?;
@@ -1026,17 +975,14 @@ impl CertificateBuilderConfig {
         let signer = RsaSha256Signer::new(issuer_key.clone());
 
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     /// Build certificate signed by Ed25519 issuer key.
@@ -1055,17 +1001,14 @@ impl CertificateBuilderConfig {
         let signer = Ed25519Signer::new(issuer_key.clone());
 
         let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to create cert builder: {}", e))
-            })?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
 
-        let cert = builder.build().map_err(|e| {
-            CryptoError::internal(format!("Failed to build certificate: {}", e))
-        })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {}", e)))?;
 
-        cert.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode certificate: {}", e))
-        })
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
     // Helper methods
@@ -1160,10 +1103,11 @@ impl CertificateBuilderConfig {
             .map_err(|e| CryptoError::internal(format!("Invalid curve OID: {}", e)))?;
 
         // Build parameters (curve OID)
-        let params = der::Any::from_der(&secp256r1_oid.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode curve OID: {}", e))
-        })?)
-        .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
+        let params =
+            der::Any::from_der(&secp256r1_oid.to_der().map_err(|e| {
+                CryptoError::internal(format!("Failed to encode curve OID: {}", e))
+            })?)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
 
         let algorithm = AlgorithmIdentifierOwned {
             oid: ec_public_key_oid,
@@ -1181,9 +1125,8 @@ impl CertificateBuilderConfig {
             bytes
         };
 
-        let subject_public_key = BitString::from_bytes(&point_bytes).map_err(|e| {
-            CryptoError::internal(format!("Failed to create bit string: {}", e))
-        })?;
+        let subject_public_key = BitString::from_bytes(&point_bytes)
+            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
 
         Ok(SubjectPublicKeyInfoOwned {
             algorithm,
@@ -1204,10 +1147,11 @@ impl CertificateBuilderConfig {
         let secp384r1_oid = ObjectIdentifier::new("1.3.132.0.34")
             .map_err(|e| CryptoError::internal(format!("Invalid curve OID: {}", e)))?;
 
-        let params = der::Any::from_der(&secp384r1_oid.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode curve OID: {}", e))
-        })?)
-        .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
+        let params =
+            der::Any::from_der(&secp384r1_oid.to_der().map_err(|e| {
+                CryptoError::internal(format!("Failed to encode curve OID: {}", e))
+            })?)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
 
         let algorithm = AlgorithmIdentifierOwned {
             oid: ec_public_key_oid,
@@ -1225,9 +1169,8 @@ impl CertificateBuilderConfig {
             bytes
         };
 
-        let subject_public_key = BitString::from_bytes(&point_bytes).map_err(|e| {
-            CryptoError::internal(format!("Failed to create bit string: {}", e))
-        })?;
+        let subject_public_key = BitString::from_bytes(&point_bytes)
+            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
 
         Ok(SubjectPublicKeyInfoOwned {
             algorithm,
@@ -1251,9 +1194,8 @@ impl CertificateBuilderConfig {
             parameters: None, // Ed25519 has no parameters
         };
 
-        let subject_public_key = BitString::from_bytes(public_key_bytes).map_err(|e| {
-            CryptoError::internal(format!("Failed to create bit string: {}", e))
-        })?;
+        let subject_public_key = BitString::from_bytes(public_key_bytes)
+            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
 
         Ok(SubjectPublicKeyInfoOwned {
             algorithm,
@@ -1891,9 +1833,7 @@ impl CsrBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Build subject name
@@ -1901,9 +1841,8 @@ impl CsrBuilderConfig {
 
         // Build CSR using RequestBuilder with the raw signing key
         // P256SigningKey implements Keypair and its VerifyingKey implements EncodePublicKey
-        let builder = RequestBuilder::new(subject, &signing_key).map_err(|e| {
-            CryptoError::internal(format!("Failed to create CSR builder: {}", e))
-        })?;
+        let builder = RequestBuilder::new(subject, &signing_key)
+            .map_err(|e| CryptoError::internal(format!("Failed to create CSR builder: {}", e)))?;
 
         let csr: CertReq = builder
             .build::<p256::ecdsa::DerSignature>()
@@ -1926,18 +1865,15 @@ impl CsrBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Build subject name
         let subject = self.build_name()?;
 
         // Build CSR using RequestBuilder
-        let builder = RequestBuilder::new(subject, &signing_key).map_err(|e| {
-            CryptoError::internal(format!("Failed to create CSR builder: {}", e))
-        })?;
+        let builder = RequestBuilder::new(subject, &signing_key)
+            .map_err(|e| CryptoError::internal(format!("Failed to create CSR builder: {}", e)))?;
 
         let csr: CertReq = builder
             .build::<p384::ecdsa::DerSignature>()
@@ -1962,16 +1898,13 @@ impl CsrBuilderConfig {
         };
 
         // Generate RSA key pair
-        let private_key = RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| {
-            CryptoError::internal(format!("Failed to generate RSA key: {}", e))
-        })?;
+        let private_key = RsaPrivateKey::new(&mut OsRng, bits)
+            .map_err(|e| CryptoError::internal(format!("Failed to generate RSA key: {}", e)))?;
 
         // Encode private key to PEM
         let private_key_pem = private_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Build subject name
@@ -1982,9 +1915,8 @@ impl CsrBuilderConfig {
         use rsa::pkcs1v15::SigningKey as RsaSigningKeyTyped;
         let rsa_signing_key = RsaSigningKeyTyped::<Sha256>::new(private_key);
 
-        let builder = RequestBuilder::new(subject, &rsa_signing_key).map_err(|e| {
-            CryptoError::internal(format!("Failed to create CSR builder: {}", e))
-        })?;
+        let builder = RequestBuilder::new(subject, &rsa_signing_key)
+            .map_err(|e| CryptoError::internal(format!("Failed to create CSR builder: {}", e)))?;
 
         let csr: CertReq = builder
             .build::<rsa::pkcs1v15::Signature>()
@@ -2009,9 +1941,7 @@ impl CsrBuilderConfig {
         // Encode private key to PEM
         let private_key_pem = signing_key
             .to_pkcs8_pem(Default::default())
-            .map_err(|e| {
-                CryptoError::internal(format!("Failed to encode private key: {}", e))
-            })?
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
             .to_string();
 
         // Build subject name
@@ -2021,9 +1951,8 @@ impl CsrBuilderConfig {
         // that implements SignatureBitStringEncoding
         let signer = Ed25519Signer::new(signing_key);
 
-        let builder = RequestBuilder::new(subject, &signer).map_err(|e| {
-            CryptoError::internal(format!("Failed to create CSR builder: {}", e))
-        })?;
+        let builder = RequestBuilder::new(subject, &signer)
+            .map_err(|e| CryptoError::internal(format!("Failed to create CSR builder: {}", e)))?;
 
         let csr: CertReq = builder
             .build::<Ed25519SignatureWrapper>()
@@ -2077,10 +2006,11 @@ impl CsrBuilderConfig {
         let secp256r1_oid = ObjectIdentifier::new("1.2.840.10045.3.1.7")
             .map_err(|e| CryptoError::internal(format!("Invalid curve OID: {}", e)))?;
 
-        let params = der::Any::from_der(&secp256r1_oid.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode curve OID: {}", e))
-        })?)
-        .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
+        let params =
+            der::Any::from_der(&secp256r1_oid.to_der().map_err(|e| {
+                CryptoError::internal(format!("Failed to encode curve OID: {}", e))
+            })?)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
 
         let algorithm = AlgorithmIdentifierOwned {
             oid: ec_public_key_oid,
@@ -2090,9 +2020,8 @@ impl CsrBuilderConfig {
         let mut point_bytes = vec![0x04];
         point_bytes.extend_from_slice(public_key_bytes);
 
-        let subject_public_key = BitString::from_bytes(&point_bytes).map_err(|e| {
-            CryptoError::internal(format!("Failed to create bit string: {}", e))
-        })?;
+        let subject_public_key = BitString::from_bytes(&point_bytes)
+            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
 
         Ok(SubjectPublicKeyInfoOwned {
             algorithm,
@@ -2112,10 +2041,11 @@ impl CsrBuilderConfig {
         let secp384r1_oid = ObjectIdentifier::new("1.3.132.0.34")
             .map_err(|e| CryptoError::internal(format!("Invalid curve OID: {}", e)))?;
 
-        let params = der::Any::from_der(&secp384r1_oid.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode curve OID: {}", e))
-        })?)
-        .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
+        let params =
+            der::Any::from_der(&secp384r1_oid.to_der().map_err(|e| {
+                CryptoError::internal(format!("Failed to encode curve OID: {}", e))
+            })?)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
 
         let algorithm = AlgorithmIdentifierOwned {
             oid: ec_public_key_oid,
@@ -2125,9 +2055,8 @@ impl CsrBuilderConfig {
         let mut point_bytes = vec![0x04];
         point_bytes.extend_from_slice(public_key_bytes);
 
-        let subject_public_key = BitString::from_bytes(&point_bytes).map_err(|e| {
-            CryptoError::internal(format!("Failed to create bit string: {}", e))
-        })?;
+        let subject_public_key = BitString::from_bytes(&point_bytes)
+            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
 
         Ok(SubjectPublicKeyInfoOwned {
             algorithm,
@@ -2150,9 +2079,8 @@ impl CsrBuilderConfig {
             parameters: None,
         };
 
-        let subject_public_key = BitString::from_bytes(public_key_bytes).map_err(|e| {
-            CryptoError::internal(format!("Failed to create bit string: {}", e))
-        })?;
+        let subject_public_key = BitString::from_bytes(public_key_bytes)
+            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
 
         Ok(SubjectPublicKeyInfoOwned {
             algorithm,

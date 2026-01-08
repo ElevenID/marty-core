@@ -391,9 +391,17 @@ mod tests {
         let (private_key, public_key) = generate_p521_keypair().unwrap();
 
         // P-521 private key should be 66 bytes
-        assert_eq!(private_key.len(), 66, "P-521 private key should be 66 bytes");
+        assert_eq!(
+            private_key.len(),
+            66,
+            "P-521 private key should be 66 bytes"
+        );
         // P-521 public key (uncompressed) should be 133 bytes (1 + 66 + 66)
-        assert_eq!(public_key.len(), 133, "P-521 public key should be 133 bytes");
+        assert_eq!(
+            public_key.len(),
+            133,
+            "P-521 public key should be 133 bytes"
+        );
     }
 
     #[test]
@@ -404,7 +412,10 @@ mod tests {
         let signature = sign_p521_sha512(&private_key, message).unwrap();
 
         // DER-encoded signature should start with 0x30 (SEQUENCE tag)
-        assert_eq!(signature[0], 0x30, "DER signature should start with SEQUENCE tag");
+        assert_eq!(
+            signature[0], 0x30,
+            "DER signature should start with SEQUENCE tag"
+        );
     }
 
     #[test]
@@ -417,7 +428,10 @@ mod tests {
 
         // Verification with different public key should fail
         let invalid = verify_p521_sha512(&public_key_2, message, &signature).unwrap();
-        assert!(!invalid, "Signature should be invalid with wrong public key");
+        assert!(
+            !invalid,
+            "Signature should be invalid with wrong public key"
+        );
     }
 
     #[test]

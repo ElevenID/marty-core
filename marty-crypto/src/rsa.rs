@@ -325,9 +325,7 @@ fn parse_rsa_public_key(der: &[u8]) -> CryptoResult<RsaPublicKey> {
             use rsa::pkcs1::DecodeRsaPublicKey;
             RsaPublicKey::from_pkcs1_der(der)
         })
-        .map_err(|e| {
-            CryptoError::invalid_signature(format!("RSA: Invalid public key: {}", e))
-        })
+        .map_err(|e| CryptoError::invalid_signature(format!("RSA: Invalid public key: {}", e)))
 }
 
 /// Parse RSA private key from DER bytes.

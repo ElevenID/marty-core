@@ -409,10 +409,7 @@ impl CrlBuilder {
         ))
     }
 
-    fn build_with_p256(
-        &self,
-        signing_key: &p256::ecdsa::SigningKey,
-    ) -> CryptoResult<Vec<u8>> {
+    fn build_with_p256(&self, signing_key: &p256::ecdsa::SigningKey) -> CryptoResult<Vec<u8>> {
         use der::asn1::ObjectIdentifier;
         use p256::ecdsa::signature::Signer;
         use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -460,9 +457,8 @@ impl CrlBuilder {
 
         // Sign
         let signature: p256::ecdsa::DerSignature = signing_key.sign(&tbs_der);
-        let sig_bits = der::asn1::BitString::from_bytes(signature.as_bytes()).map_err(|e| {
-            CryptoError::internal(format!("Failed to create signature: {}", e))
-        })?;
+        let sig_bits = der::asn1::BitString::from_bytes(signature.as_bytes())
+            .map_err(|e| CryptoError::internal(format!("Failed to create signature: {}", e)))?;
 
         // Build complete CRL
         let crl = CertificateList {
@@ -479,10 +475,7 @@ impl CrlBuilder {
             .map_err(|e| CryptoError::internal(format!("Failed to encode CRL: {}", e)))
     }
 
-    fn build_with_p384(
-        &self,
-        signing_key: &p384::ecdsa::SigningKey,
-    ) -> CryptoResult<Vec<u8>> {
+    fn build_with_p384(&self, signing_key: &p384::ecdsa::SigningKey) -> CryptoResult<Vec<u8>> {
         use der::asn1::ObjectIdentifier;
         use p384::ecdsa::signature::Signer;
         use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -524,9 +517,8 @@ impl CrlBuilder {
             .map_err(|e| CryptoError::internal(format!("Failed to encode TBS: {}", e)))?;
 
         let signature: p384::ecdsa::DerSignature = signing_key.sign(&tbs_der);
-        let sig_bits = der::asn1::BitString::from_bytes(signature.as_bytes()).map_err(|e| {
-            CryptoError::internal(format!("Failed to create signature: {}", e))
-        })?;
+        let sig_bits = der::asn1::BitString::from_bytes(signature.as_bytes())
+            .map_err(|e| CryptoError::internal(format!("Failed to create signature: {}", e)))?;
 
         let crl = CertificateList {
             tbs_cert_list: tbs,
@@ -589,9 +581,8 @@ impl CrlBuilder {
         let signature: rsa::pkcs1v15::Signature = rsa_signing_key.sign(&tbs_der);
         // Convert RSA signature to bytes using SignatureEncoding trait
         use rsa::signature::SignatureEncoding;
-        let sig_bits = der::asn1::BitString::from_bytes(&signature.to_bytes()).map_err(|e| {
-            CryptoError::internal(format!("Failed to create signature: {}", e))
-        })?;
+        let sig_bits = der::asn1::BitString::from_bytes(&signature.to_bytes())
+            .map_err(|e| CryptoError::internal(format!("Failed to create signature: {}", e)))?;
 
         let crl = CertificateList {
             tbs_cert_list: tbs,
@@ -648,9 +639,8 @@ impl CrlBuilder {
             let serial_bytes = hex::decode(&entry.serial_hex)
                 .map_err(|e| CryptoError::internal(format!("Invalid serial hex: {}", e)))?;
 
-            let serial = SerialNumber::new(&serial_bytes).map_err(|e| {
-                CryptoError::internal(format!("Invalid serial number: {}", e))
-            })?;
+            let serial = SerialNumber::new(&serial_bytes)
+                .map_err(|e| CryptoError::internal(format!("Invalid serial number: {}", e)))?;
 
             result.push(RevokedCert {
                 serial_number: serial,
@@ -703,9 +693,7 @@ impl CrlBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cert_builder::{
-        create_ca_certificate, CertProfile, CertificateBuilderConfig,
-    };
+    use crate::cert_builder::{create_ca_certificate, CertProfile, CertificateBuilderConfig};
     use crate::keygen::KeyType;
 
     #[test]

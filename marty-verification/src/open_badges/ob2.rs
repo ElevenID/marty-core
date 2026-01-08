@@ -1,9 +1,9 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use marty_crypto::serialization::{load_public_key_pem, spki_to_raw_public_key};
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 use crate::jwk::{base64url_encode, jws_sign, jws_verify, Jwk, JwsHeader};
+use marty_crypto::serialization::{load_public_key_pem, spki_to_raw_public_key};
 
 use super::contexts::ob2_context_uri;
 use super::types::{DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult};
@@ -83,13 +83,15 @@ pub fn issue_ob2_json(request_json: &str) -> VerificationResult<String> {
         warnings,
     };
 
-    serde_json::to_string(&result)
-        .map_err(|e| VerificationError::open_badges(format!("Failed to serialize OB2 issue result: {}", e)))
+    serde_json::to_string(&result).map_err(|e| {
+        VerificationError::open_badges(format!("Failed to serialize OB2 issue result: {}", e))
+    })
 }
 
 pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
-    let req: VerifyOb2Request = serde_json::from_str(request_json)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid OB2 verify request: {}", e)))?;
+    let req: VerifyOb2Request = serde_json::from_str(request_json).map_err(|e| {
+        VerificationError::open_badges(format!("Invalid OB2 verify request: {}", e))
+    })?;
 
     let assertion = req.assertion;
     let store = req.document_store.unwrap_or_default();
@@ -123,9 +125,15 @@ pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
         &mut errors,
         &mut error_codes_out,
     );
-    let issuer = badge
-        .as_ref()
-        .and_then(|b| resolve_reference(b.get("issuer"), &store, "issuer", &mut errors, &mut error_codes_out));
+    let issuer = badge.as_ref().and_then(|b| {
+        resolve_reference(
+            b.get("issuer"),
+            &store,
+            "issuer",
+            &mut errors,
+            &mut error_codes_out,
+        )
+    });
 
     if let Some(recipient_identity) = req.recipient_identity.as_ref() {
         if let Some(recipient) = assertion.get("recipient").and_then(|v| v.as_object()) {
@@ -175,18 +183,25 @@ pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
         normalized: Some(normalized),
     };
 
-    serde_json::to_string(&result)
-        .map_err(|e| VerificationError::open_badges(format!("Failed to serialize OB2 verify result: {}", e)))
+    serde_json::to_string(&result).map_err(|e| {
+        VerificationError::open_badges(format!("Failed to serialize OB2 verify result: {}", e))
+    })
 }
 
-fn build_recipient(input: Ob2RecipientInput, warnings: &mut Vec<String>) -> VerificationResult<Value> {
+fn build_recipient(
+    input: Ob2RecipientInput,
+    warnings: &mut Vec<String>,
+) -> VerificationResult<Value> {
     let hashed = input.hashed.unwrap_or(false);
     let hash_alg = input
         .hash_alg
         .unwrap_or_else(|| DEFAULT_HASH_ALG.to_string());
 
     let mut recipient = serde_json::Map::new();
-    recipient.insert("type".to_string(), Value::String(input.identity_type.unwrap_or_else(|| "email".to_string())));
+    recipient.insert(
+        "type".to_string(),
+        Value::String(input.identity_type.unwrap_or_else(|| "email".to_string())),
+    );
 
     if hashed {
         let salt = input.salt.unwrap_or_else(|| {
@@ -211,9 +226,8 @@ fn sign_assertion(
     signing: &Ob2SigningOptions,
     warnings: &mut Vec<String>,
 ) -> VerificationResult<String> {
-    let jwk_json = serde_json::to_string(&signing.jwk).map_err(|e| {
-        VerificationError::open_badges(format!("Invalid signing JWK: {}", e))
-    })?;
+    let jwk_json = serde_json::to_string(&signing.jwk)
+        .map_err(|e| VerificationError::open_badges(format!("Invalid signing JWK: {}", e)))?;
     let jwk = Jwk::from_json(&jwk_json)
         .map_err(|e| VerificationError::open_badges(format!("Invalid signing JWK: {}", e)))?;
 
@@ -264,7 +278,10 @@ fn build_verification(signing: &Ob2SigningOptions, warnings: &mut Vec<String>) -
     Value::Object(verification)
 }
 
-fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationResult<Option<String>> {
+fn verify_signature(
+    assertion: &Value,
+    store: &DocumentStore,
+) -> VerificationResult<Option<String>> {
     let signature = assertion
         .get("signature")
         .and_then(|v| v.as_str())
@@ -284,29 +301,22 @@ fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationRes
             )
         })?;
 
-    let key_value = store
-        .get(creator)
-        .ok_or_else(|| {
-            VerificationError::open_badges_document_missing(format!(
-                "verification.creator not found in document_store: {}",
-                creator
-            ))
-        })?;
+    let key_value = store.get(creator).ok_or_else(|| {
+        VerificationError::open_badges_document_missing(format!(
+            "verification.creator not found in document_store: {}",
+            creator
+        ))
+    })?;
 
     let jwk = extract_public_jwk(key_value)?;
 
-    let (_, payload_bytes) = jws_verify(signature, &jwk)
-        .map_err(|e| {
-            VerificationError::open_badges_signature_invalid(format!(
-                "JWS verification failed: {}",
-                e
-            ))
-        })?;
+    let (_, payload_bytes) = jws_verify(signature, &jwk).map_err(|e| {
+        VerificationError::open_badges_signature_invalid(format!("JWS verification failed: {}", e))
+    })?;
 
-    let payload: Value = serde_json::from_slice(&payload_bytes)
-        .map_err(|e| {
-            VerificationError::open_badges(format!("Signed payload is not JSON: {}", e))
-        })?;
+    let payload: Value = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        VerificationError::open_badges(format!("Signed payload is not JSON: {}", e))
+    })?;
 
     let mut expected = assertion.clone();
     if let Value::Object(ref mut obj) = expected {
@@ -314,7 +324,9 @@ fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationRes
     }
 
     if payload != expected {
-        Ok(Some("Signed payload does not match assertion body".to_string()))
+        Ok(Some(
+            "Signed payload does not match assertion body".to_string(),
+        ))
     } else {
         Ok(None)
     }
@@ -323,9 +335,7 @@ fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationRes
 fn extract_public_jwk(value: &Value) -> VerificationResult<Jwk> {
     if let Some(jwk_value) = value.get("publicKeyJwk") {
         let jwk_json = serde_json::to_string(jwk_value)
-            .map_err(|e| {
-                VerificationError::open_badges(format!("Invalid publicKeyJwk: {}", e))
-            })?;
+            .map_err(|e| VerificationError::open_badges(format!("Invalid publicKeyJwk: {}", e)))?;
         return Jwk::from_json(&jwk_json);
     }
 
@@ -359,14 +369,12 @@ fn jwk_from_spki(spki: &[u8]) -> VerificationResult<Jwk> {
         "EC_P256" => jwk_from_ec("P-256", &raw),
         "EC_P384" => jwk_from_ec("P-384", &raw),
         "EC_P521" => jwk_from_ec("P-521", &raw),
-        "Ed25519" => {
-            Ok(Jwk {
-                kty: "OKP".to_string(),
-                crv: Some("Ed25519".to_string()),
-                x: Some(base64url_encode(&raw)),
-                ..Jwk::default()
-            })
-        }
+        "Ed25519" => Ok(Jwk {
+            kty: "OKP".to_string(),
+            crv: Some("Ed25519".to_string()),
+            x: Some(base64url_encode(&raw)),
+            ..Jwk::default()
+        }),
         "RSA" => jwk_from_rsa(&raw),
         _ => Err(VerificationError::open_badges_unsupported(format!(
             "Unsupported public key type: {}",
@@ -449,15 +457,15 @@ fn verify_recipient_hash(
     recipient: &serde_json::Map<String, Value>,
     identity: &str,
 ) -> VerificationResult<()> {
-    let hashed = recipient.get("hashed").and_then(|v| v.as_bool()).unwrap_or(false);
+    let hashed = recipient
+        .get("hashed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !hashed {
         return Ok(());
     }
 
-    let salt = recipient
-        .get("salt")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let salt = recipient.get("salt").and_then(|v| v.as_str()).unwrap_or("");
     let hash_alg = recipient
         .get("hash")
         .and_then(|v| v.as_str())
@@ -590,7 +598,10 @@ fn should_verify_signature(assertion: &Value) -> bool {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    matches!(verification_type.to_lowercase().as_str(), "signed" | "signedbadge")
+    matches!(
+        verification_type.to_lowercase().as_str(),
+        "signed" | "signedbadge"
+    )
 }
 
 fn normalize_ob2(assertion: &Value, badge: Option<&Value>, issuer: Option<&Value>) -> Value {

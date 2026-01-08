@@ -253,11 +253,7 @@ pub fn aes_128_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> CryptoRes
 /// # Returns
 ///
 /// Unpadded plaintext.
-pub fn aes_128_cbc_decrypt(
-    key: &[u8],
-    iv: &[u8],
-    ciphertext: &[u8],
-) -> CryptoResult<Vec<u8>> {
+pub fn aes_128_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoResult<Vec<u8>> {
     if key.len() != 16 {
         return Err(CryptoError::internal(
             "AES-128-CBC requires 16-byte key".to_string(),
@@ -290,11 +286,7 @@ pub fn aes_128_cbc_decrypt(
 /// Encrypt data using AES-128-CBC without padding (for BAC).
 ///
 /// Caller must ensure plaintext is already padded to 16-byte boundary.
-pub fn aes_128_cbc_encrypt_nopad(
-    key: &[u8],
-    iv: &[u8],
-    plaintext: &[u8],
-) -> CryptoResult<Vec<u8>> {
+pub fn aes_128_cbc_encrypt_nopad(key: &[u8], iv: &[u8], plaintext: &[u8]) -> CryptoResult<Vec<u8>> {
     if key.len() != 16 {
         return Err(CryptoError::internal(
             "AES-128-CBC requires 16-byte key".to_string(),

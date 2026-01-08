@@ -19,17 +19,25 @@ const CONTEXT_FILE_OPENBADGES_V2: &str = include_str!("contexts/openbadges-v2.js
 const CONTEXT_FILE_OPENBADGES_V3: &str = include_str!("contexts/openbadges-v3.jsonld");
 const CONTEXT_FILE_VC_V1: &str = include_str!("contexts/credentials-v1.jsonld");
 const CONTEXT_FILE_VC_V2: &str = include_str!("contexts/credentials-v2.jsonld");
-const CONTEXT_FILE_DATA_INTEGRITY_V2: &str = include_str!("contexts/security-data-integrity-v2.jsonld");
+const CONTEXT_FILE_DATA_INTEGRITY_V2: &str =
+    include_str!("contexts/security-data-integrity-v2.jsonld");
 const CONTEXT_FILE_SECURITY_V1: &str = include_str!("contexts/security-v1.jsonld");
 const CONTEXT_FILE_SECURITY_V2: &str = include_str!("contexts/security-v2.jsonld");
-const CONTEXT_FILE_SECURITY_ED25519_2020: &str = include_str!("contexts/security-ed25519-2020.jsonld");
+const CONTEXT_FILE_SECURITY_ED25519_2020: &str =
+    include_str!("contexts/security-ed25519-2020.jsonld");
 const CONTEXT_FILE_SECURITY_JWS_2020: &str = include_str!("contexts/security-jws-2020.jsonld");
 
 pub fn open_badges_context_loader() -> VerificationResult<ContextLoader> {
     let mut context_map = HashMap::new();
 
-    context_map.insert(CONTEXT_OPENBADGES_V2.to_string(), CONTEXT_FILE_OPENBADGES_V2.to_string());
-    context_map.insert(CONTEXT_OPENBADGES_V3.to_string(), CONTEXT_FILE_OPENBADGES_V3.to_string());
+    context_map.insert(
+        CONTEXT_OPENBADGES_V2.to_string(),
+        CONTEXT_FILE_OPENBADGES_V2.to_string(),
+    );
+    context_map.insert(
+        CONTEXT_OPENBADGES_V3.to_string(),
+        CONTEXT_FILE_OPENBADGES_V3.to_string(),
+    );
     context_map.insert(
         CONTEXT_OPENBADGES_V3_ALIAS.to_string(),
         CONTEXT_FILE_OPENBADGES_V3.to_string(),
@@ -40,8 +48,14 @@ pub fn open_badges_context_loader() -> VerificationResult<ContextLoader> {
         CONTEXT_DATA_INTEGRITY_V2.to_string(),
         CONTEXT_FILE_DATA_INTEGRITY_V2.to_string(),
     );
-    context_map.insert(CONTEXT_SECURITY_V1.to_string(), CONTEXT_FILE_SECURITY_V1.to_string());
-    context_map.insert(CONTEXT_SECURITY_V2.to_string(), CONTEXT_FILE_SECURITY_V2.to_string());
+    context_map.insert(
+        CONTEXT_SECURITY_V1.to_string(),
+        CONTEXT_FILE_SECURITY_V1.to_string(),
+    );
+    context_map.insert(
+        CONTEXT_SECURITY_V2.to_string(),
+        CONTEXT_FILE_SECURITY_V2.to_string(),
+    );
     context_map.insert(
         CONTEXT_SECURITY_ED25519_2020.to_string(),
         CONTEXT_FILE_SECURITY_ED25519_2020.to_string(),
@@ -54,7 +68,9 @@ pub fn open_badges_context_loader() -> VerificationResult<ContextLoader> {
     // Use only pinned contexts so OB3+VC v2 compatibility tweaks take effect.
     ContextLoader::empty()
         .with_context_map_from(context_map)
-        .map_err(|e| VerificationError::open_badges(format!("Failed to build context loader: {}", e)))
+        .map_err(|e| {
+            VerificationError::open_badges(format!("Failed to build context loader: {}", e))
+        })
 }
 
 pub fn ob2_context_uri() -> &'static str {

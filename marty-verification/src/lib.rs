@@ -59,4 +59,4 @@ pub use verification::emrtd::{ChainStatus, EmrtdVerificationResult, HashStatus, 
 pub use verification::mdl::{AuthStatus, MdlVerificationResult};
 
 // Re-export crypto primitives from marty-crypto
-pub use marty_crypto::{HashAlgorithm, SignatureAlgorithm, verify_signature};
+pub use marty_crypto::{verify_signature, HashAlgorithm, SignatureAlgorithm};

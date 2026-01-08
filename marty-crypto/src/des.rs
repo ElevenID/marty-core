@@ -108,11 +108,7 @@ pub fn tdes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoResul
 /// # Returns
 ///
 /// Ciphertext (padded to multiple of 8 bytes).
-pub fn tdes_cbc_encrypt_padded(
-    key: &[u8],
-    iv: &[u8],
-    plaintext: &[u8],
-) -> CryptoResult<Vec<u8>> {
+pub fn tdes_cbc_encrypt_padded(key: &[u8], iv: &[u8], plaintext: &[u8]) -> CryptoResult<Vec<u8>> {
     if key.len() != 24 {
         return Err(CryptoError::internal(
             "3DES requires 24-byte (192-bit) key".to_string(),
@@ -149,11 +145,7 @@ pub fn tdes_cbc_encrypt_padded(
 /// # Returns
 ///
 /// Decrypted plaintext with padding removed.
-pub fn tdes_cbc_decrypt_padded(
-    key: &[u8],
-    iv: &[u8],
-    ciphertext: &[u8],
-) -> CryptoResult<Vec<u8>> {
+pub fn tdes_cbc_decrypt_padded(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoResult<Vec<u8>> {
     if key.len() != 24 {
         return Err(CryptoError::internal(
             "3DES requires 24-byte (192-bit) key".to_string(),

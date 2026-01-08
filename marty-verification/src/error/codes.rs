@@ -298,10 +298,14 @@ pub fn error_codes_markdown() -> String {
     md.push_str(
         "| E702 | `OPEN_BADGES_CONTEXT_MISSING` | Required Open Badges context is missing or unsupported |\n",
     );
-    md.push_str("| E703 | `OPEN_BADGES_SIGNATURE_INVALID` | Open Badges signature verification failed |\n");
+    md.push_str(
+        "| E703 | `OPEN_BADGES_SIGNATURE_INVALID` | Open Badges signature verification failed |\n",
+    );
     md.push_str("| E704 | `OPEN_BADGES_PROOF_INVALID` | Open Badges proof verification failed |\n");
     md.push_str("| E705 | `OPEN_BADGES_DOCUMENT_MISSING` | Open Badges referenced document not found in offline store |\n");
-    md.push_str("| E706 | `OPEN_BADGES_UNSUPPORTED` | Open Badges unsupported feature or algorithm |\n");
+    md.push_str(
+        "| E706 | `OPEN_BADGES_UNSUPPORTED` | Open Badges unsupported feature or algorithm |\n",
+    );
     md.push_str("| E707 | `OPEN_BADGES_REVOKED` | Open Badges credential has been revoked |\n");
     md.push_str("| E708 | `OPEN_BADGES_STATUS_CHECK_FAILED` | Open Badges credential status check failed |\n");
     md.push('\n');

@@ -95,9 +95,8 @@ impl std::fmt::Display for PrivateKeyAlgorithm {
 /// Parsed PKCS#12 data including private key, certificate, and chain.
 pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
     // Use the p12 crate to parse
-    let p12 = p12::PFX::parse(data).map_err(|e| {
-        CryptoError::crypto_error(format!("Failed to parse PKCS#12: {:?}", e))
-    })?;
+    let p12 = p12::PFX::parse(data)
+        .map_err(|e| CryptoError::crypto_error(format!("Failed to parse PKCS#12: {:?}", e)))?;
 
     // Get the key bags (private keys) - returns Vec<Vec<u8>>
     let key_bags = p12.key_bags(password).map_err(|e| {
@@ -105,9 +104,7 @@ pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
     })?;
 
     if key_bags.is_empty() {
-        return Err(CryptoError::crypto_error(
-            "No private key found in PKCS#12",
-        ));
+        return Err(CryptoError::crypto_error("No private key found in PKCS#12"));
     }
 
     // Get the certificate bags - returns Vec<Vec<u8>> (DER-encoded)

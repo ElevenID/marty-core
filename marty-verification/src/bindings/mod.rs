@@ -1426,8 +1426,7 @@ fn ed25519_sign<'py>(
     secret_key: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::ed25519::sign(secret_key, message).map_err(|e| PyErr::from(e))?;
+    let signature = marty_crypto::ed25519::sign(secret_key, message).map_err(|e| PyErr::from(e))?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1635,8 +1634,8 @@ fn rsa_pss_sha256_sign<'py>(
     private_key_der: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::rsa::sign_pss_sha256(private_key_der, message)
-        .map_err(|e| PyErr::from(e))?;
+    let signature =
+        marty_crypto::rsa::sign_pss_sha256(private_key_der, message).map_err(|e| PyErr::from(e))?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1647,8 +1646,8 @@ fn rsa_pss_sha384_sign<'py>(
     private_key_der: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::rsa::sign_pss_sha384(private_key_der, message)
-        .map_err(|e| PyErr::from(e))?;
+    let signature =
+        marty_crypto::rsa::sign_pss_sha384(private_key_der, message).map_err(|e| PyErr::from(e))?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1659,8 +1658,8 @@ fn rsa_pss_sha512_sign<'py>(
     private_key_der: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::rsa::sign_pss_sha512(private_key_der, message)
-        .map_err(|e| PyErr::from(e))?;
+    let signature =
+        marty_crypto::rsa::sign_pss_sha512(private_key_der, message).map_err(|e| PyErr::from(e))?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -2192,13 +2191,9 @@ fn iso9796_recover<'py>(
         })
         .transpose()?;
 
-    let recovered = marty_crypto::iso9796::iso9796_recover_message(
-        public_key_der,
-        signature,
-        scheme,
-        hash_alg,
-    )
-    .map_err(|e| PyErr::from(e))?;
+    let recovered =
+        marty_crypto::iso9796::iso9796_recover_message(public_key_der, signature, scheme, hash_alg)
+            .map_err(|e| PyErr::from(e))?;
 
     Ok(PyBytes::new(py, &recovered))
 }
@@ -2247,8 +2242,7 @@ fn get_ocsp_responder_url(cert_der: &[u8]) -> PyResult<Option<String>> {
 ///     Dictionary with response information
 #[pyfunction]
 fn parse_ocsp_response(py: Python<'_>, response_der: &[u8]) -> PyResult<Py<PyDict>> {
-    let info =
-        marty_crypto::ocsp::parse_ocsp_response(response_der).map_err(|e| PyErr::from(e))?;
+    let info = marty_crypto::ocsp::parse_ocsp_response(response_der).map_err(|e| PyErr::from(e))?;
 
     let dict = PyDict::new(py);
     dict.set_item("response_status", format!("{:?}", info.response_status))?;
@@ -2777,8 +2771,7 @@ fn dtc_create(request_json: &str) -> PyResult<String> {
 
 #[pyfunction]
 fn dtc_sign(dtc_json: &str) -> PyResult<String> {
-    dtc::sign_dtc_json(dtc_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    dtc::sign_dtc_json(dtc_json).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
 #[pyfunction]
@@ -2949,7 +2942,6 @@ pub fn marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
-
 
     // Certificate Builder Operations (feature-gated)
     #[cfg(feature = "cert-builder")]

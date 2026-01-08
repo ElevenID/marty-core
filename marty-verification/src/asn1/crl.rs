@@ -204,7 +204,8 @@ pub fn verify_crl_signature(crl_der: &[u8], issuer_public_key: &[u8]) -> Verific
     let signature = crl.signature.raw_bytes();
 
     // Verify signature
-    marty_crypto::verify_signature(algorithm, issuer_public_key, &tbs_bytes, signature).map_err(|e| e.into())
+    marty_crypto::verify_signature(algorithm, issuer_public_key, &tbs_bytes, signature)
+        .map_err(|e| e.into())
 }
 
 // Helper functions

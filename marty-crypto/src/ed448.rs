@@ -130,11 +130,7 @@ pub fn ed448_sign_with_context(
 ///
 /// # Returns
 /// `true` if signature is valid
-pub fn ed448_verify(
-    public_key: &[u8],
-    message: &[u8],
-    signature: &[u8],
-) -> CryptoResult<bool> {
+pub fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> CryptoResult<bool> {
     if public_key.len() != ED448_PUBLIC_KEY_SIZE {
         return Err(CryptoError::crypto_error(format!(
             "Invalid Ed448 public key size: expected {}, got {}",

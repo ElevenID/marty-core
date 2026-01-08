@@ -177,9 +177,9 @@ impl OcspRequestBuilder {
             optional_signature: None,
         };
 
-        ocsp_request.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode OCSP request: {}", e))
-        })
+        ocsp_request
+            .to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode OCSP request: {}", e)))
     }
 
     /// Build CertID for a certificate/issuer pair.
@@ -188,9 +188,8 @@ impl OcspRequestBuilder {
         use spki::AlgorithmIdentifierOwned;
 
         // Parse certificates
-        let cert = Certificate::from_der(cert_der).map_err(|e| {
-            CryptoError::der_error(format!("Failed to parse certificate: {}", e))
-        })?;
+        let cert = Certificate::from_der(cert_der)
+            .map_err(|e| CryptoError::der_error(format!("Failed to parse certificate: {}", e)))?;
         let issuer = Certificate::from_der(issuer_der).map_err(|e| {
             CryptoError::der_error(format!("Failed to parse issuer certificate: {}", e))
         })?;
@@ -202,9 +201,10 @@ impl OcspRequestBuilder {
         };
 
         // Hash issuer name
-        let issuer_name_der = issuer.tbs_certificate.subject.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode issuer name: {}", e))
-        })?;
+        let issuer_name_der =
+            issuer.tbs_certificate.subject.to_der().map_err(|e| {
+                CryptoError::internal(format!("Failed to encode issuer name: {}", e))
+            })?;
         let issuer_name_hash = Sha256::digest(&issuer_name_der);
 
         // Hash issuer public key
@@ -234,9 +234,8 @@ impl OcspRequestBuilder {
 
 /// Parse an OCSP response.
 pub fn parse_ocsp_response(response_der: &[u8]) -> CryptoResult<OcspResponseInfo> {
-    let response = OcspResponse::from_der(response_der).map_err(|e| {
-        CryptoError::der_error(format!("Failed to parse OCSP response: {}", e))
-    })?;
+    let response = OcspResponse::from_der(response_der)
+        .map_err(|e| CryptoError::der_error(format!("Failed to parse OCSP response: {}", e)))?;
 
     let response_status = OcspResponseStatusCode::from_ocsp_status(response.response_status);
 
@@ -259,15 +258,11 @@ pub fn parse_ocsp_response(response_der: &[u8]) -> CryptoResult<OcspResponseInfo
 
     // Check OID is id-pkix-ocsp-basic
     if response_bytes.response_type != const_oid::db::rfc6960::ID_PKIX_OCSP_BASIC {
-        return Err(CryptoError::internal(
-            "Unsupported OCSP response type",
-        ));
+        return Err(CryptoError::internal("Unsupported OCSP response type"));
     }
 
-    let basic_response =
-        BasicOcspResponse::from_der(response_bytes.response.as_bytes()).map_err(|e| {
-            CryptoError::der_error(format!("Failed to parse BasicOCSPResponse: {}", e))
-        })?;
+    let basic_response = BasicOcspResponse::from_der(response_bytes.response.as_bytes())
+        .map_err(|e| CryptoError::der_error(format!("Failed to parse BasicOCSPResponse: {}", e)))?;
 
     let tbs = &basic_response.tbs_response_data;
 
@@ -337,12 +332,8 @@ pub fn is_revoked_via_ocsp(response_der: &[u8]) -> CryptoResult<bool> {
     match response.cert_status {
         Some(OcspCertStatus::Revoked { .. }) => Ok(true),
         Some(OcspCertStatus::Good) => Ok(false),
-        Some(OcspCertStatus::Unknown) => {
-            Err(CryptoError::internal("OCSP returned unknown status"))
-        }
-        None => Err(CryptoError::internal(
-            "OCSP response was not successful",
-        )),
+        Some(OcspCertStatus::Unknown) => Err(CryptoError::internal("OCSP returned unknown status")),
+        None => Err(CryptoError::internal("OCSP response was not successful")),
     }
 }
 
@@ -436,9 +427,8 @@ impl OcspResponseBuilder {
         })?;
 
         // Parse certificates
-        let cert = Certificate::from_der(cert_der).map_err(|e| {
-            CryptoError::der_error(format!("Failed to parse certificate: {}", e))
-        })?;
+        let cert = Certificate::from_der(cert_der)
+            .map_err(|e| CryptoError::der_error(format!("Failed to parse certificate: {}", e)))?;
         let issuer = Certificate::from_der(issuer_der).map_err(|e| {
             CryptoError::der_error(format!("Failed to parse issuer certificate: {}", e))
         })?;
@@ -449,9 +439,10 @@ impl OcspResponseBuilder {
             parameters: None,
         };
 
-        let issuer_name_der = issuer.tbs_certificate.subject.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode issuer name: {}", e))
-        })?;
+        let issuer_name_der =
+            issuer.tbs_certificate.subject.to_der().map_err(|e| {
+                CryptoError::internal(format!("Failed to encode issuer name: {}", e))
+            })?;
         let issuer_name_hash = Sha256::digest(&issuer_name_der);
 
         let issuer_key_der = issuer
@@ -540,9 +531,8 @@ impl OcspResponseBuilder {
                 return Err(CryptoError::internal("Unable to parse responder key"));
             };
 
-        let sig_bits = der::asn1::BitString::from_bytes(&signature).map_err(|e| {
-            CryptoError::internal(format!("Failed to create signature: {}", e))
-        })?;
+        let sig_bits = der::asn1::BitString::from_bytes(&signature)
+            .map_err(|e| CryptoError::internal(format!("Failed to create signature: {}", e)))?;
 
         // Build BasicOCSPResponse
         let basic_response = BasicOcspResponse {
@@ -569,9 +559,9 @@ impl OcspResponseBuilder {
             response_bytes: Some(response_bytes),
         };
 
-        ocsp_response.to_der().map_err(|e| {
-            CryptoError::internal(format!("Failed to encode OCSP response: {}", e))
-        })
+        ocsp_response
+            .to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode OCSP response: {}", e)))
     }
 }
 
@@ -639,9 +629,10 @@ pub async fn ocsp_check(
         )));
     }
 
-    let response_bytes = response.bytes().await.map_err(|e| {
-        CryptoError::network_error(format!("Failed to read OCSP response: {}", e))
-    })?;
+    let response_bytes = response
+        .bytes()
+        .await
+        .map_err(|e| CryptoError::network_error(format!("Failed to read OCSP response: {}", e)))?;
 
     // Parse the OCSP response
     let response_info = parse_ocsp_response(&response_bytes)?;
@@ -698,9 +689,10 @@ pub async fn ocsp_check_get(
         )));
     }
 
-    let response_bytes = response.bytes().await.map_err(|e| {
-        CryptoError::network_error(format!("Failed to read OCSP response: {}", e))
-    })?;
+    let response_bytes = response
+        .bytes()
+        .await
+        .map_err(|e| CryptoError::network_error(format!("Failed to read OCSP response: {}", e)))?;
 
     let response_info = parse_ocsp_response(&response_bytes)?;
 
@@ -761,9 +753,8 @@ pub struct OcspCacheKey {
 impl OcspCacheKey {
     /// Create a cache key from certificate and issuer DER bytes.
     pub fn from_certs(cert_der: &[u8], issuer_der: &[u8]) -> CryptoResult<Self> {
-        let cert = Certificate::from_der(cert_der).map_err(|e| {
-            CryptoError::der_error(format!("Failed to parse certificate: {}", e))
-        })?;
+        let cert = Certificate::from_der(cert_der)
+            .map_err(|e| CryptoError::der_error(format!("Failed to parse certificate: {}", e)))?;
         let issuer = Certificate::from_der(issuer_der).map_err(|e| {
             CryptoError::der_error(format!("Failed to parse issuer certificate: {}", e))
         })?;
@@ -990,9 +981,7 @@ impl OcspClient {
             .header("Accept", "application/ocsp-response")
             .send()
             .await
-            .map_err(|e| {
-                CryptoError::network_error(format!("OCSP GET request failed: {}", e))
-            })?;
+            .map_err(|e| CryptoError::network_error(format!("OCSP GET request failed: {}", e)))?;
 
         if !response.status().is_success() {
             return Err(CryptoError::network_error(format!(

@@ -267,12 +267,8 @@ pub fn verify_master_list_signature(
 
         // Verify signature
         let signature = signer_info.signature.as_bytes();
-        let valid = marty_crypto::verify_signature(
-            algorithm,
-            &public_key_der,
-            &data_to_verify,
-            signature,
-        )?;
+        let valid =
+            marty_crypto::verify_signature(algorithm, &public_key_der, &data_to_verify, signature)?;
 
         if valid {
             return Ok(true);

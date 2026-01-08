@@ -38,7 +38,9 @@ pub use ob2::{issue_ob2_json, verify_ob2_json};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ob3::{issue_ob3_json, verify_ob3_json};
 pub use ob3::{issue_ob3_json_async, verify_ob3_json_async};
-pub use types::{DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult, OpenBadgesVersion};
+pub use types::{
+    DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult, OpenBadgesVersion,
+};
 
 pub fn detect_version(value: &Value) -> OpenBadgesVersion {
     if has_context(value, ob2_context_uri()) {

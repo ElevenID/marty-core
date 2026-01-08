@@ -25,12 +25,7 @@ use crate::{CryptoError, CryptoResult};
 /// # Returns
 ///
 /// Derived key material.
-pub fn hkdf_sha256(
-    ikm: &[u8],
-    salt: &[u8],
-    info: &[u8],
-    length: usize,
-) -> CryptoResult<Vec<u8>> {
+pub fn hkdf_sha256(ikm: &[u8], salt: &[u8], info: &[u8], length: usize) -> CryptoResult<Vec<u8>> {
     let salt = if salt.is_empty() { None } else { Some(salt) };
     let hkdf = Hkdf::<Sha256>::new(salt, ikm);
 
@@ -43,12 +38,7 @@ pub fn hkdf_sha256(
 }
 
 /// Derive keys using HKDF with SHA-384.
-pub fn hkdf_sha384(
-    ikm: &[u8],
-    salt: &[u8],
-    info: &[u8],
-    length: usize,
-) -> CryptoResult<Vec<u8>> {
+pub fn hkdf_sha384(ikm: &[u8], salt: &[u8], info: &[u8], length: usize) -> CryptoResult<Vec<u8>> {
     let salt = if salt.is_empty() { None } else { Some(salt) };
     let hkdf = Hkdf::<Sha384>::new(salt, ikm);
 
@@ -61,12 +51,7 @@ pub fn hkdf_sha384(
 }
 
 /// Derive keys using HKDF with SHA-512.
-pub fn hkdf_sha512(
-    ikm: &[u8],
-    salt: &[u8],
-    info: &[u8],
-    length: usize,
-) -> CryptoResult<Vec<u8>> {
+pub fn hkdf_sha512(ikm: &[u8], salt: &[u8], info: &[u8], length: usize) -> CryptoResult<Vec<u8>> {
     let salt = if salt.is_empty() { None } else { Some(salt) };
     let hkdf = Hkdf::<Sha512>::new(salt, ikm);
 
