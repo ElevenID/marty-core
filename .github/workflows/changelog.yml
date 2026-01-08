@@ -1,0 +1,34 @@
+name: Generate Changelog
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate changelog
+        run: |
+          git cliff --unreleased --prepend CHANGELOG.md --tag unreleased
+
+      - name: Commit changelog
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update CHANGELOG.md"
+          file_pattern: "CHANGELOG.md"

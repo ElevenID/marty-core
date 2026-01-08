@@ -1,0 +1,185 @@
+name: Release RC
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'RC tag to release (e.g., v0.2.0-rc.1)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-rust-artifacts:
+    name: Build Rust Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Get version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelogs
+        run: |
+          cargo install git-cliff
+          git cliff --tag ${{ steps.version.outputs.tag }} --output CHANGELOG.md
+
+      - name: Create source archives
+        run: |
+          mkdir -p dist
+          for crate in marty-crypto marty-verification marty-secure-storage marty-biometrics; do
+            tar -czf "dist/${crate}-${{ steps.version.outputs.version }}.tar.gz" \
+              --exclude=target \
+              --exclude=.git \
+              "${crate}/"
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz > checksums-rust.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/checksums-rust.txt
+
+  build-python-wheels:
+    name: Build Python Wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        target: [x86_64, aarch64]
+        exclude:
+          - os: windows-latest
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: marty-biometrics
+          target: ${{ matrix.target }}
+          args: --release --out dist --features python
+          sccache: 'true'
+          manylinux: auto
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: marty-biometrics/dist/*.whl
+
+  build-wasm:
+    name: Build WASM Packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM packages
+        run: |
+          cd marty-biometrics
+          mkdir -p ../dist/wasm
+          
+          # Build for web
+          wasm-pack build --target web --features wasm --out-dir ../dist/wasm/web
+          
+          # Build for nodejs
+          wasm-pack build --target nodejs --features wasm --out-dir ../dist/wasm/nodejs
+          
+          # Build for bundler
+          wasm-pack build --target bundler --features wasm --out-dir ../dist/wasm/bundler
+
+      - name: Create WASM archive
+        run: |
+          cd dist
+          tar -czf marty-biometrics-wasm.tar.gz wasm/
+          sha256sum marty-biometrics-wasm.tar.gz > checksums-wasm.txt
+
+      - name: Upload WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-artifacts
+          path: |
+            dist/marty-biometrics-wasm.tar.gz
+            dist/checksums-wasm.txt
+
+  create-release:
+    name: Create RC Release
+    needs: [build-rust-artifacts, build-python-wheels, build-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Consolidate artifacts
+        run: |
+          mkdir -p final-release
+          find release-artifacts -type f -exec cp {} final-release/ \;
+          cd final-release
+          sha256sum * > SHA256SUMS
+
+      - name: Generate release notes
+        run: |
+          cargo install git-cliff
+          git cliff --tag ${{ steps.version.outputs.tag }} --unreleased --strip all > RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.version }} (RC)
+          body_path: RELEASE_NOTES.md
+          files: final-release/*
+          prerelease: true
+          generate_release_notes: true
