@@ -79,9 +79,8 @@ pub const NIST_VALID_NAME_CHAIN_CAPS_5_EE_DER: &[u8] = include_bytes!(
 );
 
 /// Valid Name UIDs Test 6 EE
-pub const NIST_VALID_NAME_UIDS_6_EE_DER: &[u8] = include_bytes!(
-    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameUIDsTest6EE.crt"
-);
+pub const NIST_VALID_NAME_UIDS_6_EE_DER: &[u8] =
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameUIDsTest6EE.crt");
 
 // -------------------- Basic Constraints Tests --------------------
 
@@ -200,9 +199,8 @@ pub const NIST_POLICIES_P12_CA_DER: &[u8] =
     include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/PoliciesP12CACert.crt");
 
 /// Policies P123 CA Certificate
-pub const NIST_POLICIES_P123_CA_DER: &[u8] = include_bytes!(
-    "../../tests/cert_validator/fixtures/nist_pkits/certs/PoliciesP123CACert.crt"
-);
+pub const NIST_POLICIES_P123_CA_DER: &[u8] =
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/PoliciesP123CACert.crt");
 
 /// anyPolicy CA Certificate
 pub const NIST_ANY_POLICY_CA_DER: &[u8] =
@@ -372,9 +370,8 @@ pub const NIST_DELTA_CRL_CA2_DER: &[u8] =
     include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/deltaCRLCA2Cert.crt");
 
 /// Valid Delta CRL Test 2 EE
-pub const NIST_VALID_DELTA_CRL_2_EE_DER: &[u8] = include_bytes!(
-    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValiddeltaCRLTest2EE.crt"
-);
+pub const NIST_VALID_DELTA_CRL_2_EE_DER: &[u8] =
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/ValiddeltaCRLTest2EE.crt");
 
 /// Invalid Delta CRL Test 3 EE
 pub const NIST_INVALID_DELTA_CRL_3_EE_DER: &[u8] = include_bytes!(
