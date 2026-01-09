@@ -6,45 +6,45 @@
 /// Trust Anchor Root Certificate (self-signed CA)
 /// Subject: CN=Trust Anchor, O=Test Certificates 2011, C=US
 pub const NIST_TRUST_ANCHOR_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/TrustAnchorRootCertificate.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/TrustAnchorRootCertificate.crt"
 );
 
 /// Good CA Certificate (signed by Trust Anchor)
 /// Subject: CN=Good CA, O=Test Certificates 2011, C=US
 pub const NIST_GOOD_CA_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/GoodCACert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/GoodCACert.crt");
 
 /// Valid Certificate Path Test 1 EE (end entity, signed by Good CA)
 pub const NIST_VALID_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidCertificatePathTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidCertificatePathTest1EE.crt"
 );
 
 /// Bad Signed CA Certificate (invalid signature)
 pub const NIST_BAD_SIGNED_CA_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/BadSignedCACert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/BadSignedCACert.crt");
 
 /// Invalid CA Signature Test 2 EE
 pub const NIST_INVALID_SIG_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidCASignatureTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidCASignatureTest2EE.crt"
 );
 
 /// DSA CA Certificate
 pub const NIST_DSA_CA_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/DSACACert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/DSACACert.crt");
 
 /// Valid DSA Signatures Test 4 EE
 pub const NIST_VALID_DSA_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidDSASignaturesTest4EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidDSASignaturesTest4EE.crt"
 );
 
 /// Certificate with expired notAfter
 pub const NIST_BAD_NOT_AFTER_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/BadnotAfterDateCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/BadnotAfterDateCACert.crt"
 );
 
 /// Certificate with future notBefore
 pub const NIST_BAD_NOT_BEFORE_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/BadnotBeforeDateCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/BadnotBeforeDateCACert.crt"
 );
 
 // ============================================================================
@@ -55,573 +55,573 @@ pub const NIST_BAD_NOT_BEFORE_CA_DER: &[u8] = include_bytes!(
 
 /// Invalid Name Chaining Test 1 EE - Name chain broken
 pub const NIST_INVALID_NAME_CHAIN_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidNameChainingTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidNameChainingTest1EE.crt"
 );
 
 /// Invalid Name Chaining Order Test 2 EE
 pub const NIST_INVALID_NAME_CHAIN_ORDER_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidNameChainingOrderTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidNameChainingOrderTest2EE.crt"
 );
 
 /// Valid Name Chaining Whitespace Test 3 EE
 pub const NIST_VALID_NAME_CHAIN_WHITESPACE_3_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameChainingWhitespaceTest3EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameChainingWhitespaceTest3EE.crt"
 );
 
 /// Valid Name Chaining Whitespace Test 4 EE
 pub const NIST_VALID_NAME_CHAIN_WHITESPACE_4_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameChainingWhitespaceTest4EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameChainingWhitespaceTest4EE.crt"
 );
 
 /// Valid Name Chaining Capitalization Test 5 EE
 pub const NIST_VALID_NAME_CHAIN_CAPS_5_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameChainingCapitalizationTest5EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameChainingCapitalizationTest5EE.crt"
 );
 
 /// Valid Name UIDs Test 6 EE
 pub const NIST_VALID_NAME_UIDS_6_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameUIDsTest6EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNameUIDsTest6EE.crt"
 );
 
 // -------------------- Basic Constraints Tests --------------------
 
 /// Basic Constraints Critical CA False Certificate
 pub const NIST_BASIC_CONSTRAINTS_CA_FALSE_CRITICAL_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/basicConstraintsCriticalcAFalseCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/basicConstraintsCriticalcAFalseCACert.crt"
 );
 
 /// Basic Constraints Not Critical Certificate
 pub const NIST_BASIC_CONSTRAINTS_NOT_CRITICAL_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/basicConstraintsNotCriticalCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/basicConstraintsNotCriticalCACert.crt"
 );
 
 /// Missing Basic Constraints CA Certificate
 pub const NIST_MISSING_BASIC_CONSTRAINTS_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/MissingbasicConstraintsCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/MissingbasicConstraintsCACert.crt"
 );
 
 /// Invalid Missing Basic Constraints Test 1 EE
 pub const NIST_INVALID_MISSING_BASIC_CONSTRAINTS_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidMissingbasicConstraintsTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidMissingbasicConstraintsTest1EE.crt"
 );
 
 /// Invalid CA False Test 2 EE
 pub const NIST_INVALID_CA_FALSE_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidcAFalseTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidcAFalseTest2EE.crt"
 );
 
 /// Invalid CA False Test 3 EE
 pub const NIST_INVALID_CA_FALSE_3_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidcAFalseTest3EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidcAFalseTest3EE.crt"
 );
 
 /// Valid Basic Constraints Not Critical Test 4 EE
 pub const NIST_VALID_BASIC_CONSTRAINTS_4_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidbasicConstraintsNotCriticalTest4EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidbasicConstraintsNotCriticalTest4EE.crt"
 );
 
 // -------------------- Path Length Constraint Tests --------------------
 
 /// Path Length Constraint 0 CA Certificate
 pub const NIST_PATH_LEN_0_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/pathLenConstraint0CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/pathLenConstraint0CACert.crt"
 );
 
 /// Path Length Constraint 1 CA Certificate
 pub const NIST_PATH_LEN_1_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/pathLenConstraint1CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/pathLenConstraint1CACert.crt"
 );
 
 /// Path Length Constraint 6 CA Certificate
 pub const NIST_PATH_LEN_6_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/pathLenConstraint6CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/pathLenConstraint6CACert.crt"
 );
 
 /// Invalid Path Length Constraint Test 5 EE
 pub const NIST_INVALID_PATH_LEN_5_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidpathLenConstraintTest5EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidpathLenConstraintTest5EE.crt"
 );
 
 /// Invalid Path Length Constraint Test 6 EE
 pub const NIST_INVALID_PATH_LEN_6_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidpathLenConstraintTest6EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidpathLenConstraintTest6EE.crt"
 );
 
 /// Valid Path Length Constraint Test 7 EE
 pub const NIST_VALID_PATH_LEN_7_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidpathLenConstraintTest7EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidpathLenConstraintTest7EE.crt"
 );
 
 /// Valid Path Length Constraint Test 8 EE
 pub const NIST_VALID_PATH_LEN_8_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidpathLenConstraintTest8EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidpathLenConstraintTest8EE.crt"
 );
 
 // -------------------- Key Usage Tests --------------------
 
 /// Key Usage Critical keyCertSign False CA Certificate
 pub const NIST_KEY_USAGE_CRITICAL_CERT_SIGN_FALSE_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/keyUsageCriticalkeyCertSignFalseCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/keyUsageCriticalkeyCertSignFalseCACert.crt"
 );
 
 /// Key Usage Critical cRLSign False CA Certificate
 pub const NIST_KEY_USAGE_CRITICAL_CRL_SIGN_FALSE_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/keyUsageCriticalcRLSignFalseCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/keyUsageCriticalcRLSignFalseCACert.crt"
 );
 
 /// Key Usage Not Critical CA Certificate
 pub const NIST_KEY_USAGE_NOT_CRITICAL_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/keyUsageNotCriticalCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/keyUsageNotCriticalCACert.crt"
 );
 
 /// Invalid Key Usage Critical keyCertSign False Test 1 EE
 pub const NIST_INVALID_KEY_USAGE_CERT_SIGN_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidkeyUsageCriticalkeyCertSignFalseTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidkeyUsageCriticalkeyCertSignFalseTest1EE.crt"
 );
 
 /// Invalid Key Usage Not Critical keyCertSign False Test 2 EE
 pub const NIST_INVALID_KEY_USAGE_CERT_SIGN_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidkeyUsageNotCriticalkeyCertSignFalseTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidkeyUsageNotCriticalkeyCertSignFalseTest2EE.crt"
 );
 
 /// Valid Key Usage Not Critical Test 3 EE
 pub const NIST_VALID_KEY_USAGE_3_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidkeyUsageNotCriticalTest3EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidkeyUsageNotCriticalTest3EE.crt"
 );
 
 // -------------------- Certificate Policy Tests --------------------
 
 /// No Policies CA Certificate
 pub const NIST_NO_POLICIES_CA_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/NoPoliciesCACert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/NoPoliciesCACert.crt");
 
 /// Policies P12 CA Certificate
 pub const NIST_POLICIES_P12_CA_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/PoliciesP12CACert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/PoliciesP12CACert.crt");
 
 /// Policies P123 CA Certificate
 pub const NIST_POLICIES_P123_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/PoliciesP123CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/PoliciesP123CACert.crt"
 );
 
 /// anyPolicy CA Certificate
 pub const NIST_ANY_POLICY_CA_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/anyPolicyCACert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/anyPolicyCACert.crt");
 
 /// All Certificates No Policies Test 2 EE
 pub const NIST_ALL_CERTS_NO_POLICIES_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/AllCertificatesNoPoliciesTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/AllCertificatesNoPoliciesTest2EE.crt"
 );
 
 /// All Certificates Same Policies Test 10 EE
 pub const NIST_ALL_CERTS_SAME_POLICIES_10_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/AllCertificatesSamePoliciesTest10EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/AllCertificatesSamePoliciesTest10EE.crt"
 );
 
 // -------------------- Name Constraints Tests --------------------
 
 /// Name Constraints DN1 CA Certificate
 pub const NIST_NAME_CONSTRAINTS_DN1_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsDN1CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsDN1CACert.crt"
 );
 
 /// Name Constraints DN2 CA Certificate
 pub const NIST_NAME_CONSTRAINTS_DN2_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsDN2CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsDN2CACert.crt"
 );
 
 /// Name Constraints DNS1 CA Certificate
 pub const NIST_NAME_CONSTRAINTS_DNS1_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsDNS1CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsDNS1CACert.crt"
 );
 
 /// Name Constraints RFC822 CA1 Certificate
 pub const NIST_NAME_CONSTRAINTS_RFC822_CA1_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsRFC822CA1Cert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsRFC822CA1Cert.crt"
 );
 
 /// Name Constraints URI1 CA Certificate
 pub const NIST_NAME_CONSTRAINTS_URI1_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsURI1CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/nameConstraintsURI1CACert.crt"
 );
 
 /// Valid DN Name Constraints Test 1 EE
 pub const NIST_VALID_DN_NAME_CONSTRAINTS_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidDNnameConstraintsTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidDNnameConstraintsTest1EE.crt"
 );
 
 /// Invalid DN Name Constraints Test 2 EE
 pub const NIST_INVALID_DN_NAME_CONSTRAINTS_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidDNnameConstraintsTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidDNnameConstraintsTest2EE.crt"
 );
 
 /// Valid DNS Name Constraints Test 30 EE
 pub const NIST_VALID_DNS_NAME_CONSTRAINTS_30_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidDNSnameConstraintsTest30EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidDNSnameConstraintsTest30EE.crt"
 );
 
 /// Invalid DNS Name Constraints Test 31 EE
 pub const NIST_INVALID_DNS_NAME_CONSTRAINTS_31_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidDNSnameConstraintsTest31EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidDNSnameConstraintsTest31EE.crt"
 );
 
 // -------------------- Self-Issued Certificate Tests --------------------
 
 /// Basic Self-Issued New Key CA Certificate
 pub const NIST_BASIC_SELF_ISSUED_NEW_KEY_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/BasicSelfIssuedNewKeyCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/BasicSelfIssuedNewKeyCACert.crt"
 );
 
 /// Basic Self-Issued Old Key CA Certificate
 pub const NIST_BASIC_SELF_ISSUED_OLD_KEY_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/BasicSelfIssuedOldKeyCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/BasicSelfIssuedOldKeyCACert.crt"
 );
 
 /// Basic Self-Issued CRL Signing Key CA Certificate
 pub const NIST_BASIC_SELF_ISSUED_CRL_SIGNING_KEY_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/BasicSelfIssuedCRLSigningKeyCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/BasicSelfIssuedCRLSigningKeyCACert.crt"
 );
 
 /// Valid Basic Self-Issued Old With New Test 1 EE
 pub const NIST_VALID_BASIC_SELF_ISSUED_OLD_WITH_NEW_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidBasicSelfIssuedOldWithNewTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidBasicSelfIssuedOldWithNewTest1EE.crt"
 );
 
 /// Invalid Basic Self-Issued Old With New Test 2 EE
 pub const NIST_INVALID_BASIC_SELF_ISSUED_OLD_WITH_NEW_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidBasicSelfIssuedOldWithNewTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidBasicSelfIssuedOldWithNewTest2EE.crt"
 );
 
 /// Valid Basic Self-Issued New With Old Test 3 EE
 pub const NIST_VALID_BASIC_SELF_ISSUED_NEW_WITH_OLD_3_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidBasicSelfIssuedNewWithOldTest3EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidBasicSelfIssuedNewWithOldTest3EE.crt"
 );
 
 // -------------------- Validity Period Tests --------------------
 
 /// Invalid CA notBefore Date Test 1 EE
 pub const NIST_INVALID_CA_NOT_BEFORE_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidCAnotBeforeDateTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidCAnotBeforeDateTest1EE.crt"
 );
 
 /// Invalid EE notBefore Date Test 2 EE
 pub const NIST_INVALID_EE_NOT_BEFORE_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidEEnotBeforeDateTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidEEnotBeforeDateTest2EE.crt"
 );
 
 /// Valid Pre-2000 UTC notBefore Date Test 3 EE
 pub const NIST_VALID_PRE2000_NOT_BEFORE_3_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/Validpre2000UTCnotBeforeDateTest3EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/Validpre2000UTCnotBeforeDateTest3EE.crt"
 );
 
 /// Valid Generalized Time notBefore Date Test 4 EE
 pub const NIST_VALID_GEN_TIME_NOT_BEFORE_4_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidGeneralizedTimenotBeforeDateTest4EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidGeneralizedTimenotBeforeDateTest4EE.crt"
 );
 
 /// Invalid CA notAfter Date Test 5 EE
 pub const NIST_INVALID_CA_NOT_AFTER_5_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidCAnotAfterDateTest5EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidCAnotAfterDateTest5EE.crt"
 );
 
 /// Invalid EE notAfter Date Test 6 EE
 pub const NIST_INVALID_EE_NOT_AFTER_6_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidEEnotAfterDateTest6EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidEEnotAfterDateTest6EE.crt"
 );
 
 /// Invalid Pre-2000 UTC EE notAfter Date Test 7 EE
 pub const NIST_INVALID_PRE2000_NOT_AFTER_7_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/Invalidpre2000UTCEEnotAfterDateTest7EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/Invalidpre2000UTCEEnotAfterDateTest7EE.crt"
 );
 
 /// Valid Generalized Time notAfter Date Test 8 EE
 pub const NIST_VALID_GEN_TIME_NOT_AFTER_8_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidGeneralizedTimenotAfterDateTest8EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidGeneralizedTimenotAfterDateTest8EE.crt"
 );
 
 // -------------------- Distribution Point Tests --------------------
 
 /// Distribution Point 1 CA Certificate
 pub const NIST_DIST_POINT_1_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/distributionPoint1CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/distributionPoint1CACert.crt"
 );
 
 /// Distribution Point 2 CA Certificate
 pub const NIST_DIST_POINT_2_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/distributionPoint2CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/distributionPoint2CACert.crt"
 );
 
 /// Valid Distribution Point Test 1 EE
 pub const NIST_VALID_DIST_POINT_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValiddistributionPointTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValiddistributionPointTest1EE.crt"
 );
 
 /// Invalid Distribution Point Test 2 EE
 pub const NIST_INVALID_DIST_POINT_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvaliddistributionPointTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvaliddistributionPointTest2EE.crt"
 );
 
 // -------------------- Delta CRL Tests --------------------
 
 /// Delta CRL CA1 Certificate
 pub const NIST_DELTA_CRL_CA1_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/deltaCRLCA1Cert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/deltaCRLCA1Cert.crt");
 
 /// Delta CRL CA2 Certificate
 pub const NIST_DELTA_CRL_CA2_DER: &[u8] =
-    include_bytes!("../../../tests/cert_validator/fixtures/nist_pkits/certs/deltaCRLCA2Cert.crt");
+    include_bytes!("../../tests/cert_validator/fixtures/nist_pkits/certs/deltaCRLCA2Cert.crt");
 
 /// Valid Delta CRL Test 2 EE
 pub const NIST_VALID_DELTA_CRL_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValiddeltaCRLTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValiddeltaCRLTest2EE.crt"
 );
 
 /// Invalid Delta CRL Test 3 EE
 pub const NIST_INVALID_DELTA_CRL_3_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvaliddeltaCRLTest3EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvaliddeltaCRLTest3EE.crt"
 );
 
 // -------------------- Inhibit Policy Mapping Tests --------------------
 
 /// Inhibit Policy Mapping 0 CA Certificate
 pub const NIST_INHIBIT_POLICY_MAPPING_0_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitPolicyMapping0CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitPolicyMapping0CACert.crt"
 );
 
 /// Inhibit Policy Mapping 5 CA Certificate
 pub const NIST_INHIBIT_POLICY_MAPPING_5_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitPolicyMapping5CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitPolicyMapping5CACert.crt"
 );
 
 /// Invalid Inhibit Policy Mapping Test 1 EE
 pub const NIST_INVALID_INHIBIT_POLICY_MAPPING_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidinhibitPolicyMappingTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidinhibitPolicyMappingTest1EE.crt"
 );
 
 /// Valid Inhibit Policy Mapping Test 2 EE
 pub const NIST_VALID_INHIBIT_POLICY_MAPPING_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidinhibitPolicyMappingTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidinhibitPolicyMappingTest2EE.crt"
 );
 
 // -------------------- Inhibit Any-Policy Tests --------------------
 
 /// Inhibit Any-Policy 0 CA Certificate
 pub const NIST_INHIBIT_ANY_POLICY_0_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitAnyPolicy0CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitAnyPolicy0CACert.crt"
 );
 
 /// Inhibit Any-Policy 1 CA Certificate
 pub const NIST_INHIBIT_ANY_POLICY_1_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitAnyPolicy1CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitAnyPolicy1CACert.crt"
 );
 
 /// Inhibit Any-Policy 5 CA Certificate
 pub const NIST_INHIBIT_ANY_POLICY_5_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitAnyPolicy5CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/inhibitAnyPolicy5CACert.crt"
 );
 
 /// Invalid Inhibit Any-Policy Test 1 EE
 pub const NIST_INVALID_INHIBIT_ANY_POLICY_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidinhibitAnyPolicyTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidinhibitAnyPolicyTest1EE.crt"
 );
 
 /// Valid Inhibit Any-Policy Test 2 EE
 pub const NIST_VALID_INHIBIT_ANY_POLICY_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidinhibitAnyPolicyTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidinhibitAnyPolicyTest2EE.crt"
 );
 
 // -------------------- Require Explicit Policy Tests --------------------
 
 /// Require Explicit Policy 0 CA Certificate
 pub const NIST_REQUIRE_EXPLICIT_POLICY_0_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/requireExplicitPolicy0CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/requireExplicitPolicy0CACert.crt"
 );
 
 /// Require Explicit Policy 2 CA Certificate
 pub const NIST_REQUIRE_EXPLICIT_POLICY_2_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/requireExplicitPolicy2CACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/requireExplicitPolicy2CACert.crt"
 );
 
 /// Valid Require Explicit Policy Test 1 EE
 pub const NIST_VALID_REQUIRE_EXPLICIT_POLICY_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidrequireExplicitPolicyTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidrequireExplicitPolicyTest1EE.crt"
 );
 
 /// Valid Require Explicit Policy Test 2 EE
 pub const NIST_VALID_REQUIRE_EXPLICIT_POLICY_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidrequireExplicitPolicyTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidrequireExplicitPolicyTest2EE.crt"
 );
 
 /// Invalid Require Explicit Policy Test 3 EE
 pub const NIST_INVALID_REQUIRE_EXPLICIT_POLICY_3_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidrequireExplicitPolicyTest3EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidrequireExplicitPolicyTest3EE.crt"
 );
 
 // -------------------- Encoding Tests (UTF-8, Generalized Time, etc.) --------------------
 
 /// UTF-8 String Encoded Names CA Certificate
 pub const NIST_UTF8_ENCODED_NAMES_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/UTF8StringEncodedNamesCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/UTF8StringEncodedNamesCACert.crt"
 );
 
 /// UTF-8 String Case Insensitive Match CA Certificate
 pub const NIST_UTF8_CASE_INSENSITIVE_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/UTF8StringCaseInsensitiveMatchCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/UTF8StringCaseInsensitiveMatchCACert.crt"
 );
 
 /// Rollover from Printable String to UTF-8 String CA Certificate
 pub const NIST_ROLLOVER_PRINTABLE_UTF8_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/RolloverfromPrintableStringtoUTF8StringCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/RolloverfromPrintableStringtoUTF8StringCACert.crt"
 );
 
 /// Valid UTF-8 String Encoded Names Test 9 EE
 pub const NIST_VALID_UTF8_ENCODED_9_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidUTF8StringEncodedNamesTest9EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidUTF8StringEncodedNamesTest9EE.crt"
 );
 
 /// Valid Rollover from Printable String to UTF-8 String Test 10 EE
 pub const NIST_VALID_ROLLOVER_UTF8_10_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidRolloverfromPrintableStringtoUTF8StringTest10EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidRolloverfromPrintableStringtoUTF8StringTest10EE.crt"
 );
 
 /// Valid UTF-8 String Case Insensitive Match Test 11 EE
 pub const NIST_VALID_UTF8_CASE_INSENSITIVE_11_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidUTF8StringCaseInsensitiveMatchTest11EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidUTF8StringCaseInsensitiveMatchTest11EE.crt"
 );
 
 /// Generalized Time CRL next Update CA Certificate
 pub const NIST_GEN_TIME_CRL_NEXT_UPDATE_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/GeneralizedTimeCRLnextUpdateCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/GeneralizedTimeCRLnextUpdateCACert.crt"
 );
 
 /// Valid Generalized Time CRL next Update Test 13 EE
 pub const NIST_VALID_GEN_TIME_CRL_13_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidGeneralizedTimeCRLnextUpdateTest13EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidGeneralizedTimeCRLnextUpdateTest13EE.crt"
 );
 
 // -------------------- Serial Number Tests --------------------
 
 /// Negative Serial Number CA Certificate
 pub const NIST_NEGATIVE_SERIAL_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/NegativeSerialNumberCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/NegativeSerialNumberCACert.crt"
 );
 
 /// Long Serial Number CA Certificate
 pub const NIST_LONG_SERIAL_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/LongSerialNumberCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/LongSerialNumberCACert.crt"
 );
 
 /// Valid Negative Serial Number Test 14 EE
 pub const NIST_VALID_NEGATIVE_SERIAL_14_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNegativeSerialNumberTest14EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidNegativeSerialNumberTest14EE.crt"
 );
 
 /// Invalid Negative Serial Number Test 15 EE
 pub const NIST_INVALID_NEGATIVE_SERIAL_15_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidNegativeSerialNumberTest15EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidNegativeSerialNumberTest15EE.crt"
 );
 
 /// Valid Long Serial Number Test 16 EE
 pub const NIST_VALID_LONG_SERIAL_16_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidLongSerialNumberTest16EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidLongSerialNumberTest16EE.crt"
 );
 
 /// Valid Long Serial Number Test 17 EE
 pub const NIST_VALID_LONG_SERIAL_17_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidLongSerialNumberTest17EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidLongSerialNumberTest17EE.crt"
 );
 
 /// Invalid Long Serial Number Test 18 EE
 pub const NIST_INVALID_LONG_SERIAL_18_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidLongSerialNumberTest18EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidLongSerialNumberTest18EE.crt"
 );
 
 // -------------------- Separate Certificate and CRL Keys Tests --------------------
 
 /// Separate Certificate and CRL Keys Certificate Signing CA Certificate
 pub const NIST_SEPARATE_CERT_CRL_KEYS_CERT_SIGNING_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/SeparateCertificateandCRLKeysCertificateSigningCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/SeparateCertificateandCRLKeysCertificateSigningCACert.crt"
 );
 
 /// Separate Certificate and CRL Keys CRL Signing Certificate
 pub const NIST_SEPARATE_CERT_CRL_KEYS_CRL_SIGNING_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/SeparateCertificateandCRLKeysCRLSigningCert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/SeparateCertificateandCRLKeysCRLSigningCert.crt"
 );
 
 /// Valid Separate Certificate and CRL Keys Test 19 EE
 pub const NIST_VALID_SEPARATE_CERT_CRL_KEYS_19_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidSeparateCertificateandCRLKeysTest19EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidSeparateCertificateandCRLKeysTest19EE.crt"
 );
 
 /// Invalid Separate Certificate and CRL Keys Test 20 EE
 pub const NIST_INVALID_SEPARATE_CERT_CRL_KEYS_20_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidSeparateCertificateandCRLKeysTest20EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidSeparateCertificateandCRLKeysTest20EE.crt"
 );
 
 // -------------------- RFC 3280 Attribute Types Tests --------------------
 
 /// RFC 3280 Mandatory Attribute Types CA Certificate
 pub const NIST_RFC3280_MANDATORY_ATTR_TYPES_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/RFC3280MandatoryAttributeTypesCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/RFC3280MandatoryAttributeTypesCACert.crt"
 );
 
 /// RFC 3280 Optional Attribute Types CA Certificate
 pub const NIST_RFC3280_OPTIONAL_ATTR_TYPES_CA_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/RFC3280OptionalAttributeTypesCACert.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/RFC3280OptionalAttributeTypesCACert.crt"
 );
 
 /// Valid RFC 3280 Mandatory Attribute Types Test 7 EE
 pub const NIST_VALID_RFC3280_MANDATORY_7_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidRFC3280MandatoryAttributeTypesTest7EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidRFC3280MandatoryAttributeTypesTest7EE.crt"
 );
 
 /// Valid RFC 3280 Optional Attribute Types Test 8 EE
 pub const NIST_VALID_RFC3280_OPTIONAL_8_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidRFC3280OptionalAttributeTypesTest8EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidRFC3280OptionalAttributeTypesTest8EE.crt"
 );
 
 // -------------------- Unknown Critical Extension Tests --------------------
 
 /// Valid Unknown Not Critical Certificate Extension Test 1 EE
 pub const NIST_VALID_UNKNOWN_EXT_1_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/ValidUnknownNotCriticalCertificateExtensionTest1EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidUnknownNotCriticalCertificateExtensionTest1EE.crt"
 );
 
 /// Invalid Unknown Critical Certificate Extension Test 2 EE
 pub const NIST_INVALID_UNKNOWN_EXT_2_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidUnknownCriticalCertificateExtensionTest2EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/InvalidUnknownCriticalCertificateExtensionTest2EE.crt"
 );
 
 // -------------------- User Notice Qualifier Tests --------------------
 
 /// User Notice Qualifier Test 15 EE
 pub const NIST_USER_NOTICE_15_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest15EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest15EE.crt"
 );
 
 /// User Notice Qualifier Test 16 EE
 pub const NIST_USER_NOTICE_16_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest16EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest16EE.crt"
 );
 
 /// User Notice Qualifier Test 17 EE
 pub const NIST_USER_NOTICE_17_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest17EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest17EE.crt"
 );
 
 /// User Notice Qualifier Test 18 EE
 pub const NIST_USER_NOTICE_18_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest18EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest18EE.crt"
 );
 
 /// User Notice Qualifier Test 19 EE
 pub const NIST_USER_NOTICE_19_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest19EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/UserNoticeQualifierTest19EE.crt"
 );
 
 /// CPS Pointer Qualifier Test 20 EE
 pub const NIST_CPS_POINTER_20_EE_DER: &[u8] = include_bytes!(
-    "../../../tests/cert_validator/fixtures/nist_pkits/certs/CPSPointerQualifierTest20EE.crt"
+    "../../tests/cert_validator/fixtures/nist_pkits/certs/CPSPointerQualifierTest20EE.crt"
 );
 
 // ============================================================================
