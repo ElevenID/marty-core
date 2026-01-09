@@ -21,6 +21,7 @@ aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka"]
 cert-builder = []   # Certificate building utilities for Python bindings
 serde = []
+test-fixtures = []  # Enable NIST PKITS test fixtures (requires downloading fixtures)
 full = ["iaca", "csca", "aamva-client", "icao-client", "serde", "cert-builder"]
 
 [dependencies]

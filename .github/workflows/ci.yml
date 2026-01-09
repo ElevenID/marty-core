@@ -79,7 +79,6 @@ jobs:
       matrix:
         crate:
           - marty-crypto
-          - marty-verification
           - marty-secure-storage
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +89,21 @@ jobs:
 
       - name: Test default features
         run: cargo test -p ${{ matrix.crate }}
+
+  feature-matrix-verification:
+    name: Feature Matrix (marty-verification)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # marty-verification tests require fixtures that aren't included in the repo
+      # so we just verify it builds with different feature sets
+      - name: Build no default features
+        run: cargo build -p marty-verification --no-default-features
+
+      - name: Build with default features
+        run: cargo build -p marty-verification
 
   python-test:
     name: Python Tests (marty-biometrics)

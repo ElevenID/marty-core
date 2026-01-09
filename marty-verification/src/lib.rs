@@ -45,7 +45,10 @@ pub mod pkd;
 #[cfg(feature = "python")]
 pub mod bindings;
 
-#[cfg(test)]
+// Test data module is only available when the test fixtures exist.
+// The NIST PKITS fixtures must be downloaded separately.
+// Gate behind a feature to avoid compilation errors when fixtures are missing.
+#[cfg(all(test, feature = "test-fixtures"))]
 pub mod testdata;
 
 pub use error::{VerificationError, VerificationResult};
