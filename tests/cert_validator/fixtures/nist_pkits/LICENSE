@@ -1,0 +1,22 @@
+# NIST PKITS Test Data License
+
+This directory contains test data from the NIST PKI Testing Suite (PKITS).
+
+## Source
+
+Downloaded from:
+https://csrc.nist.gov/projects/pki-testing
+
+## License
+
+This material was developed by the National Institute of Standards and Technology
+(NIST), an agency of the U.S. Department of Commerce.
+
+As works of the United States Government, NIST publications are not subject to
+copyright protection in the United States. See 17 U.S.C. § 105.
+
+This data is in the **public domain** and may be freely used, distributed,
+and reproduced.
+
+For more information, see:
+https://www.nist.gov/oism/copyrights

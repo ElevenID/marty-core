@@ -97,13 +97,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
-      # marty-verification tests require fixtures that aren't included in the repo
-      # so we just verify it builds with different feature sets
       - name: Build no default features
         run: cargo build -p marty-verification --no-default-features
 
       - name: Build with default features
         run: cargo build -p marty-verification
+
+      - name: Run tests with fixtures
+        run: cargo test -p marty-verification --features test-fixtures
 
   python-test:
     name: Python Tests (marty-biometrics)
