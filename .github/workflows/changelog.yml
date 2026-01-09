@@ -25,7 +25,7 @@ jobs:
 
       - name: Generate changelog
         run: |
-          git cliff --unreleased --prepend CHANGELOG.md --tag unreleased
+          git cliff -c .cliff.toml --unreleased --prepend CHANGELOG.md --tag unreleased
 
       - name: Commit changelog
         uses: stefanzweifel/git-auto-commit-action@v5
