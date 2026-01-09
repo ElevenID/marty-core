@@ -3,14 +3,12 @@
 //! This module provides an async client for fetching CSCA/DSC certificates
 //! from the ICAO Public Key Directory for eMRTD verification.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
 use x509_cert::Certificate;
 
 use crate::error::{VerificationError, VerificationResult};
-use crate::trust_anchor::{CscaRegistry, TrustAnchor, TrustPurpose, TrustRegistry};
+use crate::trust_anchor::CscaRegistry;
 
 /// ICAO PKD client configuration.
 #[derive(Debug, Clone)]
@@ -108,20 +106,17 @@ impl IcaoPkdClient {
     pub async fn fetch_master_list(&self) -> VerificationResult<Vec<MasterListEntry>> {
         // Note: The actual ICAO PKD uses LDIF format. This is a simplified implementation.
         // A production implementation would parse the LDIF files properly.
+        let endpoint = format!("{}/csca", self.config.base_url);
 
-        let response = self
-            .http_client
-            .get(format!("{}/csca", self.config.base_url))
-            .send()
-            .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                reason: format!("Master List fetch failed: {}", e),
-            })?;
+        let response = self.http_client.get(&endpoint).send().await.map_err(|e| {
+            VerificationError::pkd_fetch(&endpoint, format!("Master List fetch failed: {}", e))
+        })?;
 
         if !response.status().is_success() {
-            return Err(VerificationError::PkdFetchError {
-                reason: format!("Master List fetch failed: {}", response.status()),
-            });
+            return Err(VerificationError::pkd_fetch(
+                endpoint,
+                format!("Master List fetch failed: {}", response.status()),
+            ));
         }
 
         // In a real implementation, this would parse LDIF format
@@ -132,19 +127,20 @@ impl IcaoPkdClient {
 
     /// Fetch DSC certificates for a specific country.
     pub async fn fetch_country_dsc(&self, country: &str) -> VerificationResult<Vec<DscEntry>> {
-        let response = self
-            .http_client
-            .get(format!("{}/dsc/{}", self.config.base_url, country))
-            .send()
-            .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                reason: format!("DSC fetch for {} failed: {}", country, e),
-            })?;
+        let endpoint = format!("{}/dsc/{}", self.config.base_url, country);
+
+        let response = self.http_client.get(&endpoint).send().await.map_err(|e| {
+            VerificationError::pkd_fetch(
+                &endpoint,
+                format!("DSC fetch for {} failed: {}", country, e),
+            )
+        })?;
 
         if !response.status().is_success() {
-            return Err(VerificationError::PkdFetchError {
-                reason: format!("DSC fetch for {} failed: {}", country, response.status()),
-            });
+            return Err(VerificationError::pkd_fetch(
+                endpoint,
+                format!("DSC fetch for {} failed: {}", country, response.status()),
+            ));
         }
 
         // Placeholder - would parse LDIF in production
@@ -153,14 +149,14 @@ impl IcaoPkdClient {
 
     /// Fetch CRL for a specific country.
     pub async fn fetch_country_crl(&self, country: &str) -> VerificationResult<Option<CrlEntry>> {
-        let response = self
-            .http_client
-            .get(format!("{}/crl/{}", self.config.base_url, country))
-            .send()
-            .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                reason: format!("CRL fetch for {} failed: {}", country, e),
-            })?;
+        let endpoint = format!("{}/crl/{}", self.config.base_url, country);
+
+        let response = self.http_client.get(&endpoint).send().await.map_err(|e| {
+            VerificationError::pkd_fetch(
+                &endpoint,
+                format!("CRL fetch for {} failed: {}", country, e),
+            )
+        })?;
 
         if response.status().is_success() {
             // Placeholder - would parse CRL in production
@@ -169,9 +165,10 @@ impl IcaoPkdClient {
             // No CRL available for this country
             Ok(None)
         } else {
-            Err(VerificationError::PkdFetchError {
-                reason: format!("CRL fetch for {} failed: {}", country, response.status()),
-            })
+            Err(VerificationError::pkd_fetch(
+                endpoint,
+                format!("CRL fetch for {} failed: {}", country, response.status()),
+            ))
         }
     }
 

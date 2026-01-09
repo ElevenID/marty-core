@@ -138,6 +138,8 @@ impl CryptoError {
         Self::Encryption(msg.into())
     }
 
+    /// Alias for encryption error (deprecated, use `encryption` instead)
+    #[allow(clippy::self_named_constructors)]
     pub fn crypto_error(msg: impl Into<String>) -> Self {
         Self::Encryption(msg.into())
     }

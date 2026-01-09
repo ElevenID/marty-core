@@ -144,19 +144,9 @@ pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
         }
     }
 
-    if should_verify_signature(&assertion) {
-        match verify_signature(&assertion, &store) {
-            Ok(warn) => {
-                if let Some(w) = warn {
-                    warnings.push(w);
-                }
-            }
-            Err(err) => {
-                errors.push(err.to_string());
-                error_codes_out.push(err.code().to_string());
-            }
-        }
-    } else if assertion.get("signature").is_some() {
+    // Verify signature if the verification type indicates signed assertion,
+    // or if a signature field is present (even without explicit signed verification type)
+    if should_verify_signature(&assertion) || assertion.get("signature").is_some() {
         match verify_signature(&assertion, &store) {
             Ok(warn) => {
                 if let Some(w) = warn {

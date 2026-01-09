@@ -688,7 +688,7 @@ impl SecureStorage {
     ) -> Result<(), StorageError> {
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
-        let details_str = details.map(|d| serde_json::to_string(d)).transpose()?;
+        let details_str = details.map(serde_json::to_string).transpose()?;
 
         conn.execute(
             r#"
@@ -714,13 +714,11 @@ fn get_schema_version(conn: &Connection) -> Result<i32, StorageError> {
 }
 
 fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), StorageError> {
-    if current_version < 2 {
-        if !column_exists(conn, "license_state", "verifications_total")? {
-            conn.execute(
-                "ALTER TABLE license_state ADD COLUMN verifications_total INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
+    if current_version < 2 && !column_exists(conn, "license_state", "verifications_total")? {
+        conn.execute(
+            "ALTER TABLE license_state ADD COLUMN verifications_total INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
 
     Ok(())

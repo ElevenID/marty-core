@@ -11,7 +11,6 @@
 
 use pyo3::prelude::*;
 
-use crate::error::BiometricError;
 use crate::types::*;
 use crate::{BiometricProvider, FaceVerifier};
 
@@ -233,7 +232,7 @@ impl PyFaceVerifier {
     fn local() -> PyResult<Self> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-        let provider = BiometricProvider::local().map_err(BiometricError::from)?;
+        let provider = BiometricProvider::local()?;
         Ok(Self { provider, runtime })
     }
 
@@ -248,17 +247,13 @@ impl PyFaceVerifier {
     fn verify(&self, request: &PyFaceVerificationRequest) -> PyResult<PyFaceVerificationResult> {
         let result = self
             .runtime
-            .block_on(self.provider.verify(request.inner.clone()))
-            .map_err(BiometricError::from)?;
+            .block_on(self.provider.verify(request.inner.clone()))?;
         Ok(PyFaceVerificationResult { inner: result })
     }
 
     /// Assess image quality for face verification
     fn assess_quality(&self, image: &str) -> PyResult<PyFaceQualityAssessment> {
-        let result = self
-            .runtime
-            .block_on(self.provider.assess_quality(image))
-            .map_err(BiometricError::from)?;
+        let result = self.runtime.block_on(self.provider.assess_quality(image))?;
         Ok(PyFaceQualityAssessment { inner: result })
     }
 }

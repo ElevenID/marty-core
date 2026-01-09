@@ -600,7 +600,7 @@ pub struct OcspCheckResult {
 ///
 /// # Returns
 /// OCSP check result with certificate status.
-#[cfg(feature = "aamva-client")]
+#[cfg(all(feature = "reqwest", feature = "aamva-client"))]
 pub async fn ocsp_check(
     cert_der: &[u8],
     issuer_cert_der: &[u8],
@@ -652,7 +652,7 @@ pub async fn ocsp_check(
 ///
 /// Uses HTTP GET with base64-encoded request in URL (per RFC 6960).
 /// Useful when POST is not supported by the responder.
-#[cfg(feature = "aamva-client")]
+#[cfg(all(feature = "reqwest", feature = "aamva-client"))]
 pub async fn ocsp_check_get(
     cert_der: &[u8],
     issuer_cert_der: &[u8],
@@ -821,7 +821,7 @@ impl Default for OcspClientConfig {
 /// - In-memory LRU cache with TTL based on OCSP nextUpdate
 /// - Configurable timeouts
 /// - Session reuse via persistent reqwest::Client
-#[cfg(feature = "ocsp-client")]
+#[cfg(all(feature = "reqwest", feature = "ocsp-client"))]
 pub struct OcspClient {
     /// HTTP client with session reuse
     http_client: reqwest::Client,
@@ -831,7 +831,7 @@ pub struct OcspClient {
     config: OcspClientConfig,
 }
 
-#[cfg(feature = "ocsp-client")]
+#[cfg(all(feature = "reqwest", feature = "ocsp-client"))]
 impl OcspClient {
     /// Create a new OCSP client with default configuration.
     pub fn new() -> Self {
@@ -1038,7 +1038,7 @@ impl OcspClient {
     }
 }
 
-#[cfg(feature = "ocsp-client")]
+#[cfg(all(feature = "reqwest", feature = "ocsp-client"))]
 impl Default for OcspClient {
     fn default() -> Self {
         Self::new()
@@ -1088,7 +1088,7 @@ mod tests {
         assert_eq!(unknown, OcspCertStatus::Unknown);
     }
 
-    #[cfg(feature = "ocsp-client")]
+    #[cfg(all(feature = "reqwest", feature = "ocsp-client"))]
     #[test]
     fn test_ocsp_client_config_defaults() {
         let config = OcspClientConfig::default();

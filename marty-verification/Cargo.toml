@@ -19,8 +19,9 @@ csca = []           # ePassport/eMRTD verification
 python = ["pyo3"]   # Python bindings
 aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka"]
+cert-builder = []   # Certificate building utilities for Python bindings
 serde = []
-full = ["iaca", "csca", "aamva-client", "icao-client", "serde"]
+full = ["iaca", "csca", "aamva-client", "icao-client", "serde", "cert-builder"]
 
 [dependencies]
 # Internal crate
@@ -85,3 +86,4 @@ hex = "0.4"
 tempfile = { workspace = true }
 tokio = { workspace = true }
 rcgen = { workspace = true }
+time = "0.3"

@@ -171,7 +171,7 @@ fn extract_crl_info(crl: &CertificateList) -> CryptoResult<CrlInfo> {
     let this_update = format_time(&tbs.this_update);
 
     // Extract next_update
-    let next_update = tbs.next_update.as_ref().map(|t| format_time(t));
+    let next_update = tbs.next_update.as_ref().map(format_time);
 
     // Extract CRL number and delta CRL indicator from extensions
     let (crl_number, is_delta_crl) = extract_crl_extensions(tbs);
@@ -399,7 +399,8 @@ impl CrlBuilder {
         }
 
         // Try RSA
-        use rsa::{pkcs8::DecodePrivateKey as _, RsaPrivateKey};
+        use rsa::pkcs8::DecodePrivateKey as _;
+        use rsa::RsaPrivateKey;
         if let Ok(signing_key) = RsaPrivateKey::from_pkcs8_pem(ca_key_pem) {
             return self.build_with_rsa(&signing_key);
         }
@@ -644,7 +645,7 @@ impl CrlBuilder {
 
             result.push(RevokedCert {
                 serial_number: serial,
-                revocation_date: revocation_time.clone(),
+                revocation_date: revocation_time,
                 crl_entry_extensions: None, // TODO: add reason extension if present
             });
         }

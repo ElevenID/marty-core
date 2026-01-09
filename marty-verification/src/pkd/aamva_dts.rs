@@ -3,13 +3,11 @@
 //! This module provides an async client for fetching IACA certificates
 //! from the AAMVA Digital Trust Service.
 
-use std::collections::HashMap;
-
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use x509_cert::Certificate;
 
 use crate::error::{VerificationError, VerificationResult};
-use crate::trust_anchor::{IacaRegistry, Jurisdiction, TrustAnchor, TrustPurpose, TrustRegistry};
+use crate::trust_anchor::{IacaRegistry, TrustAnchor, TrustPurpose, TrustRegistry};
 
 /// AAMVA DTS client configuration.
 #[derive(Debug, Clone)]
@@ -43,15 +41,13 @@ impl AamvaDtsConfig {
             base_url: std::env::var("AAMVA_DTS_BASE_URL")
                 .unwrap_or_else(|_| "https://dts.aamva.org/api/v1".to_string()),
             client_id: std::env::var("AAMVA_DTS_CLIENT_ID")
-                .map_err(|_| VerificationError::PkdAuthError {
-                    reason: "AAMVA_DTS_CLIENT_ID environment variable not set. Set this to your AAMVA DTS OAuth client ID.".to_string(),
-                    code: crate::error::codes::PKD_AUTH_ERROR,
-                })?,
+                .map_err(|_| VerificationError::pkd_auth(
+                    "AAMVA_DTS_CLIENT_ID environment variable not set. Set this to your AAMVA DTS OAuth client ID."
+                ))?,
             client_secret: std::env::var("AAMVA_DTS_CLIENT_SECRET")
-                .map_err(|_| VerificationError::PkdAuthError {
-                    reason: "AAMVA_DTS_CLIENT_SECRET environment variable not set. Set this to your AAMVA DTS OAuth client secret.".to_string(),
-                    code: crate::error::codes::PKD_AUTH_ERROR,
-                })?,
+                .map_err(|_| VerificationError::pkd_auth(
+                    "AAMVA_DTS_CLIENT_SECRET environment variable not set. Set this to your AAMVA DTS OAuth client secret."
+                ))?,
             token_endpoint: std::env::var("AAMVA_DTS_TOKEN_ENDPOINT")
                 .unwrap_or_else(|_| "https://dts.aamva.org/oauth/token".to_string()),
         })
@@ -91,6 +87,7 @@ pub struct VicalCertificate {
 
 /// OAuth token response.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct TokenResponse {
     access_token: String,
     token_type: String,
@@ -114,8 +111,6 @@ impl AamvaDtsClient {
 
     /// Authenticate with the DTS OAuth endpoint.
     async fn authenticate(&mut self) -> VerificationResult<()> {
-        use crate::error::codes;
-
         let params = [
             ("grant_type", "client_credentials"),
             ("client_id", &self.config.client_id),
@@ -128,29 +123,26 @@ impl AamvaDtsClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| VerificationError::PkdAuthError {
-                reason: format!(
+            .map_err(|e| {
+                VerificationError::pkd_auth(format!(
                     "OAuth request to {} failed: {}. Check network connectivity and endpoint URL.",
                     self.config.token_endpoint, e
-                ),
-                code: codes::PKD_AUTH_ERROR,
+                ))
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(VerificationError::PkdAuthError {
-                reason: format!("OAuth authentication failed with status {}: {}. Verify client_id and client_secret are correct.",
-                    status, body),
-                code: codes::PKD_AUTH_ERROR,
-            });
+            return Err(VerificationError::pkd_auth(format!(
+                "OAuth authentication failed with status {}: {}. Verify client_id and client_secret are correct.",
+                status, body
+            )));
         }
 
         let token: TokenResponse = response.json().await
-            .map_err(|e| VerificationError::PkdAuthError {
-                reason: format!("Failed to parse OAuth token response: {}. The DTS endpoint may have changed its response format.", e),
-                code: codes::PKD_AUTH_ERROR,
-            })?;
+            .map_err(|e| VerificationError::pkd_auth(format!(
+                "Failed to parse OAuth token response: {}. The DTS endpoint may have changed its response format.", e
+            )))?;
 
         self.access_token = Some(token.access_token);
         Ok(())
@@ -166,8 +158,6 @@ impl AamvaDtsClient {
 
     /// Fetch the complete VICAL (Verifier IACA Certificate Authority List).
     pub async fn fetch_vical(&mut self) -> VerificationResult<VicalResponse> {
-        use crate::error::codes;
-
         let token = self.ensure_authenticated().await?.to_string();
         let endpoint = format!("{}/vical", self.config.base_url);
 
@@ -177,37 +167,33 @@ impl AamvaDtsClient {
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                endpoint: endpoint.clone(),
-                reason: format!("Network request failed: {}. Check DTS connectivity.", e),
-                code: codes::PKD_FETCH_ERROR,
-                source: None,
+            .map_err(|e| {
+                VerificationError::pkd_fetch(
+                    &endpoint,
+                    format!("Network request failed: {}. Check DTS connectivity.", e),
+                )
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(VerificationError::PkdFetchError {
+            return Err(VerificationError::pkd_fetch(
                 endpoint,
-                reason: format!("HTTP {} - {}. The access token may have expired or the DTS service is unavailable.", 
+                format!("HTTP {} - {}. The access token may have expired or the DTS service is unavailable.", 
                     status, body),
-                code: codes::PKD_FETCH_ERROR,
-                source: None,
-            });
+            ));
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                endpoint,
-                reason: format!(
+        let endpoint_clone = endpoint.clone();
+        response.json().await.map_err(|e| {
+            VerificationError::pkd_fetch(
+                endpoint_clone,
+                format!(
                     "Invalid VICAL JSON response: {}. The DTS response format may have changed.",
                     e
                 ),
-                code: codes::PKD_FETCH_ERROR,
-                source: None,
-            })
+            )
+        })
     }
 
     /// Fetch IACA certificate for a specific jurisdiction.
@@ -216,33 +202,36 @@ impl AamvaDtsClient {
         jurisdiction: &str,
     ) -> VerificationResult<VicalCertificate> {
         let token = self.ensure_authenticated().await?.to_string();
+        let endpoint = format!("{}/iaca/{}", self.config.base_url, jurisdiction);
 
         let response = self
             .http_client
-            .get(format!("{}/iaca/{}", self.config.base_url, jurisdiction))
+            .get(&endpoint)
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                reason: format!("IACA fetch failed: {}", e),
+            .map_err(|e| {
+                VerificationError::pkd_fetch(&endpoint, format!("IACA fetch failed: {}", e))
             })?;
 
         if !response.status().is_success() {
-            return Err(VerificationError::PkdFetchError {
-                reason: format!(
+            return Err(VerificationError::pkd_fetch(
+                &endpoint,
+                format!(
                     "IACA fetch for {} failed: {}",
                     jurisdiction,
                     response.status()
                 ),
-            });
+            ));
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                reason: format!("Failed to parse IACA response: {}", e),
-            })
+        let endpoint_clone = endpoint.clone();
+        response.json().await.map_err(|e| {
+            VerificationError::pkd_fetch(
+                endpoint_clone,
+                format!("Failed to parse IACA response: {}", e),
+            )
+        })
     }
 
     /// Fetch delta updates since a specific VICAL version.
@@ -251,30 +240,33 @@ impl AamvaDtsClient {
         since_version: &str,
     ) -> VerificationResult<VicalResponse> {
         let token = self.ensure_authenticated().await?.to_string();
+        let endpoint = format!("{}/vical/delta", self.config.base_url);
 
         let response = self
             .http_client
-            .get(format!("{}/vical/delta", self.config.base_url))
+            .get(&endpoint)
             .query(&[("since", since_version)])
             .bearer_auth(&token)
             .send()
             .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                reason: format!("VICAL delta fetch failed: {}", e),
+            .map_err(|e| {
+                VerificationError::pkd_fetch(&endpoint, format!("VICAL delta fetch failed: {}", e))
             })?;
 
         if !response.status().is_success() {
-            return Err(VerificationError::PkdFetchError {
-                reason: format!("VICAL delta fetch failed: {}", response.status()),
-            });
+            return Err(VerificationError::pkd_fetch(
+                &endpoint,
+                format!("VICAL delta fetch failed: {}", response.status()),
+            ));
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| VerificationError::PkdFetchError {
-                reason: format!("Failed to parse VICAL delta response: {}", e),
-            })
+        let endpoint_clone = endpoint.clone();
+        response.json().await.map_err(|e| {
+            VerificationError::pkd_fetch(
+                endpoint_clone,
+                format!("Failed to parse VICAL delta response: {}", e),
+            )
+        })
     }
 
     /// Sync an IACA registry with the latest VICAL.

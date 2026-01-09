@@ -519,4 +519,42 @@ impl VerificationError {
             span_trace: SpanTrace::capture(),
         })
     }
+
+    /// Create a PKD fetch error.
+    pub fn pkd_fetch(endpoint: impl Into<String>, reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::PkdFetchError {
+            endpoint: endpoint.into(),
+            reason: reason.into(),
+            code: codes::PKD_FETCH_ERROR,
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a PKD fetch error with source.
+    pub fn pkd_fetch_with_source(
+        endpoint: impl Into<String>,
+        reason: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Box<Self> {
+        Box::new(Self::PkdFetchError {
+            endpoint: endpoint.into(),
+            reason: reason.into(),
+            code: codes::PKD_FETCH_ERROR,
+            source: Some(Box::new(source)),
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a PKD authentication error.
+    pub fn pkd_auth(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::PkdAuthError {
+            reason: reason.into(),
+            code: codes::PKD_AUTH_ERROR,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
 }

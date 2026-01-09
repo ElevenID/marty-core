@@ -64,6 +64,7 @@ pub fn hkdf_sha512(ikm: &[u8], salt: &[u8], info: &[u8], length: usize) -> Crypt
 }
 
 /// Derive keys using HKDF with specified algorithm.
+#[allow(deprecated)]
 pub fn hkdf(
     algorithm: HashAlgorithm,
     ikm: &[u8],

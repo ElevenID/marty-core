@@ -465,8 +465,6 @@ impl CertificateBuilderConfig {
 
     /// Build P-256 ECDSA self-signed certificate.
     fn build_self_signed_p256(&self) -> CryptoResult<(Vec<u8>, String)> {
-        use p256::ecdsa::signature::Signer;
-
         // Generate P-256 key pair
         let signing_key = P256SigningKey::random(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
@@ -720,8 +718,6 @@ impl CertificateBuilderConfig {
         signing_key: &P256SigningKey,
         public_key_bytes: &[u8],
     ) -> CryptoResult<Vec<u8>> {
-        use p256::ecdsa::signature::Signer;
-
         // Build subject name
         let subject = self.build_name(&self.subject)?;
         let issuer = self
@@ -763,8 +759,6 @@ impl CertificateBuilderConfig {
         signing_key: &p384::ecdsa::SigningKey,
         public_key_bytes: &[u8],
     ) -> CryptoResult<Vec<u8>> {
-        use p384::ecdsa::signature::Signer;
-
         // Build subject name
         let subject = self.build_name(&self.subject)?;
         let issuer = self
@@ -805,7 +799,6 @@ impl CertificateBuilderConfig {
         &self,
         private_key: &rsa::RsaPrivateKey,
     ) -> CryptoResult<Vec<u8>> {
-        use rsa::pkcs1::EncodeRsaPublicKey;
         use rsa::pkcs8::EncodePublicKey;
 
         // Build subject name
@@ -1887,8 +1880,7 @@ impl CsrBuilderConfig {
     }
 
     fn build_csr_rsa(&self) -> CryptoResult<(Vec<u8>, String)> {
-        use rsa::{pkcs8::EncodePrivateKey as _, pkcs8::EncodePublicKey, RsaPrivateKey};
-        use std::str::FromStr;
+        use rsa::{pkcs8::EncodePrivateKey as _, RsaPrivateKey};
 
         let bits = match self.key_type {
             KeyType::Rsa2048 => 2048,

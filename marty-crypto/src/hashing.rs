@@ -15,6 +15,7 @@ use super::HashAlgorithm;
 /// # Returns
 ///
 /// The hash digest as a byte vector.
+#[allow(deprecated)]
 pub fn hash(algorithm: HashAlgorithm, data: &[u8]) -> Vec<u8> {
     match algorithm {
         HashAlgorithm::Sha1 => hash_sha1(data),
@@ -72,6 +73,7 @@ enum HasherState {
 
 impl IncrementalHasher {
     /// Create a new incremental hasher.
+    #[allow(deprecated)]
     pub fn new(algorithm: HashAlgorithm) -> Self {
         let state = match algorithm {
             HashAlgorithm::Sha1 => HasherState::Sha1(Sha1::new()),

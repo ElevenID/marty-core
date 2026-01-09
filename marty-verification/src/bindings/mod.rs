@@ -40,6 +40,35 @@ use crate::trust_anchor::{
 };
 use crate::verification::mdl::{AuthStatus, MdlVerificationResult, ValidationRuleset};
 
+/// Trait for converting various error types to PyErr
+trait IntoPyErr {
+    fn into_pyerr(self) -> PyErr;
+}
+
+impl IntoPyErr for marty_crypto::CryptoError {
+    fn into_pyerr(self) -> PyErr {
+        let verr: VerificationError = self.into();
+        verr.into()
+    }
+}
+
+impl IntoPyErr for VerificationError {
+    fn into_pyerr(self) -> PyErr {
+        self.into()
+    }
+}
+
+impl IntoPyErr for Box<VerificationError> {
+    fn into_pyerr(self) -> PyErr {
+        (*self).into()
+    }
+}
+
+/// Helper function to convert any error implementing IntoPyErr to PyErr
+fn to_pyerr<E: IntoPyErr>(e: E) -> PyErr {
+    e.into_pyerr()
+}
+
 /// Python wrapper for MdlVerificationResult.
 #[pyclass(name = "MdlVerificationResult")]
 #[derive(Clone)]
@@ -120,7 +149,7 @@ impl PyIacaRegistry {
     #[staticmethod]
     fn from_directory(path: &str) -> PyResult<Self> {
         let registry =
-            IacaRegistry::from_directory(std::path::Path::new(path)).map_err(|e| PyErr::from(e))?;
+            IacaRegistry::from_directory(std::path::Path::new(path)).map_err(to_pyerr)?;
         Ok(Self { inner: registry })
     }
 
@@ -137,14 +166,12 @@ impl PyIacaRegistry {
             .collect();
 
         let basic_registry =
-            BasicTrustRegistry::from_pem_certificates(pem_anchors).map_err(|e| PyErr::from(e))?;
+            BasicTrustRegistry::from_pem_certificates(pem_anchors).map_err(to_pyerr)?;
 
         // Convert to IacaRegistry
         let mut iaca_registry = IacaRegistry::new();
         for anchor in basic_registry.get_anchors() {
-            iaca_registry
-                .add_anchor(anchor.clone())
-                .map_err(|e| PyErr::from(e))?;
+            iaca_registry.add_anchor(anchor.clone()).map_err(to_pyerr)?;
         }
 
         Ok(Self {
@@ -167,7 +194,7 @@ impl PyIacaRegistry {
             jurisdiction: jurisdiction.map(|s| s.to_string()),
         };
 
-        self.inner.add_anchor(anchor).map_err(|e| PyErr::from(e))
+        self.inner.add_anchor(anchor).map_err(to_pyerr)
     }
 
     /// Get the number of certificates in the registry.
@@ -211,7 +238,7 @@ fn verify_mdl_x5chain(
     let pem_bytes: Vec<Vec<u8>> = x5chain_pem.iter().map(|s| s.as_bytes().to_vec()).collect();
     let pem_refs: Vec<&[u8]> = pem_bytes.iter().map(|v| v.as_slice()).collect();
 
-    let x5chain = build_x5chain_from_pem(&pem_refs).map_err(|e| PyErr::from(e))?;
+    let x5chain = build_x5chain_from_pem(&pem_refs).map_err(to_pyerr)?;
 
     // Select ruleset
     let validation_ruleset = match ruleset.unwrap_or("aamva_mdl") {
@@ -239,7 +266,7 @@ fn verify_mdl_x5chain_cbor(
 ) -> PyResult<PyMdlVerificationResult> {
     use crate::verification::mdl::{parse_x5chain_from_cbor, verify_x5chain};
 
-    let x5chain = parse_x5chain_from_cbor(x5chain_cbor).map_err(|e| PyErr::from(e))?;
+    let x5chain = parse_x5chain_from_cbor(x5chain_cbor).map_err(to_pyerr)?;
 
     let validation_ruleset = match ruleset.unwrap_or("aamva_mdl") {
         "mdl" => ValidationRuleset::Mdl,
@@ -370,7 +397,7 @@ impl PyMrzData {
 #[pyfunction]
 fn parse_mrz(lines: Vec<String>) -> PyResult<PyMrzData> {
     let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-    let mrz = crate::mrz::parse_mrz(&line_refs).map_err(|e| PyErr::from(e))?;
+    let mrz = crate::mrz::parse_mrz(&line_refs).map_err(to_pyerr)?;
     Ok(mrz.into())
 }
 
@@ -477,7 +504,7 @@ impl PyRevokedCertificate {
 ///     CrlInfo with parsed information
 #[pyfunction]
 fn parse_crl(der_bytes: &[u8]) -> PyResult<PyCrlInfo> {
-    let crl = crate::asn1::crl::parse_crl(der_bytes).map_err(|e| PyErr::from(e))?;
+    let crl = crate::asn1::crl::parse_crl(der_bytes).map_err(to_pyerr)?;
 
     let revoked: Vec<PyRevokedCertificate> = crl
         .revoked_certificates
@@ -514,11 +541,11 @@ fn check_certificate_revocation(
     crl_der: &[u8],
 ) -> PyResult<(bool, Option<String>)> {
     // Parse the CRL first
-    let crl = crate::asn1::crl::parse_crl(crl_der).map_err(|e| PyErr::from(e))?;
+    let crl = crate::asn1::crl::parse_crl(crl_der).map_err(to_pyerr)?;
 
     // Check against the parsed CRL
     let result = crate::asn1::check_certificate_revocation(cert_serial, cert_issuer, &[crl])
-        .map_err(|e| PyErr::from(e))?;
+        .map_err(to_pyerr)?;
 
     match result {
         Some(reason) => Ok((true, Some(format!("{:?}", reason)))),
@@ -594,8 +621,7 @@ fn verify_signature(
         }
     };
 
-    marty_crypto::verify_signature(alg, public_key_der, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::verify_signature(alg, public_key_der, message, signature).map_err(to_pyerr)
 }
 
 // ============================================================================
@@ -631,7 +657,7 @@ impl PyDeviceResponse {
 
     /// Get mDL fields from the first org.iso.18013.5.1 namespace.
     fn get_mdl_fields(&self) -> PyResult<std::collections::HashMap<String, String>> {
-        let fields = self.inner.get_mdl_fields().map_err(|e| PyErr::from(e))?;
+        let fields = self.inner.get_mdl_fields().map_err(to_pyerr)?;
         // Convert Vec<(String, Value)> to HashMap<String, String>
         let map: std::collections::HashMap<String, String> = fields
             .into_iter()
@@ -700,8 +726,7 @@ impl PyDeviceResponse {
 ///     DeviceResponse with parsed information
 #[pyfunction]
 fn parse_device_response(cbor_bytes: &[u8]) -> PyResult<PyDeviceResponse> {
-    let response =
-        crate::mdoc::DeviceResponse::from_cbor(cbor_bytes).map_err(|e| PyErr::from(e))?;
+    let response = crate::mdoc::DeviceResponse::from_cbor(cbor_bytes).map_err(to_pyerr)?;
 
     Ok(PyDeviceResponse {
         version: response.version.clone(),
@@ -760,6 +785,7 @@ impl PyValidationConfig {
         ocsp_responder_url = None,
         ocsp_timeout_secs = 10
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         check_crl: bool,
         check_ocsp: bool,
@@ -971,35 +997,27 @@ impl PyChainValidator {
 
     /// Add a trust anchor (root CA) from PEM.
     fn add_trust_anchor(&mut self, pem: &str) -> PyResult<()> {
-        self.inner
-            .add_trust_anchor_pem(pem)
-            .map_err(|e| PyErr::from(e))
+        self.inner.add_trust_anchor_pem(pem).map_err(to_pyerr)
     }
 
     /// Add a trust anchor from DER bytes.
     fn add_trust_anchor_der(&mut self, der: &[u8]) -> PyResult<()> {
-        self.inner
-            .add_trust_anchor_der(der)
-            .map_err(|e| PyErr::from(e))
+        self.inner.add_trust_anchor_der(der).map_err(to_pyerr)
     }
 
     /// Add an intermediate certificate from PEM.
     fn add_intermediate(&mut self, pem: &str) -> PyResult<()> {
-        self.inner
-            .add_intermediate_pem(pem)
-            .map_err(|e| PyErr::from(e))
+        self.inner.add_intermediate_pem(pem).map_err(to_pyerr)
     }
 
     /// Add an intermediate certificate from DER bytes.
     fn add_intermediate_der(&mut self, der: &[u8]) -> PyResult<()> {
-        self.inner
-            .add_intermediate_der(der)
-            .map_err(|e| PyErr::from(e))
+        self.inner.add_intermediate_der(der).map_err(to_pyerr)
     }
 
     /// Add a CRL for revocation checking.
     fn add_crl(&mut self, crl_der: &[u8]) -> PyResult<()> {
-        let crl = crate::asn1::crl::parse_crl(crl_der).map_err(|e| PyErr::from(e))?;
+        let crl = crate::asn1::crl::parse_crl(crl_der).map_err(to_pyerr)?;
         self.inner.add_crl(crl);
         Ok(())
     }
@@ -1012,10 +1030,7 @@ impl PyChainValidator {
     /// Returns:
     ///     ChainValidationResult with validation status
     fn validate_chain(&self, chain_pem: Vec<String>) -> PyResult<PyChainValidationResult> {
-        let result = self
-            .inner
-            .validate_chain(&chain_pem)
-            .map_err(|e| PyErr::from(e))?;
+        let result = self.inner.validate_chain(&chain_pem).map_err(to_pyerr)?;
         Ok(result.into())
     }
 
@@ -1030,7 +1045,7 @@ impl PyChainValidator {
         let result = self
             .inner
             .validate_certificate(cert_pem)
-            .map_err(|e| PyErr::from(e))?;
+            .map_err(to_pyerr)?;
         Ok(result.into())
     }
 
@@ -1058,9 +1073,7 @@ impl PyChainValidator {
         // Note: This is a workaround since we can't directly access internals
         // The validator should be pre-configured with trust anchors
 
-        let result = validator
-            .validate_chain(&chain_pem)
-            .map_err(|e| PyErr::from(e))?;
+        let result = validator.validate_chain(&chain_pem).map_err(to_pyerr)?;
         Ok(result.into())
     }
 
@@ -1095,24 +1108,21 @@ impl PyChainValidator {
 /// Load a certificate from PEM format, return DER bytes.
 #[pyfunction]
 fn load_certificate_pem<'py>(py: Python<'py>, pem_data: &str) -> PyResult<Bound<'py, PyBytes>> {
-    let der =
-        marty_crypto::certificate::load_certificate_pem(pem_data).map_err(|e| PyErr::from(e))?;
+    let der = marty_crypto::certificate::load_certificate_pem(pem_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
 /// Validate a certificate DER encoding.
 #[pyfunction]
 fn load_certificate_der<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-    let _cert =
-        marty_crypto::certificate::load_certificate_der(der_data).map_err(|e| PyErr::from(e))?;
+    let _cert = marty_crypto::certificate::load_certificate_der(der_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, der_data))
 }
 
 /// Get certificate info as a dictionary.
 #[pyfunction]
 fn get_certificate_info<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound<'py, PyDict>> {
-    let info =
-        marty_crypto::certificate::get_certificate_info(der_data).map_err(|e| PyErr::from(e))?;
+    let info = marty_crypto::certificate::get_certificate_info(der_data).map_err(to_pyerr)?;
 
     let dict = PyDict::new(py);
     dict.set_item("subject", &info.subject)?;
@@ -1130,14 +1140,14 @@ fn get_certificate_info<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound
 /// Convert certificate PEM to DER.
 #[pyfunction]
 fn certificate_pem_to_der<'py>(py: Python<'py>, pem_data: &str) -> PyResult<Bound<'py, PyBytes>> {
-    let der = marty_crypto::certificate::pem_to_der(pem_data).map_err(|e| PyErr::from(e))?;
+    let der = marty_crypto::certificate::pem_to_der(pem_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
 /// Convert certificate DER to PEM.
 #[pyfunction]
 fn certificate_der_to_pem(der_data: &[u8]) -> PyResult<String> {
-    marty_crypto::certificate::der_to_pem(der_data).map_err(|e| PyErr::from(e))
+    marty_crypto::certificate::der_to_pem(der_data).map_err(to_pyerr)
 }
 
 /// Get certificate public key in SPKI DER format.
@@ -1146,28 +1156,27 @@ fn get_certificate_public_key<'py>(
     py: Python<'py>,
     der_data: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let pubkey = marty_crypto::certificate::get_certificate_public_key(der_data)
-        .map_err(|e| PyErr::from(e))?;
+    let pubkey =
+        marty_crypto::certificate::get_certificate_public_key(der_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &pubkey))
 }
 
 /// Check if a certificate is expired.
 #[pyfunction]
 fn is_certificate_expired(der_data: &[u8]) -> PyResult<bool> {
-    marty_crypto::certificate::is_certificate_expired(der_data).map_err(|e| PyErr::from(e))
+    marty_crypto::certificate::is_certificate_expired(der_data).map_err(to_pyerr)
 }
 
 /// Check if a certificate is not yet valid.
 #[pyfunction]
 fn is_certificate_not_yet_valid(der_data: &[u8]) -> PyResult<bool> {
-    marty_crypto::certificate::is_certificate_not_yet_valid(der_data).map_err(|e| PyErr::from(e))
+    marty_crypto::certificate::is_certificate_not_yet_valid(der_data).map_err(to_pyerr)
 }
 
 /// Verify that a certificate was signed by another certificate.
 #[pyfunction]
 fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -> PyResult<bool> {
-    marty_crypto::certificate::verify_certificate_signature(cert_der, issuer_der)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::certificate::verify_certificate_signature(cert_der, issuer_der).map_err(to_pyerr)
 }
 
 // ============================================================================
@@ -1177,45 +1186,41 @@ fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -> PyResult<
 /// Load a private key from PEM format, return PKCS#8 DER.
 #[pyfunction]
 fn load_private_key_pem<'py>(py: Python<'py>, pem_data: &str) -> PyResult<Bound<'py, PyBytes>> {
-    let der =
-        marty_crypto::serialization::load_private_key_pem(pem_data).map_err(|e| PyErr::from(e))?;
+    let der = marty_crypto::serialization::load_private_key_pem(pem_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
 /// Validate/load a private key from DER format.
 #[pyfunction]
 fn load_private_key_der<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-    let der =
-        marty_crypto::serialization::load_private_key_der(der_data).map_err(|e| PyErr::from(e))?;
+    let der = marty_crypto::serialization::load_private_key_der(der_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
 /// Save a private key to PEM format (PKCS#8).
 #[pyfunction]
 fn save_private_key_pem(private_key_der: &[u8]) -> PyResult<String> {
-    marty_crypto::serialization::save_private_key_pem(private_key_der).map_err(|e| PyErr::from(e))
+    marty_crypto::serialization::save_private_key_pem(private_key_der).map_err(to_pyerr)
 }
 
 /// Load a public key from PEM format (SPKI), return DER.
 #[pyfunction]
 fn load_public_key_pem<'py>(py: Python<'py>, pem_data: &str) -> PyResult<Bound<'py, PyBytes>> {
-    let der =
-        marty_crypto::serialization::load_public_key_pem(pem_data).map_err(|e| PyErr::from(e))?;
+    let der = marty_crypto::serialization::load_public_key_pem(pem_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
 /// Validate/load a public key from DER format.
 #[pyfunction]
 fn load_public_key_der<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-    let der =
-        marty_crypto::serialization::load_public_key_der(der_data).map_err(|e| PyErr::from(e))?;
+    let der = marty_crypto::serialization::load_public_key_der(der_data).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
 /// Save a public key to PEM format (SPKI).
 #[pyfunction]
 fn save_public_key_pem(public_key_der: &[u8]) -> PyResult<String> {
-    marty_crypto::serialization::save_public_key_pem(public_key_der).map_err(|e| PyErr::from(e))
+    marty_crypto::serialization::save_public_key_pem(public_key_der).map_err(to_pyerr)
 }
 
 /// Extract public key from private key (PKCS#8 DER).
@@ -1224,27 +1229,27 @@ fn extract_public_key<'py>(
     py: Python<'py>,
     private_key_der: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let pubkey = marty_crypto::serialization::extract_public_key(private_key_der)
-        .map_err(|e| PyErr::from(e))?;
+    let pubkey =
+        marty_crypto::serialization::extract_public_key(private_key_der).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &pubkey))
 }
 
 /// Detect the type of a private key.
 #[pyfunction]
 fn detect_private_key_type(der_data: &[u8]) -> PyResult<String> {
-    marty_crypto::serialization::detect_private_key_type(der_data).map_err(|e| PyErr::from(e))
+    marty_crypto::serialization::detect_private_key_type(der_data).map_err(to_pyerr)
 }
 
 /// Detect the type of a public key.
 #[pyfunction]
 fn detect_public_key_type(der_data: &[u8]) -> PyResult<String> {
-    marty_crypto::serialization::detect_public_key_type(der_data).map_err(|e| PyErr::from(e))
+    marty_crypto::serialization::detect_public_key_type(der_data).map_err(to_pyerr)
 }
 
 /// Get the key size in bits.
 #[pyfunction]
 fn get_key_size(public_key_der: &[u8]) -> PyResult<usize> {
-    marty_crypto::serialization::get_key_size(public_key_der).map_err(|e| PyErr::from(e))
+    marty_crypto::serialization::get_key_size(public_key_der).map_err(to_pyerr)
 }
 
 /// Convert raw EC private key bytes to PKCS#8 DER format.
@@ -1255,7 +1260,7 @@ fn raw_private_key_to_pkcs8<'py>(
     key_type: &str,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let der = marty_crypto::serialization::raw_private_key_to_pkcs8(raw_key, key_type)
-        .map_err(|e| PyErr::from(e))?;
+        .map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
@@ -1266,8 +1271,8 @@ fn raw_public_key_to_spki<'py>(
     raw_key: &[u8],
     key_type: &str,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let der = marty_crypto::serialization::raw_public_key_to_spki(raw_key, key_type)
-        .map_err(|e| PyErr::from(e))?;
+    let der =
+        marty_crypto::serialization::raw_public_key_to_spki(raw_key, key_type).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &der))
 }
 
@@ -1277,8 +1282,8 @@ fn pkcs8_to_raw_private_key<'py>(
     py: Python<'py>,
     pkcs8_der: &[u8],
 ) -> PyResult<(Bound<'py, PyBytes>, String)> {
-    let (raw, key_type) = marty_crypto::serialization::pkcs8_to_raw_private_key(pkcs8_der)
-        .map_err(|e| PyErr::from(e))?;
+    let (raw, key_type) =
+        marty_crypto::serialization::pkcs8_to_raw_private_key(pkcs8_der).map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &raw), key_type))
 }
 
@@ -1288,8 +1293,8 @@ fn spki_to_raw_public_key<'py>(
     py: Python<'py>,
     spki_der: &[u8],
 ) -> PyResult<(Bound<'py, PyBytes>, String)> {
-    let (raw, key_type) = marty_crypto::serialization::spki_to_raw_public_key(spki_der)
-        .map_err(|e| PyErr::from(e))?;
+    let (raw, key_type) =
+        marty_crypto::serialization::spki_to_raw_public_key(spki_der).map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &raw), key_type))
 }
 
@@ -1302,8 +1307,7 @@ fn hkdf_sha256<'py>(
     info: &[u8],
     length: usize,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let result =
-        marty_crypto::kdf::hkdf_sha256(ikm, salt, info, length).map_err(|e| PyErr::from(e))?;
+    let result = marty_crypto::kdf::hkdf_sha256(ikm, salt, info, length).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &result))
 }
 
@@ -1316,8 +1320,7 @@ fn hkdf_sha384<'py>(
     info: &[u8],
     length: usize,
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let result =
-        marty_crypto::kdf::hkdf_sha384(ikm, salt, info, length).map_err(|e| PyErr::from(e))?;
+    let result = marty_crypto::kdf::hkdf_sha384(ikm, salt, info, length).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &result))
 }
 
@@ -1356,7 +1359,7 @@ fn aes_gcm_encrypt<'py>(
             ))
         }
     }
-    .map_err(|e| PyErr::from(e))?;
+    .map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &result))
 }
 
@@ -1378,7 +1381,7 @@ fn aes_gcm_decrypt<'py>(
             ))
         }
     }
-    .map_err(|e| PyErr::from(e))?;
+    .map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &result))
 }
 
@@ -1390,8 +1393,8 @@ fn tdes_cbc_encrypt<'py>(
     iv: &[u8],
     plaintext: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let result = marty_crypto::des::tdes_cbc_encrypt_padded(key, iv, plaintext)
-        .map_err(|e| PyErr::from(e))?;
+    let result =
+        marty_crypto::des::tdes_cbc_encrypt_padded(key, iv, plaintext).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &result))
 }
 
@@ -1403,8 +1406,8 @@ fn tdes_cbc_decrypt<'py>(
     iv: &[u8],
     ciphertext: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let result = marty_crypto::des::tdes_cbc_decrypt_padded(key, iv, ciphertext)
-        .map_err(|e| PyErr::from(e))?;
+    let result =
+        marty_crypto::des::tdes_cbc_decrypt_padded(key, iv, ciphertext).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &result))
 }
 
@@ -1426,7 +1429,7 @@ fn ed25519_sign<'py>(
     secret_key: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ed25519::sign(secret_key, message).map_err(|e| PyErr::from(e))?;
+    let signature = marty_crypto::ed25519::sign(secret_key, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1456,9 +1459,9 @@ fn x25519_agree<'py>(
     secret_key: &[u8],
     peer_public: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let keypair = marty_crypto::ecdh::X25519KeyPair::from_secret_key(secret_key)
-        .map_err(|e| PyErr::from(e))?;
-    let shared = keypair.agree(peer_public).map_err(|e| PyErr::from(e))?;
+    let keypair =
+        marty_crypto::ecdh::X25519KeyPair::from_secret_key(secret_key).map_err(to_pyerr)?;
+    let shared = keypair.agree(peer_public).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &shared))
 }
 
@@ -1476,8 +1479,7 @@ fn p256_agree<'py>(
     secret_key: &[u8],
     peer_public: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let result =
-        marty_crypto::ecdh::p256_agree(secret_key, peer_public).map_err(|e| PyErr::from(e))?;
+    let result = marty_crypto::ecdh::p256_agree(secret_key, peer_public).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &result))
 }
 
@@ -1490,8 +1492,7 @@ fn p256_agree<'py>(
 fn ecdsa_p256_generate<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) =
-        marty_crypto::ecdsa::generate_p256_keypair().map_err(|e| PyErr::from(e))?;
+    let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
@@ -1500,8 +1501,7 @@ fn ecdsa_p256_generate<'py>(
 fn ecdsa_p384_generate<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) =
-        marty_crypto::ecdsa::generate_p384_keypair().map_err(|e| PyErr::from(e))?;
+    let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
@@ -1512,8 +1512,7 @@ fn ecdsa_p256_sign<'py>(
     secret_key: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::ecdsa::sign_p256_sha256(secret_key, message).map_err(|e| PyErr::from(e))?;
+    let signature = marty_crypto::ecdsa::sign_p256_sha256(secret_key, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1524,23 +1523,20 @@ fn ecdsa_p384_sign<'py>(
     secret_key: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::ecdsa::sign_p384_sha384(secret_key, message).map_err(|e| PyErr::from(e))?;
+    let signature = marty_crypto::ecdsa::sign_p384_sha384(secret_key, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
 /// Verify an ECDSA P-256 SHA-256 signature.
 #[pyfunction]
 fn ecdsa_p256_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
-    marty_crypto::ecdsa::verify_p256_sha256(public_key, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::ecdsa::verify_p256_sha256(public_key, message, signature).map_err(to_pyerr)
 }
 
 /// Verify an ECDSA P-384 SHA-384 signature.
 #[pyfunction]
 fn ecdsa_p384_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
-    marty_crypto::ecdsa::verify_p384_sha384(public_key, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::ecdsa::verify_p384_sha384(public_key, message, signature).map_err(to_pyerr)
 }
 
 /// Generate a P-521 ECDSA key pair for signing.
@@ -1548,8 +1544,7 @@ fn ecdsa_p384_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyR
 fn ecdsa_p521_generate<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) =
-        marty_crypto::ecdsa::generate_p521_keypair().map_err(|e| PyErr::from(e))?;
+    let (secret, public) = marty_crypto::ecdsa::generate_p521_keypair().map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
@@ -1560,16 +1555,14 @@ fn ecdsa_p521_sign<'py>(
     secret_key: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::ecdsa::sign_p521_sha512(secret_key, message).map_err(|e| PyErr::from(e))?;
+    let signature = marty_crypto::ecdsa::sign_p521_sha512(secret_key, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
 /// Verify an ECDSA P-521 SHA-512 signature.
 #[pyfunction]
 fn ecdsa_p521_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
-    marty_crypto::ecdsa::verify_p521_sha512(public_key, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::ecdsa::verify_p521_sha512(public_key, message, signature).map_err(to_pyerr)
 }
 
 // ============================================================================
@@ -1584,7 +1577,7 @@ fn rsa_generate<'py>(
     bits: usize,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (private_der, public_der) =
-        marty_crypto::rsa::generate_rsa_keypair(bits).map_err(|e| PyErr::from(e))?;
+        marty_crypto::rsa::generate_rsa_keypair(bits).map_err(to_pyerr)?;
     Ok((
         PyBytes::new(py, &private_der),
         PyBytes::new(py, &public_der),
@@ -1598,8 +1591,8 @@ fn rsa_pkcs1_sha256_sign<'py>(
     private_key_der: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::rsa::sign_pkcs1_sha256(private_key_der, message)
-        .map_err(|e| PyErr::from(e))?;
+    let signature =
+        marty_crypto::rsa::sign_pkcs1_sha256(private_key_der, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1610,8 +1603,8 @@ fn rsa_pkcs1_sha384_sign<'py>(
     private_key_der: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::rsa::sign_pkcs1_sha384(private_key_der, message)
-        .map_err(|e| PyErr::from(e))?;
+    let signature =
+        marty_crypto::rsa::sign_pkcs1_sha384(private_key_der, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1622,8 +1615,8 @@ fn rsa_pkcs1_sha512_sign<'py>(
     private_key_der: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::rsa::sign_pkcs1_sha512(private_key_der, message)
-        .map_err(|e| PyErr::from(e))?;
+    let signature =
+        marty_crypto::rsa::sign_pkcs1_sha512(private_key_der, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1635,7 +1628,7 @@ fn rsa_pss_sha256_sign<'py>(
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
     let signature =
-        marty_crypto::rsa::sign_pss_sha256(private_key_der, message).map_err(|e| PyErr::from(e))?;
+        marty_crypto::rsa::sign_pss_sha256(private_key_der, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1647,7 +1640,7 @@ fn rsa_pss_sha384_sign<'py>(
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
     let signature =
-        marty_crypto::rsa::sign_pss_sha384(private_key_der, message).map_err(|e| PyErr::from(e))?;
+        marty_crypto::rsa::sign_pss_sha384(private_key_der, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1659,7 +1652,7 @@ fn rsa_pss_sha512_sign<'py>(
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
     let signature =
-        marty_crypto::rsa::sign_pss_sha512(private_key_der, message).map_err(|e| PyErr::from(e))?;
+        marty_crypto::rsa::sign_pss_sha512(private_key_der, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1670,8 +1663,7 @@ fn rsa_pkcs1_sha256_verify(
     message: &[u8],
     signature: &[u8],
 ) -> PyResult<bool> {
-    marty_crypto::rsa::verify_pkcs1_sha256(public_key_der, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::rsa::verify_pkcs1_sha256(public_key_der, message, signature).map_err(to_pyerr)
 }
 
 /// Verify an RSA PKCS#1 v1.5 SHA-384 signature.
@@ -1681,8 +1673,7 @@ fn rsa_pkcs1_sha384_verify(
     message: &[u8],
     signature: &[u8],
 ) -> PyResult<bool> {
-    marty_crypto::rsa::verify_pkcs1_sha384(public_key_der, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::rsa::verify_pkcs1_sha384(public_key_der, message, signature).map_err(to_pyerr)
 }
 
 /// Verify an RSA PKCS#1 v1.5 SHA-512 signature.
@@ -1692,8 +1683,7 @@ fn rsa_pkcs1_sha512_verify(
     message: &[u8],
     signature: &[u8],
 ) -> PyResult<bool> {
-    marty_crypto::rsa::verify_pkcs1_sha512(public_key_der, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::rsa::verify_pkcs1_sha512(public_key_der, message, signature).map_err(to_pyerr)
 }
 
 /// Verify an RSA-PSS SHA-256 signature.
@@ -1703,8 +1693,7 @@ fn rsa_pss_sha256_verify(
     message: &[u8],
     signature: &[u8],
 ) -> PyResult<bool> {
-    marty_crypto::rsa::verify_pss_sha256(public_key_der, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::rsa::verify_pss_sha256(public_key_der, message, signature).map_err(to_pyerr)
 }
 
 /// Verify an RSA-PSS SHA-384 signature.
@@ -1714,8 +1703,7 @@ fn rsa_pss_sha384_verify(
     message: &[u8],
     signature: &[u8],
 ) -> PyResult<bool> {
-    marty_crypto::rsa::verify_pss_sha384(public_key_der, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::rsa::verify_pss_sha384(public_key_der, message, signature).map_err(to_pyerr)
 }
 
 /// Verify an RSA-PSS SHA-512 signature.
@@ -1725,8 +1713,7 @@ fn rsa_pss_sha512_verify(
     message: &[u8],
     signature: &[u8],
 ) -> PyResult<bool> {
-    marty_crypto::rsa::verify_pss_sha512(public_key_der, message, signature)
-        .map_err(|e| PyErr::from(e))
+    marty_crypto::rsa::verify_pss_sha512(public_key_der, message, signature).map_err(to_pyerr)
 }
 
 // ============================================================================
@@ -1769,7 +1756,7 @@ fn generate_key<'py>(
         }
     };
 
-    let key = generate_keypair(kt).map_err(|e| PyErr::from(e))?;
+    let key = generate_keypair(kt).map_err(to_pyerr)?;
     Ok((
         PyBytes::new(py, &key.private_key),
         PyBytes::new(py, &key.public_key),
@@ -1844,19 +1831,19 @@ impl PyJwk {
 
     /// Serialize to JSON.
     fn to_json(&self) -> PyResult<String> {
-        self.inner.to_json().map_err(|e| PyErr::from(e))
+        self.inner.to_json().map_err(to_pyerr)
     }
 
     /// Parse from JSON.
     #[staticmethod]
     fn from_json(json: &str) -> PyResult<Self> {
-        let inner = crate::jwk::Jwk::from_json(json).map_err(|e| PyErr::from(e))?;
+        let inner = crate::jwk::Jwk::from_json(json).map_err(to_pyerr)?;
         Ok(Self { inner })
     }
 
     /// Compute the thumbprint.
     fn thumbprint(&self) -> PyResult<String> {
-        self.inner.thumbprint().map_err(|e| PyErr::from(e))
+        self.inner.thumbprint().map_err(to_pyerr)
     }
 
     fn __repr__(&self) -> String {
@@ -1883,7 +1870,7 @@ fn jwk_generate(key_type: &str) -> PyResult<PyJwk> {
             )))
         }
     }
-    .map_err(|e| PyErr::from(e))?;
+    .map_err(to_pyerr)?;
 
     Ok(PyJwk { inner })
 }
@@ -1892,13 +1879,13 @@ fn jwk_generate(key_type: &str) -> PyResult<PyJwk> {
 #[pyfunction]
 fn jws_sign(payload: &[u8], key: &PyJwk, algorithm: &str) -> PyResult<String> {
     let header = crate::jwk::JwsHeader::new(algorithm);
-    crate::jwk::jws_sign(&header, payload, &key.inner).map_err(|e| PyErr::from(e))
+    crate::jwk::jws_sign(&header, payload, &key.inner).map_err(to_pyerr)
 }
 
 /// Verify a JWS and return the payload.
 #[pyfunction]
 fn jws_verify<'py>(py: Python<'py>, jws: &str, key: &PyJwk) -> PyResult<Bound<'py, PyBytes>> {
-    let (_, payload) = crate::jwk::jws_verify(jws, &key.inner).map_err(|e| PyErr::from(e))?;
+    let (_, payload) = crate::jwk::jws_verify(jws, &key.inner).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &payload))
 }
 
@@ -1929,14 +1916,13 @@ fn open_badge_ob3_verify(request_json: &str) -> PyResult<String> {
 /// Encrypt data and create a JWE.
 #[pyfunction]
 fn jwe_encrypt(plaintext: &[u8], recipient_key: &PyJwk, encryption: &str) -> PyResult<String> {
-    crate::jwk::jwe_encrypt_direct(plaintext, &recipient_key.inner, encryption)
-        .map_err(|e| PyErr::from(e))
+    crate::jwk::jwe_encrypt_direct(plaintext, &recipient_key.inner, encryption).map_err(to_pyerr)
 }
 
 /// Decrypt a JWE.
 #[pyfunction]
 fn jwe_decrypt<'py>(py: Python<'py>, jwe: &str, key: &PyJwk) -> PyResult<Bound<'py, PyBytes>> {
-    let plaintext = crate::jwk::jwe_decrypt(jwe, &key.inner).map_err(|e| PyErr::from(e))?;
+    let plaintext = crate::jwk::jwe_decrypt(jwe, &key.inner).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &plaintext))
 }
 
@@ -1950,8 +1936,7 @@ fn jwe_decrypt<'py>(py: Python<'py>, jwe: &str, key: &PyJwk) -> PyResult<Bound<'
 ///     Tuple of (private_key_bytes, public_key_bytes)
 #[pyfunction]
 fn ed448_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (private_key, public_key) =
-        marty_crypto::ed448::ed448_generate().map_err(|e| PyErr::from(e))?;
+    let (private_key, public_key) = marty_crypto::ed448::ed448_generate().map_err(to_pyerr)?;
     Ok((
         PyBytes::new(py, &private_key),
         PyBytes::new(py, &public_key),
@@ -1972,8 +1957,7 @@ fn ed448_sign<'py>(
     private_key: &[u8],
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::ed448::ed448_sign(private_key, message).map_err(|e| PyErr::from(e))?;
+    let signature = marty_crypto::ed448::ed448_sign(private_key, message).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &signature))
 }
 
@@ -1988,7 +1972,7 @@ fn ed448_sign<'py>(
 ///     True if signature is valid
 #[pyfunction]
 fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
-    marty_crypto::ed448::ed448_verify(public_key, message, signature).map_err(|e| PyErr::from(e))
+    marty_crypto::ed448::ed448_verify(public_key, message, signature).map_err(to_pyerr)
 }
 
 // ============================================================================
@@ -2079,7 +2063,7 @@ impl PyPkcs12Data {
 ///     Pkcs12Data with private key, certificate, and chain
 #[pyfunction]
 fn pkcs12_parse(data: &[u8], password: &str) -> PyResult<PyPkcs12Data> {
-    let parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(|e| PyErr::from(e))?;
+    let parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(to_pyerr)?;
 
     Ok(PyPkcs12Data {
         private_key_algorithm: parsed.private_key_algorithm.to_string(),
@@ -2143,7 +2127,7 @@ fn iso9796_verify(
     };
 
     marty_crypto::iso9796::iso9796_verify(public_key_der, message, signature, scheme, hash_alg)
-        .map_err(|e| PyErr::from(e))
+        .map_err(to_pyerr)
 }
 
 /// Recover message from an ISO 9796-2 signature.
@@ -2193,7 +2177,7 @@ fn iso9796_recover<'py>(
 
     let recovered =
         marty_crypto::iso9796::iso9796_recover_message(public_key_der, signature, scheme, hash_alg)
-            .map_err(|e| PyErr::from(e))?;
+            .map_err(to_pyerr)?;
 
     Ok(PyBytes::new(py, &recovered))
 }
@@ -2216,8 +2200,8 @@ fn build_ocsp_request<'py>(
     cert_der: &[u8],
     issuer_cert_der: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
-    let request = marty_crypto::ocsp::build_ocsp_request(cert_der, issuer_cert_der)
-        .map_err(|e| PyErr::from(e))?;
+    let request =
+        marty_crypto::ocsp::build_ocsp_request(cert_der, issuer_cert_der).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &request))
 }
 
@@ -2230,7 +2214,7 @@ fn build_ocsp_request<'py>(
 ///     OCSP responder URL if present, None otherwise
 #[pyfunction]
 fn get_ocsp_responder_url(cert_der: &[u8]) -> PyResult<Option<String>> {
-    marty_crypto::ocsp::get_ocsp_responder_url(cert_der).map_err(|e| PyErr::from(e))
+    marty_crypto::ocsp::get_ocsp_responder_url(cert_der).map_err(to_pyerr)
 }
 
 /// Parse an OCSP response.
@@ -2242,7 +2226,7 @@ fn get_ocsp_responder_url(cert_der: &[u8]) -> PyResult<Option<String>> {
 ///     Dictionary with response information
 #[pyfunction]
 fn parse_ocsp_response(py: Python<'_>, response_der: &[u8]) -> PyResult<Py<PyDict>> {
-    let info = marty_crypto::ocsp::parse_ocsp_response(response_der).map_err(|e| PyErr::from(e))?;
+    let info = marty_crypto::ocsp::parse_ocsp_response(response_der).map_err(to_pyerr)?;
 
     let dict = PyDict::new(py);
     dict.set_item("response_status", format!("{:?}", info.response_status))?;
@@ -2471,7 +2455,7 @@ impl PyCertificateBuilderConfig {
             .profile(self.profile.clone())
             .key_type(key_type);
 
-        let (cert_der, key_pem) = config.build_self_signed().map_err(|e| PyErr::from(e))?;
+        let (cert_der, key_pem) = config.build_self_signed().map_err(to_pyerr)?;
 
         Ok((PyBytes::new(py, &cert_der), key_pem))
     }
@@ -2530,7 +2514,7 @@ impl PyCertificateBuilderConfig {
 
         let (cert_der, key_pem) = config
             .build_signed_by(issuer_cert_der, issuer_key_pem)
-            .map_err(|e| PyErr::from(e))?;
+            .map_err(to_pyerr)?;
 
         Ok((PyBytes::new(py, &cert_der), key_pem))
     }
@@ -2587,7 +2571,7 @@ impl PyCertificateBuilderConfig {
 
         let cert_der = config
             .build_self_signed_with_key(private_key_pem)
-            .map_err(|e| PyErr::from(e))?;
+            .map_err(to_pyerr)?;
 
         Ok(PyBytes::new(py, &cert_der))
     }
@@ -2668,7 +2652,7 @@ fn build_self_signed_certificate<'py>(
         .profile(profile)
         .key_type(key_type);
 
-    let (cert_der, key_pem) = config.build_self_signed().map_err(|e| PyErr::from(e))?;
+    let (cert_der, key_pem) = config.build_self_signed().map_err(to_pyerr)?;
 
     Ok((PyBytes::new(py, &cert_der), key_pem))
 }
@@ -2688,6 +2672,7 @@ fn build_self_signed_certificate<'py>(
 ///     DER-encoded certificate bytes
 #[cfg(feature = "cert-builder")]
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn build_self_signed_certificate_with_key<'py>(
     py: Python<'py>,
     private_key_pem: &str,
@@ -2758,7 +2743,7 @@ fn build_self_signed_certificate_with_key<'py>(
 
     let cert_der = config
         .build_self_signed_with_key(private_key_pem)
-        .map_err(|e| PyErr::from(e))?;
+        .map_err(to_pyerr)?;
 
     Ok(PyBytes::new(py, &cert_der))
 }
