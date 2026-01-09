@@ -128,7 +128,7 @@ jobs:
       - name: Run Python tests
         run: |
           . .venv/bin/activate || .venv\Scripts\activate
-          pytest python/
+          pytest python/tests/
         shell: bash
 
   wasm-test:
