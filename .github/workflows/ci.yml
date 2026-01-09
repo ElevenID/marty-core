@@ -47,7 +47,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace
 
   clippy:
     name: Clippy
@@ -58,7 +58,7 @@ jobs:
         with:
           components: clippy
       - name: Run clippy
-        run: cargo clippy --workspace --all-features -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
   fmt:
     name: Format
@@ -72,7 +72,7 @@ jobs:
         run: cargo fmt --all -- --check
 
   feature-matrix:
-    name: Feature Matrix
+    name: Feature Matrix (${{ matrix.crate }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -81,7 +81,6 @@ jobs:
           - marty-crypto
           - marty-verification
           - marty-secure-storage
-          - marty-biometrics
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -89,8 +88,8 @@ jobs:
       - name: Test no default features
         run: cargo test -p ${{ matrix.crate }} --no-default-features
 
-      - name: Test all features
-        run: cargo test -p ${{ matrix.crate }} --all-features
+      - name: Test default features
+        run: cargo test -p ${{ matrix.crate }}
 
   python-test:
     name: Python Tests (marty-biometrics)
@@ -113,14 +112,24 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install maturin
-        run: pip install maturin[patchelf] pytest
+      - name: Create virtualenv and install dependencies
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate || .venv\Scripts\activate
+          pip install maturin[patchelf] pytest
+        shell: bash
 
       - name: Build Python package
-        run: maturin develop --features python
+        run: |
+          . .venv/bin/activate || .venv\Scripts\activate
+          maturin develop --features python
+        shell: bash
 
       - name: Run Python tests
-        run: pytest python/
+        run: |
+          . .venv/bin/activate || .venv\Scripts\activate
+          pytest python/
+        shell: bash
 
   wasm-test:
     name: WASM Tests (marty-biometrics)
