@@ -111,7 +111,7 @@ marty-secure-storage = { version = "0.1.2", path = "marty-secure-storage" }
 marty-biometrics = { version = "0.1.2", path = "marty-biometrics" }
 
 # Test/dev dependencies
-rcgen = "0.13"
+rcgen = "0.14"
 tempfile = "3.14"
 proptest = "1.5"
 
