@@ -14,7 +14,7 @@ rust-version = "1.75"
 # Crypto and certificates
 x509-cert = { version = "0.2", features = ["pem", "builder"] }
 der = { version = "0.7", features = ["pem", "derive"] }
-const-oid = "0.9"
+const-oid = "0.10"
 sha1 = { version = "0.10", features = ["oid"] }
 sha2 = "0.10"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "ecdh"] }
