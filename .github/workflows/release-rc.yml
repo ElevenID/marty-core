@@ -186,7 +186,7 @@ jobs:
           git cliff --tag ${{ steps.version.outputs.tag }} --unreleased --strip all > RELEASE_NOTES.md
 
       - name: Generate attestations
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v3
         with:
           subject-path: 'final-release/*.tar.gz'
 
