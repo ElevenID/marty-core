@@ -90,7 +90,7 @@ tracing-error = "0.2"
 axum = "0.8"
 
 # Database (for marty-secure-storage)
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.38", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring = "3.6"
 directories = "6.0"
 blake3 = "1.5"
