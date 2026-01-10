@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # Required for attestations
+  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -58,6 +60,14 @@ jobs:
           cd dist
           sha256sum *.tar.gz > checksums-rust.txt
 
+      - name: Generate SBOM
+        run: |
+          cargo install cargo-cyclonedx
+          mkdir -p dist/sbom
+          for crate in marty-crypto marty-verification marty-secure-storage marty-biometrics; do
+            cargo cyclonedx -p ${crate} --format json --output-cdx dist/sbom/${crate}-sbom.json
+          done
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -65,6 +75,7 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/checksums-rust.txt
+            dist/sbom/*.json
 
   build-python-wheels:
     name: Build Python Wheels
@@ -173,6 +184,11 @@ jobs:
         run: |
           cargo install git-cliff
           git cliff --tag ${{ steps.version.outputs.tag }} --unreleased --strip all > RELEASE_NOTES.md
+
+      - name: Generate attestations
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: 'final-release/*.tar.gz'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

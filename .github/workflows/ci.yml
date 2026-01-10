@@ -71,6 +71,62 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ runner.os }}-cargo-audit
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked || true
+
+      - name: Run cargo-audit
+        run: cargo audit --deny warnings
+
+      - name: Cache cargo-deny
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked || true
+
+      - name: Run cargo-deny
+        run: cargo deny check
+
+  python-security:
+    name: Python Security (marty-biometrics)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marty-biometrics
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit[toml] safety
+
+      - name: Run bandit
+        run: bandit -r python/marty_biometrics/ -f json -o bandit-report.json || bandit -r python/marty_biometrics/
+
+      - name: Run safety check
+        run: safety check --json || safety check
+
   feature-matrix:
     name: Feature Matrix (${{ matrix.crate }})
     runs-on: ubuntu-latest
