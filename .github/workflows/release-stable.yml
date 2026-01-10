@@ -24,7 +24,7 @@ jobs:
     name: Build Rust Artifacts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -102,7 +102,7 @@ jobs:
           - os: windows-latest
             target: aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v5
         with:
@@ -127,7 +127,7 @@ jobs:
     name: Build WASM Packages
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install wasm-pack
@@ -166,7 +166,7 @@ jobs:
     needs: [build-rust-artifacts, build-python-wheels, build-wasm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
