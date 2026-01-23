@@ -191,6 +191,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_add_country_csca() {
         use crate::testdata::NIST_TRUST_ANCHOR_DER;
         use der::Decode;
@@ -215,6 +216,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_add_multiple_countries() {
         use crate::testdata::{NIST_DSA_CA_DER, NIST_GOOD_CA_DER, NIST_TRUST_ANCHOR_DER};
         use der::Decode;
@@ -243,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_multiple_cscas_per_country() {
         use crate::testdata::{NIST_DSA_CA_DER, NIST_TRUST_ANCHOR_DER};
         use der::Decode;
@@ -269,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_dsc_caching() {
         use crate::testdata::{NIST_TRUST_ANCHOR_DER, NIST_VALID_EE_DER};
         use der::Decode;

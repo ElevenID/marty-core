@@ -344,6 +344,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_build_x5chain_from_pem() {
         use crate::testdata::{nist_good_ca_pem, nist_trust_anchor_pem, nist_valid_ee_pem};
 
@@ -392,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_verify_with_empty_registry() {
         use crate::testdata::{nist_good_ca_pem, nist_valid_ee_pem};
         use crate::trust_anchor::IacaRegistry;
@@ -414,6 +416,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_verify_with_matching_trust_anchor() {
         use crate::testdata::{
             nist_good_ca_pem, nist_trust_anchor_pem, nist_valid_ee_pem, NIST_TRUST_ANCHOR_DER,

@@ -10,6 +10,9 @@ use x509_cert::Certificate;
 use crate::error::{VerificationError, VerificationResult};
 use crate::trust_anchor::CscaRegistry;
 
+#[cfg(feature = "icao-client")]
+use ldap3::{LdapConnAsync, Scope, SearchEntry};
+
 /// ICAO PKD client configuration.
 #[derive(Debug, Clone)]
 pub struct IcaoPkdConfig {
@@ -104,25 +107,159 @@ impl IcaoPkdClient {
     ///
     /// The Master List contains all trusted CSCA certificates.
     pub async fn fetch_master_list(&self) -> VerificationResult<Vec<MasterListEntry>> {
-        // Note: The actual ICAO PKD uses LDIF format. This is a simplified implementation.
-        // A production implementation would parse the LDIF files properly.
-        let endpoint = format!("{}/csca", self.config.base_url);
-
-        let response = self.http_client.get(&endpoint).send().await.map_err(|e| {
-            VerificationError::pkd_fetch(&endpoint, format!("Master List fetch failed: {}", e))
-        })?;
-
-        if !response.status().is_success() {
-            return Err(VerificationError::pkd_fetch(
-                endpoint,
-                format!("Master List fetch failed: {}", response.status()),
-            ));
+        #[cfg(not(feature = "icao-client"))]
+        {
+            tracing::warn!("ICAO PKD client feature not enabled");
+            return Ok(Vec::new());
         }
 
-        // In a real implementation, this would parse LDIF format
-        // For now, return empty - this is a placeholder
-        tracing::warn!("ICAO PKD LDIF parsing not yet implemented");
-        Ok(Vec::new())
+        #[cfg(feature = "icao-client")]
+        {
+            self.fetch_master_list_ldap().await
+        }
+    }
+
+    #[cfg(feature = "icao-client")]
+    async fn fetch_master_list_ldap(&self) -> VerificationResult<Vec<MasterListEntry>> {
+        // ICAO PKD uses LDAP/LDIF format
+        let ldap_url = format!("ldap://{}:389", self.config.base_url.replace("https://", ""));
+        let base_dn = "ou=CSCA,dc=pkd,dc=icao,dc=int";
+
+        let (conn, mut ldap) = LdapConnAsync::new(&ldap_url)
+            .await
+            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP connection failed: {}", e)))?;
+
+        ldap3::drive!(conn);
+
+        // Bind
+        if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
+            let bind_dn = format!("uid={},{}", username, base_dn);
+            ldap.simple_bind(&bind_dn, password)
+                .await
+                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP bind failed: {}", e)))?;
+        } else {
+            ldap.simple_bind("", "")
+                .await
+                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP anonymous bind failed: {}", e)))?;
+        }
+
+        // Search for CSCA certificates
+        let (rs, _res) = ldap
+            .search(
+                base_dn,
+                Scope::Subtree,
+                "(objectClass=pkiCA)",
+                vec!["cACertificate", "c", "serialNumber"],
+            )
+            .await
+            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search failed: {}", e)))?
+            .success()
+            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search result failed: {:?}", e)))?;
+
+        let mut entries = Vec::new();
+
+        for entry in rs {
+            let search_entry = SearchEntry::construct(entry);
+
+            // Extract country code
+            let country = search_entry
+                .attrs
+                .get("c")
+                .and_then(|v| v.first())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "XX".to_string());
+
+            // Extract serial number
+            let serial_number = search_entry
+                .attrs
+                .get("serialNumber")
+                .and_then(|v| v.first())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            // Extract certificate (DER-encoded binary)
+            if let Some(cert_values) = search_entry.bin_attrs.get("cACertificate") {
+                for cert_der in cert_values {
+                    entries.push(MasterListEntry {
+                        country: country.clone(),
+                        certificate_der: cert_der.clone(),
+                        serial_number: serial_number.clone(),
+                    });
+                }
+            }
+        }
+
+        let _ = ldap.unbind().await;
+
+        tracing::info!("Fetched {} CSCA certificates from ICAO PKD", entries.len());
+        Ok(entries)
+    }
+
+    #[cfg(feature = "icao-client")]
+    #[allow(dead_code)]
+    async fn fetch_country_dsc_ldap(&self, country: &str) -> VerificationResult<Vec<DscEntry>> {
+        let ldap_url = format!("ldap://{}:389", self.config.base_url.replace("https://", ""));
+        let base_dn = "ou=DSC,dc=pkd,dc=icao,dc=int";
+
+        let (conn, mut ldap) = LdapConnAsync::new(&ldap_url)
+            .await
+            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP connection failed: {}", e)))?;
+
+        ldap3::drive!(conn);
+
+        // Bind
+        if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
+            let bind_dn = format!("uid={},{}", username, base_dn);
+            ldap.simple_bind(&bind_dn, password)
+                .await
+                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP bind failed: {}", e)))?;
+        } else {
+            ldap.simple_bind("", "")
+                .await
+                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP anonymous bind failed: {}", e)))?;
+        }
+
+        // Search for DSC certificates for this country
+        let filter = format!("(&(objectClass=pkiUser)(c={}))", country.to_uppercase());
+        let (rs, _res) = ldap
+            .search(
+                base_dn,
+                Scope::Subtree,
+                &filter,
+                vec!["userCertificate", "c"],
+            )
+            .await
+            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search failed: {}", e)))?
+            .success()
+            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search result failed: {:?}", e)))?;
+
+        let mut entries = Vec::new();
+
+        for entry in rs {
+            let search_entry = SearchEntry::construct(entry);
+
+            let country_code = search_entry
+                .attrs
+                .get("c")
+                .and_then(|v| v.first())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| country.to_string());
+
+            if let Some(cert_values) = search_entry.bin_attrs.get("userCertificate") {
+                for cert_der in cert_values {
+                    entries.push(DscEntry {
+                        country: country_code.clone(),
+                        certificate_der: cert_der.clone(),
+                        issuer_country: country_code.clone(),
+                    });
+                }
+            }
+        }
+
+        let _ = ldap.unbind().await;
+
+        tracing::info!("Fetched {} DSC certificates for country {} from ICAO PKD", entries.len(), country);
+        Ok(entries)
     }
 
     /// Fetch DSC certificates for a specific country.

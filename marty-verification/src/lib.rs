@@ -36,6 +36,7 @@ pub mod jwk;
 pub mod mdoc;
 pub mod mrz;
 pub mod open_badges;
+pub mod policy;
 pub mod trust_anchor;
 pub mod verification;
 

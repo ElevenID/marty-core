@@ -5,9 +5,16 @@
 //!
 //! - **AAMVA DTS**: Digital Trust Service for US/Canadian mDL IACA certificates
 //! - **ICAO PKD**: Public Key Directory for eMRTD CSCA/DSC certificates
+//! - **EUDI LoTL**: List of Trusted Lists for EU Digital Identity
 
 #[cfg(feature = "aamva-client")]
 pub mod aamva_dts;
 
 #[cfg(feature = "icao-client")]
 pub mod icao_pkd;
+
+#[cfg(feature = "eudi-client")]
+pub mod eudi_lotl;
+
+#[cfg(feature = "eudi-client")]
+pub mod eudi_xml;

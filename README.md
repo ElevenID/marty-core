@@ -6,9 +6,12 @@ Foundational Rust crates for the Marty ecosystem.
 
 | Crate | Description | Status |
 |-------|-------------|--------|
-| [`marty-crypto`](./marty-crypto) | Pure cryptographic primitives (x509, ECDSA, EdDSA, RSA, symmetric, KDF) | 🚧 |
-| [`marty-verification`](./marty-verification) | Trust chain verification for mDL (IACA) and eMRTD (CSCA) | 🚧 |
+| [`marty-crypto`](./marty-crypto) | Pure cryptographic primitives (x509, ECDSA, EdDSA, RSA, symmetric, KDF) | ✅ |
+| [`marty-verification`](./marty-verification) | Trust chain verification for mDL (IACA), eMRTD (CSCA), DTC, Open Badges | ✅ |
 | [`marty-secure-storage`](./marty-secure-storage) | Encrypted SQLite with platform keychain integration | 🚧 |
+| [`marty-biometrics`](./marty-biometrics) | Biometric authentication (iOS Face ID, Touch ID, Android) | 🚧 |
+
+**Note:** marty-core is the canonical source for all Rust verification and crypto libraries. All other projects ([marty-credentials](../marty-credentials), [marty-verifier](../marty-verifier)) depend on these crates.
 
 ## Architecture
 
@@ -45,22 +48,84 @@ All crates in this workspace use synchronized versioning following [SemVer](http
 
 ## Development
 
+### Quick Start
+
 ```bash
-# Build all crates
+# Using Make (recommended)
+make test              # Run all tests
+make check             # Run clippy + deny + fmt-check
+make watch             # Watch mode for development
+make ci                # Full CI pipeline
+
+# Using Docker (isolated environment)
+make docker-shell      # Start development container
+make docker-test       # Run tests in container
+make docker-watch      # Watch mode in container
+
+# Direct cargo commands
 cargo build --workspace
+cargo test --workspace --features test-fixtures
+cargo clippy --workspace --all-targets -- -D warnings
+```
 
-# Test all crates  
-cargo test --workspace
+### Docker Development
 
-# Test specific crate
-cargo test -p marty-crypto
+The project includes a multi-stage Docker development environment:
 
-# Check formatting
-cargo fmt --all -- --check
+```bash
+# Build images
+make docker-build              # Build all images
+make docker-build-rust         # Rust-only (lighter weight)
+make docker-build-full         # Full environment
+
+# Development workflows
+docker compose -f docker-compose.dev.yml up -d dev
+docker compose -f docker-compose.dev.yml exec dev bash
+
+# Inside container
+cd /workspace/marty-core
+cargo test --workspace --features test-fixtures
+cargo watch -x check
+```
+
+### Testing
+
+All tests require the `test-fixtures` feature which provides NIST PKITS certificates:
+
+```bash
+# Run all tests (145 tests)
+cargo test --workspace --features test-fixtures
+
+# Run specific test suite
+cargo test -p marty-verification --test chain_validation_tests --features test-fixtures
+cargo test -p marty-verification --test dtc_tests --features test-fixtures
+cargo test -p marty-verification --test open_badges_tests --features test-fixtures
+
+# Quick test (no fixtures)
+cargo test --workspace --lib
+
+# With nextest (faster)
+cargo nextest run --workspace --features test-fixtures
+```
+
+### Code Quality
+
+```bash
+# Format code
+cargo fmt --all
 
 # Lint
-cargo clippy --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Security audit
+cargo deny check
+cargo audit
+
+# Coverage report
+cargo llvm-cov --workspace --features test-fixtures --html
 ```
+
+See [Makefile](./Makefile) for all available targets.
 
 ## Release Process
 

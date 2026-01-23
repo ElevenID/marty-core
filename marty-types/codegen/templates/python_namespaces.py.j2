@@ -1,0 +1,57 @@
+"""Generated namespace constants
+DO NOT EDIT - Generated from schema/namespaces.yaml
+"""
+
+from typing import Final
+
+
+class Iso18013Namespace:
+    """{{ schema.iso18013.description }}"""
+    {% for key, value in schema.iso18013.namespaces.items() %}
+    {{ key }}: Final[str] = "{{ value.value }}"  # {{ value.description }}
+    {% endfor %}
+
+
+class Iso18013DocType:
+    """ISO 18013-5 document types"""
+    {% for key, value in schema.iso18013.doc_types.items() %}
+    {{ key }}: Final[str] = "{{ value.value }}"  # {{ value.description }}
+    {% endfor %}
+
+
+class Iso18013Element:
+    """ISO 18013-5 standard data element identifiers"""
+    {% for key, value in schema.iso18013.elements.items() %}
+    {{ key }}: Final[str] = "{{ value.value }}"  # {{ value.description }}
+    {% endfor %}
+
+
+class W3cContext:
+    """{{ schema.w3c.description }}"""
+    {% for key, value in schema.w3c.contexts.items() %}
+    {{ key }}: Final[str] = "{{ value.value }}"  # {{ value.description }}
+    {% endfor %}
+
+
+class W3cType:
+    """W3C VC credential types"""
+    {% for key, value in schema.w3c.types.items() %}
+    {{ key }}: Final[str] = "{{ value.value }}"  # {{ value.description }}
+    {% endfor %}
+
+
+class CredentialFormat:
+    """{{ schema.credential_formats.description }}"""
+    {% for key, value in schema.credential_formats.formats.items() %}
+    {{ key }}: Final[str] = "{{ value.value }}"  # {{ value.description }}
+    {% endfor %}
+
+
+__all__ = [
+    'Iso18013Namespace',
+    'Iso18013DocType',
+    'Iso18013Element',
+    'W3cContext',
+    'W3cType',
+    'CredentialFormat',
+]

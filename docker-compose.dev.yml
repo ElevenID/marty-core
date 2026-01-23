@@ -1,0 +1,106 @@
+# Docker Compose for marty development
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml exec dev bash
+#
+# Services:
+#   - dev: Full development environment with workspace mounted
+#   - rust: Rust-only development for low-level work
+#   - test-runner: Ephemeral container for CI-like test runs
+
+services:
+  # Full development environment
+  dev:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: full-dev
+    image: marty-dev:full
+    container_name: marty-dev
+    volumes:
+      # Mount entire marty-core workspace
+      - .:/workspace/marty-core
+      # Mount sibling projects for cross-repo development
+      - ../marty-credentials:/workspace/marty-credentials:ro
+      - ../marty-verifier:/workspace/marty-verifier:ro
+      # Persist cargo cache for faster rebuilds
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      # Persist target directory
+      - target-cache:/workspace/marty-core/target
+    working_dir: /workspace/marty-core
+    environment:
+      - RUST_BACKTRACE=1
+      - CARGO_INCREMENTAL=1
+      - RUSTFLAGS=-D warnings
+    stdin_open: true
+    tty: true
+    command: bash
+
+  # Rust-only development (lighter weight)
+  rust:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: rust-dev
+    image: marty-dev:rust
+    container_name: marty-rust
+    volumes:
+      - .:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+    working_dir: /workspace
+    environment:
+      - RUST_BACKTRACE=1
+      - CARGO_INCREMENTAL=1
+    stdin_open: true
+    tty: true
+    command: bash
+
+  # Test runner for CI-like environment
+  test-runner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: full-dev
+    image: marty-dev:full
+    volumes:
+      - .:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+    working_dir: /workspace
+    environment:
+      - RUST_BACKTRACE=1
+      - CI=true
+    command: >
+      bash -c "
+        echo '=== Running Rust Tests ===' &&
+        cargo nextest run --workspace --features test-fixtures &&
+        echo '=== Running Clippy ===' &&
+        cargo clippy --workspace --all-targets -- -D warnings &&
+        echo '=== Running cargo deny ===' &&
+        cargo deny check &&
+        echo '=== All checks passed! ==='
+      "
+
+  # Watch mode for continuous testing
+  watch:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+      target: rust-dev
+    image: marty-dev:rust
+    volumes:
+      - .:/workspace
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+    working_dir: /workspace
+    environment:
+      - RUST_BACKTRACE=1
+    command: cargo watch -x "test --workspace --features test-fixtures"
+
+volumes:
+  cargo-cache:
+  cargo-git:
+  target-cache:

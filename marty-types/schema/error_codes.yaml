@@ -1,0 +1,163 @@
+# Error code definitions for Marty ecosystem
+# Hierarchical error codes with category prefixes
+
+error_codes:
+  CRED:
+    description: "Credential operations"
+    codes:
+      ISSUANCE_FAILED:
+        message: "Failed to issue credential"
+        retryable: false
+        severity: "error"
+      VERIFICATION_FAILED:
+        message: "Credential verification failed"
+        retryable: false
+        severity: "error"
+      REVOCATION_CHECK_FAILED:
+        message: "Failed to check revocation status"
+        retryable: true
+        severity: "warning"
+      INVALID_FORMAT:
+        message: "Invalid credential format"
+        retryable: false
+        severity: "error"
+      EXPIRED:
+        message: "Credential has expired"
+        retryable: false
+        severity: "error"
+      NOT_YET_VALID:
+        message: "Credential is not yet valid"
+        retryable: false
+        severity: "error"
+      PARSE_ERROR:
+        message: "Failed to parse credential"
+        retryable: false
+        severity: "error"
+  
+  KEY:
+    description: "Key management operations"
+    codes:
+      NOT_FOUND:
+        message: "Key not found"
+        retryable: false
+        severity: "error"
+      GENERATION_FAILED:
+        message: "Failed to generate key"
+        retryable: true
+        severity: "error"
+      INVALID_KEY:
+        message: "Invalid key format or parameters"
+        retryable: false
+        severity: "error"
+      STORAGE_FAILED:
+        message: "Failed to store key"
+        retryable: true
+        severity: "error"
+      ACCESS_DENIED:
+        message: "Key access denied"
+        retryable: false
+        severity: "error"
+  
+  CRYPTO:
+    description: "Cryptographic operations"
+    codes:
+      SIGNATURE_INVALID:
+        message: "Invalid signature"
+        retryable: false
+        severity: "error"
+      ENCRYPTION_FAILED:
+        message: "Encryption failed"
+        retryable: true
+        severity: "error"
+      DECRYPTION_FAILED:
+        message: "Decryption failed"
+        retryable: false
+        severity: "error"
+      HASH_FAILED:
+        message: "Hash computation failed"
+        retryable: true
+        severity: "error"
+      INVALID_ALGORITHM:
+        message: "Unsupported or invalid algorithm"
+        retryable: false
+        severity: "error"
+  
+  SESSION:
+    description: "ISO 18013-5 session operations"
+    codes:
+      ESTABLISHMENT_FAILED:
+        message: "Failed to establish secure session"
+        retryable: true
+        severity: "error"
+      INVALID_STATE:
+        message: "Invalid session state"
+        retryable: false
+        severity: "error"
+      TIMEOUT:
+        message: "Session timeout"
+        retryable: true
+        severity: "error"
+      TERMINATED:
+        message: "Session terminated"
+        retryable: false
+        severity: "info"
+      ENCRYPTION_ERROR:
+        message: "Session encryption error"
+        retryable: false
+        severity: "error"
+  
+  TRANSPORT:
+    description: "Transport layer operations"
+    codes:
+      CONNECTION_FAILED:
+        message: "Transport connection failed"
+        retryable: true
+        severity: "error"
+      DISCONNECTED:
+        message: "Transport disconnected"
+        retryable: true
+        severity: "warning"
+      SEND_FAILED:
+        message: "Failed to send data"
+        retryable: true
+        severity: "error"
+      RECEIVE_FAILED:
+        message: "Failed to receive data"
+        retryable: true
+        severity: "error"
+      UNSUPPORTED:
+        message: "Transport not supported"
+        retryable: false
+        severity: "error"
+      BLE_ERROR:
+        message: "Bluetooth Low Energy error"
+        retryable: true
+        severity: "error"
+      NFC_ERROR:
+        message: "Near Field Communication error"
+        retryable: true
+        severity: "error"
+  
+  TRUST:
+    description: "Trust chain validation"
+    codes:
+      CHAIN_INVALID:
+        message: "Trust chain validation failed"
+        retryable: false
+        severity: "error"
+      ANCHOR_NOT_FOUND:
+        message: "Trust anchor not found"
+        retryable: false
+        severity: "error"
+      CERTIFICATE_EXPIRED:
+        message: "Certificate has expired"
+        retryable: false
+        severity: "error"
+      CERTIFICATE_REVOKED:
+        message: "Certificate has been revoked"
+        retryable: false
+        severity: "error"
+      PATH_BUILD_FAILED:
+        message: "Failed to build certification path"
+        retryable: false
+        severity: "error"

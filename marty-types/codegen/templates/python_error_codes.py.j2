@@ -1,0 +1,69 @@
+"""Generated error code definitions
+DO NOT EDIT - Generated from schema/error_codes.yaml
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Final
+
+
+class ErrorSeverity(Enum):
+    """Error severity levels"""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+@dataclass
+class ErrorCode:
+    """Hierarchical error code with category and specific code"""
+    category: str
+    code: str
+    message: str
+    retryable: bool
+    severity: ErrorSeverity
+
+    @property
+    def full_code(self) -> str:
+        """Get the full error code string (e.g., 'CRED.ISSUANCE_FAILED')"""
+        return f"{self.category}.{self.code}"
+
+    def __str__(self) -> str:
+        return f"{self.full_code}: {self.message}"
+
+
+class ErrorCodes:
+    """Predefined error codes for Marty ecosystem"""
+    
+    {% for category, category_data in error_codes.items() %}
+    class {{ category }}:
+        """{{ category_data.description }}"""
+        
+        {% for code, code_data in category_data.codes.items() %}
+        @staticmethod
+        def {{ code }}() -> ErrorCode:
+            """{{ code_data.message }}"""
+            return ErrorCode(
+                category="{{ category }}",
+                code="{{ code }}",
+                message="{{ code_data.message }}",
+                retryable={{ code_data.retryable }},
+                severity=ErrorSeverity.{{ code_data.severity.upper() }},
+            )
+        {% endfor %}
+    {% endfor %}
+
+
+# Convenience constants
+{% for category, category_data in error_codes.items() %}
+{% for code, code_data in category_data.codes.items() %}
+{{ category }}_{{ code }}: Final[str] = "{{ category }}.{{ code }}"
+{% endfor %}
+{% endfor %}
+
+
+__all__ = [
+    'ErrorCode',
+    'ErrorCodes',
+    'ErrorSeverity',
+]

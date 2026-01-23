@@ -38,6 +38,7 @@ use crate::error::VerificationError;
 use crate::trust_anchor::{
     BasicTrustRegistry, IacaRegistry, PemTrustAnchor, TrustPurpose, TrustRegistry,
 };
+use crate::trust_anchor::eudi::{EudiRegistry, EuMemberState, TrustServiceProvider, TspStatus};
 use crate::verification::mdl::{AuthStatus, MdlVerificationResult, ValidationRuleset};
 
 /// Trait for converting various error types to PyErr
@@ -282,6 +283,180 @@ fn verify_mdl_x5chain_cbor(
 
     let result = verify_x5chain(&x5chain, &registry.inner, validation_ruleset);
     Ok(result.into())
+}
+
+// ============================================================================
+// EUDI Registry Bindings
+// ============================================================================
+
+/// Python wrapper for EU Member State.
+#[pyclass(name = "EuMemberState")]
+#[derive(Clone)]
+pub struct PyEuMemberState {
+    #[pyo3(get)]
+    pub code: String,
+    #[pyo3(get)]
+    pub name: String,
+}
+
+#[pymethods]
+impl PyEuMemberState {
+    #[new]
+    fn new(code: &str) -> PyResult<Self> {
+        match EuMemberState::from_code(code) {
+            Some(state) => Ok(Self {
+                code: state.code().to_string(),
+                name: format!("{:?}", state),
+            }),
+            None => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid EU member state code: {}",
+                code
+            ))),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("EuMemberState(code='{}', name='{}')", self.code, self.name)
+    }
+
+    /// Get all EU member states.
+    #[staticmethod]
+    fn all() -> Vec<Self> {
+        EuMemberState::all()
+            .into_iter()
+            .map(|state| Self {
+                code: state.code().to_string(),
+                name: format!("{:?}", state),
+            })
+            .collect()
+    }
+}
+
+/// Python wrapper for Trust Service Provider.
+#[pyclass(name = "TrustServiceProvider")]
+#[derive(Clone)]
+pub struct PyTrustServiceProvider {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub member_state: String,
+    #[pyo3(get)]
+    pub status: String,
+}
+
+#[pymethods]
+impl PyTrustServiceProvider {
+    fn __repr__(&self) -> String {
+        format!(
+            "TrustServiceProvider(id='{}', name='{}', member_state='{}', status='{}')",
+            self.id, self.name, self.member_state, self.status
+        )
+    }
+}
+
+impl From<&TrustServiceProvider> for PyTrustServiceProvider {
+    fn from(tsp: &TrustServiceProvider) -> Self {
+        Self {
+            id: tsp.id.clone(),
+            name: tsp.name.clone(),
+            member_state: tsp.member_state.code().to_string(),
+            status: match &tsp.status {
+                TspStatus::Granted => "granted".to_string(),
+                TspStatus::Withdrawn => "withdrawn".to_string(),
+                TspStatus::Suspended => "suspended".to_string(),
+                TspStatus::Unknown => "unknown".to_string(),
+            },
+        }
+    }
+}
+
+/// Python wrapper for EudiRegistry.
+#[pyclass(name = "EudiRegistry")]
+pub struct PyEudiRegistry {
+    inner: EudiRegistry,
+}
+
+#[pymethods]
+impl PyEudiRegistry {
+    /// Create a new empty EUDI registry.
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: EudiRegistry::new(),
+        }
+    }
+
+    /// Add a trust anchor for a specific member state.
+    fn add_member_state_anchor(
+        &mut self,
+        member_state_code: &str,
+        cert_pem: &str,
+    ) -> PyResult<()> {
+        use der::DecodePem;
+        use x509_cert::Certificate;
+
+        let member_state = EuMemberState::from_code(member_state_code).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid member state code: {}",
+                member_state_code
+            ))
+        })?;
+
+        let cert = Certificate::from_pem(cert_pem).map_err(|e| {
+            VerificationError::pem_error(format!("Failed to parse PEM certificate: {}", e))
+        })?;
+
+        self.inner
+            .add_member_state_anchor(member_state, cert, TrustPurpose::EudiQtsp);
+        Ok(())
+    }
+
+    /// Get the number of certificates in the registry.
+    fn __len__(&self) -> usize {
+        self.inner.get_anchors().len()
+    }
+
+    /// Get list of supported member states.
+    fn supported_member_states(&self) -> Vec<String> {
+        self.inner
+            .supported_member_states()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// Get all QTSPs.
+    fn get_all_qtsps(&self) -> Vec<PyTrustServiceProvider> {
+        self.inner
+            .get_all_qtsps()
+            .into_iter()
+            .map(|tsp| tsp.into())
+            .collect()
+    }
+
+    /// Get QTSPs for a specific member state.
+    fn get_qtsps_by_member_state(&self, member_state_code: &str) -> PyResult<Vec<PyTrustServiceProvider>> {
+        let member_state = EuMemberState::from_code(member_state_code).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid member state code: {}",
+                member_state_code
+            ))
+        })?;
+
+        Ok(self
+            .inner
+            .get_qtsps_by_member_state(member_state)
+            .into_iter()
+            .map(|tsp| tsp.into())
+            .collect())
+    }
+
+    /// Clear all anchors and reset the registry.
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
 }
 
 // ============================================================================

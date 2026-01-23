@@ -21,6 +21,12 @@ pub enum TrustPurpose {
     Csca,
     /// Document Signer Certificate for eMRTD (ICAO 9303).
     Dsc,
+    /// EUDI Wallet PID/attestation issuer.
+    EudiIssuer,
+    /// EUDI Qualified Trust Service Provider (QTSP).
+    EudiQtsp,
+    /// EUDI Wallet Provider.
+    EudiWallet,
 }
 
 /// A root of trust for a specific purpose.
@@ -163,6 +169,13 @@ impl BasicTrustRegistry {
     /// Create a new empty registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a new registry with initial capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            anchors: Vec::with_capacity(capacity),
+        }
     }
 
     /// Build a trust anchor registry from PEM certificates.
@@ -344,6 +357,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_parse_nist_trust_anchor_der() {
         use crate::testdata::NIST_TRUST_ANCHOR_DER;
         use der::Decode;
@@ -368,6 +382,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_parse_nist_good_ca_der() {
         use crate::testdata::NIST_GOOD_CA_DER;
         use der::Decode;
@@ -385,6 +400,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_parse_nist_valid_ee_der() {
         use crate::testdata::NIST_VALID_EE_DER;
         use der::Decode;
@@ -402,6 +418,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_add_anchor_from_der() {
         use crate::testdata::NIST_TRUST_ANCHOR_DER;
         use der::Decode;
@@ -430,6 +447,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_add_multiple_anchors() {
         use crate::testdata::{NIST_DSA_CA_DER, NIST_GOOD_CA_DER, NIST_TRUST_ANCHOR_DER};
         use der::Decode;
@@ -473,6 +491,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_der_to_pem_roundtrip() {
         use crate::testdata::{nist_trust_anchor_pem, NIST_TRUST_ANCHOR_DER};
         use der::Decode;
@@ -499,6 +518,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_find_issuer() {
         use crate::testdata::{NIST_GOOD_CA_DER, NIST_TRUST_ANCHOR_DER};
         use der::Decode;

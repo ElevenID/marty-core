@@ -1,0 +1,38 @@
+{
+  "assertion": {
+    "@context": "https://w3id.org/openbadges/v2",
+    "badge": "urn:uuid:badge-1",
+    "id": "urn:uuid:assertion-1",
+    "recipient": {
+      "hash": "sha256",
+      "hashed": true,
+      "identity": "a8321142bc71da4f21dbfaa3d65bc413f18994e6734e2f2d19bec02734efbbf6",
+      "salt": "pepper",
+      "type": "email"
+    },
+    "signature": "eyJhbGciOiJFZERTQSJ9.eyJAY29udGV4dCI6Imh0dHBzOi8vdzNpZC5vcmcvb3BlbmJhZGdlcy92MiIsImJhZGdlIjoidXJuOnV1aWQ6YmFkZ2UtMSIsImlkIjoidXJuOnV1aWQ6YXNzZXJ0aW9uLTEiLCJyZWNpcGllbnQiOnsiaGFzaCI6InNoYTI1NiIsImhhc2hlZCI6dHJ1ZSwiaWRlbnRpdHkiOiJhODMyMTE0MmJjNzFkYTRmMjFkYmZhYTNkNjViYzQxM2YxODk5NGU2NzM0ZTJmMmQxOWJlYzAyNzM0ZWZiYmY2Iiwic2FsdCI6InBlcHBlciIsInR5cGUiOiJlbWFpbCJ9LCJ0eXBlIjoiQXNzZXJ0aW9uIn0.NjBIfKQhqkQT5ZomSCgH9WNb_yqiVBithd4PGfNgZNERAn-xz9QQjjTFJMyfDUJKZOrYzbwnApXZkfm4Hz2yAg",
+    "type": "Assertion",
+    "verification": {
+      "creator": "did:example:issuer#key-1",
+      "type": "signed"
+    }
+  },
+  "document_store": {
+    "did:example:issuer": {
+      "id": "did:example:issuer",
+      "name": "Example Issuer"
+    },
+    "did:example:issuer#key-1": {
+      "publicKeyJwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ"
+      }
+    },
+    "urn:uuid:badge-1": {
+      "id": "urn:uuid:badge-1",
+      "issuer": "did:example:issuer"
+    }
+  },
+  "recipient_identity": "user@example.org"
+}

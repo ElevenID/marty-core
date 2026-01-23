@@ -1,0 +1,50 @@
+// Generated namespace constants
+// DO NOT EDIT - Generated from schema/namespaces.yaml
+
+/// {{ schema.iso18013.description }}
+class Iso18013Namespace {
+  {% for key, value in schema.iso18013.namespaces.items() %}
+  /// {{ value.description }}
+  static const String {{ key|lower }} = '{{ value.value }}';
+  {% endfor %}
+}
+
+/// ISO 18013-5 document types
+class Iso18013DocType {
+  {% for key, value in schema.iso18013.doc_types.items() %}
+  /// {{ value.description }}
+  static const String {{ key|lower }} = '{{ value.value }}';
+  {% endfor %}
+}
+
+/// ISO 18013-5 standard data element identifiers
+class Iso18013Element {
+  {% for key, value in schema.iso18013.elements.items() %}
+  /// {{ value.description }}
+  static const String {{ key|lower }} = '{{ value.value }}';
+  {% endfor %}
+}
+
+/// {{ schema.w3c.description }}
+class W3cContext {
+  {% for key, value in schema.w3c.contexts.items() %}
+  /// {{ value.description }}
+  static const String {{ key|lower }} = '{{ value.value }}';
+  {% endfor %}
+}
+
+/// W3C VC credential types
+class W3cType {
+  {% for key, value in schema.w3c.types.items() %}
+  /// {{ value.description }}
+  static const String {{ key|lower }} = '{{ value.value }}';
+  {% endfor %}
+}
+
+/// {{ schema.credential_formats.description }}
+class CredentialFormat {
+  {% for key, value in schema.credential_formats.formats.items() %}
+  /// {{ value.description }}
+  static const String {{ key|lower }} = '{{ value.value }}';
+  {% endfor %}
+}

@@ -1,0 +1,58 @@
+// Generated error code definitions
+// DO NOT EDIT - Generated from schema/error_codes.yaml
+
+/// Error severity levels
+enum ErrorSeverity {
+  info,
+  warning,
+  error,
+}
+
+/// Hierarchical error code with category and specific code
+class ErrorCode {
+  final String category;
+  final String code;
+  final String message;
+  final bool retryable;
+  final ErrorSeverity severity;
+
+  const ErrorCode({
+    required this.category,
+    required this.code,
+    required this.message,
+    required this.retryable,
+    required this.severity,
+  });
+
+  /// Get the full error code string (e.g., "CRED.ISSUANCE_FAILED")
+  String get fullCode => '$category.$code';
+
+  @override
+  String toString() => '$fullCode: $message';
+}
+
+/// Predefined error codes for Marty ecosystem
+class ErrorCodes {
+  {% for category, category_data in error_codes.items() %}
+  /// {{ category_data.description }}
+  static class {{ category }} {
+    {% for code, code_data in category_data.codes.items() %}
+    /// {{ code_data.message }}
+    static ErrorCode {{ code|lower }}() => const ErrorCode(
+      category: '{{ category }}',
+      code: '{{ code }}',
+      message: '{{ code_data.message }}',
+      retryable: {{ code_data.retryable|lower }},
+      severity: ErrorSeverity.{{ code_data.severity }},
+    );
+    {% endfor %}
+  }
+  {% endfor %}
+}
+
+// Convenience constants
+{% for category, category_data in error_codes.items() %}
+{% for code, code_data in category_data.codes.items() %}
+const String {{ category|lower }}{{ code|capitalize }} = '{{ category }}.{{ code }}';
+{% endfor %}
+{% endfor %}

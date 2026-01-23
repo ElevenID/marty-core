@@ -13,16 +13,19 @@ name = "marty_verification"
 crate-type = ["rlib"]
 
 [features]
-default = ["iaca", "csca"]
+default = ["iaca", "csca", "icao-client"]
 iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
+eudi = []           # EU Digital Identity verification
 python = ["pyo3"]   # Python bindings
 aamva-client = ["reqwest", "tokio", "moka"]
-icao-client = ["reqwest", "tokio", "moka"]
+icao-client = ["reqwest", "tokio", "moka", "ldap3"]
+eudi-client = ["reqwest", "tokio", "moka", "quick-xml"]
 cert-builder = []   # Certificate building utilities for Python bindings
+cross-validation = []  # OpenSSL cross-validation tests
 serde = []
 test-fixtures = []  # Enable NIST PKITS test fixtures (requires downloading fixtures)
-full = ["iaca", "csca", "aamva-client", "icao-client", "serde", "cert-builder"]
+full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "serde", "cert-builder"]
 
 [dependencies]
 # Internal crate
@@ -75,6 +78,8 @@ chrono = { workspace = true }
 tokio = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 moka = { workspace = true, optional = true }
+ldap3 = { version = "0.11", optional = true }
+quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 
 # Optional Python bindings
 pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"], optional = true }
@@ -88,3 +93,7 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 rcgen = { workspace = true }
 time = "0.3"
+proptest = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+openssl = "0.10"

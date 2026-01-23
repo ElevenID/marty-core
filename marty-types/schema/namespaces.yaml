@@ -1,0 +1,170 @@
+# ISO 18013 and credential format namespace constants
+# This schema generates constants for Rust, Python, and Dart
+
+iso18013:
+  description: "ISO 18013-5 mobile driving license namespaces"
+  namespaces:
+    MDL:
+      value: "org.iso.18013.5.1"
+      description: "Base namespace for ISO 18013-5.1 mDL data elements"
+    AAMVA:
+      value: "org.iso.18013.5.1.aamva"
+      description: "AAMVA-specific extension namespace"
+  
+  doc_types:
+    MDL:
+      value: "org.iso.18013.5.1.mDL"
+      description: "Mobile Driving License document type"
+    MID:
+      value: "org.iso.18013.5.1.mID"
+      description: "Mobile ID document type"
+    MPASSPORT:
+      value: "org.iso.18013.5.1.mPassport"
+      description: "Mobile Passport document type (future)"
+  
+  elements:
+    FAMILY_NAME:
+      value: "family_name"
+      description: "Family name (surname)"
+    GIVEN_NAME:
+      value: "given_name"
+      description: "Given name (first name)"
+    BIRTH_DATE:
+      value: "birth_date"
+      description: "Date of birth"
+    EXPIRY_DATE:
+      value: "expiry_date"
+      description: "Document expiration date"
+    ISSUE_DATE:
+      value: "issue_date"
+      description: "Document issue date"
+    ISSUING_COUNTRY:
+      value: "issuing_country"
+      description: "ISO 3166-1 alpha-2 country code"
+    ISSUING_AUTHORITY:
+      value: "issuing_authority"
+      description: "Issuing authority name"
+    DOCUMENT_NUMBER:
+      value: "document_number"
+      description: "Document number"
+    PORTRAIT:
+      value: "portrait"
+      description: "Portrait image (JPEG)"
+    SIGNATURE:
+      value: "signature_usual_mark"
+      description: "Signature or usual mark image"
+    AGE_OVER_18:
+      value: "age_over_18"
+      description: "Age verification: over 18"
+    AGE_OVER_21:
+      value: "age_over_21"
+      description: "Age verification: over 21"
+    AGE_OVER_25:
+      value: "age_over_25"
+      description: "Age verification: over 25"
+    AGE_OVER_62:
+      value: "age_over_62"
+      description: "Age verification: over 62"
+    AGE_IN_YEARS:
+      value: "age_in_years"
+      description: "Exact age in years"
+    AGE_BIRTH_YEAR:
+      value: "age_birth_year"
+      description: "Birth year only"
+    DRIVING_PRIVILEGES:
+      value: "driving_privileges"
+      description: "Driving privilege categories"
+    UN_DISTINGUISHING_SIGN:
+      value: "un_distinguishing_sign"
+      description: "UN distinguishing sign"
+    SEX:
+      value: "sex"
+      description: "Sex (ISO/IEC 5218)"
+    HEIGHT:
+      value: "height"
+      description: "Height in cm"
+    WEIGHT:
+      value: "weight"
+      description: "Weight in kg"
+    EYE_COLOUR:
+      value: "eye_colour"
+      description: "Eye color"
+    HAIR_COLOUR:
+      value: "hair_colour"
+      description: "Hair color"
+    BIRTH_PLACE:
+      value: "birth_place"
+      description: "Place of birth"
+    RESIDENT_ADDRESS:
+      value: "resident_address"
+      description: "Resident address"
+    PORTRAIT_CAPTURE_DATE:
+      value: "portrait_capture_date"
+      description: "Portrait capture date"
+    NATIONALITY:
+      value: "nationality"
+      description: "Nationality (ISO 3166-1 alpha-2)"
+    RESIDENT_CITY:
+      value: "resident_city"
+      description: "City of residence"
+    RESIDENT_STATE:
+      value: "resident_state"
+      description: "State/province of residence"
+    RESIDENT_POSTAL_CODE:
+      value: "resident_postal_code"
+      description: "Postal code of residence"
+    RESIDENT_COUNTRY:
+      value: "resident_country"
+      description: "Country of residence"
+
+w3c:
+  description: "W3C Verifiable Credentials contexts and types"
+  contexts:
+    CREDENTIALS_V1:
+      value: "https://www.w3.org/2018/credentials/v1"
+      description: "W3C Verifiable Credentials v1.0 context"
+    CREDENTIALS_EXAMPLES_V1:
+      value: "https://www.w3.org/2018/credentials/examples/v1"
+      description: "W3C VC examples context"
+    ED25519_2018:
+      value: "https://w3id.org/security/suites/ed25519-2018/v1"
+      description: "Ed25519 signature suite 2018"
+    ED25519_2020:
+      value: "https://w3id.org/security/suites/ed25519-2020/v1"
+      description: "Ed25519 signature suite 2020"
+    JWS_2020:
+      value: "https://w3id.org/security/suites/jws-2020/v1"
+      description: "JSON Web Signature 2020"
+  
+  types:
+    VERIFIABLE_CREDENTIAL:
+      value: "VerifiableCredential"
+      description: "Base verifiable credential type"
+    VERIFIABLE_PRESENTATION:
+      value: "VerifiablePresentation"
+      description: "Base verifiable presentation type"
+
+credential_formats:
+  description: "Credential format identifiers"
+  formats:
+    JWT_VC_JSON:
+      value: "jwt_vc_json"
+      description: "JWT-encoded W3C VC (JSON)"
+    JWT_VP_JSON:
+      value: "jwt_vp_json"
+      description: "JWT-encoded W3C VP (JSON)"
+    LDP_VC:
+      value: "ldp_vc"
+      description: "Linked Data Proof VC"
+    LDP_VP:
+      value: "ldp_vp"
+      description: "Linked Data Proof VP"
+    MSO_MDOC:
+      value: "mso_mdoc"
+      description: "Mobile Security Object mDoc (ISO 18013-5)"
+    VC_SD_JWT:
+      value: "vc+sd-jwt"
+      description: "Selective Disclosure JWT"
+    KB_JWT_VC:
+      value: "kb+jwt_vc_json"
+      description: "Key-bound JWT VC"

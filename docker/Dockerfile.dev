@@ -1,0 +1,159 @@
+# Multi-stage Dockerfile for marty development environment
+# 
+# Targets:
+#   - rust-dev: Rust development with cargo, clippy, miri
+#   - python-dev: Python with maturin for FFI development
+#   - full-dev: Complete development environment
+#
+# Usage:
+#   docker build --target rust-dev -t marty-dev:rust -f docker/Dockerfile.dev .
+#   docker build --target python-dev -t marty-dev:python -f docker/Dockerfile.dev .
+#   docker build --target full-dev -t marty-dev:full -f docker/Dockerfile.dev .
+
+# =============================================================================
+# Base image with common tools
+# =============================================================================
+FROM debian:bookworm-slim AS base
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# Rust development stage
+# =============================================================================
+FROM base AS rust-dev
+
+# Install Rust toolchain
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+
+# Install Rust development tools
+RUN rustup component add \
+    clippy \
+    rustfmt \
+    rust-analyzer \
+    llvm-tools-preview
+
+# Install cargo tools for development
+RUN cargo install \
+    cargo-deny \
+    cargo-watch \
+    cargo-expand \
+    cargo-nextest \
+    && rm -rf /usr/local/cargo/registry
+
+# Install miri for unsafe code verification (nightly only)
+RUN rustup toolchain install nightly --component miri
+
+WORKDIR /workspace
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY marty-crypto/Cargo.toml marty-crypto/
+COPY marty-verification/Cargo.toml marty-verification/
+COPY marty-secure-storage/Cargo.toml marty-secure-storage/
+COPY marty-biometrics/Cargo.toml marty-biometrics/
+
+# Pre-build dependencies (create stub sources)
+RUN mkdir -p marty-crypto/src marty-verification/src marty-secure-storage/src marty-biometrics/src \
+    && echo "fn main() {}" > marty-crypto/src/lib.rs \
+    && echo "fn main() {}" > marty-verification/src/lib.rs \
+    && echo "fn main() {}" > marty-secure-storage/src/lib.rs \
+    && echo "fn main() {}" > marty-biometrics/src/lib.rs \
+    && cargo build --workspace 2>/dev/null || true \
+    && rm -rf marty-*/src
+
+# Development entrypoint
+CMD ["bash"]
+
+# =============================================================================
+# Python development stage
+# =============================================================================
+FROM rust-dev AS python-dev
+
+# Install Python and pip
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Install maturin for Rust-Python FFI
+RUN pip3 install --break-system-packages \
+    maturin[patchelf] \
+    pytest \
+    pytest-asyncio \
+    pytest-cov \
+    ruff \
+    mypy
+
+# Create virtual environment for project dependencies
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Install Python development dependencies
+RUN pip install \
+    maturin[patchelf] \
+    pytest \
+    pytest-asyncio \
+    pytest-cov \
+    pytest-xdist \
+    ruff \
+    mypy \
+    pydantic>=2.0 \
+    httpx \
+    uvicorn \
+    fastapi
+
+WORKDIR /workspace
+
+CMD ["bash"]
+
+# =============================================================================
+# Full development environment (includes OpenSSL for cross-validation tests)
+# =============================================================================
+FROM python-dev AS full-dev
+
+# Install additional tools for full development
+RUN apt-get update && apt-get install -y \
+    openssl \
+    jq \
+    vim \
+    less \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional cargo tools
+RUN cargo install \
+    cargo-llvm-cov \
+    cargo-audit \
+    cargo-outdated \
+    && rm -rf /usr/local/cargo/registry
+
+# Set up shell environment
+RUN echo 'alias ll="ls -la"' >> /root/.bashrc \
+    && echo 'alias ct="cargo test"' >> /root/.bashrc \
+    && echo 'alias cw="cargo watch -x check"' >> /root/.bashrc \
+    && echo 'alias pt="pytest -v"' >> /root/.bashrc
+
+# Label for easy identification
+LABEL org.opencontainers.image.title="marty-dev" \
+      org.opencontainers.image.description="Development environment for marty-core Rust/Python ecosystem" \
+      org.opencontainers.image.source="https://github.com/adamburdett/marty-core"
+
+WORKDIR /workspace
+
+CMD ["bash"]

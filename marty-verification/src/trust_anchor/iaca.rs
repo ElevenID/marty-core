@@ -514,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_add_jurisdiction_iaca() {
         use crate::testdata::NIST_GOOD_CA_DER;
         use der::Decode;
@@ -536,6 +537,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_add_multiple_jurisdictions() {
         use crate::testdata::{NIST_DSA_CA_DER, NIST_GOOD_CA_DER, NIST_TRUST_ANCHOR_DER};
         use der::Decode;
@@ -576,6 +578,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_to_isomdl_registry() {
         use crate::testdata::NIST_GOOD_CA_DER;
         use der::Decode;

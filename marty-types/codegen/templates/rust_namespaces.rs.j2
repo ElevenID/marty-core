@@ -1,0 +1,135 @@
+//! Generated namespace constants
+//! DO NOT EDIT - Generated from schema/namespaces.yaml
+
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
+/// ISO 18013-5 mobile driving license namespaces
+pub mod iso18013 {
+    #[cfg(feature = "python")]
+    use super::*;
+
+    /// {{ schema.iso18013.description }}
+    pub mod namespace {
+        {% for key, value in schema.iso18013.namespaces.items() %}
+        /// {{ value.description }}
+        pub const {{ key }}: &str = "{{ value.value }}";
+        {% endfor %}
+    }
+
+    /// ISO 18013-5 document types
+    pub mod doc_type {
+        {% for key, value in schema.iso18013.doc_types.items() %}
+        /// {{ value.description }}
+        pub const {{ key }}: &str = "{{ value.value }}";
+        {% endfor %}
+    }
+
+    /// ISO 18013-5 standard data element identifiers
+    pub mod element {
+        {% for key, value in schema.iso18013.elements.items() %}
+        /// {{ value.description }}
+        pub const {{ key }}: &str = "{{ value.value }}";
+        {% endfor %}
+    }
+
+    #[cfg(feature = "python")]
+    #[pyclass(name = "Iso18013Namespace")]
+    #[derive(Clone)]
+    pub struct PyIso18013Namespace;
+
+    #[cfg(feature = "python")]
+    #[pymethods]
+    impl PyIso18013Namespace {
+        #[classattr]
+        const MDL: &'static str = namespace::MDL;
+        #[classattr]
+        const AAMVA: &'static str = namespace::AAMVA;
+    }
+
+    #[cfg(feature = "python")]
+    #[pyclass(name = "Iso18013DocType")]
+    #[derive(Clone)]
+    pub struct PyIso18013DocType;
+
+    #[cfg(feature = "python")]
+    #[pymethods]
+    impl PyIso18013DocType {
+        #[classattr]
+        const MDL: &'static str = doc_type::MDL;
+        #[classattr]
+        const MID: &'static str = doc_type::MID;
+        #[classattr]
+        const MPASSPORT: &'static str = doc_type::MPASSPORT;
+    }
+}
+
+/// W3C Verifiable Credentials contexts and types
+pub mod w3c {
+    #[cfg(feature = "python")]
+    use super::*;
+
+    /// {{ schema.w3c.description }}
+    pub mod context {
+        {% for key, value in schema.w3c.contexts.items() %}
+        /// {{ value.description }}
+        pub const {{ key }}: &str = "{{ value.value }}";
+        {% endfor %}
+    }
+
+    /// W3C VC credential types
+    pub mod credential_type {
+        {% for key, value in schema.w3c.types.items() %}
+        /// {{ value.description }}
+        pub const {{ key }}: &str = "{{ value.value }}";
+        {% endfor %}
+    }
+
+    #[cfg(feature = "python")]
+    #[pyclass(name = "W3cContext")]
+    #[derive(Clone)]
+    pub struct PyW3cContext;
+
+    #[cfg(feature = "python")]
+    #[pymethods]
+    impl PyW3cContext {
+        {% for key, value in schema.w3c.contexts.items() %}
+        #[classattr]
+        const {{ key }}: &'static str = context::{{ key }};
+        {% endfor %}
+    }
+}
+
+/// Credential format identifiers
+pub mod credential_format {
+    #[cfg(feature = "python")]
+    use super::*;
+
+    {% for key, value in schema.credential_formats.formats.items() %}
+    /// {{ value.description }}
+    pub const {{ key }}: &str = "{{ value.value }}";
+    {% endfor %}
+
+    #[cfg(feature = "python")]
+    #[pyclass(name = "CredentialFormat")]
+    #[derive(Clone)]
+    pub struct PyCredentialFormat;
+
+    #[cfg(feature = "python")]
+    #[pymethods]
+    impl PyCredentialFormat {
+        {% for key, value in schema.credential_formats.formats.items() %}
+        #[classattr]
+        const {{ key }}: &'static str = {{ key }};
+        {% endfor %}
+    }
+}
+
+#[cfg(feature = "python")]
+pub fn register_namespace_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
+    parent_module.add_class::<iso18013::PyIso18013Namespace>()?;
+    parent_module.add_class::<iso18013::PyIso18013DocType>()?;
+    parent_module.add_class::<w3c::PyW3cContext>()?;
+    parent_module.add_class::<credential_format::PyCredentialFormat>()?;
+    Ok(())
+}

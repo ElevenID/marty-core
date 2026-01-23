@@ -1,0 +1,93 @@
+//! Generated error code definitions
+//! DO NOT EDIT - Generated from schema/error_codes.yaml
+
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
+
+/// Hierarchical error code with category and specific code
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyclass)]
+pub struct ErrorCode {
+    /// Error category (e.g., "CRED", "KEY", "CRYPTO")
+    pub category: String,
+    /// Specific error code within category
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Whether the operation can be retried
+    pub retryable: bool,
+    /// Error severity level
+    pub severity: ErrorSeverity,
+}
+
+/// Error severity levels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", pyclass)]
+pub enum ErrorSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+impl ErrorCode {
+    /// Get the full error code string (e.g., "CRED.ISSUANCE_FAILED")
+    pub fn full_code(&self) -> String {
+        format!("{}.{}", self.category, self.code)
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl ErrorCode {
+    #[getter]
+    fn full_code_py(&self) -> String {
+        self.full_code()
+    }
+}
+
+/// Predefined error codes
+pub mod codes {
+    use super::*;
+
+    {% for category, category_data in error_codes.items() %}
+    /// {{ category_data.description }}
+    pub mod {{ category|lower }} {
+        use super::*;
+
+        {% for code, code_data in category_data.codes.items() %}
+        /// {{ code_data.message }}
+        pub fn {{ code|lower }}() -> ErrorCode {
+            ErrorCode {
+                category: "{{ category }}".to_string(),
+                code: "{{ code }}".to_string(),
+                message: "{{ code_data.message }}".to_string(),
+                retryable: {{ code_data.retryable|lower }},
+                severity: ErrorSeverity::{% if code_data.severity == "error" %}Error{% elif code_data.severity == "warning" %}Warning{% else %}Info{% endif %},
+            }
+        }
+        {% endfor %}
+    }
+    {% endfor %}
+}
+
+#[cfg(feature = "python")]
+pub fn register_error_code_module(parent_module: &Bound<'_, PyModule>) -> PyResult<()> {
+    parent_module.add_class::<ErrorCode>()?;
+    parent_module.add_class::<ErrorSeverity>()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_code_creation() {
+        let err = codes::cred::issuance_failed();
+        assert_eq!(err.category, "CRED");
+        assert_eq!(err.code, "ISSUANCE_FAILED");
+        assert_eq!(err.full_code(), "CRED.ISSUANCE_FAILED");
+        assert!(!err.retryable);
+    }
+}

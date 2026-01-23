@@ -465,7 +465,6 @@ pub fn verify_emrtd(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn test_default_result() {
@@ -515,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_document_signer_certificate_creation() {
         use crate::testdata::NIST_GOOD_CA_DER;
         use der::Decode;
@@ -550,6 +550,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_verify_data_group_hashes_valid() {
         use crate::testdata::NIST_GOOD_CA_DER;
         use der::Decode;
@@ -596,6 +597,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-fixtures")]
     fn test_verify_data_group_hashes_mismatch() {
         use crate::testdata::NIST_GOOD_CA_DER;
         use der::Decode;

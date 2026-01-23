@@ -1,0 +1,71 @@
+[package]
+name = "marty-iso18013"
+version = "0.1.0"
+edition = "2021"
+authors = ["NetKnights GmbH"]
+license = "MIT OR Apache-2.0"
+description = "ISO 18013-5 mobile driving license protocol implementation"
+repository = "https://github.com/netknights/marty"
+
+[lib]
+name = "marty_iso18013"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Internal dependencies
+marty-types = { path = "../marty-types" }
+marty-crypto = { path = "../marty-crypto" }
+marty-verification = { path = "../marty-verification" }
+marty-secure-storage = { path = "../marty-secure-storage" }
+
+# CBOR and COSE
+ciborium = "0.2"
+coset = "0.3"
+isomdl = "0.2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Cryptography
+rand = "0.8"
+sha2 = "0.10"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# QR code generation
+qrcode = "0.14"
+image = "0.25"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Logging
+tracing = "0.1"
+
+# Optional: Python bindings
+pyo3 = { version = "0.24", optional = true, features = ["extension-module", "abi3-py39"] }
+
+# Optional: BLE transport
+btleplug = { version = "0.11", optional = true }
+uuid = "1.0"
+
+# Optional: NFC transport
+pcsc = { version = "2.8", optional = true }
+
+[features]
+default = []
+python = ["pyo3", "marty-types/python"]
+ble = ["btleplug"]
+nfc = ["pcsc"]
+all-transports = ["ble", "nfc"]
+
+[dev-dependencies]
+tempfile = "3.14"
+proptest = "1.5"
