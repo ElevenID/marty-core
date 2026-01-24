@@ -2942,7 +2942,7 @@ fn dtc_verify(dtc_json: &str) -> PyResult<String> {
 
 /// Create the Python module for marty_verification.
 #[pymodule]
-pub fn marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // MDL Verification
     m.add_class::<PyMdlVerificationResult>()?;
     m.add_class::<PyIacaRegistry>()?;
