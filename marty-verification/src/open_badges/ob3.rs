@@ -21,6 +21,7 @@ use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 
 use super::contexts::{ob3_context_uri, open_badges_context_loader, security_v2_context_uri};
 use super::types::{DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult};
+use super::x509_verification_method::X509VerificationKey2021;
 
 #[derive(Debug, Deserialize)]
 struct IssueOb3Request {
@@ -149,6 +150,7 @@ pub async fn verify_ob3_json_async(request_json: &str) -> VerificationResult<Str
 
     if !has_context(&req.credential, ob3_context_uri())
         && !has_context(&req.credential, "https://w3id.org/openbadges/v3")
+        && !has_context(&req.credential, "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json")
     {
         push_error(
             &mut errors,
@@ -286,6 +288,19 @@ fn build_verification_method(
             method_type
         ))),
     }
+}
+
+// For X509 verification methods, this function extracts PEM from the credential's verificationMethod
+fn build_x509_verification_method(
+    pem: &str,
+    verification_method: &IriBuf,
+    controller: UriBuf,
+) -> VerificationResult<X509VerificationKey2021> {
+    Ok(X509VerificationKey2021::new(
+        verification_method.clone(),
+        controller.to_string(),
+        pem.to_string(),
+    ))
 }
 
 fn ed25519_public_key_bytes(jwk: &JWK) -> VerificationResult<Vec<u8>> {

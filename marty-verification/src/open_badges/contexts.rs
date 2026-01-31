@@ -6,6 +6,7 @@ use crate::error::{VerificationError, VerificationResult};
 
 const CONTEXT_OPENBADGES_V2: &str = "https://w3id.org/openbadges/v2";
 const CONTEXT_OPENBADGES_V3: &str = "https://purl.imsglobal.org/spec/ob/v3p0/context.json";
+const CONTEXT_OPENBADGES_V3_303: &str = "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json";
 const CONTEXT_OPENBADGES_V3_ALIAS: &str = "https://w3id.org/openbadges/v3";
 const CONTEXT_VC_V1: &str = "https://www.w3.org/2018/credentials/v1";
 const CONTEXT_VC_V2: &str = "https://www.w3.org/ns/credentials/v2";
@@ -36,6 +37,10 @@ pub fn open_badges_context_loader() -> VerificationResult<ContextLoader> {
     );
     context_map.insert(
         CONTEXT_OPENBADGES_V3.to_string(),
+        CONTEXT_FILE_OPENBADGES_V3.to_string(),
+    );
+    context_map.insert(
+        CONTEXT_OPENBADGES_V3_303.to_string(),
         CONTEXT_FILE_OPENBADGES_V3.to_string(),
     );
     context_map.insert(

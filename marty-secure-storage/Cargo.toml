@@ -49,6 +49,8 @@ uuid = { workspace = true }
 
 # Encoding
 hex = "0.4"
+# Internal crates
+marty-types = { path = "../marty-types" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

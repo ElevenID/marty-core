@@ -1,15 +1,20 @@
-name: Release Stable
+name: Release Stable (DISABLED - Use Local Builds)
 
+# ZERO-COST STRATEGY: All builds happen locally
+# This workflow is disabled to eliminate expensive cross-platform builds
+# See ../Marty/docs/LOCAL_BUILD_SETUP.md for local build instructions
+#
+# Cost savings: ~$10-20/month (cross-platform Rust + Python builds)
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - '!v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       tag:
         description: 'Stable tag to release (e.g., v0.2.0)'
         required: true
+  # push:
+  #   tags:
+  #     - 'v[0-9]+.[0-9]+.[0-9]+'
+  #     - '!v[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: write

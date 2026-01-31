@@ -27,26 +27,35 @@
 //! | Offline JSON-LD Contexts | ✓ | ✓ |
 
 mod contexts;
+mod method_wrapper;
 mod ob2;
 mod ob3;
+mod suite_wrapper;
 mod types;
+mod x509_suite;
+mod x509_verification_method;
 
 use serde_json::Value;
 
 pub use contexts::{ob2_context_uri, ob3_context_uri, open_badges_context_loader};
+pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
 pub use ob2::{issue_ob2_json, verify_ob2_json};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ob3::{issue_ob3_json, verify_ob3_json};
 pub use ob3::{issue_ob3_json_async, verify_ob3_json_async};
+pub use suite_wrapper::OpenBadgeSuite;
 pub use types::{
     DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult, OpenBadgesVersion,
 };
+pub use x509_suite::X509Signature2021;
+pub use x509_verification_method::X509VerificationKey2021;
 
 pub fn detect_version(value: &Value) -> OpenBadgesVersion {
     if has_context(value, ob2_context_uri()) {
         return OpenBadgesVersion::V2;
     }
     if has_context(value, ob3_context_uri()) || has_context(value, "https://w3id.org/openbadges/v3")
+        || has_context(value, "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json")
     {
         return OpenBadgesVersion::V3;
     }

@@ -21,6 +21,7 @@
 use pyo3::prelude::*;
 
 pub mod generated;
+pub mod open_badges;
 
 // Re-export commonly used items
 pub use generated::{error_codes, namespaces};

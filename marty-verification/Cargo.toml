@@ -82,11 +82,13 @@ ldap3 = { version = "0.11", optional = true }
 quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 
 # Optional Python bindings
-pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"], optional = true }
+pyo3 = { workspace = true, optional = true }
 
 # mDoc/mDL support
 isomdl = "0.2.0"
 hex = "0.4"
+marty-zkp = { path = "../marty-zkp", features = ["python"] }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

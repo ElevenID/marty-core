@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013"]
+members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp"]
 resolver = "2"
 
 [workspace.package]
@@ -95,6 +95,10 @@ blake3 = "1.5"
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
+zeroize = "1.7"
+
+# Python bindings
+pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }
 
 # Internal crates
 marty-crypto = { path = "marty-crypto" }

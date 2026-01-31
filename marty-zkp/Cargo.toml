@@ -1,0 +1,26 @@
+[package]
+name = "marty-zkp"
+version = "0.1.0"
+edition = "2021"
+description = "Bridge to Google Longfellow ZK (LibZK) for privacy-preserving proofs"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+marty-types = { path = "../marty-types" }
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+libc = "0.2"
+zeroize = "1.7"
+
+[build-dependencies]
+cc = "1.0"
+cmake = "0.1"
+bindgen = "0.69" # In a real scenario, we'd use this to generate bindings
+
+[features]
+default = []
+python = ["dep:pyo3"]
+
+[dependencies.pyo3]
+workspace = true
+optional = true

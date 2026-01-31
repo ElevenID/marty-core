@@ -40,6 +40,7 @@ use crate::trust_anchor::{
 };
 use crate::trust_anchor::eudi::{EudiRegistry, EuMemberState, TrustServiceProvider, TspStatus};
 use crate::verification::mdl::{AuthStatus, MdlVerificationResult, ValidationRuleset};
+use marty_zkp::python::verify_age_zkp;
 
 /// Trait for converting various error types to PyErr
 trait IntoPyErr {
@@ -3283,6 +3284,9 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
+
+    // ZK Proof Verification
+    m.add_function(wrap_pyfunction!(verify_age_zkp, m)?)?;
 
     // Certificate Builder Operations (feature-gated)
     #[cfg(feature = "cert-builder")]

@@ -61,7 +61,7 @@ thiserror = { workspace = true }
 base64 = { workspace = true }
 
 # Python bindings (optional)
-pyo3 = { version = "0.24", features = ["extension-module", "abi3-py311"], optional = true }
+pyo3 = { workspace = true, optional = true }
 
 # WASM bindings (optional)
 wasm-bindgen = { version = "0.2", optional = true }
