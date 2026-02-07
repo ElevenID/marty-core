@@ -11,9 +11,15 @@ from ._marty_verification import (
     open_badge_ob2_verify,
     open_badge_ob3_issue,
     open_badge_ob3_verify,
-    # ZK Verification
-    verify_age_zkp,
 )
+
+# Try to import ZK verification if available
+try:
+    from ._marty_verification import verify_age_zkp
+    _has_zkp = True
+except ImportError:
+    verify_age_zkp = None
+    _has_zkp = False
 
 __version__ = "0.1.0"
 
@@ -23,6 +29,7 @@ __all__ = [
     "open_badge_ob2_verify",
     "open_badge_ob3_issue",
     "open_badge_ob3_verify",
-    # ZK Verification
-    "verify_age_zkp",
 ]
+
+if _has_zkp:
+    __all__.append("verify_age_zkp")
