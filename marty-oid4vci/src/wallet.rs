@@ -1,0 +1,849 @@
+//! OID4VCI/OID4VP wallet (holder) engine.
+//!
+//! Implements the wallet/holder side of the OID4VCI v1 and OID4VP v1
+//! specifications.  For the server (issuer/verifier) side see [`crate::issuer`]
+//! and [`crate::verifier`].
+//!
+//! # Feature flag
+//!
+//! This module is gated behind the `wallet` feature.  Enable it in consuming
+//! crates with:
+//!
+//! ```toml
+//! marty-oid4vci = { path = "…", features = ["wallet", "jwt_vc_json", "sd_jwt", "mso_mdoc", "zk_mdoc"] }
+//! ```
+//!
+//! # Supported flows
+//!
+//! | Flow | Method |
+//! |------|--------|
+//! | Pre-authorized code (§4.1) | [`WalletEngine::exchange_pre_auth_code`] |
+//! | Authorization code + PKCE (§4.2) | [`WalletEngine::build_authorization_request`] / [`WalletEngine::exchange_auth_code`] |
+//! | Credential request (§8) | [`WalletEngine::request_credential`] |
+//! | OID4VP presentation (§5) | [`WalletEngine::build_presentation_submission`] / [`WalletEngine::submit_presentation`] |
+//! | ZK predicate presentation | [`WalletEngine::build_zk_presentation`] |
+
+use std::collections::HashMap;
+
+use base64::Engine;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{Oid4vciError, Oid4vciResult};
+use crate::issuer::generate_pkce_challenge_s256;
+use crate::types::{
+    AuthorizationDetail, AuthorizationRequest,
+    CodeChallengeMethod, CredentialFormat, CredentialOffer, CredentialRequest, CredentialResponse,
+    GrantType, SingleProof, TokenResponse,
+};
+use crate::verifier::{
+    DescriptorMapEntry, PresentationDefinition, PresentationSubmission,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Issuer metadata (wallet-parsed)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Parsed `.well-known/openid-credential-issuer` response (OID4VCI §12.2.2).
+///
+/// Only the fields the wallet needs to drive a credential issuance flow are
+/// modelled here.  Unknown fields are captured in `extra`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssuerMetadata {
+    /// The Credential Issuer identifier URL.
+    pub credential_issuer: String,
+    /// Token endpoint (may live on a separate AS).
+    pub token_endpoint: Option<String>,
+    /// Credential endpoint.
+    pub credential_endpoint: String,
+    /// Authorization endpoint (for auth-code flow).
+    pub authorization_endpoint: Option<String>,
+    /// Supported grant types.
+    #[serde(default)]
+    pub grant_types_supported: Vec<String>,
+    /// Credential configurations offered by this issuer.
+    #[serde(default)]
+    pub credential_configurations_supported: HashMap<String, serde_json::Value>,
+    /// Raw extra fields preserved for forward-compatibility.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl IssuerMetadata {
+    /// Resolve the token endpoint, falling back to `{credential_issuer}/token`.
+    pub fn token_endpoint(&self) -> String {
+        self.token_endpoint
+            .clone()
+            .unwrap_or_else(|| format!("{}/token", self.credential_issuer))
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OID4VP wallet types
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A ZK proof for one input descriptor in a presentation.
+///
+/// `predicate_id` follows the wire format (e.g. `"age_over_18"`, `"age_over_21"`).
+/// Generation is the caller's responsibility (via `marty-zkp::Prover::prove_by_id`).
+#[derive(Debug, Clone)]
+pub struct ZkProofEntry {
+    /// The `InputDescriptor.id` this proof satisfies.
+    pub descriptor_id: String,
+    /// Wire-format predicate identifier (e.g. `"age_over_18"`).
+    pub predicate_id: String,
+    /// ZK proof bytes from `marty-zkp::Prover`.
+    pub proof_bytes: Vec<u8>,
+}
+
+/// The verifier's response after receiving a VP token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresentationResponse {
+    /// Whether the verifier accepted the presentation.
+    pub ok: bool,
+    /// Optional redirect URI returned by the verifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redirect_uri: Option<String>,
+    /// Optional error code (OID4VP §6.4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Optional error description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WalletEngine
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// OID4VCI/OID4VP wallet engine.
+///
+/// Stateless — all session state is returned to the caller rather than stored
+/// internally, consistent with the pattern used by [`crate::issuer::IssuanceEngine`].
+pub struct WalletEngine {
+    client: reqwest::Client,
+}
+
+impl WalletEngine {
+    /// Create a new wallet engine with default HTTP client settings.
+    pub fn new() -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent("marty-wallet/0.1")
+                .build()
+                .expect("reqwest client init failed"),
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Credential Offer parsing (§4)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Parse a `openid-credential-offer://` URI or a plain
+    /// `https://…?credential_offer=…` URL into a [`CredentialOffer`].
+    ///
+    /// Handles both inline `credential_offer` parameter (base64url-encoded JSON)
+    /// and the `credential_offer_uri` redirect pattern (fetches the URI).
+    pub async fn parse_credential_offer(&self, input: &str) -> Oid4vciResult<CredentialOffer> {
+        // Normalise the scheme so `url::Url` can parse it.
+        let url_str = if input.starts_with("openid-credential-offer://") {
+            input.replacen("openid-credential-offer://", "https://offer.invalid/", 1)
+        } else {
+            input.to_string()
+        };
+
+        let parsed = url::Url::parse(&url_str).map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Invalid credential offer URI: {}", e))
+        })?;
+
+        let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+
+        if let Some(offer_json) = params.get("credential_offer") {
+            // Inline JSON (may be URL-encoded but reqwest handles that for us)
+            let offer: CredentialOffer = serde_json::from_str(offer_json).map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("Invalid credential_offer JSON: {}", e))
+            })?;
+            return Ok(offer);
+        }
+
+        if let Some(offer_uri) = params.get("credential_offer_uri") {
+            // Redirect pattern — fetch the offer
+            let resp = self
+                .client
+                .get(offer_uri)
+                .send()
+                .await
+                .map_err(|e| Oid4vciError::InvalidRequest(format!("credential_offer_uri fetch failed: {}", e)))?;
+
+            let offer: CredentialOffer = resp.json().await.map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "credential_offer_uri response is not valid JSON: {}",
+                    e
+                ))
+            })?;
+            return Ok(offer);
+        }
+
+        Err(Oid4vciError::InvalidRequest(
+            "No credential_offer or credential_offer_uri parameter found".into(),
+        ))
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Issuer metadata (§12.2.2)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Fetch and parse `.well-known/openid-credential-issuer` for `issuer_url`.
+    pub async fn fetch_issuer_metadata(&self, issuer_url: &str) -> Oid4vciResult<IssuerMetadata> {
+        let well_known = format!(
+            "{}/.well-known/openid-credential-issuer",
+            issuer_url.trim_end_matches('/')
+        );
+
+        let resp = self
+            .client
+            .get(&well_known)
+            .send()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Metadata fetch failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Metadata endpoint returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        resp.json::<IssuerMetadata>().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Metadata response parse error: {}", e))
+        })
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Token endpoint — pre-authorized code flow (§6.1)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Exchange a pre-authorized code for an access token.
+    ///
+    /// `tx_code` — the transaction PIN, if the offer requires one.
+    pub async fn exchange_pre_auth_code(
+        &self,
+        token_endpoint: &str,
+        pre_auth_code: &str,
+        tx_code: Option<&str>,
+    ) -> Oid4vciResult<TokenResponse> {
+        let mut params = vec![
+            (
+                "grant_type",
+                GrantType::PreAuthorizedCode.as_str().to_string(),
+            ),
+            ("pre-authorized_code", pre_auth_code.to_string()),
+        ];
+        if let Some(pin) = tx_code {
+            params.push(("tx_code", pin.to_string()));
+        }
+
+        let resp = self
+            .client
+            .post(token_endpoint)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Token request failed: {}", e)))?;
+
+        Self::parse_token_response(resp).await
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Token endpoint — authorization code + PKCE flow (§6.2 / RFC 7636)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Build an authorization request for the authorization code + PKCE flow.
+    ///
+    /// Returns the request struct (for constructing the redirect URL) and the
+    /// raw PKCE code verifier the caller must keep secret until token exchange.
+    pub fn build_authorization_request(
+        &self,
+        _issuer_metadata: &IssuerMetadata,
+        credential_configuration_id: &str,
+        client_id: &str,
+        redirect_uri: &str,
+        issuer_state: Option<String>,
+    ) -> Oid4vciResult<(AuthorizationRequest, String)> {
+        // Generate PKCE challenge — reuse existing helper from the issuer module.
+        let code_verifier = generate_random_verifier();
+        let code_challenge = generate_pkce_challenge_s256(&code_verifier);
+
+        let req = AuthorizationRequest {
+            response_type: "code".into(),
+            client_id: client_id.to_string(),
+            redirect_uri: Some(redirect_uri.to_string()),
+            scope: None,
+            state: Some(generate_random_state()),
+            issuer_state,
+            code_challenge: Some(code_challenge),
+            code_challenge_method: Some(CodeChallengeMethod::S256),
+            authorization_details: Some(vec![AuthorizationDetail {
+                detail_type: "openid_credential".into(),
+                credential_configuration_id: Some(credential_configuration_id.to_string()),
+                format: None,
+            }]),
+        };
+
+        Ok((req, code_verifier))
+    }
+
+    /// Build the authorization redirect URL from an [`AuthorizationRequest`].
+    pub fn authorization_redirect_url(
+        &self,
+        authorization_endpoint: &str,
+        req: &AuthorizationRequest,
+    ) -> Oid4vciResult<String> {
+        let mut url = url::Url::parse(authorization_endpoint).map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Invalid authorization_endpoint: {}", e))
+        })?;
+
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("response_type", &req.response_type);
+            pairs.append_pair("client_id", &req.client_id);
+            if let Some(ref uri) = req.redirect_uri {
+                pairs.append_pair("redirect_uri", uri);
+            }
+            if let Some(ref state) = req.state {
+                pairs.append_pair("state", state);
+            }
+            if let Some(ref challenge) = req.code_challenge {
+                pairs.append_pair("code_challenge", challenge);
+                pairs.append_pair(
+                    "code_challenge_method",
+                    req.code_challenge_method
+                        .as_ref()
+                        .map(|m| m.as_str())
+                        .unwrap_or("S256"),
+                );
+            }
+            if let Some(ref issuer_state) = req.issuer_state {
+                pairs.append_pair("issuer_state", issuer_state);
+            }
+            if let Some(ref details) = req.authorization_details {
+                let details_json = serde_json::to_string(details).map_err(|e| {
+                    Oid4vciError::InvalidRequest(format!(
+                        "authorization_details serialization error: {}",
+                        e
+                    ))
+                })?;
+                pairs.append_pair("authorization_details", &details_json);
+            }
+        }
+
+        Ok(url.to_string())
+    }
+
+    /// Exchange an authorization code (+ PKCE verifier) for an access token.
+    pub async fn exchange_auth_code(
+        &self,
+        token_endpoint: &str,
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: Option<&str>,
+        client_id: Option<&str>,
+    ) -> Oid4vciResult<TokenResponse> {
+        let mut params = vec![
+            (
+                "grant_type",
+                GrantType::AuthorizationCode.as_str().to_string(),
+            ),
+            ("code", code.to_string()),
+            ("code_verifier", code_verifier.to_string()),
+        ];
+        if let Some(uri) = redirect_uri {
+            params.push(("redirect_uri", uri.to_string()));
+        }
+        if let Some(id) = client_id {
+            params.push(("client_id", id.to_string()));
+        }
+
+        let resp = self
+            .client
+            .post(token_endpoint)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Token request failed: {}", e)))?;
+
+        Self::parse_token_response(resp).await
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Proof-of-possession JWT (§8.2)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Create an `openid4vci-proof+jwt` proof-of-possession JWT.
+    ///
+    /// Signs with the holder's P-256 private key (JWK JSON).  Other algorithms
+    /// can be added by extending `SigningAlgorithm` in types.rs.
+    ///
+    /// # Arguments
+    /// * `holder_kid`   — the `kid` to embed in the JWT header (wallet DID or key URL)
+    /// * `c_nonce`      — the nonce from the token response (OID4VCI §8.2)
+    /// * `issuer_url`   — the credential issuer URL (goes in `aud`)
+    /// * `jwk_json`     — holder's P-256 JWK (private key, JSON string)
+    pub fn create_proof_jwt(
+        &self,
+        holder_kid: &str,
+        c_nonce: &str,
+        issuer_url: &str,
+        jwk_json: &str,
+    ) -> Oid4vciResult<String> {
+        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+
+        let jwk: serde_json::Value = serde_json::from_str(jwk_json).map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Invalid JWK JSON: {}", e))
+        })?;
+
+        // Extract the raw private key bytes from the JWK.
+        // For P-256 (ES256) we expect `crv: "P-256"` + `d` (raw private scalar, base64url).
+        let d_b64 = jwk
+            .get("d")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Oid4vciError::InvalidRequest("JWK missing 'd' (private key)".into()))?;
+
+        let d_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(d_b64)
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("JWK 'd' decode error: {}", e)))?;
+
+        // Build PKCS#8 DER from the raw P-256 scalar so jsonwebtoken can load it.
+        use p256::pkcs8::EncodePrivateKey as _;
+        let secret_key = p256::SecretKey::from_slice(&d_bytes)
+            .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 private key: {}", e)))?;
+        let der = secret_key
+            .to_pkcs8_der()
+            .map_err(|e| Oid4vciError::KeyError(format!("PKCS#8 DER encoding failed: {}", e)))?;
+
+        // EncodingKey::from_ec_der is infallible in jsonwebtoken 9.x
+        let encoding_key = EncodingKey::from_ec_der(der.as_bytes());
+
+        let now = chrono::Utc::now().timestamp() as u64;
+
+        let claims = ProofJwtClaims {
+            iss: Some(holder_kid.to_string()),
+            aud: issuer_url.to_string(),
+            iat: now,
+            nonce: c_nonce.to_string(),
+        };
+
+        let mut header = Header::new(Algorithm::ES256);
+        header.typ = Some("openid4vci-proof+jwt".into());
+        header.kid = Some(holder_kid.to_string());
+
+        encode(&header, &claims, &encoding_key)
+            .map_err(|e| Oid4vciError::SigningError(format!("JWT signing failed: {}", e)))
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Credential request (§8)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Post a credential request to the issuer's credential endpoint.
+    ///
+    /// `proof_jwt` — the PoP JWT from [`WalletEngine::create_proof_jwt`].
+    pub async fn request_credential(
+        &self,
+        credential_endpoint: &str,
+        access_token: &str,
+        format: &CredentialFormat,
+        credential_configuration_id: Option<&str>,
+        proof_jwt: &str,
+    ) -> Oid4vciResult<CredentialResponse> {
+        let proof = SingleProof {
+            proof_type: "jwt".into(),
+            jwt: proof_jwt.to_string(),
+        };
+
+        let req = CredentialRequest {
+            format: Some(format.as_str().to_string()),
+            credential_identifier: credential_configuration_id.map(|s| s.to_string()),
+            proofs: None,
+            proof: Some(proof),
+            credential_definition: None,
+            vct: None,
+            doctype: None,
+            claims: None,
+        };
+
+        let resp = self
+            .client
+            .post(credential_endpoint)
+            .bearer_auth(access_token)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("Credential request failed: {}", e))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Credential endpoint returned HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        resp.json::<CredentialResponse>().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Credential response parse error: {}", e))
+        })
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // OID4VP — parse incoming presentation request (§5)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Parse an `openid4vp://` request URI into a [`PresentationDefinition`].
+    ///
+    /// Handles both inline JSON and `request_uri` redirect.
+    pub async fn parse_presentation_request(
+        &self,
+        input: &str,
+    ) -> Oid4vciResult<PresentationDefinition> {
+        let url_str = if input.starts_with("openid4vp://") {
+            input.replacen("openid4vp://", "https://vp.invalid/", 1)
+        } else {
+            input.to_string()
+        };
+
+        let parsed = url::Url::parse(&url_str).map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Invalid presentation request URI: {}", e))
+        })?;
+
+        let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+
+        // Direct `presentation_definition` parameter
+        if let Some(pd_json) = params.get("presentation_definition") {
+            let pd: PresentationDefinition = serde_json::from_str(pd_json).map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "Invalid presentation_definition JSON: {}",
+                    e
+                ))
+            })?;
+            return Ok(pd);
+        }
+
+        // `request_uri` or `presentation_definition_uri` redirect
+        let uri = params
+            .get("request_uri")
+            .or_else(|| params.get("presentation_definition_uri"));
+
+        if let Some(uri) = uri {
+            let resp = self
+                .client
+                .get(uri.as_str())
+                .send()
+                .await
+                .map_err(|e| {
+                    Oid4vciError::InvalidRequest(format!(
+                        "presentation_definition_uri fetch failed: {}",
+                        e
+                    ))
+                })?;
+
+            // The response may be a full request object or just a PD
+            let body: serde_json::Value = resp.json().await.map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "presentation_definition_uri response parse error: {}",
+                    e
+                ))
+            })?;
+
+            // Try nested `presentation_definition` key first, then root
+            let pd_value = body
+                .get("presentation_definition")
+                .cloned()
+                .unwrap_or(body);
+
+            let pd: PresentationDefinition =
+                serde_json::from_value(pd_value).map_err(|e| {
+                    Oid4vciError::InvalidRequest(format!(
+                        "presentation_definition parse error: {}",
+                        e
+                    ))
+                })?;
+            return Ok(pd);
+        }
+
+        Err(Oid4vciError::InvalidRequest(
+            "No presentation_definition, request_uri or presentation_definition_uri found".into(),
+        ))
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // OID4VP — build and submit presentations (§6)
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// Build a standard (non-ZK) presentation submission.
+    ///
+    /// `credentials` — map of descriptor ID → VP token/credential bytes (format-encoded).
+    /// Returns a [`PresentationSubmission`] and a serialized `vp_token`.
+    pub fn build_presentation_submission(
+        &self,
+        definition: &PresentationDefinition,
+        credentials: HashMap<String, String>,
+    ) -> Oid4vciResult<(String, PresentationSubmission)> {
+        let vp_id = uuid::Uuid::new_v4().to_string();
+
+        let descriptor_map: Vec<DescriptorMapEntry> = definition
+            .input_descriptors
+            .iter()
+            .map(|desc| {
+                let format = credentials
+                    .get(&desc.id)
+                    .and_then(|cred| infer_format(cred))
+                    .unwrap_or("jwt_vc_json");
+
+                DescriptorMapEntry {
+                    id: desc.id.clone(),
+                    format: format.to_string(),
+                    path: "$".to_string(),
+                    path_nested: None,
+                }
+            })
+            .collect();
+
+        // Build a minimal VP envelope
+        let vp_claims: Vec<serde_json::Value> = definition
+            .input_descriptors
+            .iter()
+            .filter_map(|desc| credentials.get(&desc.id))
+            .map(|cred| serde_json::Value::String(cred.clone()))
+            .collect();
+
+        let vp_token = serde_json::json!({
+            "@context": ["https://www.w3.org/2018/credentials/v1"],
+            "type": ["VerifiablePresentation"],
+            "verifiableCredential": vp_claims
+        })
+        .to_string();
+
+        let submission = PresentationSubmission {
+            id: vp_id,
+            definition_id: definition.id.clone(),
+            descriptor_map,
+        };
+
+        Ok((vp_token, submission))
+    }
+
+    /// Build a ZK presentation submission.
+    ///
+    /// For each ZK-requested field in the definition, one [`ZkProofEntry`]
+    /// must be provided.  Standard (non-ZK) descriptors use `credentials`.
+    ///
+    /// ZK proof generation is intentionally kept outside this method so that
+    /// the caller controls key material and `marty-zkp` invocation.
+    pub fn build_zk_presentation(
+        &self,
+        definition: &PresentationDefinition,
+        credentials: HashMap<String, String>,
+        zk_proofs: Vec<ZkProofEntry>,
+    ) -> Oid4vciResult<(String, PresentationSubmission)> {
+        let vp_id = uuid::Uuid::new_v4().to_string();
+        let zk_proofs_by_id: HashMap<_, _> =
+            zk_proofs.iter().map(|e| (e.descriptor_id.as_str(), e)).collect();
+
+        let mut descriptor_map = vec![];
+        let mut vp_credentials = vec![];
+        let mut zk_proof_map: HashMap<String, serde_json::Value> = HashMap::new();
+
+        for desc in &definition.input_descriptors {
+            let has_zk = desc.constraints.fields.iter().any(|f| f.zk_predicate.is_some());
+
+            if has_zk {
+                // ZK path — embed the proof, not the raw credential
+                let entry = zk_proofs_by_id.get(desc.id.as_str()).ok_or_else(|| {
+                    Oid4vciError::InvalidRequest(format!(
+                        "Missing ZK proof for descriptor '{}'",
+                        desc.id
+                    ))
+                })?;
+
+                let proof_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(&entry.proof_bytes);
+
+                zk_proof_map.insert(
+                    desc.id.clone(),
+                    serde_json::json!({
+                        "predicate": entry.predicate_id,
+                        "proof": proof_b64,
+                        "proof_type": crate::formats::zk_mdoc::ZK_PROOF_TYPE_LIGERO,
+                    }),
+                );
+
+                descriptor_map.push(DescriptorMapEntry {
+                    id: desc.id.clone(),
+                    format: "zk_mdoc".to_string(),
+                    path: format!("$.zk_proofs.{}", desc.id),
+                    path_nested: None,
+                });
+            } else {
+                // Standard path
+                if let Some(cred) = credentials.get(&desc.id) {
+                    let format = infer_format(cred).unwrap_or("jwt_vc_json");
+                    vp_credentials.push(serde_json::Value::String(cred.clone()));
+                    descriptor_map.push(DescriptorMapEntry {
+                        id: desc.id.clone(),
+                        format: format.to_string(),
+                        path: format!("$.verifiableCredential[{}]", vp_credentials.len() - 1),
+                        path_nested: None,
+                    });
+                }
+            }
+        }
+
+        let vp_token = serde_json::json!({
+            "@context": ["https://www.w3.org/2018/credentials/v1"],
+            "type": ["VerifiablePresentation"],
+            "verifiableCredential": vp_credentials,
+            "zk_proofs": zk_proof_map,
+        })
+        .to_string();
+
+        let submission = PresentationSubmission {
+            id: vp_id,
+            definition_id: definition.id.clone(),
+            descriptor_map,
+        };
+
+        Ok((vp_token, submission))
+    }
+
+    /// POST a VP token + submission to the verifier's `response_uri`.
+    pub async fn submit_presentation(
+        &self,
+        response_uri: &str,
+        vp_token: &str,
+        presentation_submission: &PresentationSubmission,
+    ) -> Oid4vciResult<PresentationResponse> {
+        let submission_json = serde_json::to_string(presentation_submission).map_err(|e| {
+            Oid4vciError::InvalidRequest(format!(
+                "Presentation submission serialization error: {}",
+                e
+            ))
+        })?;
+
+        let params = [
+            ("vp_token", vp_token),
+            ("presentation_submission", &submission_json),
+        ];
+
+        let resp = self
+            .client
+            .post(response_uri)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("Presentation submission failed: {}", e))
+            })?;
+
+        let status = resp.status();
+        let body: serde_json::Value =
+            resp.json().await.unwrap_or(serde_json::Value::Object(Default::default()));
+
+        if status.is_success() {
+            Ok(PresentationResponse {
+                ok: true,
+                redirect_uri: body
+                    .get("redirect_uri")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                error: None,
+                error_description: None,
+            })
+        } else {
+            Ok(PresentationResponse {
+                ok: false,
+                redirect_uri: None,
+                error: body
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                error_description: body
+                    .get("error_description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            })
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Internal helpers
+    // ──────────────────────────────────────────────────────────────────────
+
+    async fn parse_token_response(resp: reqwest::Response) -> Oid4vciResult<TokenResponse> {
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Token endpoint returned HTTP {}: {}",
+                status, body
+            )));
+        }
+        resp.json::<TokenResponse>().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e))
+        })
+    }
+}
+
+impl Default for WalletEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PoP JWT claims
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProofJwtClaims {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iss: Option<String>,
+    aud: String,
+    iat: u64,
+    nonce: String,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PKCE helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn generate_random_verifier() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_random_state() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Format detection heuristic
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Infer a credential format string from the raw credential value.
+fn infer_format(cred: &str) -> Option<&'static str> {
+    if cred.contains('~') {
+        Some("spruce-vc+sd-jwt")
+    } else if cred.starts_with('{') {
+        Some("mso_mdoc")
+    } else {
+        // Treat as JWT
+        Some("jwt_vc_json")
+    }
+}

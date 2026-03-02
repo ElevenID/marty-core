@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-// Mock implementation of LibZK C-API
+// Mock implementation of LibZK C-API (generic predicate interface)
 
 extern "C" {
 
@@ -15,9 +15,9 @@ extern "C" {
     } ZkStatus;
 
     void* zk_create_transcript(const uint8_t* nonce, size_t nonce_len) {
-        // Just return a dummy pointer
+        // Allocate a tiny opaque context so the pointer is non-null and unique.
         int* p = (int*)malloc(sizeof(int));
-        *p = 1; 
+        *p = 1;
         return (void*)p;
     }
 
@@ -25,41 +25,59 @@ extern "C" {
         if (transcript) free(transcript);
     }
 
-    ZkStatus zk_prove_age_over_18(
+    // ── Generic predicate API ─────────────────────────────────────────
+
+    ZkStatus zk_prove_predicate(
         void* transcript,
+        const char* predicate_id,
         const uint8_t* mso_bytes,
         size_t mso_len,
         const uint8_t* signature,
         size_t sig_len,
-        const char* birth_date_str,
+        const char* claim_value,
         uint8_t** proof_out,
         size_t* proof_len_out
     ) {
-        if (!mso_bytes || !signature || !birth_date_str) return ZkErrorInvalidInput;
-        
-        // Mock proof generation
-        const char* mock_proof = "mock_zk_proof_data";
-        size_t len = strlen(mock_proof);
-        
-        *proof_out = (uint8_t*)malloc(len);
-        memcpy(*proof_out, mock_proof, len);
-        *proof_len_out = len;
-        
+        if (!transcript || !predicate_id || !mso_bytes || !signature || !claim_value)
+            return ZkErrorInvalidInput;
+        if (mso_len == 0 || sig_len == 0)
+            return ZkErrorInvalidInput;
+
+        // Mock: encode predicate_id + a fixed suffix as the "proof"
+        // Real LibZK would run the Ligero circuit here.
+        const char* suffix = ":mock_zk_proof";
+        size_t pid_len = strlen(predicate_id);
+        size_t suf_len = strlen(suffix);
+        size_t total = pid_len + suf_len;
+
+        *proof_out = (uint8_t*)malloc(total);
+        if (!*proof_out) return ZkErrorGeneric;
+
+        memcpy(*proof_out, predicate_id, pid_len);
+        memcpy(*proof_out + pid_len, suffix, suf_len);
+        *proof_len_out = total;
+
         return ZkSuccess;
     }
 
-    ZkStatus zk_verify_age_over_18(
+    ZkStatus zk_verify_predicate(
         void* transcript,
+        const char* predicate_id,
         const uint8_t* mso_bytes,
         size_t mso_len,
         const uint8_t* proof,
         size_t proof_len
     ) {
-        if (!proof || proof_len == 0) return ZkErrorVerificationFailed;
+        if (!transcript || !predicate_id || !proof || proof_len == 0)
+            return ZkErrorVerificationFailed;
+        // Mock: accept any non-empty proof
         return ZkSuccess;
     }
+
+    // ── Buffer management ─────────────────────────────────────────────
 
     void zk_free_buffer(uint8_t* buffer) {
         if (buffer) free(buffer);
     }
-}
+
+} // extern "C"
