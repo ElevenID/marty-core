@@ -1,8 +1,13 @@
 //! Build script for marty-zkp
 //!
-//! When USE_ZK_MOCK=1, compiles the mock C++ stub.
-//! Otherwise (default), compiles the real Longfellow ZK library sources
-//! directly using the `cc` crate — no CMake required.
+//! **Real library (default):** compiles 12 Longfellow source files directly.
+//!
+//! **Mock stub (dev / CI only):** activated by either:
+//!   - the `zk-mock` Cargo feature  (`--features marty-zkp/zk-mock`), or
+//!   - the environment variable `USE_ZK_MOCK=1` (convenience alias).
+//!
+//! Building with `--release` while the mock is active is a **hard compile
+//! error** — the mock must never make it into a production binary.
 
 use std::env;
 use std::path::PathBuf;
@@ -11,6 +16,28 @@ fn main() {
     println!("cargo:rerun-if-changed=src/cpp/");
     println!("cargo:rerun-if-env-changed=LIBZK_PATH");
     println!("cargo:rerun-if-env-changed=USE_ZK_MOCK");
+
+    // Mock is active when the Cargo feature is set OR the env-var shortcut is used.
+    let feature_active = env::var("CARGO_FEATURE_ZK_MOCK").is_ok();
+    let env_active = env::var("USE_ZK_MOCK").unwrap_or_default() == "1";
+    let use_mock = feature_active || env_active;
+
+    if use_mock {
+        let profile = env::var("PROFILE").unwrap_or_default();
+        if profile == "release" {
+            // Hard error — stops the build immediately.
+            eprintln!(
+                "cargo:error=ZK mock (feature \"zk-mock\" or USE_ZK_MOCK=1) \
+                 must NOT be used in release builds. \
+                 Remove --features marty-zkp/zk-mock and unset USE_ZK_MOCK."
+            );
+            std::process::exit(1);
+        }
+        // Expose cfg(zk_mock) so Rust source can gate on it (belt-and-suspenders).
+        println!("cargo:rustc-cfg=zk_mock");
+        compile_mock();
+        return;
+    }
 
     let libzk_path = env::var("LIBZK_PATH").unwrap_or_else(|_| {
         let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -21,15 +48,7 @@ fn main() {
             .unwrap_or_else(|| PathBuf::from("../../../longfellow-zk"));
         workspace_root.to_string_lossy().to_string()
     });
-
-    let libzk_path = PathBuf::from(&libzk_path);
-
-    let use_mock = env::var("USE_ZK_MOCK").unwrap_or_else(|_| "0".to_string());
-    if use_mock == "1" {
-        compile_mock();
-    } else {
-        compile_libzk(&libzk_path);
-    }
+    compile_libzk(&PathBuf::from(libzk_path));
 }
 
 fn compile_mock() {

@@ -20,6 +20,10 @@ bindgen = "0.69" # In a real scenario, we'd use this to generate bindings
 [features]
 default = []
 python = ["dep:pyo3"]
+# zk-mock: compile the C++ stub instead of the real Longfellow library.
+# ONLY for local development and CI unit tests. Never enable in production.
+# Building with --release while this feature is active is a hard compile error.
+zk-mock = []
 
 [dependencies.pyo3]
 workspace = true

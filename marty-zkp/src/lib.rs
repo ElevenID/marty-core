@@ -1,6 +1,14 @@
 mod ffi;
 pub mod mdoc_support;
 
+// Belt-and-suspenders: the build script already hard-errors, but this
+// compile_error! catches any path where cfg(zk_mock) leaks into a release build.
+#[cfg(all(zk_mock, not(debug_assertions)))]
+compile_error!(
+    "ZK mock (feature \"zk-mock\" / USE_ZK_MOCK=1) must not be compiled \
+     in release mode. Remove --features marty-zkp/zk-mock and unset USE_ZK_MOCK."
+);
+
 use std::ffi::CString;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
