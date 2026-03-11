@@ -46,8 +46,13 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run tests
-        run: cargo test --workspace --features test-fixtures
+      - name: Run tests (workspace, excluding marty-zkp)
+        run: cargo test --workspace --exclude marty-zkp --features test-fixtures
+
+      - name: Run marty-zkp tests (ZK mock)
+        env:
+          USE_ZK_MOCK: "1"
+        run: cargo test -p marty-zkp
 
   clippy:
     name: Clippy

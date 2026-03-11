@@ -286,6 +286,10 @@ impl Prover {
     ///
     /// The returned bytes must be passed to [`Verifier::verify`] unchanged.
     pub fn prove(circuit: &Circuit, input: &MdocProveInput) -> Result<Vec<u8>, ZkError> {
+        let expected_n = unsafe { (*circuit.spec()).num_attributes };
+        if input.attributes.len() != expected_n {
+            return Err(ZkError::InvalidInput);
+        }
         let ffi_attrs = input.attributes.iter()
             .map(|a| a.to_ffi())
             .collect::<Result<Vec<_>, _>>()?;
@@ -343,6 +347,11 @@ impl Verifier {
     ) -> Result<bool, ZkError> {
         if proof.is_empty() {
             return Ok(false);
+        }
+
+        let expected_n = unsafe { (*circuit.spec()).num_attributes };
+        if input.attributes.len() != expected_n {
+            return Err(ZkError::InvalidInput);
         }
 
         let ffi_attrs = input.attributes.iter()
