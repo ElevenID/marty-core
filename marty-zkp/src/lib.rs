@@ -234,13 +234,13 @@ impl Circuit {
     /// Generate a compressed circuit for the ZK spec that supports exactly
     /// `num_attributes` attributes.
     ///
-    /// `kZkSpecs` is searched (highest-version-first) for a matching entry.
+    /// `kZkSpecs` is searched for the highest-version matching entry.
     /// Returns an error if no such spec exists or if the generator fails.
     pub fn generate(num_attributes: usize) -> Result<Self, ZkError> {
         let spec_index = unsafe {
             (0..ffi::NUM_ZK_SPECS)
-                .rev()
-                .find(|&i| ffi::kZkSpecs[i].num_attributes == num_attributes)
+                .filter(|&i| ffi::kZkSpecs[i].num_attributes == num_attributes)
+                .max_by_key(|&i| ffi::kZkSpecs[i].version)
                 .ok_or(ZkError::InvalidInput)?
         };
 

@@ -307,10 +307,10 @@ fn circuit_generate_one_attribute() {
     Circuit::generate(1).expect("Circuit::generate(1) must succeed");
 }
 
-/// `Circuit::generate(6)` must also succeed (highest supported attribute count).
+/// `Circuit::generate(4)` must also succeed (highest supported attribute count in real library).
 #[test]
-fn circuit_generate_six_attributes() {
-    Circuit::generate(6).expect("Circuit::generate(6) must succeed");
+fn circuit_generate_four_attributes() {
+    Circuit::generate(4).expect("Circuit::generate(4) must succeed");
 }
 
 /// `Circuit::generate` for an unsupported count must return `InvalidInput`.
