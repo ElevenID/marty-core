@@ -1,58 +1,60 @@
-use crate::ZkPredicate;
+use crate::{AttributeRequest, MdocProveInput};
 
-/// All data needed to generate or verify a ZK proof for an mDoc claim.
+/// Convenience wrapper that collects all inputs required to generate or verify
+/// a ZK proof for a single mDoc presentation.
 ///
-/// Bundles the raw cryptographic material (MSO bytes + COSE signature)
-/// together with the claim metadata, so callers don't have to track them
-/// separately.
+/// Mirrors [`MdocProveInput`] but provides named constructors that align with
+/// the ISO 18013-5 / OID4VP parsing flow.
 pub struct MdocZkInput {
-    /// Raw MSO (Mobile Security Object) bytes — the COSE_Sign1 payload.
-    pub mso_bytes: Vec<u8>,
-    /// COSE signature over the MSO.
-    pub signature: Vec<u8>,
-    /// Name of the mDoc claim being proved (e.g. `"birth_date"`).
-    pub claim_name: String,
-    /// Plaintext value of the claim.  **Never transmitted** — only used
-    /// locally to run the ZK circuit.
-    pub claim_value: String,
+    /// Full CBOR-encoded ISO 18013-5 mDoc bytes (the `DeviceResponse` document).
+    pub mdoc: Vec<u8>,
+    /// Issuer public key X coordinate as `"0x..."` hex string.
+    pub issuer_pkx: String,
+    /// Issuer public key Y coordinate as `"0x..."` hex string.
+    pub issuer_pky: String,
+    /// Session transcript bytes.
+    pub transcript: Vec<u8>,
+    /// Attributes to prove in zero-knowledge.
+    pub attributes: Vec<AttributeRequest>,
+    /// Current time in ISO 8601 format, e.g. `"2026-01-30T09:00:00Z"`.
+    pub now: String,
+    /// mDoc docType, e.g. `"org.iso.18013.5.1.mDL"`.
+    pub doc_type: String,
 }
 
 impl MdocZkInput {
     pub fn new(
-        mso_bytes: Vec<u8>,
-        signature: Vec<u8>,
-        claim_name: impl Into<String>,
-        claim_value: impl Into<String>,
+        mdoc: Vec<u8>,
+        issuer_pkx: impl Into<String>,
+        issuer_pky: impl Into<String>,
+        transcript: Vec<u8>,
+        attributes: Vec<AttributeRequest>,
+        now: impl Into<String>,
+        doc_type: impl Into<String>,
     ) -> Self {
         Self {
-            mso_bytes,
-            signature,
-            claim_name: claim_name.into(),
-            claim_value: claim_value.into(),
+            mdoc,
+            issuer_pkx: issuer_pkx.into(),
+            issuer_pky: issuer_pky.into(),
+            transcript,
+            attributes,
+            now: now.into(),
+            doc_type: doc_type.into(),
         }
     }
 
-    /// Construct from raw COSE_Sign1 elements.
-    ///
-    /// The MSO is taken as the `payload` of the COSE_Sign1 structure
-    /// (the ToBeSigned bytes that LibZK operates on).
-    pub fn from_cose_sign1(
-        _protected_header: &[u8],
-        payload: &[u8],
-        signature: &[u8],
-        claim_name: impl Into<String>,
-        claim_value: impl Into<String>,
-    ) -> Self {
-        Self {
-            mso_bytes: payload.to_vec(),
-            signature: signature.to_vec(),
-            claim_name: claim_name.into(),
-            claim_value: claim_value.into(),
+    /// Convert into a [`MdocProveInput`] for use with [`crate::Prover`] and
+    /// [`crate::Verifier`].
+    pub fn into_prove_input(self) -> MdocProveInput {
+        MdocProveInput {
+            mdoc: self.mdoc,
+            issuer_pkx: self.issuer_pkx,
+            issuer_pky: self.issuer_pky,
+            transcript: self.transcript,
+            attributes: self.attributes,
+            now: self.now,
+            doc_type: self.doc_type,
         }
-    }
-
-    /// Verify that this input carries the claim required by the given predicate.
-    pub fn claim_matches_predicate(&self, predicate: &ZkPredicate) -> bool {
-        self.claim_name == predicate.required_claim()
     }
 }
+

@@ -1,9 +1,9 @@
 mod ffi;
 pub mod mdoc_support;
 
+use std::ffi::CString;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::Zeroize;
 
 // ── Predicate ────────────────────────────────────────────────────────
 
@@ -94,43 +94,177 @@ pub enum ZkError {
     VerificationFailed,
     #[error("Unsupported predicate: {0}")]
     UnsupportedPredicate(String),
+    #[error("Prover error code: {0}")]
+    ProverError(u32),
+    #[error("Verifier error code: {0}")]
+    VerifierError(u32),
+    #[error("Circuit generation error code: {0}")]
+    CircuitError(u32),
     #[error("Unknown error code: {0}")]
     Unknown(u32),
 }
 
-impl From<ffi::ZkStatus> for Result<(), ZkError> {
-    fn from(status: ffi::ZkStatus) -> Self {
-        match status {
-            ffi::ZkStatus::Success => Ok(()),
-            ffi::ZkStatus::ErrorGeneric => Err(ZkError::Generic),
-            ffi::ZkStatus::ErrorInvalidInput => Err(ZkError::InvalidInput),
-            ffi::ZkStatus::ErrorVerificationFailed => Err(ZkError::VerificationFailed),
-        }
+impl From<ffi::MdocProverErrorCode> for ZkError {
+    fn from(code: ffi::MdocProverErrorCode) -> Self {
+        ZkError::ProverError(code as u32)
     }
 }
 
-// ── Transcript ────────────────────────────────────────────────────────
-
-pub struct ZkTranscript {
-    inner: *mut libc::c_void,
-}
-
-// SAFETY: ZkTranscript wraps an opaque C pointer. The underlying Longfellow
-// library is documented as thread-safe for distinct transcript instances.
-unsafe impl Send for ZkTranscript {}
-
-impl Drop for ZkTranscript {
-    fn drop(&mut self) {
-        unsafe {
-            ffi::zk_free_transcript(self.inner);
-        }
+impl From<ffi::MdocVerifierErrorCode> for ZkError {
+    fn from(code: ffi::MdocVerifierErrorCode) -> Self {
+        ZkError::VerifierError(code as u32)
     }
 }
+
+impl From<ffi::CircuitGenerationErrorCode> for ZkError {
+    fn from(code: ffi::CircuitGenerationErrorCode) -> Self {
+        ZkError::CircuitError(code as u32)
+    }
+}
+
+// ── ZkTranscript ──────────────────────────────────────────────────────
+
+/// Session transcript bytes (binds the ZK proof to a specific presentation session).
+///
+/// In the ISO 18013-5 / OID4VP flow the transcript is the serialised
+/// `SessionTranscript` CBOR structure that was included in the device
+/// authentication.  The Longfellow prover uses it as a Fiat-Shamir
+/// context input so every proof is cryptographically bound to exactly
+/// one session and cannot be replayed in a different session.
+#[derive(Clone)]
+pub struct ZkTranscript(Vec<u8>);
 
 impl ZkTranscript {
-    pub fn new(nonce: &[u8]) -> Self {
-        let inner = unsafe { ffi::zk_create_transcript(nonce.as_ptr(), nonce.len()) };
-        Self { inner }
+    pub fn new(transcript_bytes: &[u8]) -> Self {
+        Self(transcript_bytes.to_vec())
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+// ── AttributeRequest ─────────────────────────────────────────────────
+
+/// A single mDoc attribute to prove (namespace, element identifier, CBOR value).
+#[derive(Clone)]
+pub struct AttributeRequest {
+    /// mDoc namespace, e.g. `"org.iso.18013.5.1"`.
+    pub namespace: String,
+    /// Element identifier, e.g. `"age_over_18"`.
+    pub id: String,
+    /// Raw CBOR bytes of the expected element value, e.g. `\xf5` for CBOR true.
+    pub cbor_value: Vec<u8>,
+}
+
+impl AttributeRequest {
+    pub fn new(namespace: impl Into<String>, id: impl Into<String>, cbor_value: Vec<u8>) -> Self {
+        Self { namespace: namespace.into(), id: id.into(), cbor_value }
+    }
+
+    /// Convert to the C-ABI `RequestedAttribute` struct.
+    fn to_ffi(&self) -> Result<ffi::RequestedAttribute, ZkError> {
+        let ns = self.namespace.as_bytes();
+        let id = self.id.as_bytes();
+        let cv = &self.cbor_value;
+
+        if ns.len() > 64 || id.len() > 32 || cv.len() > 64 {
+            return Err(ZkError::InvalidInput);
+        }
+
+        let mut attr = ffi::RequestedAttribute {
+            namespace_id: [0u8; 64],
+            id: [0u8; 32],
+            cbor_value: [0u8; 64],
+            namespace_len: ns.len(),
+            id_len: id.len(),
+            cbor_value_len: cv.len(),
+        };
+        attr.namespace_id[..ns.len()].copy_from_slice(ns);
+        attr.id[..id.len()].copy_from_slice(id);
+        attr.cbor_value[..cv.len()].copy_from_slice(cv);
+        Ok(attr)
+    }
+}
+
+// ── MdocProveInput ────────────────────────────────────────────────────
+
+/// All public inputs required to run the mDoc ZK prover or verifier.
+#[derive(Clone)]
+pub struct MdocProveInput {
+    /// Full CBOR-encoded ISO 18013-5 mDoc (the `DeviceResponse` document bytes).
+    pub mdoc: Vec<u8>,
+    /// Issuer public key X coordinate as a `"0x..."` hex string.
+    pub issuer_pkx: String,
+    /// Issuer public key Y coordinate as a `"0x..."` hex string.
+    pub issuer_pky: String,
+    /// Session transcript (binds proof to this presentation session).
+    pub transcript: Vec<u8>,
+    /// Attributes to disclose in zero-knowledge.
+    pub attributes: Vec<AttributeRequest>,
+    /// Current time in ISO 8601 format, e.g. `"2026-01-30T09:00:00Z"`.
+    pub now: String,
+    /// mDoc docType, e.g. `"org.iso.18013.5.1.mDL"`.
+    pub doc_type: String,
+}
+
+// ── Circuit ───────────────────────────────────────────────────────────
+
+/// Pre-generated compressed circuit for a given number of attributes.
+///
+/// Generate once with [`Circuit::generate`] and pass to every
+/// [`Prover::prove`] / [`Verifier::verify`] call.  Circuits are
+/// large (~100 MB uncompressed) and expensive to generate, so callers
+/// should cache them.
+pub struct Circuit {
+    bytes: Vec<u8>,
+    spec_index: usize,
+}
+
+impl std::fmt::Debug for Circuit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Circuit")
+            .field("bytes_len", &self.bytes.len())
+            .field("spec_index", &self.spec_index)
+            .finish()
+    }
+}
+
+impl Circuit {
+    /// Generate a compressed circuit for the ZK spec that supports exactly
+    /// `num_attributes` attributes.
+    ///
+    /// `kZkSpecs` is searched (highest-version-first) for a matching entry.
+    /// Returns an error if no such spec exists or if the generator fails.
+    pub fn generate(num_attributes: usize) -> Result<Self, ZkError> {
+        let spec_index = unsafe {
+            (0..ffi::NUM_ZK_SPECS)
+                .rev()
+                .find(|&i| ffi::kZkSpecs[i].num_attributes == num_attributes)
+                .ok_or(ZkError::InvalidInput)?
+        };
+
+        let mut cb: *mut u8 = std::ptr::null_mut();
+        let mut clen: usize = 0;
+
+        let rc = unsafe {
+            ffi::generate_circuit(&ffi::kZkSpecs[spec_index], &mut cb, &mut clen)
+        };
+        if rc != ffi::CircuitGenerationErrorCode::Success {
+            return Err(ZkError::from(rc));
+        }
+        if cb.is_null() {
+            return Err(ZkError::CircuitError(0));
+        }
+
+        let bytes = unsafe { std::slice::from_raw_parts(cb, clen).to_vec() };
+        unsafe { libc::free(cb as *mut libc::c_void) };
+
+        Ok(Self { bytes, spec_index })
+    }
+
+    fn spec(&self) -> *const ffi::ZkSpecStruct {
+        unsafe { &ffi::kZkSpecs[self.spec_index] }
     }
 }
 
@@ -139,77 +273,51 @@ impl ZkTranscript {
 pub struct Prover;
 
 impl Prover {
-    /// Generate a ZK proof for the given predicate.
+    /// Generate a ZK proof that the mDoc attributes in `input` satisfy
+    /// the requested values without revealing the underlying document.
     ///
-    /// * `predicate`   — which statement to prove
-    /// * `transcript`  — challenge transcript (contains session nonce)
-    /// * `mso_bytes`   — raw MSO (Mobile Security Object) bytes from the mDoc
-    /// * `signature`   — COSE signature over the MSO
-    /// * `claim_value` — the plaintext claim value (e.g. "1990-01-15" for birth_date)
-    ///                   This value is *only* used locally; it is never transmitted.
-    pub fn prove(
-        predicate: &ZkPredicate,
-        transcript: &ZkTranscript,
-        mso_bytes: &[u8],
-        signature: &[u8],
-        claim_value: &str,
-    ) -> Result<Vec<u8>, ZkError> {
-        let predicate_id = std::ffi::CString::new(predicate.id())
-            .map_err(|_| ZkError::InvalidInput)?;
-        let claim_value_c = std::ffi::CString::new(claim_value)
-            .map_err(|_| ZkError::InvalidInput)?;
+    /// The returned bytes must be passed to [`Verifier::verify`] unchanged.
+    pub fn prove(circuit: &Circuit, input: &MdocProveInput) -> Result<Vec<u8>, ZkError> {
+        let ffi_attrs = input.attributes.iter()
+            .map(|a| a.to_ffi())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let pkx = CString::new(input.issuer_pkx.as_str()).map_err(|_| ZkError::InvalidInput)?;
+        let pky = CString::new(input.issuer_pky.as_str()).map_err(|_| ZkError::InvalidInput)?;
+        let now = CString::new(input.now.as_str()).map_err(|_| ZkError::InvalidInput)?;
 
         let mut proof_ptr: *mut u8 = std::ptr::null_mut();
         let mut proof_len: usize = 0;
 
-        let status = unsafe {
-            ffi::zk_prove_predicate(
-                transcript.inner,
-                predicate_id.as_ptr(),
-                mso_bytes.as_ptr(),
-                mso_bytes.len(),
-                signature.as_ptr(),
-                signature.len(),
-                claim_value_c.as_ptr(),
+        let rc = unsafe {
+            ffi::run_mdoc_prover(
+                circuit.bytes.as_ptr(),
+                circuit.bytes.len(),
+                input.mdoc.as_ptr(),
+                input.mdoc.len(),
+                pkx.as_ptr(),
+                pky.as_ptr(),
+                input.transcript.as_ptr(),
+                input.transcript.len(),
+                ffi_attrs.as_ptr(),
+                ffi_attrs.len(),
+                now.as_ptr(),
                 &mut proof_ptr,
                 &mut proof_len,
+                circuit.spec(),
             )
         };
 
-        Result::from(status)?;
-
+        if rc != ffi::MdocProverErrorCode::Success {
+            return Err(ZkError::from(rc));
+        }
         if proof_ptr.is_null() {
             return Err(ZkError::Generic);
         }
 
         let proof = unsafe { std::slice::from_raw_parts(proof_ptr, proof_len).to_vec() };
-        unsafe { ffi::zk_free_buffer(proof_ptr) };
-
+        unsafe { libc::free(proof_ptr as *mut libc::c_void) };
         Ok(proof)
-    }
-
-    /// Convenience: parse a predicate ID string and prove in one call.
-    pub fn prove_by_id(
-        predicate_id: &str,
-        transcript: &ZkTranscript,
-        mso_bytes: &[u8],
-        signature: &[u8],
-        claim_value: &str,
-    ) -> Result<Vec<u8>, ZkError> {
-        let predicate = ZkPredicate::from_id(predicate_id);
-        Self::prove(&predicate, transcript, mso_bytes, signature, claim_value)
-    }
-
-    /// Deprecated — use [`Prover::prove`] with [`ZkPredicate::AgeOver(18)`].
-    #[deprecated(since = "0.2.0", note = "use Prover::prove(&ZkPredicate::AgeOver(18), ...)")]
-    #[allow(dead_code)]
-    pub fn prove_age_over_18(
-        transcript: &ZkTranscript,
-        mso_bytes: &[u8],
-        signature: &[u8],
-        birth_date: &str,
-    ) -> Result<Vec<u8>, ZkError> {
-        Self::prove(&ZkPredicate::AgeOver(18), transcript, mso_bytes, signature, birth_date)
     }
 }
 
@@ -218,61 +326,55 @@ impl Prover {
 pub struct Verifier;
 
 impl Verifier {
-    /// Verify a ZK proof for the given predicate.
-    ///
-    /// Returns `Ok(true)` if the proof is valid, `Ok(false)` if it is
-    /// structurally valid but the predicate does not hold, and `Err` for
-    /// any other failure (invalid bytes, corrupt proof, etc.).
+    /// Verify a ZK proof, returning `Ok(true)` on success, `Ok(false)` if the
+    /// proof does not verify, or `Err` for structural / input failures.
     pub fn verify(
-        predicate: &ZkPredicate,
-        transcript: &ZkTranscript,
-        mso_bytes: &[u8],
+        circuit: &Circuit,
+        input: &MdocProveInput,
         proof: &[u8],
     ) -> Result<bool, ZkError> {
-        let predicate_id = std::ffi::CString::new(predicate.id())
-            .map_err(|_| ZkError::InvalidInput)?;
+        if proof.is_empty() {
+            return Ok(false);
+        }
 
-        let status = unsafe {
-            ffi::zk_verify_predicate(
-                transcript.inner,
-                predicate_id.as_ptr(),
-                mso_bytes.as_ptr(),
-                mso_bytes.len(),
+        let ffi_attrs = input.attributes.iter()
+            .map(|a| a.to_ffi())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let pkx = CString::new(input.issuer_pkx.as_str()).map_err(|_| ZkError::InvalidInput)?;
+        let pky = CString::new(input.issuer_pky.as_str()).map_err(|_| ZkError::InvalidInput)?;
+        let now = CString::new(input.now.as_str()).map_err(|_| ZkError::InvalidInput)?;
+        let doc_type = CString::new(input.doc_type.as_str()).map_err(|_| ZkError::InvalidInput)?;
+
+        let rc = unsafe {
+            ffi::run_mdoc_verifier(
+                circuit.bytes.as_ptr(),
+                circuit.bytes.len(),
+                pkx.as_ptr(),
+                pky.as_ptr(),
+                input.transcript.as_ptr(),
+                input.transcript.len(),
+                ffi_attrs.as_ptr(),
+                ffi_attrs.len(),
+                now.as_ptr(),
                 proof.as_ptr(),
                 proof.len(),
+                doc_type.as_ptr(),
+                circuit.spec(),
             )
         };
 
-        match status {
-            ffi::ZkStatus::Success => Ok(true),
-            ffi::ZkStatus::ErrorVerificationFailed => Ok(false),
-            _ => {
-                Result::from(status)?;
-                Ok(false) // unreachable
-            }
+        match rc {
+            ffi::MdocVerifierErrorCode::Success => Ok(true),
+            ffi::MdocVerifierErrorCode::GeneralFailure
+            | ffi::MdocVerifierErrorCode::CircuitParsingFailure
+            | ffi::MdocVerifierErrorCode::ProofTooSmall
+            | ffi::MdocVerifierErrorCode::HashParsingFailure
+            | ffi::MdocVerifierErrorCode::SignatureParsingFailure
+            | ffi::MdocVerifierErrorCode::InvalidCbor
+            | ffi::MdocVerifierErrorCode::AttributeNumberMismatch => Ok(false),
+            _ => Err(ZkError::from(rc)),
         }
-    }
-
-    /// Convenience: parse a predicate ID string and verify in one call.
-    pub fn verify_by_id(
-        predicate_id: &str,
-        transcript: &ZkTranscript,
-        mso_bytes: &[u8],
-        proof: &[u8],
-    ) -> Result<bool, ZkError> {
-        let predicate = ZkPredicate::from_id(predicate_id);
-        Self::verify(&predicate, transcript, mso_bytes, proof)
-    }
-
-    /// Deprecated — use [`Verifier::verify`] with [`ZkPredicate::AgeOver(18)`].
-    #[deprecated(since = "0.2.0", note = "use Verifier::verify(&ZkPredicate::AgeOver(18), ...)")]
-    #[allow(dead_code)]
-    pub fn verify_age_over_18(
-        transcript: &ZkTranscript,
-        mso_bytes: &[u8],
-        proof: &[u8],
-    ) -> Result<bool, ZkError> {
-        Self::verify(&ZkPredicate::AgeOver(18), transcript, mso_bytes, proof)
     }
 }
 
@@ -282,61 +384,47 @@ impl Verifier {
 pub mod python {
     use super::*;
     use pyo3::prelude::*;
-    use std::sync::Arc;
-    use std::sync::Mutex;
 
-    // Safe wrapper for ZkTranscript that is Send + Sync
-    struct SafeZkTranscript {
-        inner: *mut libc::c_void,
-    }
-
-    unsafe impl Send for SafeZkTranscript {}
-    unsafe impl Sync for SafeZkTranscript {}
-
-    impl Drop for SafeZkTranscript {
-        fn drop(&mut self) {
-            if !self.inner.is_null() {
-                unsafe {
-                    ffi::zk_free_transcript(self.inner);
-                }
-            }
-        }
-    }
-
-    #[pyclass]
-    pub struct PyZkTranscript {
-        transcript: Arc<Mutex<SafeZkTranscript>>,
-    }
-
-    #[pymethods]
-    impl PyZkTranscript {
-        #[new]
-        fn new(nonce: &[u8]) -> Self {
-            let inner = unsafe { ffi::zk_create_transcript(nonce.as_ptr(), nonce.len()) };
-            let transcript = Arc::new(Mutex::new(SafeZkTranscript { inner }));
-            Self { transcript }
-        }
-    }
-
-    /// Verify a ZK proof for a named predicate.
+    /// Verify a ZK proof for an mDoc presentation.
     ///
-    /// `predicate_id` follows the wire format (e.g. `"age_over_18"`, `"age_over_21"`).
+    /// * `mdoc`       — full CBOR mDoc bytes
+    /// * `issuer_pkx` — issuer public key X as `"0x..."` hex string
+    /// * `issuer_pky` — issuer public key Y as `"0x..."` hex string
+    /// * `transcript` — session transcript bytes
+    /// * `namespace`  — attribute namespace, e.g. `"org.iso.18013.5.1"`
+    /// * `attr_id`    — attribute element identifier, e.g. `"age_over_18"`
+    /// * `cbor_value` — expected raw CBOR bytes, e.g. `b"\xf5"` for true
+    /// * `now`        — current time, e.g. `"2026-01-30T09:00:00Z"`
+    /// * `doc_type`   — mDoc docType, e.g. `"org.iso.18013.5.1.mDL"`
+    /// * `proof`      — ZK proof bytes to verify
+    #[allow(clippy::too_many_arguments)]
     #[pyfunction]
-    pub fn verify_zk_predicate(
-        predicate_id: &str,
-        nonce: &[u8],
-        mso: &[u8],
+    pub fn verify_mdoc_zk(
+        mdoc: &[u8],
+        issuer_pkx: &str,
+        issuer_pky: &str,
+        transcript: &[u8],
+        namespace: &str,
+        attr_id: &str,
+        cbor_value: &[u8],
+        now: &str,
+        doc_type: &str,
         proof: &[u8],
     ) -> PyResult<bool> {
-        let transcript = ZkTranscript::new(nonce);
-        Verifier::verify_by_id(predicate_id, &transcript, mso, proof)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-    }
+        let circuit = Circuit::generate(1)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-    /// Deprecated — use [`verify_zk_predicate`] with `predicate_id = "age_over_18"`.
-    #[pyfunction]
-    #[deprecated(since = "0.2.0", note = "use verify_zk_predicate")]
-    pub fn verify_age_zkp(nonce: &[u8], mso: &[u8], proof: &[u8]) -> PyResult<bool> {
-        verify_zk_predicate("age_over_18", nonce, mso, proof)
+        let input = MdocProveInput {
+            mdoc: mdoc.to_vec(),
+            issuer_pkx: issuer_pkx.to_string(),
+            issuer_pky: issuer_pky.to_string(),
+            transcript: transcript.to_vec(),
+            attributes: vec![AttributeRequest::new(namespace, attr_id, cbor_value.to_vec())],
+            now: now.to_string(),
+            doc_type: doc_type.to_string(),
+        };
+
+        Verifier::verify(&circuit, &input, proof)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 }
