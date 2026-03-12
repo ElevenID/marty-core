@@ -25,6 +25,10 @@ pub struct IssuerMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferred_credential_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_endpoint: Option<String>,
     pub credential_configurations_supported: HashMap<String, CredentialConfiguration>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +138,8 @@ pub struct MetadataBuilder {
     issuer_url: String,
     issuer_name: String,
     nonce_endpoint: Option<String>,
+    deferred_credential_endpoint: Option<String>,
+    notification_endpoint: Option<String>,
     authorization_endpoint: Option<String>,
     credential_types: Vec<CredentialTypeConfig>,
     binding_methods: Vec<String>,
@@ -146,6 +152,8 @@ impl MetadataBuilder {
             issuer_url: issuer_url.into(),
             issuer_name: issuer_name.into(),
             nonce_endpoint: None,
+            deferred_credential_endpoint: None,
+            notification_endpoint: None,
             authorization_endpoint: None,
             credential_types: Vec::new(),
             binding_methods: vec!["did:key".into(), "did:jwk".into(), "jwk".into()],
@@ -155,6 +163,16 @@ impl MetadataBuilder {
 
     pub fn nonce_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.nonce_endpoint = Some(endpoint.into());
+        self
+    }
+
+    pub fn deferred_credential_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.deferred_credential_endpoint = Some(endpoint.into());
+        self
+    }
+
+    pub fn notification_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.notification_endpoint = Some(endpoint.into());
         self
     }
 
@@ -235,11 +253,13 @@ impl MetadataBuilder {
             credential_endpoint: format!("{}/credential", issuer),
             token_endpoint: format!("{}/token", issuer),
             nonce_endpoint: self.nonce_endpoint.as_ref().map(|e| {
-                if e.starts_with("http") {
-                    e.clone()
-                } else {
-                    format!("{}{}", issuer, e)
-                }
+                if e.starts_with("http") { e.clone() } else { format!("{}{}", issuer, e) }
+            }),
+            deferred_credential_endpoint: self.deferred_credential_endpoint.as_ref().map(|e| {
+                if e.starts_with("http") { e.clone() } else { format!("{}{}", issuer, e) }
+            }),
+            notification_endpoint: self.notification_endpoint.as_ref().map(|e| {
+                if e.starts_with("http") { e.clone() } else { format!("{}{}", issuer, e) }
             }),
             authorization_endpoint: self.authorization_endpoint.as_ref().map(|e| {
                 if e.starts_with("http") {
@@ -341,7 +361,8 @@ fn build_config_for_format(
             zk_predicates: None,
         },
         CredentialFormat::SdJwt => CredentialConfiguration {
-            format: "spruce-vc+sd-jwt".into(),
+            // OID4VCI 1.0 Final Appendix A: SD-JWT VC format identifier is "dc+sd-jwt"
+            format: "dc+sd-jwt".into(),
             scope: Some(ctype.id.clone()),
             cryptographic_binding_methods_supported: binding_methods.to_vec(),
             credential_signing_alg_values_supported: signing_algs.to_vec(),
@@ -578,9 +599,10 @@ mod tests {
         assert!(configs.contains_key("IdentityCredential_sd_jwt"));
         assert!(configs.contains_key("IdentityCredential_mso_mdoc"));
 
-        // Check formats
+        // Check formats — OID4VCI 1.0 Final format identifiers
         assert_eq!(configs["IdentityCredential"].format, "jwt_vc_json");
-        assert_eq!(configs["IdentityCredential_sd_jwt"].format, "spruce-vc+sd-jwt");
+        // OID4VCI 1.0 Final Appendix A: SD-JWT VC format identifier MUST be "dc+sd-jwt"
+        assert_eq!(configs["IdentityCredential_sd_jwt"].format, "dc+sd-jwt");
         assert_eq!(configs["IdentityCredential_mso_mdoc"].format, "mso_mdoc");
 
         // SD-JWT should have vct
@@ -642,5 +664,127 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["credential_issuer"], "https://issuer.example.com");
         assert!(parsed["credential_configurations_supported"]["EmployeeBadge"].is_object());
+    }
+
+    /// OID4VCI 1.0 Final Appendix A conformance: SD-JWT VC format MUST use "dc+sd-jwt",
+    /// not the draft identifier "vc+sd-jwt" or the SpruceID alias "spruce-vc+sd-jwt".
+    #[test]
+    fn test_sd_jwt_format_id_is_final_spec() {
+        use crate::types::ClaimDefinition;
+        let ctype = CredentialTypeConfig {
+            id: "ConformanceCred".into(),
+            name: "Conformance Credential".into(),
+            formats: vec![CredentialFormat::SdJwt],
+            vc_types: vec![],
+            vct: Some("https://example.com/credentials/conformance".into()),
+            doctype: None,
+            claims: [
+                ("name".into(), ClaimDefinition { mandatory: true, value_type: Some("string".into()), display: None }),
+            ].into(),
+            display: None,
+        };
+
+        let metadata = MetadataBuilder::new("https://issuer.example.com", "Test Issuer")
+            .add_credential_type(ctype)
+            .build();
+
+        let sd_jwt_config = &metadata.credential_configurations_supported["ConformanceCred_sd_jwt"];
+
+        // MUST be "dc+sd-jwt" per OID4VCI 1.0 Final
+        assert_eq!(
+            sd_jwt_config.format, "dc+sd-jwt",
+            "SD-JWT VC format identifier MUST be 'dc+sd-jwt' per OID4VCI 1.0 Final Appendix A"
+        );
+        // MUST NOT be the old draft identifier
+        assert_ne!(sd_jwt_config.format, "vc+sd-jwt", "Draft identifier 'vc+sd-jwt' is not allowed in Final");
+        assert_ne!(sd_jwt_config.format, "spruce-vc+sd-jwt", "SpruceID alias must not appear in conformant metadata");
+
+        // vct MUST be preserved
+        assert_eq!(
+            sd_jwt_config.vct.as_deref(),
+            Some("https://example.com/credentials/conformance")
+        );
+
+        // proof_types_supported MUST include jwt
+        assert!(sd_jwt_config.proof_types_supported.contains_key("jwt"));
+    }
+
+    #[test]
+    fn test_deferred_credential_endpoint_in_metadata() {
+        // OID4VCI-1FINAL §9: deferred_credential_endpoint MUST appear in metadata when set.
+        let meta = MetadataBuilder::new("https://issuer.example.com", "Test Issuer")
+            .deferred_credential_endpoint("/v1/issuance/deferred-credential")
+            .build();
+
+        let deferred = meta.deferred_credential_endpoint.as_deref().expect(
+            "deferred_credential_endpoint MUST be present when configured",
+        );
+        assert_eq!(
+            deferred,
+            "https://issuer.example.com/v1/issuance/deferred-credential"
+        );
+
+        // Confirm serialization includes the field
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains("deferred_credential_endpoint"),
+            "JSON metadata MUST contain deferred_credential_endpoint"
+        );
+    }
+
+    #[test]
+    fn test_notification_endpoint_in_metadata() {
+        // OID4VCI-1FINAL §11: notification_endpoint MUST appear in metadata when set.
+        let meta = MetadataBuilder::new("https://issuer.example.com", "Test Issuer")
+            .notification_endpoint("/v1/issuance/notification")
+            .build();
+
+        let notif = meta.notification_endpoint.as_deref().expect(
+            "notification_endpoint MUST be present when configured",
+        );
+        assert_eq!(notif, "https://issuer.example.com/v1/issuance/notification");
+
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains("notification_endpoint"),
+            "JSON metadata MUST contain notification_endpoint"
+        );
+    }
+
+    #[test]
+    fn test_deferred_and_notification_absent_by_default() {
+        // When not configured, fields MUST be omitted (skip_serializing_if = None).
+        let meta = MetadataBuilder::new("https://issuer.example.com", "Test Issuer").build();
+
+        assert!(meta.deferred_credential_endpoint.is_none());
+        assert!(meta.notification_endpoint.is_none());
+
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            !json.contains("deferred_credential_endpoint"),
+            "deferred_credential_endpoint MUST be omitted when not set"
+        );
+        assert!(
+            !json.contains("notification_endpoint"),
+            "notification_endpoint MUST be omitted when not set"
+        );
+    }
+
+    #[test]
+    fn test_deferred_absolute_url_not_prefixed() {
+        // When an absolute URL is provided it MUST be used as-is.
+        let meta = MetadataBuilder::new("https://issuer.example.com", "Test Issuer")
+            .deferred_credential_endpoint("https://other.example.com/deferred")
+            .notification_endpoint("https://other.example.com/notification")
+            .build();
+
+        assert_eq!(
+            meta.deferred_credential_endpoint.as_deref(),
+            Some("https://other.example.com/deferred")
+        );
+        assert_eq!(
+            meta.notification_endpoint.as_deref(),
+            Some("https://other.example.com/notification")
+        );
     }
 }

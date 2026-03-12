@@ -63,7 +63,7 @@ impl X509Signature2021 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-fixtures"))]
 mod tests {
     use super::*;
     use crate::testdata::NIST_TRUST_ANCHOR_DER;

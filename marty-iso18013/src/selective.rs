@@ -63,6 +63,14 @@ impl SelectiveDisclosure {
                     namespace_elements.push(element.clone());
                 }
             }
+
+            // ISO 18013-5 §7.2.1: mandatory elements must always be included,
+            // even if not explicitly requested by the reader.
+            for mandatory_element in &self.mandatory {
+                if available.contains(mandatory_element) && !namespace_elements.contains(mandatory_element) {
+                    namespace_elements.push(mandatory_element.clone());
+                }
+            }
             
             if !namespace_elements.is_empty() {
                 filtered.insert(namespace.clone(), namespace_elements);

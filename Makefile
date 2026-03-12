@@ -12,6 +12,8 @@
 
 .PHONY: all test check fmt lint deny build clean dev ci
 .PHONY: docker-build docker-shell docker-test docker-watch docker-clean
+.PHONY: conformance conformance-crypto conformance-iso18013 conformance-zkp
+.PHONY: conformance-verification conformance-oid4vci
 
 # Default target
 all: check test
@@ -201,3 +203,80 @@ help:
 	@echo "  make coverage      Generate HTML coverage report"
 	@echo "  make audit         Security audit"
 	@echo "  make miri          Run miri (unsafe verification)"
+	@echo "  make conformance               Run all conformance test suites"
+	@echo "  make conformance-crypto        Phase 1: NIST CAVP crypto primitives"
+	@echo "  make conformance-iso18013      Phase 2: ISO 18013-5 CBOR/COSE/mDoc structure"
+	@echo "  make conformance-verification  Phase 2/4: MDL trust-chain + Open Badges 3.0"
+	@echo "  make conformance-oid4vci       Phase 3: OID4VCI SD-JWT-VC format"
+	@echo "  make conformance-zkp           Phase 6: Longfellow ZK (Ligero)"
+
+# =============================================================================
+# Conformance Tests
+# =============================================================================
+
+# Run all conformance test suites
+# Phase 1: crypto, Phase 2: ISO/mDoc + mDoc structure + MDL/OB3 verification,
+# Phase 3: SD-JWT VC, Phase 6: Longfellow ZK
+conformance: conformance-crypto conformance-iso18013 conformance-verification conformance-oid4vci conformance-zkp
+	@echo "✅ All conformance tests passed!"
+
+# Phase 1 — Cryptographic primitive conformance (NIST CAVP / IETF RFCs)
+#   CAVP SHA-256/384/512, HMAC-SHA-256/384/512 (FIPS 180-4 / RFC 4231)
+#   CAVP ECDSA P-256/384 (FIPS 186-4)
+#   CAVP ECDH P-256/384/X25519 (RFC 7748)
+#   CAVP AES-256-GCM (FIPS 197 / SP 800-38D)
+#   RFC 5869 HKDF test vectors
+#   RSA PKCS#1 v1.5 / PSS round-trip + rejection tests (FIPS 186-4)
+conformance-crypto:
+	@echo "==> Running Phase 1: crypto conformance tests"
+	cargo test -p marty-crypto \
+	    cavp_sha_hmac \
+	    cavp_ecdsa \
+	    cavp_ecdh \
+	    cavp_aes_gcm \
+	    rfc5869_hkdf \
+	    cavp_rsa \
+	    -- --nocapture
+
+# Phase 2 — ISO 18013-5 / mDoc conformance (RFC 8949 CBOR, RFC 9052 COSE, selective disclosure, session)
+#   + ISO 18013-5 data-model structure tests (namespace constants, DeviceEngagement, protocol types)
+conformance-iso18013:
+	@echo "==> Running Phase 2: ISO mDoc conformance tests"
+	cargo test -p marty-iso18013 \
+	    cbor_conformance \
+	    cose_conformance \
+	    selective_disclosure \
+	    session_conformance \
+	    mdoc_structure \
+	    -- --nocapture
+
+# Phase 2 (continued) — MDL trust-chain + OB3 credential verification conformance
+#   mdl_conformance:         X5Chain/IACA/MdlVerificationResult conformance (ISO 18013-5 §9)
+#   open_badges_conformance: 1EdTech Open Badges 3.0 + OB2 backward-compat conformance
+conformance-verification:
+	@echo "==> Running Phase 2/4: verification conformance tests"
+	cargo test -p marty-verification \
+	    mdl_conformance \
+	    open_badges_conformance \
+	    -- --nocapture
+
+# Phase 3 — OID4VCI SD-JWT-VC credential format conformance
+#   sd_jwt_vc_conformance: sign_sd_jwt engine — IETF flat, W3C VCDM v2, SD payload, credential_id
+conformance-oid4vci:
+	@echo "==> Running Phase 3: OID4VCI SD-JWT-VC conformance tests"
+	cargo test -p marty-oid4vci \
+	    sd_jwt_vc_conformance \
+	    -- --nocapture
+
+# Phase 6 — Longfellow ZK (Ligero) conformance
+#   ZkPredicate wire IDs and round-trips (§1)
+#   ZkTranscript nonce binding and isolation (§2)
+#   Prove → Verify round-trips for all predicate variants (§3)
+#   Soundness / rejection: empty inputs, empty proof, tampered proof (§4)
+#   MdocZkInput helper construction from raw fields and COSE_Sign1 (§5)
+#   prove_by_id / verify_by_id convenience APIs (§6)
+#   Privacy: proof must not contain plaintext claim value (§7)
+#   ZkError model mapping (§8)
+conformance-zkp:
+	@echo "==> Running Phase 6: Longfellow ZK conformance tests"
+	USE_ZK_MOCK=1 cargo test -p marty-zkp --test conformance -- --nocapture

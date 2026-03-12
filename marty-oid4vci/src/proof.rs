@@ -545,7 +545,9 @@ mod tests {
             holder_id,
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
         );
-        assert!(jwk.is_none());
+        // did:key:z6Mk... is an Ed25519 key; resolve_did_key_to_jwk returns the
+        // public JWK so signature verification can be performed without network I/O.
+        assert!(jwk.is_some());
     }
 
     #[test]

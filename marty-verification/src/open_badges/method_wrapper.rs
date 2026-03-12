@@ -148,17 +148,16 @@ mod tests {
     
     #[test]
     fn test_parse_jwk_method() {
-        let json = json!({
+        // Generate a real Ed25519 keypair so parsing passes curve-point validation
+        let jwk = ssi::JWK::generate_ed25519().expect("generate ed25519");
+        let pub_jwk = jwk.to_public();
+        let json = serde_json::json!({
             "id": "did:example:issuer#key-1",
             "type": "JsonWebKey2020",
             "controller": "did:example:issuer",
-            "publicKeyJwk": {
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "x": "mockbase64data"
-            }
+            "publicKeyJwk": serde_json::to_value(&pub_jwk).expect("jwk to value")
         });
-        
+
         let method = OpenBadgeMethod::from_json(&json).unwrap();
         assert!(!method.is_x509());
         assert!(method.as_ssi().is_some());

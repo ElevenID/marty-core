@@ -425,6 +425,217 @@ impl VerificationEngine {
         }
     }
 
+    /// Verify a JWT Verifiable Presentation token cryptographically.
+    ///
+    /// Validates:
+    /// 1. JWT structure (compact serialization, 3 parts)
+    /// 2. `nonce` claim matches `expected_nonce`
+    /// 3. `aud` claim contains this verifier's `verifier_id`
+    /// 4. Token is not expired (60-second clock skew grace)
+    /// 5. JWT signature using the holder's embedded public key, sourced from
+    ///    (in priority order): JWT header `jwk`, payload `cnf.jwk`, payload `sub_jwk`
+    ///
+    /// This handles the `jwt_vp_json` format (OID4VP §6.1).  For mDoc VP
+    /// verification use the ISO 18013-7 `DeviceResponse` path instead.
+    ///
+    /// # Arguments
+    /// * `vp_token`         — compact JWT VP token from the wallet
+    /// * `expected_nonce`   — nonce from the original authorization request
+    pub fn verify_vp_token(&self, vp_token: &str, expected_nonce: &str) -> VerificationResult {
+        use base64::Engine;
+        use jsonwebtoken::{decode_header, Algorithm, DecodingKey, Validation};
+
+        // ── Step 1: Parse JWT header ──────────────────────────────────
+        let header = match decode_header(vp_token) {
+            Ok(h) => h,
+            Err(e) => {
+                return VerificationResult {
+                    valid: false,
+                    descriptor_results: vec![],
+                    zk_results: vec![],
+                    errors: vec![format!("VP token header parse error: {}", e)],
+                }
+            }
+        };
+
+        // ── Step 2: Base64-decode payload to extract claims ───────────
+        let parts: Vec<&str> = vp_token.split('.').collect();
+        if parts.len() != 3 {
+            return VerificationResult {
+                valid: false,
+                descriptor_results: vec![],
+                zk_results: vec![],
+                errors: vec!["VP token is not a valid compact JWT (expected 3 parts)".into()],
+            };
+        }
+
+        let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1])
+        {
+            Ok(b) => b,
+            Err(e) => {
+                return VerificationResult {
+                    valid: false,
+                    descriptor_results: vec![],
+                    zk_results: vec![],
+                    errors: vec![format!("VP token payload base64 decode error: {}", e)],
+                }
+            }
+        };
+
+        let payload: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                return VerificationResult {
+                    valid: false,
+                    descriptor_results: vec![],
+                    zk_results: vec![],
+                    errors: vec![format!("VP token payload JSON parse error: {}", e)],
+                }
+            }
+        };
+
+        // ── Step 3: Validate nonce ────────────────────────────────────
+        let token_nonce = payload
+            .get("nonce")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if token_nonce != expected_nonce {
+            return VerificationResult {
+                valid: false,
+                descriptor_results: vec![],
+                zk_results: vec![],
+                errors: vec![format!(
+                    "Nonce mismatch: expected '{}', got '{}'",
+                    expected_nonce, token_nonce
+                )],
+            };
+        }
+
+        // ── Step 4: Validate audience ─────────────────────────────────
+        let aud_ok = match payload.get("aud") {
+            Some(serde_json::Value::String(a)) => a == &self.verifier_id,
+            Some(serde_json::Value::Array(arr)) => {
+                arr.iter().any(|a| a.as_str() == Some(&self.verifier_id))
+            }
+            _ => false,
+        };
+        if !aud_ok {
+            return VerificationResult {
+                valid: false,
+                descriptor_results: vec![],
+                zk_results: vec![],
+                errors: vec![format!(
+                    "Audience mismatch: expected '{}' in aud claim",
+                    self.verifier_id
+                )],
+            };
+        }
+
+        // ── Step 5: Validate expiration ───────────────────────────────
+        if let Some(exp) = payload.get("exp").and_then(|v| v.as_i64()) {
+            let now = chrono::Utc::now().timestamp();
+            if now > exp + 60 {
+                // 60-second clock skew grace
+                return VerificationResult {
+                    valid: false,
+                    descriptor_results: vec![],
+                    zk_results: vec![],
+                    errors: vec!["VP token has expired".into()],
+                };
+            }
+        }
+
+        // ── Step 6: Locate holder public key ─────────────────────────
+        //   Priority:
+        //   a) Header `jwk` (RFC 7517 §4.7) — set by spec-compliant wallets
+        //   b) Payload `cnf.jwk`            — key confirmation claim (RFC 7800)
+        //   c) Payload `sub_jwk`            — older/draft wallets
+        let jwk: Option<jsonwebtoken::jwk::Jwk> = header
+            .jwk
+            .clone()
+            .or_else(|| {
+                payload
+                    .get("cnf")
+                    .and_then(|c| c.get("jwk"))
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+            })
+            .or_else(|| {
+                payload
+                    .get("sub_jwk")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+            });
+
+        let jwk = match jwk {
+            Some(j) => j,
+            None => {
+                return VerificationResult {
+                    valid: false,
+                    descriptor_results: vec![],
+                    zk_results: vec![],
+                    errors: vec![
+                        "No holder public key found in VP token — expected header `jwk` \
+                         or payload `cnf.jwk`"
+                            .into(),
+                    ],
+                }
+            }
+        };
+
+        // ── Step 7: Build decoding key from JWK ──────────────────────
+        let decoding_key = match DecodingKey::from_jwk(&jwk) {
+            Ok(k) => k,
+            Err(e) => {
+                return VerificationResult {
+                    valid: false,
+                    descriptor_results: vec![],
+                    zk_results: vec![],
+                    errors: vec![format!("Cannot build decoding key from JWK: {}", e)],
+                }
+            }
+        };
+
+        // ── Step 8: Verify JWT signature ──────────────────────────────
+        // Claims (nonce, aud, exp) were already validated manually.
+        // jsonwebtoken is used here only for the cryptographic signature check.
+        let mut validation = Validation::new(header.alg);
+        validation.validate_aud = false; // validated manually above
+        validation.validate_exp = true;
+        validation.leeway = 60; // 60s clock skew tolerance
+
+        let format_label = match header.alg {
+            Algorithm::ES256 | Algorithm::ES384 => "jwt_vp_json",
+            Algorithm::RS256 | Algorithm::RS384 | Algorithm::RS512 => "jwt_vp_json",
+            Algorithm::EdDSA => "jwt_vp_json",
+            _ => "jwt_vp",
+        };
+
+        match jsonwebtoken::decode::<serde_json::Value>(vp_token, &decoding_key, &validation) {
+            Ok(_) => VerificationResult {
+                valid: true,
+                descriptor_results: vec![DescriptorVerificationResult {
+                    descriptor_id: "vp_token".into(),
+                    valid: true,
+                    format: format_label.into(),
+                    error: None,
+                }],
+                zk_results: vec![],
+                errors: vec![],
+            },
+            Err(e) => VerificationResult {
+                valid: false,
+                descriptor_results: vec![DescriptorVerificationResult {
+                    descriptor_id: "vp_token".into(),
+                    valid: false,
+                    format: format_label.into(),
+                    error: Some(format!("JWT signature verification failed: {}", e)),
+                }],
+                zk_results: vec![],
+                errors: vec![format!("VP token signature verification failed: {}", e)],
+            },
+        }
+    }
+
     /// Verify a presentation submission against a presentation definition.
     ///
     /// Performs structural validation (descriptor mapping, format checks).
@@ -697,6 +908,63 @@ mod tests {
             .as_ref()
             .unwrap();
         assert_eq!(zk.predicate, "age_over_18");
+    }
+
+    #[test]
+    fn test_verify_vp_token_malformed() {
+        let engine = test_engine();
+        let result = engine.verify_vp_token("not.a.jwt.at.all", "nonce");
+        assert!(!result.valid);
+        assert!(
+            result.errors[0].contains("header parse error")
+                || result.errors[0].contains("3 parts")
+        );
+    }
+
+    #[test]
+    fn test_verify_vp_token_nonce_mismatch() {
+        let engine = test_engine();
+        // Craft a minimal payload with wrong nonce (no signature check yet — key missing)
+        use base64::Engine;
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"ES256","typ":"JWT"}"#);
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            r#"{"iss":"did:example:holder","aud":"did:example:verifier","nonce":"wrong","iat":1000000000}"#,
+        );
+        let fake_token = format!("{}.{}.fake_sig", header_b64, payload_b64);
+        let result = engine.verify_vp_token(&fake_token, "correct_nonce");
+        assert!(!result.valid);
+        assert!(result.errors[0].contains("Nonce mismatch"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_audience_mismatch() {
+        let engine = test_engine(); // verifier_id = "did:example:verifier"
+        use base64::Engine;
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"ES256","typ":"JWT"}"#);
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            r#"{"iss":"did:example:holder","aud":"did:example:wrong_verifier","nonce":"abc","iat":1000000000}"#,
+        );
+        let fake_token = format!("{}.{}.fake_sig", header_b64, payload_b64);
+        let result = engine.verify_vp_token(&fake_token, "abc");
+        assert!(!result.valid);
+        assert!(result.errors[0].contains("Audience mismatch"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_no_key() {
+        let engine = test_engine();
+        use base64::Engine;
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"ES256","typ":"JWT"}"#);
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            r#"{"iss":"did:example:holder","aud":"did:example:verifier","nonce":"testnonce","iat":1000000000}"#,
+        );
+        let fake_token = format!("{}.{}.fake_sig", header_b64, payload_b64);
+        let result = engine.verify_vp_token(&fake_token, "testnonce");
+        assert!(!result.valid);
+        assert!(result.errors[0].contains("No holder public key"));
     }
 
     #[test]

@@ -569,6 +569,38 @@ fn normalize_zk_predicate_claims(
 }
 
 // ============================================================================
+// OID4VP Verification
+// ============================================================================
+
+/// Verify an OID4VP VP JWT token.
+///
+/// Validates the JWT signature (when the holder public key is embedded in the
+/// token via `jwk` header, `cnf.jwk`, or `sub_jwk`), the nonce, the audience,
+/// and the expiry.
+///
+/// Args:
+///     vp_token: The compact-serialised VP JWT (or SD-JWT presentation).
+///     expected_nonce: The nonce from the authorization request.
+///     verifier_id: The verifier's client_id / audience value.
+///
+/// Returns:
+///     JSON object `{ "valid": bool, "errors": [str] }`.
+#[pyfunction]
+fn oid4vp_verify_vp_token(
+    vp_token: &str,
+    expected_nonce: &str,
+    verifier_id: &str,
+) -> PyResult<String> {
+    use marty_oid4vci::verifier::VerificationEngine;
+    // Pass verifier_id as both verifier_id and response_uri — the engine uses
+    // verifier_id as the expected `aud` claim value.
+    let engine = VerificationEngine::new(verifier_id, verifier_id);
+    let result = engine.verify_vp_token(vp_token, expected_nonce);
+    serde_json::to_string(&result)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Serialization error: {e}")))
+}
+
+// ============================================================================
 // Module Definition
 // ============================================================================
 
@@ -616,6 +648,9 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
+
+    // OID4VP Protocol
+    m.add_function(wrap_pyfunction!(oid4vp_verify_vp_token, m)?)?;
     Ok(())
 }
 

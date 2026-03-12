@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn test_x509_with_chain() {
         let method = X509VerificationKey2021::with_chain(
-            IriBuf::new("https://issuer.edu/keys/1").unwrap(),
+            IriBuf::new("https://issuer.edu/keys/1".to_string()).unwrap(),
             "https://issuer.edu".to_string(),
             "-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----".to_string(),
             vec!["MIIBkT...".to_string()],
