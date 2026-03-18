@@ -51,7 +51,9 @@ pub mod ocsp;
 pub mod pkcs12;
 pub mod rsa;
 pub mod serialization;
+pub mod sod_builder;
 pub mod symmetric;
+pub mod bbs;
 
 pub use error::{CryptoError, CryptoResult};
 
@@ -85,6 +87,10 @@ pub enum SignatureAlgorithm {
     RsaPssSha384,
     /// RSA PSS with SHA-512 (PS512)
     RsaPssSha512,
+    /// BBS+ with BLS12-381 and SHA-256
+    BbsBls12381Sha256,
+    /// BBS+ with BLS12-381 and SHAKE-256 (IETF recommended)
+    BbsBls12381Shake256,
 }
 
 impl SignatureAlgorithm {
@@ -102,6 +108,9 @@ impl SignatureAlgorithm {
             Self::RsaPkcs1Sha384 => "1.2.840.113549.1.1.12",
             Self::RsaPkcs1Sha512 => "1.2.840.113549.1.1.13",
             Self::RsaPssSha256 | Self::RsaPssSha384 | Self::RsaPssSha512 => "1.2.840.113549.1.1.10",
+            // BBS+ does not have an ASN.1 OID; use the IETF ciphersuite identifiers
+            Self::BbsBls12381Sha256 => "BBS_BLS12381_SHA256",
+            Self::BbsBls12381Shake256 => "BBS_BLS12381_SHAKE256",
         }
     }
 
@@ -118,6 +127,8 @@ impl SignatureAlgorithm {
             "1.2.840.113549.1.1.11" => Ok(Self::RsaPkcs1Sha256),
             "1.2.840.113549.1.1.12" => Ok(Self::RsaPkcs1Sha384),
             "1.2.840.113549.1.1.13" => Ok(Self::RsaPkcs1Sha512),
+            "BBS_BLS12381_SHA256" => Ok(Self::BbsBls12381Sha256),
+            "BBS_BLS12381_SHAKE256" => Ok(Self::BbsBls12381Shake256),
             _ => Err(CryptoError::unsupported_algorithm(format!(
                 "Unsupported signature algorithm OID: {}",
                 oid
@@ -153,6 +164,11 @@ impl SignatureAlgorithm {
         )
     }
 
+    /// Check if this is a BBS+ algorithm.
+    pub fn is_bbs(&self) -> bool {
+        matches!(self, Self::BbsBls12381Sha256 | Self::BbsBls12381Shake256)
+    }
+
     /// Get the expected signature size in bytes for this algorithm.
     #[allow(deprecated)]
     pub fn signature_size(&self) -> usize {
@@ -169,6 +185,7 @@ impl SignatureAlgorithm {
             | Self::RsaPssSha256
             | Self::RsaPssSha384
             | Self::RsaPssSha512 => 256, // Typical 2048-bit RSA
+            Self::BbsBls12381Sha256 | Self::BbsBls12381Shake256 => 80, // BBS+ signature is 80 bytes
         }
     }
 }
@@ -285,6 +302,11 @@ pub fn verify_signature(
         }
         SignatureAlgorithm::RsaPssSha512 => {
             rsa::verify_pss_sha512(public_key_der, message, signature)
+        }
+        SignatureAlgorithm::BbsBls12381Sha256 | SignatureAlgorithm::BbsBls12381Shake256 => {
+            Err(CryptoError::unsupported_algorithm(
+                "BBS+ signatures use multi-message API; use bbs module directly".to_string(),
+            ))
         }
     }
 }

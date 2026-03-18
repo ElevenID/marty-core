@@ -30,6 +30,8 @@ pub struct EmrtdVerificationResult {
     pub sod_signature_status: SignatureStatus,
     /// Data group hash verification status.
     pub dg_hash_status: HashStatus,
+    /// DSC revocation status (requires CRLs to be provided via options).
+    pub revocation_status: RevocationStatus,
 }
 
 impl Default for EmrtdVerificationResult {
@@ -42,6 +44,7 @@ impl Default for EmrtdVerificationResult {
             dsc_chain_status: ChainStatus::Unknown,
             sod_signature_status: SignatureStatus::Unknown,
             dg_hash_status: HashStatus::Unknown,
+            revocation_status: RevocationStatus::Unchecked,
         }
     }
 }
@@ -77,6 +80,29 @@ pub enum HashStatus {
     Invalid,
     /// Hash verification was not performed.
     Unknown,
+}
+
+/// DSC revocation status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RevocationStatus {
+    /// Certificate confirmed not revoked by provided CRLs.
+    NotRevoked,
+    /// Certificate has been revoked.
+    Revoked,
+    /// CRL check was not performed (no CRLs provided).
+    Unchecked,
+}
+
+/// Options for fine-grained eMRTD verification control.
+///
+/// Pass to [`verify_emrtd_with_options`] to enable optional checks.
+#[derive(Debug, Default, Clone)]
+pub struct EmrtdVerificationOptions {
+    /// CRL data for DSC revocation checking.
+    ///
+    /// Fetch fresh CRLs via [`crate::pkd::icao_pkd::IcaoPkdClient::fetch_country_crl`]
+    /// and parse with [`crate::asn1::crl::parse_crl`].
+    pub crls: Vec<crate::asn1::crl::CrlInfo>,
 }
 
 /// Document Signer Certificate (DSC) extracted from eMRTD.
@@ -255,6 +281,11 @@ fn verify_certificate_signature(
         | "1.2.840.113549.1.1.13"
         | "1.2.840.113549.1.1.10"
         | "1.2.840.113549.1.1.5" => {
+            verify_certificate_signature_unified(tbs_bytes, signature_bytes, spki, sig_alg)
+        }
+        // EdDSA: Ed25519 (1.3.101.112) and Ed448 (1.3.101.113)
+        // Used by a growing number of countries for DSC signing.
+        "1.3.101.112" | "1.3.101.113" => {
             verify_certificate_signature_unified(tbs_bytes, signature_bytes, spki, sig_alg)
         }
         oid => Err(VerificationError::internal(format!(
@@ -462,6 +493,60 @@ pub fn verify_emrtd(
     result
 }
 
+/// Full eMRTD verification with optional revocation checking.
+///
+/// Extends [`verify_emrtd`] with:
+/// - DSC revocation checking against provided CRLs
+///
+/// # Example
+/// ```rust,ignore
+/// let options = EmrtdVerificationOptions {
+///     crls: vec![crl_info],
+/// };
+/// let result = verify_emrtd_with_options(&sod, &dgs, &registry, &options);
+/// assert_eq!(result.revocation_status, RevocationStatus::NotRevoked);
+/// ```
+pub fn verify_emrtd_with_options(
+    sod: &SecurityObject,
+    data_groups: &std::collections::HashMap<u8, Vec<u8>>,
+    registry: &CscaRegistry,
+    options: &EmrtdVerificationOptions,
+) -> EmrtdVerificationResult {
+    let mut result = verify_emrtd(sod, data_groups, registry);
+
+    // CRL revocation check on the DSC
+    if !options.crls.is_empty() {
+        let serial = &sod.signer_certificate.serial_number;
+        let issuer = sod
+            .signer_certificate
+            .certificate
+            .tbs_certificate
+            .issuer
+            .to_string();
+
+        match crate::asn1::crl::check_certificate_revocation(serial, &issuer, &options.crls) {
+            Ok(Some(reason)) => {
+                result.revocation_status = RevocationStatus::Revoked;
+                result
+                    .errors
+                    .push(format!("DSC has been revoked: {:?}", reason));
+                result.verified = false;
+            }
+            Ok(None) => {
+                result.revocation_status = RevocationStatus::NotRevoked;
+            }
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("CRL revocation check failed: {}", e));
+                result.revocation_status = RevocationStatus::Unchecked;
+            }
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,6 +627,7 @@ mod tests {
             dsc_chain_status: ChainStatus::Valid,
             sod_signature_status: SignatureStatus::Valid,
             dg_hash_status: HashStatus::Valid,
+            revocation_status: RevocationStatus::Unchecked,
         };
 
         assert!(result.verified);

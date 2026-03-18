@@ -38,9 +38,10 @@ use crate::error::VerificationError;
 use crate::trust_anchor::{
     BasicTrustRegistry, IacaRegistry, PemTrustAnchor, TrustPurpose, TrustRegistry,
 };
+#[cfg(feature = "csca")]
+use crate::trust_anchor::csca::CscaRegistry;
 use crate::trust_anchor::eudi::{EudiRegistry, EuMemberState, TrustServiceProvider, TspStatus};
 use crate::verification::mdl::{AuthStatus, MdlVerificationResult, ValidationRuleset};
-use marty_zkp::python::verify_age_zkp;
 
 /// Trait for converting various error types to PyErr
 trait IntoPyErr {
@@ -216,6 +217,34 @@ impl PyIacaRegistry {
     /// Get the VICAL version.
     fn vical_version(&self) -> Option<String> {
         self.inner.vical_version().map(|s| s.to_string())
+    }
+
+    /// Get all trust anchors as PEM-encoded certificates.
+    fn get_anchors_pem(&self) -> PyResult<Vec<String>> {
+        use der::EncodePem;
+        let mut pems = Vec::new();
+        for anchor in self.inner.get_anchors() {
+            let pem = anchor
+                .certificate
+                .to_pem(Default::default())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            pems.push(pem);
+        }
+        Ok(pems)
+    }
+
+    /// Get trust anchors for a specific jurisdiction as PEM certificates.
+    fn get_jurisdiction_anchors_pem(&self, jurisdiction: &str) -> PyResult<Vec<String>> {
+        use der::EncodePem;
+        let mut pems = Vec::new();
+        for anchor in self.inner.get_anchors_by_jurisdiction(jurisdiction) {
+            let pem = anchor
+                .certificate
+                .to_pem(Default::default())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            pems.push(pem);
+        }
+        Ok(pems)
     }
 }
 
@@ -457,6 +486,140 @@ impl PyEudiRegistry {
     /// Clear all anchors and reset the registry.
     fn clear(&mut self) {
         self.inner.clear();
+    }
+
+    /// Get all trust anchors as PEM-encoded certificates.
+    fn get_anchors_pem(&self) -> PyResult<Vec<String>> {
+        use der::EncodePem;
+        let mut pems = Vec::new();
+        for anchor in self.inner.get_anchors() {
+            let pem = anchor
+                .certificate
+                .to_pem(Default::default())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            pems.push(pem);
+        }
+        Ok(pems)
+    }
+
+    /// Get trust anchors for a specific member state as PEM certificates.
+    fn get_member_state_anchors_pem(&self, member_state_code: &str) -> PyResult<Vec<String>> {
+        use der::EncodePem;
+        let member_state = EuMemberState::from_code(member_state_code).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid member state code: {}",
+                member_state_code
+            ))
+        })?;
+        let mut pems = Vec::new();
+        for anchor in self.inner.get_member_state_anchors(member_state) {
+            let pem = anchor
+                .certificate
+                .to_pem(Default::default())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            pems.push(pem);
+        }
+        Ok(pems)
+    }
+}
+
+// ============================================================================
+// CSCA Registry Bindings (feature-gated)
+// ============================================================================
+
+/// Python wrapper for CscaRegistry.
+#[cfg(feature = "csca")]
+#[pyclass(name = "CscaRegistry")]
+pub struct PyCscaRegistry {
+    inner: CscaRegistry,
+}
+
+#[cfg(feature = "csca")]
+#[pymethods]
+impl PyCscaRegistry {
+    /// Create a new empty CSCA registry.
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: CscaRegistry::new(),
+        }
+    }
+
+    /// Load CSCA certificates from a directory of PEM files.
+    #[staticmethod]
+    fn from_directory(path: &str) -> PyResult<Self> {
+        let registry =
+            CscaRegistry::from_directory(std::path::Path::new(path)).map_err(to_pyerr)?;
+        Ok(Self { inner: registry })
+    }
+
+    /// Add a CSCA certificate for a specific country.
+    fn add_country_csca(&mut self, country_code: &str, cert_pem: &str) -> PyResult<()> {
+        use der::DecodePem;
+        use x509_cert::Certificate;
+
+        let cert = Certificate::from_pem(cert_pem).map_err(|e| {
+            VerificationError::pem_error(format!("Failed to parse PEM certificate: {}", e))
+        })?;
+
+        self.inner
+            .add_country_csca(country_code, cert)
+            .map_err(to_pyerr)
+    }
+
+    /// Get CSCA certificates for a specific country as PEM strings.
+    fn get_country_cscas_pem(&self, country_code: &str) -> PyResult<Vec<String>> {
+        use der::EncodePem;
+        let mut pems = Vec::new();
+        for anchor in self.inner.get_country_cscas(country_code) {
+            let pem = anchor
+                .certificate
+                .to_pem(Default::default())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            pems.push(pem);
+        }
+        Ok(pems)
+    }
+
+    /// Get all supported countries.
+    fn supported_countries(&self) -> Vec<String> {
+        self.inner
+            .supported_countries()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// Get the number of CSCA certificates in the registry.
+    fn __len__(&self) -> usize {
+        self.inner.get_anchors().len()
+    }
+
+    /// Get the Master List version.
+    fn master_list_version(&self) -> Option<String> {
+        self.inner.master_list_version().map(|s| s.to_string())
+    }
+
+    /// Get all trust anchors as PEM-encoded certificates.
+    fn get_anchors_pem(&self) -> PyResult<Vec<String>> {
+        use der::EncodePem;
+        let mut pems = Vec::new();
+        for anchor in self.inner.get_anchors() {
+            let pem = anchor
+                .certificate
+                .to_pem(Default::default())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            pems.push(pem);
+        }
+        Ok(pems)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CscaRegistry(countries={}, anchors={})",
+            self.inner.supported_countries().len(),
+            self.inner.get_anchors().len()
+        )
     }
 }
 
@@ -2951,6 +3114,17 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_mdl_x5chain, m)?)?;
     m.add_function(wrap_pyfunction!(verify_mdl_x5chain_cbor, m)?)?;
 
+    // EUDI Trust Registry
+    m.add_class::<PyEudiRegistry>()?;
+    m.add_class::<PyEuMemberState>()?;
+    m.add_class::<PyTrustServiceProvider>()?;
+
+    // CSCA Trust Registry (feature-gated)
+    #[cfg(feature = "csca")]
+    {
+        m.add_class::<PyCscaRegistry>()?;
+    }
+
     // MRZ Parsing
     m.add_class::<PyMrzData>()?;
     m.add_function(wrap_pyfunction!(parse_mrz, m)?)?;
@@ -3132,6 +3306,17 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_mdl_x5chain, m)?)?;
     m.add_function(wrap_pyfunction!(verify_mdl_x5chain_cbor, m)?)?;
 
+    // EUDI Trust Registry
+    m.add_class::<PyEudiRegistry>()?;
+    m.add_class::<PyEuMemberState>()?;
+    m.add_class::<PyTrustServiceProvider>()?;
+
+    // CSCA Trust Registry (feature-gated)
+    #[cfg(feature = "csca")]
+    {
+        m.add_class::<PyCscaRegistry>()?;
+    }
+
     // MRZ Parsing
     m.add_class::<PyMrzData>()?;
     m.add_function(wrap_pyfunction!(parse_mrz, m)?)?;
@@ -3284,9 +3469,6 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
-
-    // ZK Proof Verification
-    m.add_function(wrap_pyfunction!(verify_age_zkp, m)?)?;
 
     // Certificate Builder Operations (feature-gated)
     #[cfg(feature = "cert-builder")]

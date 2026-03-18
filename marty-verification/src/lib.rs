@@ -43,6 +43,14 @@ pub mod verification;
 #[cfg(any(feature = "aamva-client", feature = "icao-client"))]
 pub mod pkd;
 
+/// eMRTD issuance infrastructure (CSCA, DSC, EF.SOD builder).
+///
+/// Available when the `csca` feature is enabled.  Requires that the
+/// `marty-crypto` dependency was compiled with the `sod-builder` and
+/// `cert-builder` features (both are enabled by the default `Cargo.toml`).
+#[cfg(feature = "csca")]
+pub mod issuance;
+
 #[cfg(feature = "python")]
 pub mod bindings;
 
@@ -60,8 +68,15 @@ pub use trust_anchor::{IacaRegistry, Jurisdiction};
 
 // Re-export commonly used types
 #[cfg(feature = "csca")]
-pub use verification::emrtd::{ChainStatus, EmrtdVerificationResult, HashStatus, SignatureStatus};
+pub use verification::emrtd::{ChainStatus, EmrtdVerificationOptions, EmrtdVerificationResult, HashStatus, RevocationStatus, SignatureStatus};
 pub use verification::mdl::{AuthStatus, MdlVerificationResult};
+
+// Re-export chip I/O types for government NFC integration
+#[cfg(feature = "csca")]
+pub use chip_io::{
+    ApduCommand, ApduResponse, BacKeys, BacSession, MrzKeyInfo, MockPassportChip,
+    PaceKeys, PacePassword, PaceSession, PassportChip, derive_bac_base_keys, mrz_check_digit,
+};
 
 // Re-export crypto primitives from marty-crypto
 pub use marty_crypto::{verify_signature, HashAlgorithm, SignatureAlgorithm};

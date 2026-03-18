@@ -90,6 +90,8 @@ pub struct FormatRequirement {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Constraints {
     /// Fields the verifier wants to see.
+    /// Per DIF PE v2 §5, `fields` is optional; defaults to empty array.
+    #[serde(default)]
     pub fields: Vec<FieldConstraint>,
     /// Whether selective disclosure is required.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -710,6 +712,317 @@ impl VerificationEngine {
             zk_results: vec![],
             errors,
         }
+    }
+
+    /// Full Presentation Exchange (DIF PE v2) evaluation.
+    ///
+    /// Performs structural validation (descriptor mapping, format checks) AND
+    /// field constraint evaluation against the decoded VP token payload JSON.
+    ///
+    /// `vp_payload` is the JWT body (the `serde_json::Value` decoded from the
+    /// VP token's second segment). When `None`, the call delegates to
+    /// [`verify_presentation_structure`] for structural checks only.
+    ///
+    /// For each `InputDescriptor`, the matching `descriptor_map` entry's `path`
+    /// (and `path_nested.path` when present) navigates from the VP token payload
+    /// to the relevant credential document.  `FieldConstraint.path` JSONPath
+    /// expressions are evaluated against that document and `FieldConstraint.filter`
+    /// (JSON Schema draft-07 subset) restricts accepted values.
+    pub fn verify_presentation(
+        &self,
+        definition: &PresentationDefinition,
+        submission: &PresentationSubmission,
+        vp_payload: Option<&serde_json::Value>,
+    ) -> VerificationResult {
+        // ── 1. Structural check ──────────────────────────────────────────────
+        let structural = self.verify_presentation_structure(definition, submission);
+        if !structural.valid {
+            return structural;
+        }
+
+        let payload = match vp_payload {
+            Some(p) => p,
+            None => return structural, // no payload — structural-only result
+        };
+
+        // ── 2. Field constraint evaluation per descriptor ────────────────────
+        let mut descriptor_results: Vec<DescriptorVerificationResult> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+
+        for descriptor in &definition.input_descriptors {
+            // Structural check already verified this entry exists.
+            let map_entry = match submission
+                .descriptor_map
+                .iter()
+                .find(|e| e.id == descriptor.id)
+            {
+                Some(e) => e,
+                None => continue,
+            };
+
+            // Navigate to the credential document using path + path_nested.
+            let root_doc = Self::json_path_get(payload, &map_entry.path)
+                .unwrap_or(payload);
+            let credential_doc = match &map_entry.path_nested {
+                Some(nested) => {
+                    Self::json_path_get(root_doc, &nested.path).unwrap_or(root_doc)
+                }
+                None => root_doc,
+            };
+
+            // Enforce limit_disclosure: "required" — credential MUST be SD-JWT.
+            if descriptor.constraints.limit_disclosure.as_deref() == Some("required") {
+                let fmt = map_entry.format.as_str();
+                if !fmt.contains("sd_jwt") && !fmt.contains("sd-jwt") {
+                    let err = format!(
+                        "Descriptor '{}': limit_disclosure:required but format '{}' is not SD-JWT",
+                        descriptor.id, fmt
+                    );
+                    errors.push(err.clone());
+                    descriptor_results.push(DescriptorVerificationResult {
+                        descriptor_id: descriptor.id.clone(),
+                        valid: false,
+                        format: map_entry.format.clone(),
+                        error: Some(err),
+                    });
+                    continue;
+                }
+            }
+
+            // Evaluate field constraints against the credential document.
+            let mut field_errors: Vec<String> = Vec::new();
+            for field in &descriptor.constraints.fields {
+                // ZK predicates are verified separately via verify_zk_predicate().
+                if field.zk_predicate.is_some() {
+                    continue;
+                }
+
+                let matched = field
+                    .path
+                    .iter()
+                    .find_map(|p| Self::json_path_get(credential_doc, p));
+
+                match matched {
+                    None if field.optional.unwrap_or(false) => {} // absent but optional — ok
+                    None => {
+                        field_errors.push(format!(
+                            "Descriptor '{}': required claim not found at paths {:?}",
+                            descriptor.id, field.path
+                        ));
+                    }
+                    Some(val) => {
+                        if let Some(ref filter) = field.filter {
+                            if let Err(e) = Self::apply_json_schema_filter(val, filter) {
+                                field_errors.push(format!(
+                                    "Descriptor '{}': field filter not satisfied — {}",
+                                    descriptor.id, e
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let valid = field_errors.is_empty();
+            let error = if valid {
+                None
+            } else {
+                Some(field_errors.join("; "))
+            };
+            errors.extend(field_errors);
+
+            // Reuse the format label from the structural result.
+            let format = structural
+                .descriptor_results
+                .iter()
+                .find(|r| r.descriptor_id == descriptor.id)
+                .map(|r| r.format.clone())
+                .unwrap_or_else(|| map_entry.format.clone());
+
+            descriptor_results.push(DescriptorVerificationResult {
+                descriptor_id: descriptor.id.clone(),
+                valid,
+                format,
+                error,
+            });
+        }
+
+        VerificationResult {
+            valid: errors.is_empty(),
+            descriptor_results,
+            zk_results: structural.zk_results,
+            errors,
+        }
+    }
+
+    /// Extract a value from a JSON document using a simple JSONPath expression.
+    ///
+    /// Supported subset:
+    ///   - `$`            — root document
+    ///   - `$.field`      — top-level field
+    ///   - `$.a.b.c`      — nested path
+    ///   - `$.a\.b.c`     — escaped dots (mDoc namespace separators)
+    ///   - `$.arr[0]`     — zero-based array index
+    ///
+    /// Recursive descent (`..`), wildcards (`*`), and filter expressions
+    /// (`?(...)`) are not supported — they are not used in Marty PDs.
+    pub(crate) fn json_path_get<'a>(
+        root: &'a serde_json::Value,
+        path: &str,
+    ) -> Option<&'a serde_json::Value> {
+        let rest = path.strip_prefix('$')?;
+        if rest.is_empty() {
+            return Some(root);
+        }
+        let rest = rest.strip_prefix('.').unwrap_or(rest);
+        let segments = Self::split_path_segments(rest);
+        let mut current = root;
+        for seg in &segments {
+            if let Some(bracket) = seg.find('[') {
+                let field = &seg[..bracket];
+                let end = seg.rfind(']').unwrap_or(seg.len());
+                let idx: usize = seg[bracket + 1..end].parse().ok()?;
+                current = current.get(field)?;
+                current = current.get(idx)?;
+            } else {
+                let field = seg.replace("\\.", ".");
+                current = current.get(field.as_str())?;
+            }
+        }
+        Some(current)
+    }
+
+    /// Split a JSONPath tail on unescaped dots.
+    fn split_path_segments(path: &str) -> Vec<String> {
+        let mut segments: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut chars = path.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => {
+                    current.push('\\');
+                    if chars.peek() == Some(&'.') {
+                        current.push(chars.next().unwrap());
+                    }
+                }
+                '.' => {
+                    segments.push(std::mem::take(&mut current));
+                }
+                _ => current.push(c),
+            }
+        }
+        if !current.is_empty() {
+            segments.push(current);
+        }
+        segments
+    }
+
+    /// Apply a JSON Schema draft-07 subset filter to a value.
+    ///
+    /// Supported keywords:
+    /// - `type`     — `"string"`, `"number"`, `"array"`, `"object"`, `"boolean"`, `"null"`
+    /// - `const`    — exact equality
+    /// - `enum`     — membership in array
+    /// - `minimum`  — numeric lower bound (inclusive)
+    /// - `maximum`  — numeric upper bound (inclusive)
+    /// - `pattern`  — ECMA 262 regular expression (JSON Schema §6.3.3)
+    /// - `contains` — at least one array element satisfies a sub-schema
+    ///
+    /// Unknown keywords are silently ignored.
+    fn apply_json_schema_filter(
+        value: &serde_json::Value,
+        filter: &serde_json::Value,
+    ) -> Result<(), String> {
+        let Some(obj) = filter.as_object() else {
+            return Ok(());
+        };
+
+        if let Some(expected_type) = obj.get("type").and_then(|v| v.as_str()) {
+            let actual = match value {
+                serde_json::Value::String(_) => "string",
+                serde_json::Value::Number(_) => "number",
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::Object(_) => "object",
+                serde_json::Value::Bool(_) => "boolean",
+                serde_json::Value::Null => "null",
+            };
+            if expected_type != actual {
+                return Err(format!(
+                    "type mismatch: expected '{}', got '{}'",
+                    expected_type, actual
+                ));
+            }
+        }
+
+        if let Some(expected) = obj.get("const") {
+            if value != expected {
+                return Err(format!(
+                    "const mismatch: expected {expected}, got {value}"
+                ));
+            }
+        }
+
+        if let Some(variants) = obj.get("enum").and_then(|v| v.as_array()) {
+            if !variants.contains(value) {
+                return Err(format!("enum: {value} is not one of {variants:?}"));
+            }
+        }
+
+        if let Some(min) = obj.get("minimum").and_then(|v| v.as_f64()) {
+            match value.as_f64() {
+                Some(n) if n >= min => {}
+                Some(n) => return Err(format!("minimum {min}: {n} is below minimum")),
+                None => return Err(format!("minimum {min}: value is not a number")),
+            }
+        }
+
+        if let Some(max) = obj.get("maximum").and_then(|v| v.as_f64()) {
+            match value.as_f64() {
+                Some(n) if n <= max => {}
+                Some(n) => return Err(format!("maximum {max}: {n} exceeds maximum")),
+                None => return Err(format!("maximum {max}: value is not a number")),
+            }
+        }
+
+        if let Some(pattern) = obj.get("pattern").and_then(|v| v.as_str()) {
+            let s = value.as_str().unwrap_or("");
+            // JSON Schema §6.3.3: pattern uses ECMA 262 regular expressions.
+            // The `regex` crate is compatible for all patterns used in DIF PEX spec examples.
+            match regex::Regex::new(pattern) {
+                Ok(re) => {
+                    if !re.is_match(s) {
+                        return Err(format!("pattern '{pattern}' not matched by '{s}'"));
+                    }
+                }
+                Err(_) => {
+                    // Graceful fallback for patterns that don't compile as Rust regex
+                    // (e.g. ECMA 262-only syntax). Fall back to substring check.
+                    if !s.contains(pattern) {
+                        return Err(format!("pattern '{pattern}' not satisfied by '{s}'"));
+                    }
+                }
+            }
+        }
+
+        if let Some(contains_schema) = obj.get("contains") {
+            match value.as_array() {
+                None => {
+                    return Err(format!("`contains` applied to non-array: {value}"));
+                }
+                Some(arr) => {
+                    let satisfied = arr
+                        .iter()
+                        .any(|elem| Self::apply_json_schema_filter(elem, contains_schema).is_ok());
+                    if !satisfied {
+                        return Err(format!(
+                            "array does not contain element satisfying: {contains_schema}"
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

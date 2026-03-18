@@ -53,6 +53,8 @@ pub enum KeyType {
     HmacSha384,
     /// HMAC-SHA512 key (64 bytes)
     HmacSha512,
+    /// BLS12-381 key pair for BBS+ signatures (32 bytes secret, 96 bytes public)
+    Bls12381,
 }
 
 /// Generated key pair or symmetric key.
@@ -88,6 +90,7 @@ impl GeneratedKey {
             KeyType::Rsa2048 => 2048,
             KeyType::Rsa3072 => 3072,
             KeyType::Rsa4096 => 4096,
+            KeyType::Bls12381 => 256,
         }
     }
 }
@@ -111,6 +114,7 @@ pub fn generate_keypair(key_type: KeyType) -> CryptoResult<GeneratedKey> {
         KeyType::HmacSha256 => generate_symmetric(32, KeyType::HmacSha256),
         KeyType::HmacSha384 => generate_symmetric(48, KeyType::HmacSha384),
         KeyType::HmacSha512 => generate_symmetric(64, KeyType::HmacSha512),
+        KeyType::Bls12381 => generate_bls12381(),
     }
 }
 
@@ -340,6 +344,25 @@ pub fn generate_rsa_pem(bits: usize) -> CryptoResult<(String, String)> {
         .map_err(|e| CryptoError::internal(format!("RSA public key PEM encoding failed: {}", e)))?;
 
     Ok((private_pem.to_string(), public_pem))
+}
+
+// ============================================================================
+// BLS12-381 (BBS+ Signatures)
+// ============================================================================
+
+fn generate_bls12381() -> CryptoResult<GeneratedKey> {
+    use crate::bbs::{BbsCiphersuite, BbsKeyPair};
+
+    // Use SHAKE-256 ciphersuite (IETF recommended) for key generation.
+    // The key pair is ciphersuite-agnostic at the BLS12-381 level;
+    // the ciphersuite matters for sign/verify/proof operations.
+    let keypair = BbsKeyPair::generate(BbsCiphersuite::Bls12381Shake256)?;
+
+    Ok(GeneratedKey {
+        key_type: KeyType::Bls12381,
+        private_key: keypair.secret_key().to_vec(),
+        public_key: keypair.public_key().to_vec(),
+    })
 }
 
 // ============================================================================

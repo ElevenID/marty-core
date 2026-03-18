@@ -34,7 +34,7 @@ pkcs5 = { version = "0.7", features = ["pbes2"] }
 spki = { version = "0.7", features = ["pem"] }
 
 # CMS/CRL/OCSP (PKCS#7, X.509 extensions)
-cms = "0.2"
+cms = { version = "0.2", features = ["builder"] }
 x509-ocsp = "0.2"
 
 # Symmetric encryption
@@ -58,6 +58,9 @@ x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 
 # Ed448 (for eMRTD Active Authentication)
 ed448-goldilocks-plus = "0.16"
+
+# BBS+ signatures (BLS12-381)
+zkryptium = { version = "0.4", features = ["bbsplus"] }
 
 # PKCS#12 (for key/cert bundle parsing)
 p12 = "0.6"

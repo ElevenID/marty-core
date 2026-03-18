@@ -11,12 +11,14 @@
 //!  §4  Selective disclosure — only declared claims produce disclosures
 //!  §5  Non-SD-JWT payload format returns error (guard)
 //!  §6  `SignedCredential::SdJwt` shape — credential_id is a valid URN
+//!  §7  SD-JWT verification — round-trip issuance + verification
+//!  §8  Holder selective disclosure — only chosen disclosures are revealed
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::collections::HashMap;
 
 use marty_oid4vci::{
-    formats::sd_jwt::sign_sd_jwt,
+    formats::sd_jwt::{sign_sd_jwt, verify_sd_jwt},
     types::{
         CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential, SigningAlgorithm,
     },
@@ -468,4 +470,357 @@ fn decode_jwt_payload(compact: &str) -> Value {
     let b64 = jws.split('.').nth(1).expect("payload part");
     let bytes = URL_SAFE_NO_PAD.decode(b64).expect("base64url decode");
     serde_json::from_slice(&bytes).expect("payload JSON")
+}
+
+/// Extract the public-key-only version of the test Ed25519 JWK (no `d` field).
+fn test_issuer_public_jwk() -> String {
+    r#"{
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    }"#
+    .to_string()
+}
+
+// ── §7  SD-JWT Verification — round-trip ─────────────────────────────────────
+
+/// RFC 9449 §7.3 / IETF SD-JWT-VC §4: a credential signed with `sign_sd_jwt`
+/// MUST be accepted by `verify_sd_jwt` using the issuer's public key.
+/// The `verified_claims` MUST contain the non-SD claims at minimum.
+#[test]
+fn verify_sd_jwt_round_trip_no_disclosures() {
+    let issuer_key = test_issuer_key();
+    let public_jwk = test_issuer_public_jwk();
+
+    let claims = CredentialClaims {
+        subject_id: Some("did:example:holder".to_string()),
+        credential_type: "IdentityCredential".to_string(),
+        claims: base_claims(),
+        expiration_seconds: Some(3600),
+        selective_disclosure_claims: Vec::new(), // all claims plaintext
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+
+    let signed = sign_sd_jwt(&issuer_key, &claims).expect("sign_sd_jwt");
+    let compact = match signed {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!("expected SdJwt"),
+    };
+
+    let verified = verify_sd_jwt(&compact, &public_jwk, None, None)
+        .expect("verify_sd_jwt must succeed for a freshly-signed credential");
+
+    // Non-SD claims must be present in the verified payload
+    assert_eq!(
+        verified.get("given_name").and_then(|v| v.as_str()),
+        Some("Alice"),
+        "given_name must be present in verified_claims"
+    );
+    assert_eq!(
+        verified.get("family_name").and_then(|v| v.as_str()),
+        Some("Smith"),
+        "family_name must be present in verified_claims"
+    );
+}
+
+/// RFC 9449 §7.2: selectively-disclosed claims MUST appear in `verified_claims`
+/// after the verifier reconstructs the payload from the provided disclosures.
+#[test]
+fn verify_sd_jwt_round_trip_with_disclosures() {
+    let issuer_key = test_issuer_key();
+    let public_jwk = test_issuer_public_jwk();
+
+    let claims = CredentialClaims {
+        subject_id: None,
+        credential_type: "IdentityCredential".to_string(),
+        claims: base_claims(),
+        expiration_seconds: Some(3600),
+        selective_disclosure_claims: vec![
+            "given_name".to_string(),
+            "birth_date".to_string(),
+        ],
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+
+    let signed = sign_sd_jwt(&issuer_key, &claims).expect("sign_sd_jwt");
+    let compact = match signed {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!("expected SdJwt"),
+    };
+
+    // The compact form must contain disclosures (tilde segments)
+    let parts: Vec<&str> = compact.split('~').collect();
+    assert!(
+        parts.len() > 2,
+        "SD claims MUST produce disclosure segments; got {} tilde parts",
+        parts.len()
+    );
+
+    let verified = verify_sd_jwt(&compact, &public_jwk, None, None)
+        .expect("verify_sd_jwt must succeed");
+
+    // The non-SD claim `family_name` must always be present
+    assert_eq!(
+        verified.get("family_name").and_then(|v| v.as_str()),
+        Some("Smith"),
+        "non-SD claim family_name must be present"
+    );
+
+    // SD claims `given_name` and `birth_date` must be reconstructed from disclosures
+    assert_eq!(
+        verified.get("given_name").and_then(|v| v.as_str()),
+        Some("Alice"),
+        "SD claim given_name must be reconstructed from disclosures"
+    );
+    assert_eq!(
+        verified.get("birth_date").and_then(|v| v.as_str()),
+        Some("1990-01-15"),
+        "SD claim birth_date must be reconstructed from disclosures"
+    );
+}
+
+/// RFC 9449 §7: a tampered SD-JWT (bit-flipped signature) MUST be rejected
+/// by `verify_sd_jwt`.
+#[test]
+fn verify_sd_jwt_tampered_signature_rejected() {
+    let issuer_key = test_issuer_key();
+    let public_jwk = test_issuer_public_jwk();
+
+    let claims = CredentialClaims {
+        subject_id: None,
+        credential_type: "VC".to_string(),
+        claims: base_claims(),
+        expiration_seconds: None,
+        selective_disclosure_claims: Vec::new(),
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+
+    let signed = sign_sd_jwt(&issuer_key, &claims).unwrap();
+    let compact = match signed {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!(),
+    };
+
+    // Corrupt the last byte of the JWS signature
+    let (jws, disclosures) = compact.split_once('~').unwrap_or((&compact, ""));
+    let mut jws_parts: Vec<&str> = jws.splitn(3, '.').collect();
+    let mut sig_bytes = URL_SAFE_NO_PAD.decode(jws_parts[2]).unwrap();
+    let last = sig_bytes.len() - 1;
+    sig_bytes[last] ^= 0xFF;
+    let corrupted_sig = URL_SAFE_NO_PAD.encode(&sig_bytes);
+    jws_parts[2] = &corrupted_sig;
+    let tampered = format!("{}.{}.{}~{}", jws_parts[0], jws_parts[1], corrupted_sig, disclosures);
+
+    let result = verify_sd_jwt(&tampered, &public_jwk, None, None);
+    assert!(
+        result.is_err(),
+        "tampered SD-JWT signature MUST be rejected by verify_sd_jwt"
+    );
+}
+
+/// RFC 9449 §7: a completely wrong key MUST cause verification to fail.
+#[test]
+fn verify_sd_jwt_wrong_public_key_rejected() {
+    let issuer_key = test_issuer_key();
+    // Different Ed25519 public key — not the one that signed the credential
+    let wrong_public_jwk = r#"{
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "JHm4sOOblT4OFLG1MWFHQ4m3OxFpMqHF6AyEXS3UKY"
+    }"#;
+
+    let claims = CredentialClaims {
+        subject_id: None,
+        credential_type: "VC".to_string(),
+        claims: base_claims(),
+        expiration_seconds: None,
+        selective_disclosure_claims: Vec::new(),
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+
+    let signed = sign_sd_jwt(&issuer_key, &claims).unwrap();
+    let compact = match signed {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!(),
+    };
+
+    let result = verify_sd_jwt(&compact, wrong_public_jwk, None, None);
+    assert!(
+        result.is_err(),
+        "SD-JWT verified with a wrong public key MUST be rejected"
+    );
+}
+
+// ── §8  SD-JWT Disclosure Integrity ──────────────────────────────────────────
+
+/// RFC 9449 §5.1: the `_sd` array in the payload MUST NOT contain the
+/// plaintext claim name — it must only contain salted hash digests.
+#[test]
+fn sd_claims_payload_contains_only_hashes_not_plaintext() {
+    let claims = CredentialClaims {
+        subject_id: None,
+        credential_type: "VC".to_string(),
+        claims: base_claims(),
+        expiration_seconds: None,
+        selective_disclosure_claims: vec!["given_name".to_string(), "birth_date".to_string()],
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+
+    let signed = sign_sd_jwt(&test_issuer_key(), &claims).unwrap();
+    let compact = match signed {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!(),
+    };
+
+    let payload = decode_jwt_payload(&compact);
+    let sd_array = payload.get("_sd").and_then(|v| v.as_array()).expect("_sd array");
+
+    // Each element of _sd must be a string (base64url-encoded hash), not an object
+    for entry in sd_array {
+        assert!(
+            entry.is_string(),
+            "_sd entries must be base64url hash strings, not: {:?}",
+            entry
+        );
+        let s = entry.as_str().unwrap();
+        assert!(
+            s.len() >= 32,
+            "_sd hash digest is suspiciously short ({} chars): {}",
+            s.len(),
+            s
+        );
+    }
+
+    // The SD claim names must NOT appear as plaintext keys in the payload
+    assert!(
+        payload.get("given_name").is_none(),
+        "given_name must NOT appear as plaintext in the JWT body when SD-selected"
+    );
+    assert!(
+        payload.get("birth_date").is_none(),
+        "birth_date must NOT appear as plaintext when SD-selected"
+    );
+}
+
+/// RFC 9449 §5.2: each disclosure in the compact form MUST be a valid
+/// base64url-encoded JSON array `[salt, name, value]`.
+#[test]
+fn sd_jwt_disclosures_have_valid_structure() {
+    let claims = CredentialClaims {
+        subject_id: None,
+        credential_type: "VC".to_string(),
+        claims: base_claims(),
+        expiration_seconds: None,
+        selective_disclosure_claims: vec![
+            "given_name".to_string(),
+            "family_name".to_string(),
+            "birth_date".to_string(),
+        ],
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+
+    let signed = sign_sd_jwt(&test_issuer_key(), &claims).unwrap();
+    let compact = match signed {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!(),
+    };
+
+    // Disclosures are the tilde-separated segments after the JWS
+    let tilde_parts: Vec<&str> = compact.split('~').collect();
+    // tilde_parts[0] = JWS, tilde_parts[1..n-1] = disclosures, tilde_parts[n] = "" (trailing ~) or KB-JWT
+    let disclosures: Vec<&str> = tilde_parts[1..]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .copied()
+        .collect();
+
+    assert!(
+        !disclosures.is_empty(),
+        "3 SD claims must produce at least 1 disclosure"
+    );
+
+    for disc in &disclosures {
+        let bytes = URL_SAFE_NO_PAD.decode(disc).unwrap_or_else(|e| {
+            panic!("disclosure must be valid base64url: {} ({})", disc, e)
+        });
+        let decoded: Value = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+            panic!("disclosure must be valid JSON: {:?} ({})", bytes, e)
+        });
+        let arr = decoded
+            .as_array()
+            .expect("disclosure must be a JSON array");
+        assert_eq!(
+            arr.len(),
+            3,
+            "disclosure must have [salt, name, value] — got {:?}",
+            arr
+        );
+        assert!(arr[0].is_string(), "disclosure[0] (salt) must be a string");
+        assert!(arr[1].is_string(), "disclosure[1] (name) must be a string");
+    }
+}
+
+/// RFC 9449 §7.1: `_sd_alg` in the payload MUST default to `sha-256` when
+/// no explicit algorithm is specified.
+#[test]
+fn sd_jwt_payload_sd_alg_defaults_to_sha256() {
+    let claims = CredentialClaims {
+        subject_id: None,
+        credential_type: "VC".to_string(),
+        claims: base_claims(),
+        expiration_seconds: None,
+        selective_disclosure_claims: vec!["given_name".to_string()],
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+
+    let signed = sign_sd_jwt(&test_issuer_key(), &claims).unwrap();
+    let compact = match signed {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!(),
+    };
+
+    let payload = decode_jwt_payload(&compact);
+    if let Some(alg) = payload.get("_sd_alg") {
+        assert_eq!(
+            alg.as_str(),
+            Some("sha-256"),
+            "_sd_alg must be 'sha-256' when present"
+        );
+    }
+    // If _sd_alg is absent, sha-256 is the default per RFC 9449 §5 — both are conformant.
 }

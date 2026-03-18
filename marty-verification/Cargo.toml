@@ -10,7 +10,7 @@ description = "Trust chain verification for mDL (IACA) and eMRTD (CSCA)"
 
 [lib]
 name = "marty_verification"
-crate-type = ["rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["iaca", "csca", "icao-client"]
@@ -29,7 +29,7 @@ full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "s
 
 [dependencies]
 # Internal crate
-marty-crypto = { workspace = true }
+marty-crypto = { workspace = true, features = ["sod-builder", "cert-builder"] }
 
 # Re-export crypto types
 x509-cert = { workspace = true }
@@ -87,7 +87,6 @@ pyo3 = { workspace = true, optional = true }
 # mDoc/mDL support
 isomdl = "0.2.0"
 hex = "0.4"
-marty-zkp = { path = "../marty-zkp", features = ["python"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]

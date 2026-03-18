@@ -19,11 +19,13 @@ default = ["ecdsa", "eddsa", "rsa", "x509"]
 ecdsa = []           # ECDSA with P-256/P-384/P-521
 eddsa = []           # Ed25519 and Ed448
 rsa = []             # RSA PKCS#1 v1.5 and PSS
+bbs = []             # BBS+ with BLS12-381 (SHA-256/SHAKE-256)
 x509 = []            # X.509 certificate parsing
 symmetric = []       # AES-GCM, AES-CBC, 3DES
 kdf = []             # HKDF, PBKDF2
 pkcs12 = []          # PKCS#12 bundle parsing
 cert-builder = []    # Certificate builder functionality
+sod-builder = ["cms/builder"]  # EF.SOD DER builder for ICAO 9303 eMRTDs
 # These features are defined for cfg guards but require external crates when used
 aamva-client = []    # AAMVA OCSP client (needs reqwest externally)
 ocsp-client = []     # OCSP client functionality (needs reqwest externally)
@@ -78,6 +80,9 @@ x25519-dalek = { workspace = true }
 
 # Ed448
 ed448-goldilocks-plus = { workspace = true }
+
+# BBS+ signatures
+zkryptium = { workspace = true }
 
 # Time
 chrono = { workspace = true }

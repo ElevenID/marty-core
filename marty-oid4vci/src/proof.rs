@@ -1,11 +1,16 @@
-//! Proof-of-possession verification for OID4VCI (§8.2).
+//! Proof-of-possession verification and creation for OID4VCI (§8.2).
 //!
 //! This module implements cryptographic verification of JWT proofs submitted
 //! with credential requests. This replaces the previous insecure approach of
 //! only extracting the `kid` header without signature verification.
+//!
+//! It also exposes `create_proof_jwt` for generating spec-correct holder
+//! proof-of-possession JWTs (e.g. for integration tests and wallet clients).
 
 use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
+use rand::rngs::OsRng;
 use serde::Deserialize;
 use ssi::crypto::AlgorithmInstance;
 use ssi::jwk::{Params, JWK};
@@ -470,6 +475,76 @@ pub fn extract_proof_jwts(request: &crate::types::CredentialRequest) -> Oid4vciR
     Err(Oid4vciError::ProofVerificationFailed(
         "No proof provided in credential request. Either 'proofs' (v1) or 'proof' (legacy) is required.".into(),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Proof creation (wallet-side / test helper)
+// ---------------------------------------------------------------------------
+
+/// Base58btc encoder using the Bitcoin alphabet (no multibase prefix).
+fn base58btc_encode(data: &[u8]) -> String {
+    const ALPHA: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let n_leading = data.iter().take_while(|&&b| b == 0).count();
+    let mut digits: Vec<u8> = Vec::new();
+    for &byte in data {
+        let mut carry = byte as u32;
+        for d in &mut digits {
+            carry += (*d as u32) * 256;
+            *d = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    digits.extend(std::iter::repeat(0u8).take(n_leading));
+    digits.reverse();
+    digits.iter().map(|&d| ALPHA[d as usize] as char).collect()
+}
+
+/// Create a spec-correct OID4VCI proof-of-possession JWT (OID4VCI §8.2).
+///
+/// Generates an ephemeral Ed25519 key pair, derives a `did:key` from it,
+/// and returns a compact JWT signed with that key.  The JWT contains:
+///   - header: `{"alg":"EdDSA","typ":"openid4vci-proof+jwt","kid":"<did:key>#<did:key>"}`
+///   - payload: `{"iss":"<did:key>","aud":"<aud>","iat":<now>,"nonce":"<c_nonce>"}`
+///
+/// The returned JWT passes `verify_jwt_proof` because the `kid` is a `did:key`
+/// whose public key is resolved inline (no network I/O) and the signature is
+/// verified cryptographically.
+pub fn create_proof_jwt(aud: &str, c_nonce: &str) -> Oid4vciResult<String> {
+    // Generate ephemeral Ed25519 key pair
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+
+    // Derive did:key: multicodec prefix 0xed 0x01 + raw pub key → base58btc
+    let pub_bytes = verifying_key.to_bytes();
+    let mut prefixed = vec![0xed_u8, 0x01];
+    prefixed.extend_from_slice(&pub_bytes);
+    let did = format!("did:key:z{}", base58btc_encode(&prefixed));
+    let kid = format!("{}#{}", did, did);
+
+    let header = serde_json::json!({
+        "alg": "EdDSA",
+        "typ": "openid4vci-proof+jwt",
+        "kid": kid,
+    });
+    let payload = serde_json::json!({
+        "iss": did,
+        "aud": aud,
+        "iat": chrono::Utc::now().timestamp(),
+        "nonce": c_nonce,
+    });
+
+    let header_b64 = B64.encode(serde_json::to_string(&header).unwrap().as_bytes());
+    let payload_b64 = B64.encode(serde_json::to_string(&payload).unwrap().as_bytes());
+    let signing_input = format!("{}.{}", header_b64, payload_b64);
+
+    let signature = signing_key.sign(signing_input.as_bytes());
+    let sig_b64 = B64.encode(signature.to_bytes());
+
+    Ok(format!("{}.{}.{}", header_b64, payload_b64, sig_b64))
 }
 
 #[cfg(test)]

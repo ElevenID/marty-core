@@ -171,6 +171,49 @@ pub fn sign_sd_jwt(
     })
 }
 
+/// Verify an SD-JWT presentation and reconstruct the disclosed claims.
+///
+/// The verifier checks:
+/// 1. JWS signature against the issuer's public key
+/// 2. Each disclosure's hash against the `_sd` array in the payload
+/// 3. Duplicate disclosure detection
+/// 4. KB-JWT `aud` / `nonce` binding (when both `expected_aud` and
+///    `expected_nonce` are supplied)
+///
+/// # Returns
+/// The reconstructed JSON payload with all selectively-disclosed claims
+/// merged into their canonical positions (i.e. the `_sd` hash entries are
+/// replaced by the clear-text claim key-value pairs).
+///
+/// # Arguments
+/// * `sd_jwt_compact`   — Compact SD-JWT (`JWS~disc1~disc2~[KB-JWT]`)
+/// * `issuer_jwk_json`  — Issuer's **public** JWK as a JSON string
+/// * `expected_aud`     — Expected KB-JWT audience (optional)
+/// * `expected_nonce`   — Expected KB-JWT nonce (optional)
+pub fn verify_sd_jwt(
+    sd_jwt_compact: &str,
+    issuer_jwk_json: &str,
+    expected_aud: Option<String>,
+    expected_nonce: Option<String>,
+) -> Oid4vciResult<serde_json::Value> {
+    let jwk_obj: jsonwebtoken::jwk::Jwk = serde_json::from_str(issuer_jwk_json)
+        .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
+
+    let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&jwk_obj)
+        .map_err(|e| Oid4vciError::KeyError(format!("Failed to create decoding key: {}", e)))?;
+
+    let verifier = sd_jwt_rs::SDJWTVerifier::new(
+        sd_jwt_compact.to_string(),
+        Box::new(move |_issuer: &str, _header: &jsonwebtoken::Header| decoding_key.clone()),
+        expected_aud,
+        expected_nonce,
+        SDJWTSerializationFormat::Compact,
+    )
+    .map_err(|e| Oid4vciError::SdJwtError(format!("SD-JWT verification failed: {:?}", e)))?;
+
+    Ok(verifier.verified_claims)
+}
+
 /// Re-sign the SD-JWT's JWS part with a new header that includes `kid`.
 ///
 /// `sd-jwt-rs` 0.7 does not support `extra_header_parameters` (unimplemented!).

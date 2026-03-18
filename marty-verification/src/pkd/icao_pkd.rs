@@ -263,28 +263,29 @@ impl IcaoPkdClient {
     }
 
     /// Fetch DSC certificates for a specific country.
+    ///
+    /// When the `icao-client` feature is enabled (LDAP), uses the ICAO PKD
+    /// LDAP directory.  Falls back to a no-op warning when LDAP is unavailable.
     pub async fn fetch_country_dsc(&self, country: &str) -> VerificationResult<Vec<DscEntry>> {
-        let endpoint = format!("{}/dsc/{}", self.config.base_url, country);
-
-        let response = self.http_client.get(&endpoint).send().await.map_err(|e| {
-            VerificationError::pkd_fetch(
-                &endpoint,
-                format!("DSC fetch for {} failed: {}", country, e),
-            )
-        })?;
-
-        if !response.status().is_success() {
-            return Err(VerificationError::pkd_fetch(
-                endpoint,
-                format!("DSC fetch for {} failed: {}", country, response.status()),
-            ));
+        #[cfg(feature = "icao-client")]
+        {
+            return self.fetch_country_dsc_ldap(country).await;
         }
 
-        // Placeholder - would parse LDIF in production
-        Ok(Vec::new())
+        #[allow(unreachable_code)]
+        {
+            tracing::warn!(
+                "icao-client feature not enabled; cannot fetch DSC for country {}",
+                country
+            );
+            Ok(Vec::new())
+        }
     }
 
-    /// Fetch CRL for a specific country.
+    /// Fetch CRL for a specific country and parse it into a [`CrlEntry`].
+    ///
+    /// Returns `Ok(None)` when no CRL is published for the country (HTTP 404)
+    /// or when the payload cannot be parsed (a warning is logged).
     pub async fn fetch_country_crl(&self, country: &str) -> VerificationResult<Option<CrlEntry>> {
         let endpoint = format!("{}/crl/{}", self.config.base_url, country);
 
@@ -296,8 +297,36 @@ impl IcaoPkdClient {
         })?;
 
         if response.status().is_success() {
-            // Placeholder - would parse CRL in production
-            Ok(None)
+            let crl_der = response
+                .bytes()
+                .await
+                .map_err(|e| {
+                    VerificationError::pkd_fetch(
+                        &endpoint,
+                        format!("Failed to read CRL bytes for {}: {}", country, e),
+                    )
+                })?
+                .to_vec();
+
+            match crate::asn1::crl::parse_crl(&crl_der) {
+                Ok(info) => {
+                    let next_update = info.next_update.map(|dt| dt.to_rfc3339());
+                    tracing::info!(
+                        "Fetched and parsed CRL for country {} (next update: {:?})",
+                        country,
+                        next_update
+                    );
+                    Ok(Some(CrlEntry {
+                        country: country.to_string(),
+                        crl_der,
+                        next_update,
+                    }))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse CRL for {}: {}", country, e);
+                    Ok(None)
+                }
+            }
         } else if response.status().as_u16() == 404 {
             // No CRL available for this country
             Ok(None)

@@ -55,6 +55,7 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
+regex = { version = "1", default-features = false, features = ["std"] }
 
 # ZK Proofs (optional, behind zk_mdoc feature)
 marty-zkp = { path = "../marty-zkp", optional = true }

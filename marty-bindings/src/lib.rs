@@ -382,6 +382,27 @@ fn oid4vci_verify_pkce_s256(code_verifier: &str, code_challenge: &str) -> bool {
     marty_oid4vci::verify_pkce_s256(code_verifier, code_challenge)
 }
 
+/// Create a spec-correct OID4VCI proof-of-possession JWT (OID4VCI §8.2).
+///
+/// Generates an ephemeral Ed25519 key pair, derives a `did:key` from it, and
+/// returns a compact JWT signed with that key.  Suitable for wallet clients
+/// and integration tests that need a real, verifiable proof of possession.
+///
+/// Args:
+///     aud: Credential issuer URL (audience), e.g. "http://localhost:8005/org/<org_id>"
+///     c_nonce: The c_nonce value from the token response
+///
+/// Returns:
+///     Compact JWT string (`header.payload.signature`)
+///
+/// Raises:
+///     `RuntimeError` on key generation or signing failure
+#[pyfunction]
+fn oid4vci_create_proof_jwt(aud: &str, c_nonce: &str) -> PyResult<String> {
+    marty_oid4vci::proof::create_proof_jwt(aud, c_nonce)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Proof JWT creation failed: {e}")))
+}
+
 /// Verify an OID4VCI proof-of-possession JWT.
 ///
 /// Performs full OID4VCI §8.2 verification:
@@ -646,6 +667,7 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_create_authorization_response, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_exchange_auth_code_for_token, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
 
