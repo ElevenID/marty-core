@@ -236,7 +236,7 @@ jobs:
       - name: Trigger marty-credentials release
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           repository: ${{ github.repository_owner }}/marty-credentials
           event-type: marty-core-released
           client-payload: '{"tag": "${{ steps.version.outputs.tag }}"}'
@@ -244,7 +244,7 @@ jobs:
       - name: Trigger marty-verifier release
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
           repository: ${{ github.repository_owner }}/marty-verifier
           event-type: marty-core-released
           client-payload: '{"tag": "${{ steps.version.outputs.tag }}"}'
