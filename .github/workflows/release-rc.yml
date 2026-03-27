@@ -199,3 +199,19 @@ jobs:
           files: final-release/*
           prerelease: true
           generate_release_notes: true
+
+      - name: Notify downstream repos
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ElevenID/marty-credentials
+          event-type: marty-core-released
+          client-payload: '{"tag": "${{ steps.version.outputs.tag }}"}'
+
+      - name: Notify marty-verifier
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ElevenID/marty-verifier
+          event-type: marty-core-released
+          client-payload: '{"tag": "${{ steps.version.outputs.tag }}"}'
