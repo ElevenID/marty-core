@@ -13,6 +13,7 @@ use super::x509_verification_method::X509VerificationKey2021;
 /// Full implementation would include certificate chain validation, CRL checking, and OCSP support.
 #[derive(Debug, Clone)]
 pub struct X509Signature2021 {
+    #[allow(dead_code)]
     trust_anchors: Vec<Vec<u8>>,
 }
 
@@ -58,8 +59,10 @@ impl X509Signature2021 {
     /// # Arguments
     /// * `crl_der` - DER-encoded Certificate Revocation List
     pub fn add_crl(&mut self, _crl_der: Vec<u8>) -> VerificationResult<()> {
-        // TODO: Implement CRL addition
-        Ok(())
+        // TODO: Implement CRL addition — parse DER, store revoked serials
+        Err(VerificationError::open_badges_unsupported(
+            "CRL processing is not yet implemented".to_string()
+        ))
     }
 }
 

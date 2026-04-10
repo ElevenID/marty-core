@@ -124,6 +124,11 @@ impl RevocationReason {
             Self::AaCompromise => "aACompromise",
         }
     }
+
+    /// Convert to integer code per RFC 5280 §5.3.1.
+    pub fn to_code(&self) -> u8 {
+        *self as u8
+    }
 }
 
 /// Information about a revoked certificate.
@@ -393,13 +398,11 @@ impl CrlBuilder {
 
         // Try P-384
         use p384::ecdsa::SigningKey as P384SigningKey;
-        use p384::pkcs8::DecodePrivateKey as _;
         if let Ok(signing_key) = P384SigningKey::from_pkcs8_pem(ca_key_pem) {
             return self.build_with_p384(&signing_key);
         }
 
         // Try RSA
-        use rsa::pkcs8::DecodePrivateKey as _;
         use rsa::RsaPrivateKey;
         if let Ok(signing_key) = RsaPrivateKey::from_pkcs8_pem(ca_key_pem) {
             return self.build_with_rsa(&signing_key);
@@ -646,7 +649,29 @@ impl CrlBuilder {
             result.push(RevokedCert {
                 serial_number: serial,
                 revocation_date: revocation_time,
-                crl_entry_extensions: None, // TODO: add reason extension if present
+                crl_entry_extensions: match entry.reason {
+                    Some(reason) => {
+                        // Encode CRLReason extension (OID 2.5.29.21)
+                        // CRLReason ::= ENUMERATED { ... }
+                        use const_oid::ObjectIdentifier;
+                        use x509_cert::ext::Extension;
+
+                        let reason_code = reason.to_code();
+                        // DER-encode an ENUMERATED: tag 0x0A, length 0x01, value
+                        let enum_der = vec![0x0A, 0x01, reason_code];
+                        let extn_value = der::asn1::OctetString::new(enum_der)
+                            .map_err(|e| CryptoError::internal(format!("DER OctetString error: {}", e)))?;
+                        // id-ce-cRLReasons = 2.5.29.21
+                        let oid = ObjectIdentifier::new_unwrap("2.5.29.21");
+                        let ext = Extension {
+                            extn_id: oid,
+                            critical: false,
+                            extn_value,
+                        };
+                        Some(vec![ext])
+                    }
+                    None => None,
+                },
             });
         }
 

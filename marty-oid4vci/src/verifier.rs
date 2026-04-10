@@ -377,14 +377,16 @@ impl VerificationEngine {
     ///
     /// # Arguments
     /// * `challenge` — the original ZK challenge that was sent to the wallet
+    /// * `circuit`   — pre-generated circuit for the attribute count
+    /// * `input`     — the mDoc prove input (mdoc bytes, issuer key, attributes, etc.)
     /// * `proof`     — the ZK proof bytes from the wallet
-    /// * `mso_bytes` — the MSO bytes from the credential
     #[cfg(feature = "zk_mdoc")]
     pub fn verify_zk_predicate(
         &self,
         challenge: &ZkChallenge,
+        circuit: &marty_zkp::Circuit,
+        input: &marty_zkp::MdocProveInput,
         proof: &[u8],
-        mso_bytes: &[u8],
     ) -> ZkVerificationResult {
         use chrono::Utc;
 
@@ -401,11 +403,7 @@ impl VerificationEngine {
             };
         }
 
-        // Parse the predicate generically — no hard-coded variants here.
-        let predicate = marty_zkp::ZkPredicate::from_id(&challenge.predicate);
-        let transcript = marty_zkp::ZkTranscript::new(&challenge.nonce_bytes);
-
-        match marty_zkp::Verifier::verify(&predicate, &transcript, mso_bytes, proof) {
+        match marty_zkp::Verifier::verify(circuit, input, proof) {
             Ok(true) => ZkVerificationResult {
                 valid: true,
                 predicate: challenge.predicate.clone(),

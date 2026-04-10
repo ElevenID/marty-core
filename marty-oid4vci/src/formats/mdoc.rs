@@ -13,6 +13,7 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
+use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, IssuerKey, SignedCredential};
 
 // ── CBOR tag number for `encoded-cbor` (tag 24, RFC 8949 §3.4.5.1) ──
@@ -86,6 +87,14 @@ pub fn sign_mdoc(
     let issuer_auth = sign_cose_sign1(&mso_bytes, &jwk, issuer_key)?;
 
     // 4. Assemble IssuerSigned = { nameSpaces, issuerAuth }
+    // issuerAuth must be the COSE_Sign1 CBOR structure (array), NOT a byte
+    // string wrapping the serialized structure.  ISO 18013-5 §9.1.2.4 defines
+    // IssuerAuth = COSE_Sign1 which is a CBOR array [protected, unprotected,
+    // payload, signature].  Wallet implementations (e.g. Walt.id) expect the
+    // array directly in the IssuerSigned map.
+    let issuer_auth_cbor: CborValue = ciborium::from_reader(&issuer_auth[..])
+        .map_err(|e| Oid4vciError::MdocError(format!("Failed to parse issuer_auth CBOR: {e}")))?;
+
     let name_spaces = CborValue::Map(vec![(
         CborValue::Text(namespace.to_string()),
         CborValue::Array(issuer_signed_items),
@@ -95,7 +104,7 @@ pub fn sign_mdoc(
         (CborValue::Text("nameSpaces".into()), name_spaces),
         (
             CborValue::Text("issuerAuth".into()),
-            CborValue::Bytes(issuer_auth),
+            issuer_auth_cbor,
         ),
     ]);
 
@@ -108,6 +117,156 @@ pub fn sign_mdoc(
     Ok(SignedCredential::MsoMdoc {
         issuer_signed_b64: encoded,
         credential_id,
+    })
+}
+
+/// Sign an mDoc credential using any [`CredentialSigner`].
+///
+/// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
+/// For remote/KMS signing, pass a custom `CredentialSigner` implementation.
+pub fn sign_mdoc_with_signer(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<SignedCredential> {
+    let prepared = prepare_mdoc(signer, claims)?;
+    let signature = signer.sign(&prepared.tbs_data)?;
+    Ok(assemble_mdoc(prepared, &signature)?)
+}
+
+/// Intermediate state between mDoc preparation and signing.
+///
+/// Returned by [`prepare_mdoc()`] — the caller signs `tbs_data` and
+/// passes the result to [`assemble_mdoc()`].
+pub struct PreparedMdoc {
+    /// The COSE_Sign1 to-be-signed bytes.
+    pub tbs_data: Vec<u8>,
+    /// The credential ID (urn:uuid:...) assigned during preparation.
+    pub credential_id: String,
+    /// Serialized COSE protected header.
+    protected_header: coset::Header,
+    /// MSO payload bytes (for assembly).
+    mso_bytes: Vec<u8>,
+    /// Namespace and IssuerSignedItems for assembly.
+    namespace: String,
+    /// The tagged CBOR IssuerSignedItem entries.
+    issuer_signed_items: Vec<CborValue>,
+}
+
+/// Prepare an mDoc credential for signing.
+///
+/// Builds the MSO and COSE_Sign1 structure, returning a [`PreparedMdoc`]
+/// whose `tbs_data` field must be signed externally.
+pub fn prepare_mdoc(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<PreparedMdoc> {
+    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now();
+
+    let doc_type = claims
+        .mdoc_doctype
+        .as_deref()
+        .unwrap_or("org.iso.18013.5.1.mDL");
+    let namespace = claims
+        .mdoc_namespace
+        .as_deref()
+        .unwrap_or("org.iso.18013.5.1");
+
+    // Build IssuerSignedItems and collect digests
+    let mut issuer_signed_items = Vec::new();
+    let mut value_digests = Vec::new();
+
+    for (i, (claim_name, claim_value)) in claims.claims.iter().enumerate() {
+        let digest_id = i as u64;
+        let mut salt = [0u8; 32];
+        rand::thread_rng().fill(&mut salt);
+        let item = build_issuer_signed_item(digest_id, &salt, claim_name, claim_value)?;
+        let item_bytes = cbor_encode(&item)?;
+        let digest = Sha256::digest(&item_bytes).to_vec();
+        value_digests.push((digest_id, digest));
+        issuer_signed_items.push(CborValue::Tag(
+            CBOR_TAG_ENCODED_CBOR,
+            Box::new(CborValue::Bytes(item_bytes)),
+        ));
+    }
+
+    // Build MSO
+    let validity_days = claims.expiration_seconds.map(|s| s / 86400).unwrap_or(365);
+    let valid_until = now + chrono::Duration::days(validity_days);
+    let mso = build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
+    let mso_bytes = cbor_encode(&mso)?;
+
+    // Build COSE_Sign1 protected header
+    let alg = match signer.algorithm() {
+        crate::types::SigningAlgorithm::ES256 => iana::Algorithm::ES256,
+        crate::types::SigningAlgorithm::EdDSA => iana::Algorithm::EdDSA,
+        crate::types::SigningAlgorithm::ES256K => {
+            return Err(Oid4vciError::MdocError(
+                "ES256K is not supported for mDoc COSE signing".into(),
+            ));
+        }
+        crate::types::SigningAlgorithm::ES384 => iana::Algorithm::ES384,
+        crate::types::SigningAlgorithm::RS256 => iana::Algorithm::PS256,
+    };
+
+    let protected = HeaderBuilder::new().algorithm(alg).build();
+
+    // Compute TBS data
+    let cose_for_tbs = CoseSign1Builder::new()
+        .protected(protected.clone())
+        .payload(mso_bytes.clone())
+        .build();
+    let tbs = cose_for_tbs.tbs_data(&[]);
+
+    Ok(PreparedMdoc {
+        tbs_data: tbs,
+        credential_id,
+        protected_header: protected,
+        mso_bytes,
+        namespace: namespace.to_string(),
+        issuer_signed_items,
+    })
+}
+
+/// Assemble a signed mDoc from the prepared data and a raw COSE signature.
+pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<SignedCredential> {
+    let cose_sign1 = CoseSign1Builder::new()
+        .protected(prepared.protected_header)
+        .payload(prepared.mso_bytes)
+        .signature(signature.to_vec())
+        .build();
+
+    let issuer_auth = cose_sign1.to_tagged_vec().map_err(|e| {
+        Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e))
+    })?;
+
+    // Deserialize COSE_Sign1 bytes back to a CborValue so issuerAuth is
+    // embedded as the COSE_Sign1 array structure, not as a byte string.
+    let issuer_auth_cbor: CborValue = ciborium::from_reader(&issuer_auth[..])
+        .map_err(|e| Oid4vciError::MdocError(format!("Failed to parse issuer_auth CBOR: {e}")))?;
+
+    let name_spaces = CborValue::Map(vec![(
+        CborValue::Text(prepared.namespace),
+        CborValue::Array(prepared.issuer_signed_items),
+    )]);
+
+    let issuer_signed = CborValue::Map(vec![
+        (CborValue::Text("nameSpaces".into()), name_spaces),
+        (
+            CborValue::Text("issuerAuth".into()),
+            issuer_auth_cbor,
+        ),
+    ]);
+
+    let result_bytes = cbor_encode(&issuer_signed)?;
+    let encoded = base64::Engine::encode(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        &result_bytes,
+    );
+
+    Ok(SignedCredential::MsoMdoc {
+        issuer_signed_b64: encoded,
+        credential_id: prepared.credential_id,
     })
 }
 

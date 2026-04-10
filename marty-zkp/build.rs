@@ -16,6 +16,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/cpp/");
     println!("cargo:rerun-if-env-changed=LIBZK_PATH");
     println!("cargo:rerun-if-env-changed=USE_ZK_MOCK");
+    println!("cargo::rustc-check-cfg=cfg(zk_mock)");
 
     // Mock is active when the Cargo feature is set OR the env-var shortcut is used.
     let feature_active = env::var("CARGO_FEATURE_ZK_MOCK").is_ok();
@@ -71,6 +72,10 @@ fn compile_libzk(lib_dir: &std::path::Path) {
         .flag("-std=c++17")
         .flag("-O2")
         .flag("-DOPENSSL_SUPPRESS_DEPRECATED=1")
+        // Suppress warnings from vendored longfellow-zk library
+        .flag("-Wno-unused-parameter")
+        .flag("-Wno-missing-field-initializers")
+        .flag("-Wno-sign-compare")
         .include(&lib_src);
 
     // Architecture-specific crypto acceleration flags

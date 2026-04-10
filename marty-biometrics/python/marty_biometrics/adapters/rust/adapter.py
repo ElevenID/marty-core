@@ -5,13 +5,16 @@ This adapter wraps the _marty_biometrics Rust module and converts
 between Python types and Rust types.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from marty_biometrics.ports.types import (
+    FaceBounds,
     FaceVerificationRequest,
     FaceVerificationResult,
     FaceQualityAssessment,
     FaceQualityFactors,
+    LivenessResult,
+    LivenessScores,
     ProviderCapabilities,
 )
 
@@ -30,6 +33,30 @@ def _get_rust_module():
         )
 
 
+def _convert_face_bounds(rust_bounds) -> Optional[FaceBounds]:
+    """Convert Rust FaceBounds to Python FaceBounds."""
+    if rust_bounds is None:
+        return None
+    return FaceBounds(
+        x=rust_bounds.x,
+        y=rust_bounds.y,
+        width=rust_bounds.width,
+        height=rust_bounds.height,
+    )
+
+
+def _convert_liveness(rust_liveness) -> Optional[LivenessResult]:
+    """Convert Rust LivenessResult to Python LivenessResult."""
+    if rust_liveness is None:
+        return None
+    return LivenessResult(
+        passed=rust_liveness.passed,
+        fused_score=rust_liveness.fused_score,
+        decision=rust_liveness.decision,
+        errors=rust_liveness.errors if rust_liveness.errors else [],
+    )
+
+
 class RustFaceVerifier:
     """
     Face verifier backed by Rust FFI bindings.
@@ -42,7 +69,7 @@ class RustFaceVerifier:
         """
         Initialize with a Rust FaceVerifier instance.
 
-        Use the class methods `mock()` or `local()` to create instances.
+        Use the class methods `mock()`, `local()`, or `onnx()` to create instances.
         """
         self._inner = inner
 
@@ -77,6 +104,31 @@ class RustFaceVerifier:
         """
         rust = _get_rust_module()
         inner = rust.FaceVerifier.local()
+        return cls(inner)
+
+    @classmethod
+    def onnx(cls, models_dir: str) -> "RustFaceVerifier":
+        """
+        Create an ONNX-backed verifier.
+
+        Requires the Rust library to be compiled with the ``onnx`` feature.
+
+        Args:
+            models_dir: Path to directory containing ONNX model files.
+
+        Returns:
+            A RustFaceVerifier configured with the ONNX provider.
+
+        Raises:
+            RuntimeError: If ONNX support is not compiled in.
+        """
+        rust = _get_rust_module()
+        if not hasattr(rust.FaceVerifier, "onnx"):
+            raise RuntimeError(
+                "ONNX support not available. "
+                "Rebuild with: maturin develop --features python,onnx"
+            )
+        inner = rust.FaceVerifier.onnx(models_dir)
         return cls(inner)
 
     def capabilities(self) -> ProviderCapabilities:
@@ -131,7 +183,7 @@ class RustFaceVerifier:
             probe_quality=rust_result.probe_quality,
             processing_time_ms=rust_result.processing_time_ms,
             provider=rust_result.provider,
-            liveness=None,  # TODO: Convert liveness result
+            liveness=_convert_liveness(rust_result.liveness),
         )
 
     def assess_quality(self, image: str) -> FaceQualityAssessment:
@@ -153,7 +205,7 @@ class RustFaceVerifier:
             overall_score=rust_result.overall_score,
             face_detected=rust_result.face_detected,
             face_count=rust_result.face_count,
-            face_bounds=None,  # TODO: Convert face bounds
+            face_bounds=_convert_face_bounds(rust_result.face_bounds),
             factors=FaceQualityFactors(
                 sharpness=rust_result.sharpness,
                 brightness=rust_result.brightness,
@@ -162,3 +214,27 @@ class RustFaceVerifier:
                 pose=rust_result.pose,
             ),
         )
+
+    def extract_template(self, image: str):
+        """Extract a face template from an image."""
+        return self._inner.extract_template(image)
+
+    def compare_templates(self, reference, probe) -> float:
+        """Compare two face templates, returning a similarity score."""
+        return self._inner.compare_templates(reference, probe)
+
+    def estimate_age(self, image: str):
+        """Estimate the age of the subject in the image."""
+        return self._inner.estimate_age(image)
+
+    def detect_passive_liveness(self, frames: List[str]):
+        """Passive liveness detection from multiple frames."""
+        return self._inner.detect_passive_liveness(frames)
+
+    def detect_deepfake(self, image: str):
+        """Deepfake / synthetic face analysis."""
+        return self._inner.detect_deepfake(image)
+
+    def match_face_to_document(self, selfie: str, document_photo: str):
+        """Match a selfie against a document photo."""
+        return self._inner.match_face_to_document(selfie, document_photo)

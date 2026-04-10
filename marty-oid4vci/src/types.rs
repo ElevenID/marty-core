@@ -20,8 +20,8 @@ pub enum CredentialFormat {
     /// W3C Verifiable Credentials JWT format.
     #[serde(rename = "jwt_vc_json")]
     JwtVcJson,
-    /// IETF SD-JWT Verifiable Credential format (OID4VCI 1.0 / SpruceID "spruce-vc+sd-jwt").
-    #[serde(rename = "spruce-vc+sd-jwt")]
+    /// IETF SD-JWT Verifiable Credential format (OID4VCI 1.0).
+    #[serde(rename = "dc+sd-jwt", alias = "spruce-vc+sd-jwt")]
     SdJwt,
     /// ISO 18013-5 mobile document format.
     #[serde(rename = "mso_mdoc")]
@@ -35,7 +35,7 @@ impl CredentialFormat {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::JwtVcJson => "jwt_vc_json",
-            Self::SdJwt => "spruce-vc+sd-jwt",
+            Self::SdJwt => "dc+sd-jwt",
             Self::MsoMdoc => "mso_mdoc",
             Self::ZkMdoc => "zk_mdoc",
         }
@@ -45,7 +45,7 @@ impl CredentialFormat {
     pub fn from_str_loose(s: &str) -> Option<Self> {
         match s {
             "jwt_vc_json" | "jwt_vc" => Some(Self::JwtVcJson),
-            "spruce-vc+sd-jwt" | "dc+sd-jwt" | "vc+sd-jwt" | "sd_jwt" | "sd-jwt" => Some(Self::SdJwt),
+            "dc+sd-jwt" | "spruce-vc+sd-jwt" | "vc+sd-jwt" | "sd_jwt" | "sd-jwt" => Some(Self::SdJwt),
             "mso_mdoc" | "mdoc" => Some(Self::MsoMdoc),
             "zk_mdoc" | "zk-mdoc" | "zkp_mdoc" => Some(Self::ZkMdoc),
             _ => None,

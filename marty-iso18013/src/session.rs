@@ -14,6 +14,7 @@ pub struct SessionEncryption {
     sk_encryption: Vec<u8>,
     
     /// Session MAC key (derived from ECDH)
+    #[allow(dead_code)]
     sk_mac: Vec<u8>,
     
     /// Message counter for encryption

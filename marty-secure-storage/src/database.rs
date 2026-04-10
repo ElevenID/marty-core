@@ -9,7 +9,6 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use crate::encryption::PiiEncryptor;
 use crate::error::StorageError;
 use crate::keychain::KeychainManager;
 use crate::models::*;
@@ -39,8 +38,6 @@ pub struct VerificationHistoryEntry {
 /// Secure storage manager
 pub struct SecureStorage {
     conn: Arc<Mutex<Connection>>,
-    #[allow(dead_code)]
-    pii_encryptor: Option<PiiEncryptor>,
 }
 
 impl SecureStorage {
@@ -84,13 +81,8 @@ impl SecureStorage {
 
         tracing::info!(?db_path, "Secure storage initialized");
 
-        // Initialize PII encryptor
-        let pii_key = keychain.get_or_create_pii_key()?;
-        let pii_encryptor = Some(PiiEncryptor::new(&pii_key)?);
-
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            pii_encryptor,
         })
     }
 
@@ -734,4 +726,417 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, S
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+impl SecureStorage {
+    /// Create in-memory storage for tests (no keychain, no encryption).
+    fn new_in_memory() -> Result<Self, StorageError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        conn.execute_batch(SCHEMA)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('schema_version', ?)",
+            [SCHEMA_VERSION.to_string()],
+        )?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            pii_encryptor: None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    // ====================================================================
+    // Verification events
+    // ====================================================================
+
+    #[test]
+    fn test_store_and_retrieve_verification_event() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            storage
+                .store_verification_event("evt-1", "mDL", &"valid")
+                .await
+                .unwrap();
+
+            let history = storage.get_verification_history(10).await.unwrap();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].id, "evt-1");
+            assert_eq!(history[0].credential_type, "mDL");
+        });
+    }
+
+    #[test]
+    fn test_verification_history_ordering() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            storage
+                .store_verification_event("evt-1", "mDL", &"valid")
+                .await
+                .unwrap();
+            storage
+                .store_verification_event("evt-2", "eMRTD", &"valid")
+                .await
+                .unwrap();
+
+            let history = storage.get_verification_history(10).await.unwrap();
+            assert_eq!(history.len(), 2);
+            // Most recent first
+            assert_eq!(history[0].id, "evt-2");
+        });
+    }
+
+    #[test]
+    fn test_verification_history_limit() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            for i in 0..5 {
+                storage
+                    .store_verification_event(&format!("evt-{}", i), "mDL", &"valid")
+                    .await
+                    .unwrap();
+            }
+
+            let history = storage.get_verification_history(2).await.unwrap();
+            assert_eq!(history.len(), 2);
+        });
+    }
+
+    #[test]
+    fn test_clear_all_verification_history() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            storage
+                .store_verification_event("evt-1", "mDL", &"valid")
+                .await
+                .unwrap();
+
+            let deleted = storage.clear_verification_history(0).await.unwrap();
+            assert_eq!(deleted, 1);
+
+            let history = storage.get_verification_history(10).await.unwrap();
+            assert!(history.is_empty());
+        });
+    }
+
+    // ====================================================================
+    // Trust anchors
+    // ====================================================================
+
+    #[test]
+    fn test_store_and_get_trust_anchor() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let anchor = TrustAnchor {
+                id: "anchor-1".to_string(),
+                anchor_type: TrustAnchorType::Iaca,
+                jurisdiction: "US".to_string(),
+                subject: Some("CN=Test IACA".to_string()),
+                issuer: Some("CN=Root CA".to_string()),
+                serial_number: Some("1234".to_string()),
+                not_before: None,
+                not_after: None,
+                certificate_der: vec![0x30, 0x82, 0x01],
+                certificate_hash: "abc123".to_string(),
+                source: TrustAnchorSource::AamvaDts,
+                synced_at: Utc::now(),
+            };
+            storage.store_trust_anchor(&anchor).await.unwrap();
+
+            let anchors = storage
+                .get_trust_anchors(TrustAnchorType::Iaca, Some("US"))
+                .await
+                .unwrap();
+            assert_eq!(anchors.len(), 1);
+            assert_eq!(anchors[0].id, "anchor-1");
+            assert_eq!(anchors[0].jurisdiction, "US");
+        });
+    }
+
+    #[test]
+    fn test_trust_anchor_filter_by_type() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let iaca = TrustAnchor {
+                id: "iaca-1".to_string(),
+                anchor_type: TrustAnchorType::Iaca,
+                jurisdiction: "US".to_string(),
+                subject: None,
+                issuer: None,
+                serial_number: None,
+                not_before: None,
+                not_after: None,
+                certificate_der: vec![1],
+                certificate_hash: "h1".to_string(),
+                source: TrustAnchorSource::AamvaDts,
+                synced_at: Utc::now(),
+            };
+            let csca = TrustAnchor {
+                id: "csca-1".to_string(),
+                anchor_type: TrustAnchorType::Csca,
+                jurisdiction: "DE".to_string(),
+                subject: None,
+                issuer: None,
+                serial_number: None,
+                not_before: None,
+                not_after: None,
+                certificate_der: vec![2],
+                certificate_hash: "h2".to_string(),
+                source: TrustAnchorSource::IcaoPkd,
+                synced_at: Utc::now(),
+            };
+            storage.store_trust_anchor(&iaca).await.unwrap();
+            storage.store_trust_anchor(&csca).await.unwrap();
+
+            let iaca_results = storage
+                .get_trust_anchors(TrustAnchorType::Iaca, None)
+                .await
+                .unwrap();
+            assert_eq!(iaca_results.len(), 1);
+            assert_eq!(iaca_results[0].id, "iaca-1");
+        });
+    }
+
+    #[test]
+    fn test_count_trust_anchors() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let anchor = TrustAnchor {
+                id: "a1".to_string(),
+                anchor_type: TrustAnchorType::Csca,
+                jurisdiction: "FR".to_string(),
+                subject: None,
+                issuer: None,
+                serial_number: None,
+                not_before: None,
+                not_after: None,
+                certificate_der: vec![0],
+                certificate_hash: "h".to_string(),
+                source: TrustAnchorSource::Manual,
+                synced_at: Utc::now(),
+            };
+            storage.store_trust_anchor(&anchor).await.unwrap();
+
+            assert_eq!(
+                storage.count_trust_anchors(TrustAnchorType::Csca).await.unwrap(),
+                1
+            );
+            assert_eq!(
+                storage.count_trust_anchors(TrustAnchorType::Iaca).await.unwrap(),
+                0
+            );
+        });
+    }
+
+    // ====================================================================
+    // Offline queue
+    // ====================================================================
+
+    #[test]
+    fn test_queue_and_retrieve_events() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let payload = serde_json::json!({"type": "verification", "status": "ok"});
+            let id = storage.queue_event("verification_complete", &payload).await.unwrap();
+            assert!(!id.is_empty());
+
+            let pending = storage.get_pending_events(10).await.unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].event_type, "verification_complete");
+            assert_eq!(pending[0].payload["type"], "verification");
+        });
+    }
+
+    #[test]
+    fn test_remove_queued_event() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let payload = serde_json::json!({"x": 1});
+            let id = storage.queue_event("test", &payload).await.unwrap();
+
+            storage.remove_queued_event(&id).await.unwrap();
+            let pending = storage.get_pending_events(10).await.unwrap();
+            assert!(pending.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_queue_status() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let status = storage.get_queue_status().await.unwrap();
+            assert_eq!(status.pending_events, 0);
+            assert_eq!(status.data_size_bytes, 0);
+
+            storage.queue_event("test", &serde_json::json!({"a":"b"})).await.unwrap();
+            let status = storage.get_queue_status().await.unwrap();
+            assert_eq!(status.pending_events, 1);
+            assert!(status.data_size_bytes > 0);
+        });
+    }
+
+    // ====================================================================
+    // License state
+    // ====================================================================
+
+    #[test]
+    fn test_license_state_initially_none() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let state = storage.get_license_state().await.unwrap();
+            assert!(state.is_none());
+        });
+    }
+
+    #[test]
+    fn test_update_and_get_license_state() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let state = LicenseState {
+                license_jwt: Some("eyJ...".to_string()),
+                validated_at: Some(Utc::now()),
+                hardware_fingerprint: Some("fp-abc".to_string()),
+                verifications_today: 42,
+                verifications_date: Some("2026-03-28".to_string()),
+                verifications_total: 1000,
+                grace_period_started: None,
+            };
+            storage.update_license_state(&state).await.unwrap();
+
+            let stored = storage.get_license_state().await.unwrap().unwrap();
+            assert_eq!(stored.license_jwt, Some("eyJ...".to_string()));
+            assert_eq!(stored.verifications_today, 42);
+            assert_eq!(stored.verifications_total, 1000);
+            assert_eq!(stored.hardware_fingerprint, Some("fp-abc".to_string()));
+        });
+    }
+
+    // ====================================================================
+    // Sync state
+    // ====================================================================
+
+    #[test]
+    fn test_sync_state_initially_none() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let state = storage.get_sync_state().await.unwrap();
+            assert!(state.is_none());
+        });
+    }
+
+    #[test]
+    fn test_update_and_get_sync_state() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let state = SyncState {
+                last_iaca_sync: Some(Utc::now()),
+                last_csca_sync: None,
+                last_crl_sync: None,
+                iaca_version: Some("v2".to_string()),
+                csca_version: None,
+                sync_in_progress: false,
+                last_error: None,
+            };
+            storage.update_sync_state(&state).await.unwrap();
+
+            let stored = storage.get_sync_state().await.unwrap().unwrap();
+            assert_eq!(stored.iaca_version, Some("v2".to_string()));
+            assert!(!stored.sync_in_progress);
+        });
+    }
+
+    // ====================================================================
+    // Audit log
+    // ====================================================================
+
+    #[test]
+    fn test_add_audit_log() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            storage
+                .add_audit_log(
+                    "license_validated",
+                    Some("operator-1"),
+                    Some("license-123"),
+                    Some(&serde_json::json!({"result": "ok"})),
+                )
+                .await
+                .unwrap();
+            // No getter method yet, just verify it doesn't error
+        });
+    }
+
+    #[test]
+    fn test_add_audit_log_minimal() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            storage
+                .add_audit_log("startup", None, None, None)
+                .await
+                .unwrap();
+        });
+    }
+
+    // ====================================================================
+    // Schema / migration helpers
+    // ====================================================================
+
+    #[test]
+    fn test_schema_version_stored() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let conn = storage.conn.lock().await;
+            let version = get_schema_version(&conn).unwrap();
+            assert_eq!(version, SCHEMA_VERSION);
+        });
+    }
+
+    #[test]
+    fn test_column_exists_positive() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let conn = storage.conn.lock().await;
+            assert!(column_exists(&conn, "verification_events", "credential_type").unwrap());
+        });
+    }
+
+    #[test]
+    fn test_column_exists_negative() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let conn = storage.conn.lock().await;
+            assert!(!column_exists(&conn, "verification_events", "nonexistent_column").unwrap());
+        });
+    }
 }

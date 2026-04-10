@@ -16,17 +16,18 @@ targets = [
 db-path = "~/.cargo/advisory-db"
 # The url(s) of the advisory databases to use
 db-urls = ["https://github.com/rustsec/advisory-db"]
-# Vulnerability level that will fail the check
-vulnerability = "deny"
-# Unmaintained crate advisories will fail the check
-unmaintained = "warn"
+# Unmaintained crate advisories (workspace deps only)
+unmaintained = "workspace"
 # Yanked crate detection
 yanked = "warn"
-# Notices (informational advisories)
-notice = "warn"
 # A list of advisory IDs to ignore (useful for false positives)
 ignore = [
-    #"RUSTSEC-0000-0000",
+    # owning_ref — transitive via ssi → json-ld; no fix available, ssi needs replacement
+    { id = "RUSTSEC-2022-0040", reason = "transitive dep via ssi crate, no safe upgrade" },
+    # pyo3 0.22.x → 0.24.x is a breaking change requiring PyO3 migration
+    { id = "RUSTSEC-2025-0020", reason = "PyO3 0.22→0.24 breaking change; tracked for next major upgrade" },
+    # rsa Marvin attack — both 0.6.1 (ssi-jwk) and 0.9.9 (cms); no patched version
+    { id = "RUSTSEC-2023-0071", reason = "no safe upgrade available; transitive via ssi and cms crates" },
 ]
 
 [licenses]
@@ -44,14 +45,9 @@ allow = [
     "Zlib",
     "0BSD",
 ]
-# List of explicitly denied licenses
-deny = [
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-3.0",
-]
-# Copyleft licenses should be flagged
-copyleft = "warn"
+# List of explicitly denied licenses — use exceptions for crate-specific overrides
+# deny list replaced by allow-list-only approach in cargo-deny 0.18+
+# Copyleft licenses — handled by allow list (anything not in allow is denied)
 # Allow 1 or more licenses on a per-crate basis
 exceptions = [
     # ring uses a custom license that is permissive but not OSI approved

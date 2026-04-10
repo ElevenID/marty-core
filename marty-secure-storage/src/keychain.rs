@@ -4,6 +4,7 @@ use crate::error::StorageError;
 
 const SERVICE_NAME: &str = "com.marty.verifier";
 const DB_KEY_NAME: &str = "database_encryption_key";
+#[allow(dead_code)]
 const PII_KEY_NAME: &str = "pii_encryption_key";
 
 /// Keychain manager for secure key storage
@@ -25,6 +26,7 @@ impl KeychainManager {
     }
 
     /// Get or create the PII encryption key
+    #[allow(dead_code)]
     pub fn get_or_create_pii_key(&self) -> Result<Vec<u8>, StorageError> {
         self.get_or_create_key(PII_KEY_NAME)
     }
@@ -68,17 +70,6 @@ impl KeychainManager {
         let mut key = vec![0u8; 32];
         rand::thread_rng().fill_bytes(&mut key);
         Ok(key)
-    }
-
-    /// Delete all stored keys (for testing/reset)
-    #[allow(dead_code)]
-    pub fn delete_all_keys(&self) -> Result<(), StorageError> {
-        for key_name in [DB_KEY_NAME, PII_KEY_NAME] {
-            if let Ok(entry) = keyring::Entry::new(&self.service, key_name) {
-                let _ = entry.delete_credential();
-            }
-        }
-        Ok(())
     }
 }
 

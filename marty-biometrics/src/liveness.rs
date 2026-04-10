@@ -138,9 +138,12 @@ impl LivenessChallengeBuilder {
 ///
 /// Checks:
 /// - Challenge has not expired
-/// - Signature is present (actual verification is caller's responsibility)
+/// - Signature is present and valid (HMAC-SHA256)
 /// - Steps are well-formed
-pub fn validate_challenge(challenge: &LivenessChallenge) -> Result<(), BiometricError> {
+pub fn validate_challenge(
+    challenge: &LivenessChallenge,
+    hmac_key: &[u8],
+) -> Result<(), BiometricError> {
     // Check expiration
     let expires_at = chrono::DateTime::parse_from_rfc3339(&challenge.expires_at)
         .map_err(|e| BiometricError::LivenessValidation(format!("Invalid expires_at: {}", e)))?;
@@ -149,10 +152,12 @@ pub fn validate_challenge(challenge: &LivenessChallenge) -> Result<(), Biometric
         return Err(BiometricError::ChallengeExpired);
     }
 
-    // Check signature is present
+    // Verify HMAC-SHA256 signature
     if challenge.signature.is_empty() {
         return Err(BiometricError::InvalidSignature);
     }
+
+    verify_challenge_signature(challenge, hmac_key)?;
 
     // Check steps are well-formed
     for step in &challenge.steps {
@@ -184,6 +189,60 @@ pub fn validate_challenge(challenge: &LivenessChallenge) -> Result<(), Biometric
     Ok(())
 }
 
+/// Sign a liveness challenge using HMAC-SHA256.
+///
+/// Computes the HMAC over the canonical bytes and sets the signature field
+/// to the hex-encoded MAC.
+pub fn sign_challenge(challenge: &mut LivenessChallenge, hmac_key: &[u8]) {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let canonical = challenge_canonical_bytes(challenge);
+    // HMAC-SHA256 accepts any key length per RFC 2104; this cannot fail in
+    // practice but we avoid .expect() in library code as a safety policy.
+    let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key)
+        .unwrap_or_else(|_| unreachable!("HMAC-SHA256 accepts any key length"));
+    mac.update(&canonical);
+    let result = mac.finalize();
+    challenge.signature = bytes_to_hex(&result.into_bytes());
+}
+
+/// Verify a challenge's HMAC-SHA256 signature.
+fn verify_challenge_signature(
+    challenge: &LivenessChallenge,
+    hmac_key: &[u8],
+) -> Result<(), BiometricError> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let canonical = challenge_canonical_bytes(challenge);
+    // HMAC-SHA256 accepts any key length per RFC 2104, but handle the
+    // theoretical error to avoid panicking in library code.
+    let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key)
+        .map_err(|_| BiometricError::InvalidSignature)?;
+    mac.update(&canonical);
+
+    let sig_bytes = hex_to_bytes(&challenge.signature)
+        .ok_or(BiometricError::InvalidSignature)?;
+
+    mac.verify_slice(&sig_bytes)
+        .map_err(|_| BiometricError::InvalidSignature)
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
 /// Compute the canonical bytes of a challenge for signing
 ///
 /// This creates a deterministic byte representation of the challenge
@@ -209,6 +268,8 @@ pub fn challenge_canonical_bytes(challenge: &LivenessChallenge) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    const TEST_KEY: &[u8] = b"test-hmac-key-for-liveness-challenges";
+
     #[test]
     fn test_challenge_builder() {
         let challenge = LivenessChallengeBuilder::new("challenge-123", "session-456")
@@ -225,12 +286,27 @@ mod tests {
     }
 
     #[test]
+    fn test_sign_and_validate_challenge() {
+        let mut challenge = LivenessChallengeBuilder::new("id", "session")
+            .add_blink("step-1", "Blink", 2000)
+            .build("nonce");
+
+        sign_challenge(&mut challenge, TEST_KEY);
+        assert!(!challenge.signature.is_empty());
+        // Signature should be 64 hex chars (32 bytes HMAC-SHA256)
+        assert_eq!(challenge.signature.len(), 64);
+
+        let result = validate_challenge(&challenge, TEST_KEY);
+        assert!(result.is_ok(), "valid signed challenge should pass: {result:?}");
+    }
+
+    #[test]
     fn test_validate_expired_challenge() {
         let mut challenge = LivenessChallengeBuilder::new("id", "session").build("nonce");
         challenge.expires_at = "2020-01-01T00:00:00Z".to_string();
-        challenge.signature = "fake-sig".to_string();
+        sign_challenge(&mut challenge, TEST_KEY);
 
-        let result = validate_challenge(&challenge);
+        let result = validate_challenge(&challenge, TEST_KEY);
         assert!(matches!(result, Err(BiometricError::ChallengeExpired)));
     }
 
@@ -238,7 +314,47 @@ mod tests {
     fn test_validate_unsigned_challenge() {
         let challenge = LivenessChallengeBuilder::new("id", "session").build("nonce");
 
-        let result = validate_challenge(&challenge);
+        let result = validate_challenge(&challenge, TEST_KEY);
+        assert!(matches!(result, Err(BiometricError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_validate_wrong_key_rejected() {
+        let mut challenge = LivenessChallengeBuilder::new("id", "session")
+            .add_blink("step-1", "Blink", 2000)
+            .build("nonce");
+
+        sign_challenge(&mut challenge, TEST_KEY);
+
+        let wrong_key = b"wrong-key";
+        let result = validate_challenge(&challenge, wrong_key);
+        assert!(matches!(result, Err(BiometricError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_validate_tampered_challenge() {
+        let mut challenge = LivenessChallengeBuilder::new("id", "session")
+            .add_blink("step-1", "Blink", 2000)
+            .build("nonce");
+
+        sign_challenge(&mut challenge, TEST_KEY);
+
+        // Tamper with the challenge after signing
+        challenge.nonce = "tampered-nonce".to_string();
+
+        let result = validate_challenge(&challenge, TEST_KEY);
+        assert!(matches!(result, Err(BiometricError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_validate_corrupt_signature() {
+        let mut challenge = LivenessChallengeBuilder::new("id", "session")
+            .add_blink("step-1", "Blink", 2000)
+            .build("nonce");
+
+        challenge.signature = "not-valid-hex!!!".to_string();
+
+        let result = validate_challenge(&challenge, TEST_KEY);
         assert!(matches!(result, Err(BiometricError::InvalidSignature)));
     }
 
@@ -253,5 +369,24 @@ mod tests {
 
         assert_eq!(bytes1, bytes2);
         assert!(!bytes1.is_empty());
+    }
+
+    #[test]
+    fn test_hex_roundtrip() {
+        let data = vec![0xde, 0xad, 0xbe, 0xef, 0x00, 0xff];
+        let hex = bytes_to_hex(&data);
+        assert_eq!(hex, "deadbeef00ff");
+        let decoded = hex_to_bytes(&hex).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_hex_to_bytes_odd_length() {
+        assert!(hex_to_bytes("abc").is_none());
+    }
+
+    #[test]
+    fn test_hex_to_bytes_invalid_chars() {
+        assert!(hex_to_bytes("zzzz").is_none());
     }
 }

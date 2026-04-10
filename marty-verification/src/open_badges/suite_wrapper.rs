@@ -58,6 +58,7 @@ impl OpenBadgeSuite {
 }
 
 /// Trait representing a suite capable of verifying Open Badge credentials.
+#[allow(dead_code)]
 pub trait OpenBadgeVerificationSuite {
     /// Verify a signature.
     fn verify_sync(&self, message: &[u8], signature: &[u8], method: &crate::open_badges::method_wrapper::OpenBadgeMethod) -> VerificationResult<bool>;

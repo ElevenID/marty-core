@@ -30,6 +30,7 @@ impl Apdu {
         let mut bytes = vec![self.cla, self.ins, self.p1, self.p2];
         
         if !self.data.is_empty() {
+            debug_assert!(self.data.len() <= 255, "APDU data exceeds short-form Lc limit");
             bytes.push(self.data.len() as u8);
             bytes.extend_from_slice(&self.data);
         }
@@ -130,8 +131,8 @@ impl NfcTransport {
             return Err(crate::error::Error::Transport("Failed to select mDL application".to_string()));
         }
 
-        *self.context.lock().unwrap() = Some(ctx);
-        *self.card.lock().unwrap() = Some(card);
+        *self.context.lock().map_err(|_| crate::error::Error::Transport("NFC context mutex poisoned".to_string()))? = Some(ctx);
+        *self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))? = Some(card);
         self.connected = true;
 
         Ok(())
@@ -170,7 +171,7 @@ impl NfcTransport {
 #[cfg(feature = "nfc")]
 impl Default for NfcTransport {
     fn default() -> Self {
-        Self::new().unwrap()
+        Self::new().expect("NfcTransport::new() failed during Default construction")
     }
 }
 
@@ -186,7 +187,7 @@ impl Transport for NfcTransport {
             return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
         }
 
-        let card_guard = self.card.lock().unwrap();
+        let card_guard = self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))?;
         let card = card_guard.as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No card connected".to_string()))?;
 
@@ -205,7 +206,7 @@ impl Transport for NfcTransport {
             return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
         }
 
-        let card_guard = self.card.lock().unwrap();
+        let card_guard = self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))?;
         let card = card_guard.as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No card connected".to_string()))?;
 
@@ -217,8 +218,8 @@ impl Transport for NfcTransport {
     }
 
     async fn close(&mut self) -> Result<()> {
-        *self.card.lock().unwrap() = None;
-        *self.context.lock().unwrap() = None;
+        *self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))? = None;
+        *self.context.lock().map_err(|_| crate::error::Error::Transport("NFC context mutex poisoned".to_string()))? = None;
         self.connected = false;
         Ok(())
     }

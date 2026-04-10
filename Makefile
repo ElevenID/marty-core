@@ -10,7 +10,7 @@
 #   make docker-build  - Build development images
 #   make docker-shell  - Shell into dev container
 
-.PHONY: all test check fmt lint deny build clean dev ci
+.PHONY: all test check fmt lint deny build clean dev ci feature-combinations
 .PHONY: docker-build docker-shell docker-test docker-watch docker-clean
 .PHONY: conformance conformance-crypto conformance-iso18013 conformance-zkp
 .PHONY: conformance-verification conformance-oid4vci
@@ -157,8 +157,12 @@ docker-clean:
 # =============================================================================
 
 # Full CI pipeline (mirrors GitHub Actions)
-ci: fmt-check lint deny test
+ci: fmt-check lint deny test feature-combinations
 	@echo "✅ All CI checks passed!"
+
+# Run critical Cargo feature combinations
+feature-combinations:
+	bash ./scripts/test-feature-combinations.sh
 
 # CI with coverage
 ci-coverage: fmt-check lint deny coverage-text
@@ -196,6 +200,7 @@ help:
 	@echo "CI/Release:"
 	@echo "  make ci            Run full CI pipeline"
 	@echo "  make ci-coverage   CI with coverage report"
+	@echo "  make feature-combinations  Validate critical Cargo feature combinations"
 	@echo "  make release-check Prepare for release"
 	@echo ""
 	@echo "Other:"

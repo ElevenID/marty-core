@@ -245,3 +245,314 @@ pub struct LivenessChallenge {
     /// Enable accessibility adjustments
     pub accessibility_mode: bool,
 }
+
+// ========================================================================
+// Age estimation types
+// ========================================================================
+
+/// Result of age estimation from a face image
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgeEstimate {
+    /// Estimated age in years
+    pub estimated_age: u8,
+    /// Confidence of the estimate (0.0 - 1.0)
+    pub confidence: f32,
+    /// Predicted age range (lower, upper)
+    pub age_range: (u8, u8),
+}
+
+// ========================================================================
+// Face search (1:N) types
+// ========================================================================
+
+/// A single match result from a 1:N face search
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchMatch {
+    /// Index of the matched template in the gallery
+    pub index: usize,
+    /// Cosine similarity to the probe
+    pub similarity: f32,
+    /// Identifier of the matched template (caller-provided)
+    pub template_id: String,
+}
+
+// ========================================================================
+// Deepfake / presentation attack detection types
+// ========================================================================
+
+/// Classification of attack types
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AttackType {
+    /// Printed photo held to camera
+    Print,
+    /// Digital screen replay
+    Screen,
+    /// 3D silicone or rigid mask
+    Mask3D,
+    /// AI-generated face (deepfake)
+    Deepfake,
+    /// Real-time face swap overlay
+    FaceSwap,
+    /// Video/image injected into the capture pipeline (virtual camera, emulator)
+    Injection,
+}
+
+/// Result of deepfake / synthetic face analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeepfakeAnalysis {
+    /// Whether the image is classified as synthetic
+    pub is_synthetic: bool,
+    /// Confidence of the classification (0.0 - 1.0)
+    pub confidence: f32,
+    /// Detected attack type, if any
+    pub attack_type: Option<AttackType>,
+}
+
+/// ISO/IEC 30107-3 Presentation Attack Detection score
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PadScore {
+    /// Whether an attack was detected
+    pub attack_detected: bool,
+    /// Classified attack type, if any
+    pub attack_type: Option<AttackType>,
+    /// Detection confidence (0.0 - 1.0)
+    pub confidence: f32,
+}
+
+// ========================================================================
+// Passive liveness types
+// ========================================================================
+
+/// Result of passive (multi-frame) liveness analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PassiveLivenessResult {
+    /// Whether the subject is determined to be live
+    pub is_live: bool,
+    /// Liveness confidence (0.0 - 1.0)
+    pub confidence: f32,
+    /// PAD score breakdown
+    pub pad: Option<PadScore>,
+    /// Number of frames analyzed
+    pub frames_analyzed: u32,
+    /// Processing time in milliseconds
+    pub processing_time_ms: u64,
+}
+
+// ========================================================================
+// Extended provider capabilities
+// ========================================================================
+
+/// Extended capabilities advertised by biometric providers
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExtendedCapabilities {
+    /// Supports age estimation
+    pub supports_age_estimation: bool,
+    /// Supports passive liveness detection
+    pub supports_passive_liveness: bool,
+    /// Supports deepfake detection
+    pub supports_deepfake_detection: bool,
+    /// Supports 1:N face search
+    pub supports_search: bool,
+    /// Supports face-to-document matching
+    pub supports_document_match: bool,
+    /// Supports PAD scoring (ISO 30107-3)
+    pub supports_pad: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // FaceVerificationRequest
+    // ====================================================================
+
+    #[test]
+    fn test_face_verification_request_default() {
+        let req = FaceVerificationRequest::default();
+        assert!(req.reference_image.is_empty());
+        assert!(req.probe_image.is_empty());
+        assert!(req.threshold.is_none());
+        assert!(!req.allow_network_fallback);
+        assert!(!req.accessibility_mode);
+        assert!(!req.retain_audit_clip);
+    }
+
+    #[test]
+    fn test_face_verification_request_serialization() {
+        let req = FaceVerificationRequest {
+            reference_image: "base64ref".to_string(),
+            probe_image: "base64probe".to_string(),
+            threshold: Some(0.75),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: FaceVerificationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.reference_image, "base64ref");
+        assert_eq!(back.threshold, Some(0.75));
+    }
+
+    // ====================================================================
+    // FaceVerificationResult
+    // ====================================================================
+
+    #[test]
+    fn test_face_verification_result_serialization() {
+        let result = FaceVerificationResult {
+            verified: true,
+            similarity: 0.92,
+            threshold: 0.70,
+            reference_quality: Some(0.95),
+            probe_quality: Some(0.88),
+            processing_time_ms: 150,
+            provider: "mock".to_string(),
+            liveness: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: FaceVerificationResult = serde_json::from_str(&json).unwrap();
+        assert!(back.verified);
+        assert!((back.similarity - 0.92).abs() < f32::EPSILON);
+        assert_eq!(back.provider, "mock");
+    }
+
+    // ====================================================================
+    // FaceQualityAssessment
+    // ====================================================================
+
+    #[test]
+    fn test_face_quality_assessment() {
+        let assessment = FaceQualityAssessment {
+            overall_score: 0.85,
+            face_detected: true,
+            face_count: 1,
+            face_bounds: Some(FaceBounds {
+                x: 0.1,
+                y: 0.1,
+                width: 0.5,
+                height: 0.6,
+            }),
+            factors: FaceQualityFactors {
+                sharpness: 0.9,
+                brightness: 0.5,
+                contrast: 0.8,
+                face_size: 0.4,
+                pose: 0.95,
+            },
+        };
+        let json = serde_json::to_string(&assessment).unwrap();
+        let back: FaceQualityAssessment = serde_json::from_str(&json).unwrap();
+        assert!(back.face_detected);
+        assert_eq!(back.face_count, 1);
+        assert!((back.factors.sharpness - 0.9).abs() < f32::EPSILON);
+    }
+
+    // ====================================================================
+    // ProviderCapabilities
+    // ====================================================================
+
+    #[test]
+    fn test_provider_capabilities() {
+        let caps = ProviderCapabilities {
+            name: "MockProvider".to_string(),
+            version: "1.0.0".to_string(),
+            supports_verification: true,
+            supports_quality: true,
+            supports_templates: false,
+            supports_liveness: true,
+            offline_capable: true,
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        let back: ProviderCapabilities = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "MockProvider");
+        assert!(back.supports_verification);
+        assert!(!back.supports_templates);
+        assert!(back.offline_capable);
+    }
+
+    // ====================================================================
+    // LivenessMode
+    // ====================================================================
+
+    #[test]
+    fn test_liveness_mode_default() {
+        let mode = LivenessMode::default();
+        match mode {
+            LivenessMode::Unknown => {}
+            _ => panic!("default should be Unknown"),
+        }
+    }
+
+    #[test]
+    fn test_liveness_mode_serialization() {
+        let json = serde_json::to_string(&LivenessMode::OnDevice).unwrap();
+        let back: LivenessMode = serde_json::from_str(&json).unwrap();
+        match back {
+            LivenessMode::OnDevice => {}
+            _ => panic!("expected OnDevice"),
+        }
+    }
+
+    // ====================================================================
+    // LivenessChallenge
+    // ====================================================================
+
+    #[test]
+    fn test_liveness_challenge_serialization() {
+        let challenge = LivenessChallenge {
+            challenge_id: "ch-1".to_string(),
+            nonce: "random-nonce".to_string(),
+            session_id: "sess-1".to_string(),
+            steps: vec![LivenessStep {
+                step_id: "step-1".to_string(),
+                step_type: LivenessStepType::HeadPose,
+                prompt: Some("Turn left".to_string()),
+                pose_direction: Some("left".to_string()),
+                time_limit_ms: Some(3000),
+            }],
+            issued_at: "2026-03-29T00:00:00Z".to_string(),
+            expires_at: "2026-03-29T00:05:00Z".to_string(),
+            signature: "sig-data".to_string(),
+            preferred_mode: Some(LivenessMode::OnDevice),
+            allow_network_fallback: true,
+            accessibility_mode: false,
+        };
+
+        let json = serde_json::to_string(&challenge).unwrap();
+        let back: LivenessChallenge = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.challenge_id, "ch-1");
+        assert_eq!(back.steps.len(), 1);
+        assert_eq!(back.steps[0].pose_direction, Some("left".to_string()));
+        assert!(back.allow_network_fallback);
+    }
+
+    // ====================================================================
+    // LivenessStepType
+    // ====================================================================
+
+    #[test]
+    fn test_liveness_step_type_default() {
+        let step = LivenessStepType::default();
+        match step {
+            LivenessStepType::Unknown => {}
+            _ => panic!("default should be Unknown"),
+        }
+    }
+
+    // ====================================================================
+    // FaceTemplate
+    // ====================================================================
+
+    #[test]
+    fn test_face_template_serialization() {
+        let template = FaceTemplate {
+            data: "base64template".to_string(),
+            version: "v1".to_string(),
+            provider: "mock".to_string(),
+            quality_score: 0.88,
+        };
+        let json = serde_json::to_string(&template).unwrap();
+        let back: FaceTemplate = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.data, "base64template");
+        assert!((back.quality_score - 0.88).abs() < f32::EPSILON);
+    }
+}

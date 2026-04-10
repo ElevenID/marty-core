@@ -127,3 +127,83 @@ impl fmt::Display for Oid4vciErrorCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // Oid4vciError Display
+    // ====================================================================
+
+    #[test]
+    fn test_error_display_messages() {
+        let err = Oid4vciError::InvalidOffer("missing issuer".into());
+        assert_eq!(err.to_string(), "Invalid offer: missing issuer");
+
+        let err = Oid4vciError::ProofVerificationFailed("bad sig".into());
+        assert_eq!(err.to_string(), "Proof verification failed: bad sig");
+
+        let err = Oid4vciError::InvalidCNonce {
+            expected: "abc".into(),
+            got: "xyz".into(),
+        };
+        assert!(err.to_string().contains("abc"));
+        assert!(err.to_string().contains("xyz"));
+    }
+
+    #[test]
+    fn test_error_from_serde_json() {
+        let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let err: Oid4vciError = json_err.into();
+        match err {
+            Oid4vciError::SerializationError(msg) => assert!(!msg.is_empty()),
+            _ => panic!("expected SerializationError"),
+        }
+    }
+
+    #[test]
+    fn test_error_from_url_parse() {
+        let url_err = url::Url::parse("://bad").unwrap_err();
+        let err: Oid4vciError = url_err.into();
+        match err {
+            Oid4vciError::InvalidUrl(msg) => assert!(!msg.is_empty()),
+            _ => panic!("expected InvalidUrl"),
+        }
+    }
+
+    #[test]
+    fn test_error_from_base64_decode() {
+        use base64::Engine;
+        let b64_err = base64::engine::general_purpose::STANDARD
+            .decode("!!!invalid!!!")
+            .unwrap_err();
+        let err: Oid4vciError = b64_err.into();
+        match err {
+            Oid4vciError::JwtError(msg) => assert!(msg.contains("Base64")),
+            _ => panic!("expected JwtError"),
+        }
+    }
+
+    // ====================================================================
+    // Oid4vciErrorCode Display
+    // ====================================================================
+
+    #[test]
+    fn test_error_code_display() {
+        assert_eq!(Oid4vciErrorCode::UnsupportedGrantType.to_string(), "unsupported_grant_type");
+        assert_eq!(Oid4vciErrorCode::InvalidGrant.to_string(), "invalid_grant");
+        assert_eq!(Oid4vciErrorCode::InvalidToken.to_string(), "invalid_token");
+        assert_eq!(Oid4vciErrorCode::InvalidCredentialRequest.to_string(), "invalid_credential_request");
+        assert_eq!(Oid4vciErrorCode::UnsupportedCredentialType.to_string(), "unsupported_credential_type");
+        assert_eq!(Oid4vciErrorCode::UnsupportedCredentialFormat.to_string(), "unsupported_credential_format");
+        assert_eq!(Oid4vciErrorCode::InvalidProof.to_string(), "invalid_proof");
+        assert_eq!(Oid4vciErrorCode::CNonceExpired.to_string(), "c_nonce_expired");
+    }
+
+    #[test]
+    fn test_error_code_equality() {
+        assert_eq!(Oid4vciErrorCode::InvalidGrant, Oid4vciErrorCode::InvalidGrant);
+        assert_ne!(Oid4vciErrorCode::InvalidGrant, Oid4vciErrorCode::InvalidToken);
+    }
+}

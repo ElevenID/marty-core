@@ -1,7 +1,5 @@
 //! Biometric provider implementations
 
-use std::time::Instant;
-
 use crate::error::BiometricError;
 use crate::traits::FaceVerifier;
 use crate::types::*;
@@ -12,6 +10,9 @@ pub enum BiometricProvider {
     Local(LocalProvider),
     /// Mock provider for testing
     Mock(MockProvider),
+    /// ONNX Runtime provider (SCRFD + ArcFace + age + liveness + deepfake)
+    #[cfg(feature = "onnx")]
+    Onnx(crate::onnx::OnnxProvider),
     // Future: SITA, NEC, Idemia integrations
 }
 
@@ -25,6 +26,12 @@ impl BiometricProvider {
     pub fn mock() -> Self {
         Self::Mock(MockProvider::new())
     }
+
+    /// Create ONNX provider with models from the given directory
+    #[cfg(feature = "onnx")]
+    pub fn onnx(models_dir: impl AsRef<std::path::Path>) -> Result<Self, BiometricError> {
+        Ok(Self::Onnx(crate::onnx::OnnxProvider::new(models_dir)?))
+    }
 }
 
 // Implement FaceVerifier directly on BiometricProvider
@@ -33,6 +40,17 @@ impl FaceVerifier for BiometricProvider {
         match self {
             BiometricProvider::Local(p) => p.capabilities(),
             BiometricProvider::Mock(p) => p.capabilities(),
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.capabilities(),
+        }
+    }
+
+    fn extended_capabilities(&self) -> ExtendedCapabilities {
+        match self {
+            BiometricProvider::Local(p) => p.extended_capabilities(),
+            BiometricProvider::Mock(p) => p.extended_capabilities(),
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.extended_capabilities(),
         }
     }
 
@@ -43,6 +61,8 @@ impl FaceVerifier for BiometricProvider {
         match self {
             BiometricProvider::Local(p) => p.verify(request).await,
             BiometricProvider::Mock(p) => p.verify(request).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.verify(request).await,
         }
     }
 
@@ -50,6 +70,8 @@ impl FaceVerifier for BiometricProvider {
         match self {
             BiometricProvider::Local(p) => p.assess_quality(image).await,
             BiometricProvider::Mock(p) => p.assess_quality(image).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.assess_quality(image).await,
         }
     }
 
@@ -57,6 +79,8 @@ impl FaceVerifier for BiometricProvider {
         match self {
             BiometricProvider::Local(p) => p.extract_template(image).await,
             BiometricProvider::Mock(p) => p.extract_template(image).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.extract_template(image).await,
         }
     }
 
@@ -68,38 +92,221 @@ impl FaceVerifier for BiometricProvider {
         match self {
             BiometricProvider::Local(p) => p.compare_templates(reference, probe).await,
             BiometricProvider::Mock(p) => p.compare_templates(reference, probe).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.compare_templates(reference, probe).await,
+        }
+    }
+
+    async fn estimate_age(&self, image: &str) -> Result<AgeEstimate, BiometricError> {
+        match self {
+            BiometricProvider::Local(p) => p.estimate_age(image).await,
+            BiometricProvider::Mock(p) => p.estimate_age(image).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.estimate_age(image).await,
+        }
+    }
+
+    async fn detect_passive_liveness(
+        &self,
+        frames: &[String],
+    ) -> Result<PassiveLivenessResult, BiometricError> {
+        match self {
+            BiometricProvider::Local(p) => p.detect_passive_liveness(frames).await,
+            BiometricProvider::Mock(p) => p.detect_passive_liveness(frames).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.detect_passive_liveness(frames).await,
+        }
+    }
+
+    async fn detect_deepfake(&self, image: &str) -> Result<DeepfakeAnalysis, BiometricError> {
+        match self {
+            BiometricProvider::Local(p) => p.detect_deepfake(image).await,
+            BiometricProvider::Mock(p) => p.detect_deepfake(image).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.detect_deepfake(image).await,
+        }
+    }
+
+    async fn search(
+        &self,
+        probe: &FaceTemplate,
+        gallery: &[FaceTemplate],
+        top_k: usize,
+    ) -> Result<Vec<SearchMatch>, BiometricError> {
+        match self {
+            BiometricProvider::Local(p) => p.search(probe, gallery, top_k).await,
+            BiometricProvider::Mock(p) => p.search(probe, gallery, top_k).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.search(probe, gallery, top_k).await,
+        }
+    }
+
+    async fn match_face_to_document(
+        &self,
+        selfie: &str,
+        document_photo: &str,
+    ) -> Result<FaceVerificationResult, BiometricError> {
+        match self {
+            BiometricProvider::Local(p) => p.match_face_to_document(selfie, document_photo).await,
+            BiometricProvider::Mock(p) => p.match_face_to_document(selfie, document_photo).await,
+            #[cfg(feature = "onnx")]
+            BiometricProvider::Onnx(p) => p.match_face_to_document(selfie, document_photo).await,
         }
     }
 }
 
 /// Local face verification provider
 ///
-/// This is a placeholder that will be implemented with OpenCV/dlib
-/// for offline facial verification capability.
+/// When built with the `onnx` feature, delegates to [`OnnxProvider`] for real
+/// on-device inference using SCRFD + ArcFace models.  Without `onnx`, all
+/// methods return [`BiometricError::NotSupported`].
 pub struct LocalProvider {
+    #[cfg_attr(not(feature = "onnx"), allow(dead_code))]
     threshold: f32,
+    #[cfg(feature = "onnx")]
+    onnx: crate::onnx::OnnxProvider,
 }
 
 impl LocalProvider {
-    /// Create a new local provider with default threshold
+    /// Create a new local provider with default threshold.
+    ///
+    /// When the `onnx` feature is enabled, `models_dir` points to the
+    /// directory containing ONNX model files.  Without `onnx`, the path
+    /// is ignored.
+    #[cfg(feature = "onnx")]
+    pub fn new() -> Result<Self, BiometricError> {
+        // Default models path – caller can use with_models_dir for custom path
+        Err(BiometricError::ProviderError(
+            "LocalProvider requires a models directory when using ONNX backend. \
+             Use LocalProvider::with_models_dir(path) instead."
+                .to_string(),
+        ))
+    }
+
+    /// Create a new local provider without ONNX (stub).
+    #[cfg(not(feature = "onnx"))]
     pub fn new() -> Result<Self, BiometricError> {
         Ok(Self { threshold: 0.7 })
     }
 
-    /// Create a new local provider with custom threshold
+    /// Create a local provider pointing at a directory of ONNX models.
+    #[cfg(feature = "onnx")]
+    pub fn with_models_dir(
+        models_dir: impl AsRef<std::path::Path>,
+    ) -> Result<Self, BiometricError> {
+        let onnx = crate::onnx::OnnxProvider::new(models_dir)?;
+        Ok(Self {
+            threshold: 0.7,
+            onnx,
+        })
+    }
+
+    /// Create a new local provider with custom threshold (non-ONNX stub).
+    #[cfg(not(feature = "onnx"))]
     pub fn with_threshold(threshold: f32) -> Result<Self, BiometricError> {
         Ok(Self { threshold })
     }
+
+    /// Create a new local provider with custom threshold + ONNX models dir.
+    #[cfg(feature = "onnx")]
+    pub fn with_threshold_and_models(
+        threshold: f32,
+        models_dir: impl AsRef<std::path::Path>,
+    ) -> Result<Self, BiometricError> {
+        let onnx = crate::onnx::OnnxProvider::new(models_dir)?;
+        Ok(Self { threshold, onnx })
+    }
 }
 
+// ── ONNX-backed LocalProvider ──────────────────────────────────────────
+#[cfg(feature = "onnx")]
+impl FaceVerifier for LocalProvider {
+    fn capabilities(&self) -> ProviderCapabilities {
+        let mut caps = self.onnx.capabilities();
+        caps.name = "marty-local".to_string();
+        caps
+    }
+
+    fn extended_capabilities(&self) -> ExtendedCapabilities {
+        self.onnx.extended_capabilities()
+    }
+
+    async fn verify(
+        &self,
+        mut request: FaceVerificationRequest,
+    ) -> Result<FaceVerificationResult, BiometricError> {
+        if request.threshold.is_none() {
+            request.threshold = Some(self.threshold);
+        }
+        let mut result = self.onnx.verify(request).await?;
+        result.provider = "marty-local".to_string();
+        Ok(result)
+    }
+
+    async fn assess_quality(&self, image: &str) -> Result<FaceQualityAssessment, BiometricError> {
+        self.onnx.assess_quality(image).await
+    }
+
+    async fn extract_template(&self, image: &str) -> Result<FaceTemplate, BiometricError> {
+        self.onnx.extract_template(image).await
+    }
+
+    async fn compare_templates(
+        &self,
+        reference: &FaceTemplate,
+        probe: &FaceTemplate,
+    ) -> Result<f32, BiometricError> {
+        self.onnx.compare_templates(reference, probe).await
+    }
+
+    async fn estimate_age(&self, image: &str) -> Result<AgeEstimate, BiometricError> {
+        self.onnx.estimate_age(image).await
+    }
+
+    async fn detect_passive_liveness(
+        &self,
+        frames: &[String],
+    ) -> Result<PassiveLivenessResult, BiometricError> {
+        self.onnx.detect_passive_liveness(frames).await
+    }
+
+    async fn detect_deepfake(&self, image: &str) -> Result<DeepfakeAnalysis, BiometricError> {
+        self.onnx.detect_deepfake(image).await
+    }
+
+    async fn search(
+        &self,
+        probe: &FaceTemplate,
+        gallery: &[FaceTemplate],
+        top_k: usize,
+    ) -> Result<Vec<SearchMatch>, BiometricError> {
+        self.onnx.search(probe, gallery, top_k).await
+    }
+
+    async fn match_face_to_document(
+        &self,
+        selfie: &str,
+        document_photo: &str,
+    ) -> Result<FaceVerificationResult, BiometricError> {
+        let mut result = self
+            .onnx
+            .match_face_to_document(selfie, document_photo)
+            .await?;
+        result.provider = "marty-local".to_string();
+        Ok(result)
+    }
+}
+
+// ── Non-ONNX stub LocalProvider ────────────────────────────────────────
+#[cfg(not(feature = "onnx"))]
 impl FaceVerifier for LocalProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
             name: "marty-local".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            supports_verification: true,
-            supports_quality: true,
-            supports_templates: true,
+            supports_verification: false,
+            supports_quality: false,
+            supports_templates: false,
             supports_liveness: false,
             offline_capable: true,
         }
@@ -107,61 +314,22 @@ impl FaceVerifier for LocalProvider {
 
     async fn verify(
         &self,
-        request: FaceVerificationRequest,
+        _request: FaceVerificationRequest,
     ) -> Result<FaceVerificationResult, BiometricError> {
-        let start = Instant::now();
-        let threshold = request.threshold.unwrap_or(self.threshold);
-
-        // TODO: Implement actual face verification using OpenCV/dlib
-        // For now, return a placeholder result
-        #[cfg(feature = "tracing")]
-        tracing::warn!("Local face verification not implemented - returning mock result");
-
-        // Placeholder: check if images are non-empty
-        if request.reference_image.is_empty() || request.probe_image.is_empty() {
-            return Err(BiometricError::FaceNotDetected);
-        }
-
-        let similarity = 0.85; // Placeholder
-
-        Ok(FaceVerificationResult {
-            verified: similarity >= threshold,
-            similarity,
-            threshold,
-            reference_quality: Some(0.9),
-            probe_quality: Some(0.85),
-            processing_time_ms: start.elapsed().as_millis() as u64,
-            provider: "marty-local".to_string(),
-            liveness: None,
-        })
+        Err(BiometricError::NotSupported(
+            "Local verification requires the 'onnx' feature".to_string(),
+        ))
     }
 
     async fn assess_quality(&self, _image: &str) -> Result<FaceQualityAssessment, BiometricError> {
-        // TODO: Implement quality assessment
-        Ok(FaceQualityAssessment {
-            overall_score: 0.85,
-            face_detected: true,
-            face_count: 1,
-            face_bounds: Some(FaceBounds {
-                x: 0.2,
-                y: 0.1,
-                width: 0.6,
-                height: 0.8,
-            }),
-            factors: FaceQualityFactors {
-                sharpness: 0.9,
-                brightness: 0.5,
-                contrast: 0.8,
-                face_size: 0.7,
-                pose: 0.95,
-            },
-        })
+        Err(BiometricError::NotSupported(
+            "Local quality assessment requires the 'onnx' feature".to_string(),
+        ))
     }
 
     async fn extract_template(&self, _image: &str) -> Result<FaceTemplate, BiometricError> {
-        // TODO: Implement template extraction
-        Err(BiometricError::TemplateExtraction(
-            "Not implemented".to_string(),
+        Err(BiometricError::NotSupported(
+            "Local template extraction requires the 'onnx' feature".to_string(),
         ))
     }
 
@@ -170,9 +338,8 @@ impl FaceVerifier for LocalProvider {
         _reference: &FaceTemplate,
         _probe: &FaceTemplate,
     ) -> Result<f32, BiometricError> {
-        // TODO: Implement template comparison
-        Err(BiometricError::TemplateExtraction(
-            "Not implemented".to_string(),
+        Err(BiometricError::NotSupported(
+            "Local template comparison requires the 'onnx' feature".to_string(),
         ))
     }
 }
@@ -369,19 +536,55 @@ mod tests {
         assert_eq!(caps.name, "mock");
     }
 
-    #[test]
-    fn test_local_provider_new() {
-        let provider = LocalProvider::new().unwrap();
-        assert_eq!(provider.threshold, 0.7);
+    // Without the `onnx` feature LocalProvider is a stub that returns
+    // NotSupported for all operations.
+    #[cfg(not(feature = "onnx"))]
+    mod local_stub_tests {
+        use super::*;
+
+        #[test]
+        fn test_local_provider_new() {
+            let provider = LocalProvider::new().unwrap();
+            assert_eq!(provider.threshold, 0.7);
+        }
+
+        #[test]
+        fn test_local_provider_capabilities() {
+            let provider = LocalProvider::new().unwrap();
+            let caps = provider.capabilities();
+
+            assert_eq!(caps.name, "marty-local");
+            assert!(!caps.supports_verification);
+            assert!(caps.offline_capable);
+        }
+
+        #[tokio::test]
+        async fn test_local_provider_verify_not_supported() {
+            let provider = LocalProvider::new().unwrap();
+            let result = provider
+                .verify(FaceVerificationRequest::default())
+                .await;
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn test_local_provider_quality_not_supported() {
+            let provider = LocalProvider::new().unwrap();
+            let result = provider.assess_quality("img").await;
+            assert!(result.is_err());
+        }
     }
 
-    #[test]
-    fn test_local_provider_capabilities() {
-        let provider = LocalProvider::new().unwrap();
-        let caps = provider.capabilities();
+    // With `onnx` feature, LocalProvider::new() requires a models dir,
+    // so it should return an error.
+    #[cfg(feature = "onnx")]
+    mod local_onnx_tests {
+        use super::*;
 
-        assert_eq!(caps.name, "marty-local");
-        assert!(caps.supports_verification);
-        assert!(caps.offline_capable);
+        #[test]
+        fn test_local_provider_new_requires_models_dir() {
+            let result = LocalProvider::new();
+            assert!(result.is_err());
+        }
     }
 }

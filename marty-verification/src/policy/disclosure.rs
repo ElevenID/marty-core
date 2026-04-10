@@ -105,3 +105,200 @@ impl MinimumDisclosureSet {
         self.missing_required.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::types::*;
+    use std::collections::HashMap;
+
+    fn make_policy(
+        required: Vec<RequiredClaim>,
+        derived: HashMap<String, String>,
+    ) -> PresentationPolicy {
+        PresentationPolicy {
+            id: "test-policy".to_string(),
+            name: "Test".to_string(),
+            description: None,
+            purpose: "testing".to_string(),
+            accepted_credential_types: vec![],
+            required_claims: required,
+            holder_binding: HolderBindingMethod::None,
+            trust_profile_id: None,
+            allowed_issuers: vec![],
+            freshness_requirements: FreshnessRequirements::default(),
+            prefer_predicates: false,
+            single_presentation: false,
+            derived_attribute_preferences: derived,
+            credential_ranking_strategy: CredentialRankingStrategy::FreshestFirst,
+            credential_ranking_weights: HashMap::new(),
+            metadata: HashMap::new(),
+            version: 1,
+        }
+    }
+
+    fn required(name: &str) -> RequiredClaim {
+        RequiredClaim {
+            claim_name: name.to_string(),
+            credential_type: "TestCredential".to_string(),
+            accept_predicate: false,
+            required_value: None,
+        }
+    }
+
+    // ====================================================================
+    // resolve()
+    // ====================================================================
+
+    #[test]
+    fn test_resolve_empty_policy() {
+        let policy = make_policy(vec![], HashMap::new());
+        let resolver = MinimumDisclosureResolver::new(&policy);
+        let result = resolver.resolve(&["name".to_string()]);
+        assert!(result.is_complete());
+        assert!(result.claims.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_all_required_present() {
+        let policy = make_policy(
+            vec![required("name"), required("birth_date")],
+            HashMap::new(),
+        );
+        let resolver = MinimumDisclosureResolver::new(&policy);
+        let available = vec![
+            "name".to_string(),
+            "birth_date".to_string(),
+            "address".to_string(), // extra — should not be selected
+        ];
+        let result = resolver.resolve(&available);
+        assert!(result.is_complete());
+        assert_eq!(result.claims.len(), 2);
+        assert!(result.claims.contains(&"name".to_string()));
+        assert!(result.claims.contains(&"birth_date".to_string()));
+        // "address" is NOT in minimum set
+        assert!(!result.claims.contains(&"address".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_missing_required() {
+        let policy = make_policy(
+            vec![required("name"), required("ssn")],
+            HashMap::new(),
+        );
+        let resolver = MinimumDisclosureResolver::new(&policy);
+        let available = vec!["name".to_string()];
+        let result = resolver.resolve(&available);
+        assert!(!result.is_complete());
+        assert_eq!(result.missing_required, vec!["ssn"]);
+    }
+
+    #[test]
+    fn test_resolve_prefers_derived_attribute() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_21".to_string());
+
+        let policy = make_policy(vec![required("birth_date")], derived);
+        let resolver = MinimumDisclosureResolver::new(&policy);
+
+        let available = vec![
+            "birth_date".to_string(),
+            "age_over_21".to_string(),
+        ];
+        let result = resolver.resolve(&available);
+        assert!(result.is_complete());
+        // Should pick derived over raw
+        assert!(result.claims.contains(&"age_over_21".to_string()));
+        assert!(!result.claims.contains(&"birth_date".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_derived_not_available_falls_back() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_21".to_string());
+
+        let policy = make_policy(vec![required("birth_date")], derived);
+        let resolver = MinimumDisclosureResolver::new(&policy);
+
+        let available = vec!["birth_date".to_string()];
+        let result = resolver.resolve(&available);
+        assert!(result.is_complete());
+        assert!(result.claims.contains(&"birth_date".to_string()));
+    }
+
+    // ====================================================================
+    // get_preferred_disclosure()
+    // ====================================================================
+
+    #[test]
+    fn test_preferred_disclosure_required_only() {
+        let policy = make_policy(
+            vec![required("name"), required("birth_date")],
+            HashMap::new(),
+        );
+        let resolver = MinimumDisclosureResolver::new(&policy);
+
+        let available = vec![
+            "name".to_string(),
+            "birth_date".to_string(),
+            "address".to_string(),
+        ];
+        // include_optional = false → only required claims
+        let result = resolver.get_preferred_disclosure(&available, false);
+        assert!(result.contains(&"name".to_string()));
+        assert!(result.contains(&"birth_date".to_string()));
+        assert!(!result.contains(&"address".to_string()));
+    }
+
+    #[test]
+    fn test_preferred_disclosure_include_optional() {
+        let policy = make_policy(
+            vec![required("name")],
+            HashMap::new(),
+        );
+        let resolver = MinimumDisclosureResolver::new(&policy);
+
+        let available = vec!["name".to_string(), "address".to_string()];
+        let result = resolver.get_preferred_disclosure(&available, true);
+        assert!(result.contains(&"name".to_string()));
+        assert!(result.contains(&"address".to_string()));
+    }
+
+    #[test]
+    fn test_preferred_disclosure_uses_derived() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_18".to_string());
+
+        let policy = make_policy(vec![required("birth_date")], derived);
+        let resolver = MinimumDisclosureResolver::new(&policy);
+
+        let available = vec![
+            "birth_date".to_string(),
+            "age_over_18".to_string(),
+        ];
+        let result = resolver.get_preferred_disclosure(&available, false);
+        assert!(result.contains(&"age_over_18".to_string()));
+    }
+
+    // ====================================================================
+    // MinimumDisclosureSet
+    // ====================================================================
+
+    #[test]
+    fn test_disclosure_set_is_complete() {
+        let set = MinimumDisclosureSet {
+            claims: vec!["name".to_string()],
+            missing_required: vec![],
+        };
+        assert!(set.is_complete());
+    }
+
+    #[test]
+    fn test_disclosure_set_incomplete() {
+        let set = MinimumDisclosureSet {
+            claims: vec![],
+            missing_required: vec!["ssn".to_string()],
+        };
+        assert!(!set.is_complete());
+    }
+}

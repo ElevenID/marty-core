@@ -151,6 +151,7 @@ jobs:
         crate:
           - marty-crypto
           - marty-secure-storage
+          - marty-bindings
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -176,6 +177,37 @@ jobs:
 
       - name: Run tests with fixtures
         run: cargo test -p marty-verification --features test-fixtures
+
+  feature-matrix-oid4vci:
+    name: Feature Matrix (marty-oid4vci)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check no default features
+        run: cargo check -p marty-oid4vci --no-default-features
+
+      - name: Test default features
+        run: cargo test -p marty-oid4vci
+
+      - name: Check issuer role alone
+        run: cargo check -p marty-oid4vci --no-default-features --features issuer
+
+      - name: Check verifier role alone
+        run: cargo check -p marty-oid4vci --no-default-features --features verifier
+
+  feature-combinations:
+    name: Feature Combinations
+    runs-on: ubuntu-latest
+    env:
+      MATRIX_CARGO_TARGET_DIR: target/feature-matrix
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run critical feature combinations
+        run: bash ./scripts/test-feature-combinations.sh
 
   python-test:
     name: Python Tests (marty-biometrics)

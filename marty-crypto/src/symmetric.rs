@@ -3,7 +3,7 @@
 // Suppress deprecated warning from aes-gcm crate using older generic-array version
 #![allow(deprecated)]
 
-use aes::Aes128;
+use aes::{Aes128, Aes256};
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes128Gcm, Aes256Gcm, Nonce as GcmNonce,
@@ -348,6 +348,71 @@ pub fn aes_128_cbc_decrypt_nopad(
 }
 
 // ============================================================================
+// AES-256-CBC (Used in EAC secure messaging)
+// ============================================================================
+
+type Aes256CbcEnc = Encryptor<Aes256>;
+type Aes256CbcDec = Decryptor<Aes256>;
+
+/// Encrypt data using AES-256-CBC with PKCS7 padding.
+pub fn aes_256_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> CryptoResult<Vec<u8>> {
+    if key.len() != 32 {
+        return Err(CryptoError::internal(
+            "AES-256-CBC requires 32-byte key".to_string(),
+        ));
+    }
+    if iv.len() != 16 {
+        return Err(CryptoError::internal(
+            "AES-CBC requires 16-byte IV".to_string(),
+        ));
+    }
+
+    let cipher = Aes256CbcEnc::new_from_slices(key, iv)
+        .map_err(|e| CryptoError::internal(format!("AES key/IV error: {}", e)))?;
+
+    let padding_len = 16 - (plaintext.len() % 16);
+    let mut buffer = vec![0u8; plaintext.len() + padding_len];
+    buffer[..plaintext.len()].copy_from_slice(plaintext);
+
+    let ciphertext = cipher
+        .encrypt_padded_mut::<Pkcs7>(&mut buffer, plaintext.len())
+        .map_err(|e| CryptoError::internal(format!("AES-256-CBC encryption failed: {}", e)))?;
+
+    Ok(ciphertext.to_vec())
+}
+
+/// Decrypt data using AES-256-CBC with PKCS7 padding.
+pub fn aes_256_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoResult<Vec<u8>> {
+    if key.len() != 32 {
+        return Err(CryptoError::internal(
+            "AES-256-CBC requires 32-byte key".to_string(),
+        ));
+    }
+    if iv.len() != 16 {
+        return Err(CryptoError::internal(
+            "AES-CBC requires 16-byte IV".to_string(),
+        ));
+    }
+    if ciphertext.len() % 16 != 0 {
+        return Err(CryptoError::internal(
+            "AES-CBC ciphertext must be multiple of 16 bytes".to_string(),
+        ));
+    }
+
+    let cipher = Aes256CbcDec::new_from_slices(key, iv)
+        .map_err(|e| CryptoError::internal(format!("AES key/IV error: {}", e)))?;
+
+    let mut buffer = ciphertext.to_vec();
+    let plaintext = cipher
+        .decrypt_padded_mut::<Pkcs7>(&mut buffer)
+        .map_err(|_| {
+            CryptoError::internal("AES-256-CBC decryption failed: invalid padding".to_string())
+        })?;
+
+    Ok(plaintext.to_vec())
+}
+
+// ============================================================================
 // CMAC (for Secure Messaging)
 // ============================================================================
 
@@ -365,6 +430,26 @@ pub fn aes_128_cmac(key: &[u8], data: &[u8]) -> CryptoResult<Vec<u8>> {
 
     let mut mac = <Cmac<Aes128> as Mac>::new_from_slice(key)
         .map_err(|e| CryptoError::internal(format!("CMAC key error: {}", e)))?;
+
+    mac.update(data);
+    let result = mac.finalize();
+
+    Ok(result.into_bytes().to_vec())
+}
+
+// ============================================================================
+// HMAC-SHA256 (for EAC secure messaging MAC)
+// ============================================================================
+
+/// Compute HMAC-SHA256.
+///
+/// Used in EAC secure messaging for message authentication.
+pub fn hmac_sha256(key: &[u8], data: &[u8]) -> CryptoResult<Vec<u8>> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
+        .map_err(|e| CryptoError::internal(format!("HMAC key error: {}", e)))?;
 
     mac.update(data);
     let result = mac.finalize();

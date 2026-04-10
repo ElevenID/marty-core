@@ -51,6 +51,7 @@ pub mod formats;
 pub mod issuer;
 pub mod metadata;
 pub mod proof;
+pub mod signer;
 pub mod types;
 pub mod verifier;
 
@@ -59,6 +60,7 @@ pub mod wallet;
 
 pub use error::{Oid4vciError, Oid4vciResult};
 pub use issuer::{generate_pkce_challenge_s256, verify_pkce_s256, IssuanceEngine};
+pub use signer::CredentialSigner;
 pub use types::{
     AuthorizationCodeGrant, AuthorizationCodeTokenRequest, AuthorizationDetail,
     AuthorizationRequest, AuthorizationResponse, AuthorizationSession, CodeChallengeMethod,

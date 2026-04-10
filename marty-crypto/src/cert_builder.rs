@@ -37,12 +37,12 @@
 //! ```
 
 use der::{Decode, Encode};
-use ed25519_dalek::{Signer as Ed25519SignerTrait, SigningKey as Ed25519SigningKey};
+use ed25519_dalek::{SigningKey as Ed25519SigningKey};
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p256::pkcs8::EncodePrivateKey;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use signature::Keypair; // Import for verifying_key() method
 use spki::SubjectPublicKeyInfoOwned;
 use x509_cert::{
@@ -436,7 +436,6 @@ impl CertificateBuilderConfig {
             return true;
         }
         // Try P-384
-        use p384::pkcs8::DecodePrivateKey as _;
         if p384::ecdsa::SigningKey::from_pkcs8_pem(pem).is_ok() {
             return true;
         }
@@ -1198,7 +1197,7 @@ impl CertificateBuilderConfig {
 
     fn map_profile_to_x509_profile(&self, issuer_name: &Name) -> Profile {
         match &self.profile {
-            CertProfile::Ca { path_length } => {
+            CertProfile::Ca { path_length: _ } => {
                 // Self-signed CA uses Root profile
                 Profile::Root
             }
@@ -1274,7 +1273,6 @@ struct EcdsaP256Signer(P256SigningKey);
 
 impl signature::Signer<P256SignatureWrapper> for EcdsaP256Signer {
     fn try_sign(&self, msg: &[u8]) -> Result<P256SignatureWrapper, signature::Error> {
-        use p256::ecdsa::signature::Signer;
         let sig: p256::ecdsa::DerSignature = self.0.try_sign(msg)?;
         Ok(P256SignatureWrapper(sig))
     }
@@ -1349,7 +1347,6 @@ struct EcdsaP384Signer(p384::ecdsa::SigningKey);
 
 impl signature::Signer<P384SignatureWrapper> for EcdsaP384Signer {
     fn try_sign(&self, msg: &[u8]) -> Result<P384SignatureWrapper, signature::Error> {
-        use p384::ecdsa::signature::Signer;
         let sig: p384::ecdsa::DerSignature = self.0.try_sign(msg)?;
         Ok(P384SignatureWrapper(sig))
     }
@@ -1457,7 +1454,6 @@ impl RsaSha256Signer {
 impl signature::Signer<RsaSignatureWrapper> for RsaSha256Signer {
     fn try_sign(&self, msg: &[u8]) -> Result<RsaSignatureWrapper, signature::Error> {
         use rsa::pkcs1v15::SigningKey;
-        use rsa::signature::Signer;
 
         let signing_key = SigningKey::<Sha256>::new(self.private_key.clone());
         let sig = signing_key.try_sign(msg)?;
@@ -1986,6 +1982,7 @@ impl CsrBuilderConfig {
             .map_err(|e| CryptoError::internal(format!("Failed to parse name: {}", e)))
     }
 
+    #[allow(dead_code)]
     fn build_ecdsa_p256_spki(
         &self,
         public_key_bytes: &[u8],
@@ -2021,6 +2018,7 @@ impl CsrBuilderConfig {
         })
     }
 
+    #[allow(dead_code)]
     fn build_ecdsa_p384_spki(
         &self,
         public_key_bytes: &[u8],
@@ -2056,6 +2054,7 @@ impl CsrBuilderConfig {
         })
     }
 
+    #[allow(dead_code)]
     fn build_ed25519_spki(
         &self,
         public_key_bytes: &[u8],

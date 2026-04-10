@@ -1,0 +1,56 @@
+[package]
+name = "marty-didcomm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "DIDComm v2 messaging support for Marty digital identity platform"
+keywords = ["didcomm", "did", "verifiable-credentials", "messaging"]
+categories = ["authentication", "cryptography"]
+
+[lib]
+name = "marty_didcomm"
+crate-type = ["rlib"]
+
+[features]
+default = ["did_key", "did_web", "did_peer", "did_jwk"]
+did_key = []
+did_web = ["dep:reqwest", "dep:tokio"]
+did_peer = []
+did_jwk = []
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Crypto — key agreement + signing for DIDComm envelopes
+x25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true }
+p256 = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+
+# JOSE — JWE / JWS construction
+jsonwebtoken = "9.3"
+aes-gcm = { workspace = true }
+aes = { workspace = true }
+
+# DID document parsing + resolution
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = "2.5"
+bs58 = "0.5"
+urlencoding = "2.1"
+
+# HTTP client for did:web resolution (optional)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

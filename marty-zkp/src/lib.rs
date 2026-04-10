@@ -32,6 +32,15 @@ pub enum ZkPredicate {
     /// Escape hatch for forward-compatible / custom predicates carried as a
     /// wire-format predicate identifier string.
     Custom(String),
+    /// Sentinel for the Longfellow `pk_circuit` key-ownership proof.
+    ///
+    /// **NOT SUPPORTED WITH HSM/KMS KEY MANAGEMENT.**
+    ///
+    /// `pk_circuit` requires every bit of the raw private scalar `sk` for its
+    /// double-and-add loop. No HSM exposes this. There is no compatible shim.
+    /// This variant is recognised by [`ZkPredicate::from_id`] and causes
+    /// [`Prover::prove_key_ownership`] to return [`ZkError::HsmIncompatible`].
+    KeyOwnership,
 }
 
 impl ZkPredicate {
@@ -48,6 +57,11 @@ impl ZkPredicate {
         }
         match id {
             "membership" => Self::Membership,
+            // Explicitly catch known key-ownership identifiers and map them to
+            // the unsupported sentinel. Callers that check the returned variant
+            // before dispatching will see ZkPredicate::KeyOwnership and can
+            // surface a clear error rather than falling into the Custom path.
+            "key_ownership" | "prove_key" | "ecpk" | "pk_prove" => Self::KeyOwnership,
             other => Self::Custom(other.to_string()),
         }
     }
@@ -59,6 +73,7 @@ impl ZkPredicate {
             Self::ValueInRange { min, max } => format!("value_in_range_{}_{}", min, max),
             Self::Membership => "membership".to_string(),
             Self::Custom(s) => s.clone(),
+            Self::KeyOwnership => "key_ownership".to_string(),
         }
     }
 
@@ -69,6 +84,7 @@ impl ZkPredicate {
             Self::ValueInRange { min, max } => format!("Proves value is between {} and {}", min, max),
             Self::Membership => "Proves value is a member of an authorized set".to_string(),
             Self::Custom(s) => format!("Custom predicate: {}", s),
+            Self::KeyOwnership => "NOT SUPPORTED: key-ownership proof requires raw scalar (HSM-incompatible)".to_string(),
         }
     }
 
@@ -80,7 +96,15 @@ impl ZkPredicate {
             Self::ValueInRange { .. } => "value",
             Self::Membership => "value",
             Self::Custom(_) => "value",
+            Self::KeyOwnership => "key_ownership",
         }
+    }
+
+    /// Returns true if this predicate can be run with an HSM-backed device key.
+    /// Use this before constructing a [`MdocProveInput`] to catch incompatible
+    /// predicates early.
+    pub fn is_hsm_compatible(&self) -> bool {
+        !matches!(self, Self::KeyOwnership)
     }
 }
 
@@ -102,6 +126,26 @@ pub enum ZkError {
     VerificationFailed,
     #[error("Unsupported predicate: {0}")]
     UnsupportedPredicate(String),
+    /// Returned when a caller attempts to use a ZK circuit that requires direct
+    /// access to the raw private key scalar, which is fundamentally incompatible
+    /// with HSM/KMS key management.
+    ///
+    /// Specifically, the Longfellow `pk_circuit` / `PkWitness::compute_witness(Nat sk)`
+    /// performs a bit-by-bit double-and-add scalar multiplication and needs every
+    /// individual bit of `sk`. No standard HSM (PKCS#11, AWS KMS, Cloud KMS) can
+    /// expose this — they treat the scalar as opaque.
+    ///
+    /// There is no shim that makes `pk_circuit` HSM-compatible without redesigning
+    /// it as a sigma-protocol signature-verification proof (i.e. `VerifyWitness3`).
+    /// Note: `pk_circuit` is NOT exported through the public Longfellow C API
+    /// (`mdoc_zk.h`) and is therefore unreachable from this crate under normal
+    /// operation. This error exists as an explicit, discoverable contract.
+    #[error(
+        "HSM-incompatible circuit: '{0}' requires raw private key scalar bits \
+        (pk_circuit / PkWitness). No HSM/KMS can provide this. \
+        Use VerifyWitness3-based proofs (run_mdoc_prover) instead."
+    )]
+    HsmIncompatible(String),
     #[error("Prover error code: {0}")]
     ProverError(u32),
     #[error("Verifier error code: {0}")]
@@ -265,6 +309,14 @@ impl Circuit {
             return Err(ZkError::CircuitError(0));
         }
 
+        // Safety: bound-check clen before constructing a slice from an FFI pointer
+        // to prevent out-of-bounds reads from a misbehaving C library.
+        const MAX_CIRCUIT_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+        if clen > MAX_CIRCUIT_SIZE {
+            unsafe { libc::free(cb as *mut libc::c_void) };
+            return Err(ZkError::CircuitError(0));
+        }
+
         let bytes = unsafe { std::slice::from_raw_parts(cb, clen).to_vec() };
         unsafe { libc::free(cb as *mut libc::c_void) };
 
@@ -272,6 +324,12 @@ impl Circuit {
     }
 
     fn spec(&self) -> *const ffi::ZkSpecStruct {
+        assert!(
+            self.spec_index < ffi::NUM_ZK_SPECS,
+            "spec_index {} out of bounds (max {})",
+            self.spec_index,
+            ffi::NUM_ZK_SPECS
+        );
         unsafe { &ffi::kZkSpecs[self.spec_index] }
     }
 }
@@ -330,6 +388,29 @@ impl Prover {
         let proof = unsafe { std::slice::from_raw_parts(proof_ptr, proof_len).to_vec() };
         unsafe { libc::free(proof_ptr as *mut libc::c_void) };
         Ok(proof)
+    }
+
+    /// Attempt to produce a key-ownership ZK proof (Longfellow `pk_circuit`).
+    ///
+    /// **Always returns [`ZkError::HsmIncompatible`].**
+    ///
+    /// `pk_circuit` (`PkWitness::compute_witness`) requires every individual bit
+    /// of the raw private scalar `sk`. No HSM/KMS (PKCS#11, AWS KMS, Cloud KMS)
+    /// can expose this — the scalar is treated as opaque. There is no shim that
+    /// bridges this gap without materially weakening the HSM security boundary.
+    ///
+    /// The Longfellow C API (`mdoc_zk.h`) does not export a `run_pk_prover`
+    /// function, so this circuit is already unreachable through our FFI layer.
+    /// This stub exists as an explicit, compile-time-visible, runtime-enforced
+    /// contract so developers discover the limitation immediately rather than
+    /// hitting a link error or undefined behaviour.
+    ///
+    /// If key-ownership proof is ever required, it must be redesigned as a
+    /// sigma-protocol over a device signature (i.e., using `VerifyWitness3` /
+    /// `run_mdoc_prover` to verify a nonce-signed ECDSA signature), which IS
+    /// HSM-compatible.
+    pub fn prove_key_ownership(_circuit: &Circuit) -> Result<Vec<u8>, ZkError> {
+        Err(ZkError::HsmIncompatible("pk_circuit".to_string()))
     }
 }
 

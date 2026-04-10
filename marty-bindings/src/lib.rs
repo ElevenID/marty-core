@@ -204,7 +204,8 @@ fn create_verifiable_credential(
         "jws": signature_b64
     });
     
-    Ok(serde_json::to_string_pretty(&credential).unwrap())
+    serde_json::to_string_pretty(&credential)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("JSON serialization failed: {e}")))
 }
 
 /// Helper function to encode bytes as base64url (no padding)
@@ -526,6 +527,152 @@ fn oid4vci_sign_credential(
     Ok((credential_str, signed.credential_id().to_string()))
 }
 
+/// Prepare a credential for external signing (BYOK).
+///
+/// Returns a tuple of (signing_input_base64, credential_id, format_hint).
+/// The caller signs `signing_input` externally and passes the result to
+/// `oid4vci_assemble_credential()`.
+#[pyfunction]
+#[pyo3(signature = (issuer_id, algorithm, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
+fn oid4vci_prepare_credential(
+    issuer_id: &str,
+    algorithm: &str,
+    subject_id: Option<&str>,
+    credential_type: &str,
+    claims_json: &str,
+    expiration_seconds: Option<i64>,
+    format: &str,
+    selective_disclosure_claims: Vec<String>,
+    credential_payload_format: &str,
+    w3c_context: Vec<String>,
+    w3c_types: Vec<String>,
+) -> PyResult<(String, String, String)> {
+    use marty_oid4vci::types::{CredentialClaims, CredentialFormat, CredentialPayloadFormat, SigningAlgorithm};
+    use marty_oid4vci::signer::CredentialSigner;
+
+    let claims: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(claims_json).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid claims JSON: {e}"))
+        })?;
+
+    let signing_algorithm = match algorithm {
+        "ES256" => SigningAlgorithm::ES256,
+        "EdDSA" => SigningAlgorithm::EdDSA,
+        "ES256K" => SigningAlgorithm::ES256K,
+        "ES384" => SigningAlgorithm::ES384,
+        "RS256" => SigningAlgorithm::RS256,
+        _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            format!("Unknown algorithm: {algorithm}")
+        )),
+    };
+
+    // Create a stub signer that provides metadata but cannot sign
+    // (signing will happen externally)
+    #[derive(Debug)]
+    struct MetadataSigner {
+        issuer_id: String,
+        algorithm: SigningAlgorithm,
+    }
+    impl CredentialSigner for MetadataSigner {
+        fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
+            unreachable!("MetadataSigner.sign() should not be called during prepare")
+        }
+        fn algorithm(&self) -> SigningAlgorithm { self.algorithm }
+        fn issuer_id(&self) -> &str { &self.issuer_id }
+        fn kid_url(&self) -> String {
+            if let Some(key_part) = self.issuer_id.strip_prefix("did:key:") {
+                format!("{}#{}", self.issuer_id, key_part)
+            } else {
+                self.issuer_id.clone()
+            }
+        }
+    }
+
+    let signer = MetadataSigner {
+        issuer_id: issuer_id.to_string(),
+        algorithm: signing_algorithm,
+    };
+
+    let cred_claims = CredentialClaims {
+        subject_id: subject_id.map(String::from),
+        credential_type: credential_type.to_string(),
+        claims,
+        expiration_seconds,
+        selective_disclosure_claims,
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: vec![],
+        credential_payload_format: CredentialPayloadFormat::from_str_loose(credential_payload_format),
+        w3c_context,
+        w3c_types,
+    };
+
+    let cred_format = CredentialFormat::from_str_loose(format)
+        .unwrap_or(CredentialFormat::JwtVcJson);
+
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    match cred_format {
+        CredentialFormat::JwtVcJson => {
+            let prepared = marty_oid4vci::formats::jwt_vc::prepare_jwt_vc(&signer, &cred_claims)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
+            // signing_input is already a string (header_b64.payload_b64)
+            Ok((prepared.signing_input, prepared.credential_id, "jwt_vc_json".to_string()))
+        }
+        CredentialFormat::MsoMdoc => {
+            let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc(&signer, &cred_claims)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
+            // tbs_data is raw bytes — base64url encode for transport
+            let tbs_b64 = b64.encode(&prepared.tbs_data);
+            Ok((tbs_b64, prepared.credential_id, "mso_mdoc".to_string()))
+        }
+        _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            format!("Format '{}' does not support prepare/assemble yet", format)
+        )),
+    }
+}
+
+/// Assemble a signed credential from prepared data and an external signature.
+///
+/// Takes the signing_input (from prepare), signature bytes (base64url), and
+/// format/credential_id. Returns (credential_str, credential_id).
+#[pyfunction]
+#[pyo3(signature = (signing_input, signature_b64, credential_id, format))]
+fn oid4vci_assemble_credential(
+    signing_input: &str,
+    signature_b64: &str,
+    credential_id: &str,
+    format: &str,
+) -> PyResult<(String, String)> {
+    use marty_oid4vci::types::SignedCredential;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+    let signature = b64.decode(signature_b64).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid signature base64: {e}"))
+    })?;
+
+    match format {
+        "jwt_vc_json" => {
+            let prepared = marty_oid4vci::formats::jwt_vc::PreparedJwtVc {
+                signing_input: signing_input.to_string(),
+                credential_id: credential_id.to_string(),
+            };
+            let signed = marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(prepared, &signature);
+            match signed {
+                SignedCredential::JwtVcJson { jwt, credential_id } => {
+                    Ok((jwt, credential_id))
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            format!("Format '{}' assemble not yet supported via FFI", format)
+        )),
+    }
+}
+
 /// Normalize legacy Python input (`List[str]`) into typed ZK predicate bindings.
 fn normalize_zk_predicate_claims(
     claims: &std::collections::HashMap<String, serde_json::Value>,
@@ -622,6 +769,180 @@ fn oid4vp_verify_vp_token(
 }
 
 // ============================================================================
+// Symmetric Crypto (AES-CBC, HMAC, SHA-256) — EAC secure messaging support
+// ============================================================================
+
+/// AES-256-CBC encrypt with PKCS7 padding.
+#[pyfunction]
+fn aes_256_cbc_encrypt<'py>(
+    py: Python<'py>,
+    key: &[u8],
+    iv: &[u8],
+    plaintext: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let ct = marty_crypto::symmetric::aes_256_cbc_encrypt(key, iv, plaintext)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new_bound(py, &ct))
+}
+
+/// AES-256-CBC decrypt with PKCS7 padding.
+#[pyfunction]
+fn aes_256_cbc_decrypt<'py>(
+    py: Python<'py>,
+    key: &[u8],
+    iv: &[u8],
+    ciphertext: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let pt = marty_crypto::symmetric::aes_256_cbc_decrypt(key, iv, ciphertext)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new_bound(py, &pt))
+}
+
+/// HMAC-SHA256.
+#[pyfunction]
+fn hmac_sha256<'py>(
+    py: Python<'py>,
+    key: &[u8],
+    data: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let mac = marty_crypto::symmetric::hmac_sha256(key, data)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+    Ok(PyBytes::new_bound(py, &mac))
+}
+
+/// SHA-256 hash.
+#[pyfunction]
+fn sha256<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    let digest = marty_crypto::hashing::hash_sha256(data);
+    Ok(PyBytes::new_bound(py, &digest))
+}
+
+// ============================================================================
+// DIDComm v2
+// ============================================================================
+
+/// Resolve a DID to its DID Document (JSON string).
+///
+/// Supports did:key, did:web, did:peer, did:jwk.
+/// Does NOT support ledger-based methods (did:ion, did:ethr, did:sov).
+///
+/// Args:
+///     did: The DID to resolve
+///     universal_resolver_url: Optional URL to a Universal Resolver for unsupported methods
+///
+/// Returns:
+///     JSON string of the DID Document
+#[pyfunction]
+#[pyo3(signature = (did, universal_resolver_url=None))]
+fn didcomm_resolve_did(did: &str, universal_resolver_url: Option<&str>) -> PyResult<String> {
+    let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
+    let resolver = match universal_resolver_url {
+        Some(url) => marty_didcomm::DidResolver::with_universal_resolver(url),
+        None => marty_didcomm::DidResolver::new(),
+    };
+    let doc = rt.block_on(resolver.resolve(did)).map_err(to_pyerr)?;
+    serde_json::to_string(&doc).map_err(to_pyerr)
+}
+
+/// Extract the DIDComm service endpoint URI from a DID Document JSON.
+///
+/// Args:
+///     did_document_json: JSON string of the DID Document
+///
+/// Returns:
+///     The service endpoint URI string, or empty string if none found
+#[pyfunction]
+fn didcomm_extract_endpoint(did_document_json: &str) -> PyResult<String> {
+    let doc: marty_didcomm::DidDocument =
+        serde_json::from_str(did_document_json).map_err(to_pyerr)?;
+    Ok(doc.didcomm_endpoint().unwrap_or("").to_string())
+}
+
+/// Pack a signed credential into a DIDComm v2 plaintext message.
+///
+/// Creates an issue-credential/3.0 message with the credential as an attachment.
+/// The caller is responsible for delivering this to the holder's endpoint.
+///
+/// Args:
+///     credential: The signed credential string (SD-JWT, JWT, or base64 mDoc)
+///     format: Credential format (e.g. "vc+sd-jwt", "mso_mdoc", "jwt_vc_json")
+///     issuer_did: The issuer's DID
+///     holder_did: The holder/recipient DID
+///     thread_id: Optional thread ID for correlation
+///     credential_id: Optional credential identifier
+///
+/// Returns:
+///     JSON string of the DIDComm plaintext message
+#[pyfunction]
+#[pyo3(signature = (credential, format, issuer_did, holder_did, thread_id=None, credential_id=None))]
+fn didcomm_pack_credential(
+    credential: &str,
+    format: &str,
+    issuer_did: &str,
+    holder_did: &str,
+    thread_id: Option<&str>,
+    credential_id: Option<&str>,
+) -> PyResult<String> {
+    marty_didcomm::pack_credential_for_holder(
+        credential,
+        format,
+        issuer_did,
+        holder_did,
+        thread_id,
+        credential_id,
+    )
+    .map_err(to_pyerr)
+}
+
+/// Unpack a DIDComm v2 plaintext message and return its JSON representation.
+///
+/// Args:
+///     message_json: The DIDComm plaintext message JSON string
+///
+/// Returns:
+///     Parsed message as JSON string (validated structure)
+#[pyfunction]
+fn didcomm_unpack_message(message_json: &str) -> PyResult<String> {
+    let msg = marty_didcomm::unpack_didcomm_message(message_json).map_err(to_pyerr)?;
+    serde_json::to_string(&msg).map_err(to_pyerr)
+}
+
+/// Encrypt a DIDComm v2 plaintext message for a recipient using ECDH-ES+A256KW + A256GCM.
+///
+/// Args:
+///     plaintext_json: The DIDComm plaintext message (JSON string)
+///     recipient_did_document_json: The recipient's DID Document (JSON string)
+///
+/// Returns:
+///     JWE JSON Serialization (General) string
+#[pyfunction]
+fn didcomm_encrypt(plaintext_json: &str, recipient_did_document_json: &str) -> PyResult<String> {
+    let did_doc: marty_didcomm::DidDocument =
+        serde_json::from_str(recipient_did_document_json).map_err(to_pyerr)?;
+    marty_didcomm::encrypt_for_recipient(plaintext_json, &did_doc).map_err(to_pyerr)
+}
+
+/// Decrypt a DIDComm v2 JWE (anoncrypt) message using the recipient's X25519 private key.
+///
+/// Args:
+///     jwe_json: JWE JSON Serialization string
+///     recipient_x25519_private_key: 32-byte X25519 private key
+///
+/// Returns:
+///     Decrypted plaintext (JSON string)
+#[pyfunction]
+fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyResult<String> {
+    if recipient_x25519_private_key.len() != 32 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "X25519 private key must be exactly 32 bytes",
+        ));
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(recipient_x25519_private_key);
+    marty_didcomm::decrypt_jwe(jwe_json, &key).map_err(to_pyerr)
+}
+
+// ============================================================================
 // Module Definition
 // ============================================================================
 
@@ -670,9 +991,215 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
 
     // OID4VP Protocol
     m.add_function(wrap_pyfunction!(oid4vp_verify_vp_token, m)?)?;
+
+    // Symmetric Crypto (EAC secure messaging)
+    m.add_function(wrap_pyfunction!(aes_256_cbc_encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(aes_256_cbc_decrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(hmac_sha256, m)?)?;
+    m.add_function(wrap_pyfunction!(sha256, m)?)?;
+
+    // DIDComm v2
+    m.add_function(wrap_pyfunction!(didcomm_resolve_did, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_extract_endpoint, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_pack_credential, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_unpack_message, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_decrypt, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // Helper function tests (pure Rust — no Python interpreter needed)
+    // ====================================================================
+
+    #[test]
+    fn test_base64_url_encode_empty() {
+        assert_eq!(base64_url_encode(&[]), "");
+    }
+
+    #[test]
+    fn test_base64_url_encode_known_vector() {
+        // RFC 4648 test vector
+        let encoded = base64_url_encode(b"Hello, World!");
+        assert_eq!(encoded, "SGVsbG8sIFdvcmxkIQ");
+        // Verify no padding characters
+        assert!(!encoded.contains('='));
+    }
+
+    #[test]
+    fn test_base64_url_encode_binary() {
+        let data: Vec<u8> = (0..=255).collect();
+        let encoded = base64_url_encode(&data);
+        // URL-safe: no '+' or '/'
+        assert!(!encoded.contains('+'));
+        assert!(!encoded.contains('/'));
+    }
+
+    // ====================================================================
+    // Credential offer creation (delegates to marty-oid4vci, no PyO3)
+    // ====================================================================
+
+    #[test]
+    fn test_credential_offer_single_type() {
+        let json_str = marty_oid4vci::issuer::create_credential_offer(
+            "https://issuer.example.com",
+            &["VerifiableId".to_string()],
+            Some("pre-auth-123"),
+            false,
+        )
+        .expect("offer creation should succeed");
+        let offer: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(
+            offer["credential_issuer"],
+            "https://issuer.example.com"
+        );
+        assert!(offer["credential_configuration_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "VerifiableId"));
+    }
+
+    #[test]
+    fn test_credential_offer_multiple_types() {
+        let json_str = marty_oid4vci::issuer::create_credential_offer(
+            "https://issuer.example.com",
+            &["VerifiableId".to_string(), "mDL".to_string()],
+            None,
+            false,
+        )
+        .expect("offer should succeed without pre-auth code");
+        let offer: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let ids = offer["credential_configuration_ids"].as_array().unwrap();
+        assert_eq!(ids.len(), 2);
+    }
+
+    // ====================================================================
+    // Token response (via engine, no PyO3)
+    // ====================================================================
+
+    #[test]
+    fn test_token_response_structure() {
+        let engine = _dummy_engine();
+        let resp = engine
+            .create_token_response("pre-auth-abc", 1800)
+            .expect("token response should succeed");
+        let json_str = serde_json::to_string(&resp).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        assert!(val.get("access_token").is_some(), "must contain access_token");
+        assert!(val.get("nonce").is_some(), "must contain nonce");
+        assert_eq!(val["token_type"], "Bearer");
+    }
+
+    // ====================================================================
+    // PKCE S256 verification (pure Rust)
+    // ====================================================================
+
+    #[test]
+    fn test_pkce_s256_valid() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let hash = marty_crypto::hashing::hash_sha256(verifier.as_bytes());
+        let challenge = base64_url_encode(&hash);
+
+        assert!(
+            marty_oid4vci::verify_pkce_s256(verifier, &challenge),
+            "valid PKCE pair must verify"
+        );
+    }
+
+    #[test]
+    fn test_pkce_s256_invalid() {
+        assert!(
+            !marty_oid4vci::verify_pkce_s256("wrong-verifier", "wrong-challenge"),
+            "mismatched PKCE pair must fail"
+        );
+    }
+
+    // ====================================================================
+    // Proof JWT round-trip (pure Rust)
+    // ====================================================================
+
+    #[test]
+    fn test_proof_jwt_create_and_verify() {
+        let aud = "https://issuer.example.com";
+        let c_nonce = "test-nonce-12345";
+
+        let jwt = marty_oid4vci::proof::create_proof_jwt(aud, c_nonce)
+            .expect("proof JWT creation should succeed");
+
+        // JWT should have 3 dot-separated parts
+        assert_eq!(jwt.split('.').count(), 3, "JWT must have header.payload.signature");
+
+        // Verify it round-trips
+        let verified = marty_oid4vci::proof::verify_jwt_proof(&jwt, aud, Some(c_nonce), 300)
+            .expect("proof JWT verification should succeed");
+
+        assert!(
+            verified.holder_id.starts_with("did:key:"),
+            "holder_did should be a did:key, got: {}",
+            verified.holder_id
+        );
+        assert_eq!(verified.nonce.as_deref(), Some(c_nonce));
+    }
+
+    #[test]
+    fn test_proof_jwt_wrong_nonce_fails() {
+        let jwt = marty_oid4vci::proof::create_proof_jwt("https://issuer.example.com", "nonce-a")
+            .expect("creation should succeed");
+
+        let result = marty_oid4vci::proof::verify_jwt_proof(&jwt, "", Some("nonce-b"), 300);
+        assert!(result.is_err(), "wrong nonce must fail verification");
+    }
+
+    // ====================================================================
+    // normalize_zk_predicate_claims (pure Rust helper)
+    // ====================================================================
+
+    #[test]
+    fn test_normalize_zk_empty_input() {
+        let claims = std::collections::HashMap::new();
+        let result = normalize_zk_predicate_claims(&claims, vec![]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_zk_claim_names_input() {
+        let mut claims = std::collections::HashMap::new();
+        claims.insert("birth_date".to_string(), serde_json::json!("1990-01-01"));
+        claims.insert("name".to_string(), serde_json::json!("Alice"));
+
+        let result = normalize_zk_predicate_claims(
+            &claims,
+            vec!["birth_date".to_string()],
+        );
+        assert!(!result.is_empty());
+        assert_eq!(result[0].claim_name, "birth_date");
+    }
+
+    #[test]
+    fn test_normalize_zk_predicate_strings_with_birth_date() {
+        let mut claims = std::collections::HashMap::new();
+        claims.insert("birth_date".to_string(), serde_json::json!("1990-01-01"));
+
+        // Input that looks like predicates, not claim names
+        let result = normalize_zk_predicate_claims(
+            &claims,
+            vec!["age_over_18".to_string()],
+        );
+        assert!(!result.is_empty());
+        assert_eq!(result[0].claim_name, "birth_date");
+        assert!(result[0].supported_predicates.contains(&"age_over_18".to_string()));
+    }
 }
 

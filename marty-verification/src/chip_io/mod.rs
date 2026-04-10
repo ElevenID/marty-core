@@ -46,6 +46,7 @@ impl ApduCommand {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = vec![self.cla, self.ins, self.p1, self.p2];
         if !self.data.is_empty() {
+            debug_assert!(self.data.len() <= 255, "APDU data exceeds short-form Lc limit");
             buf.push(self.data.len() as u8);
             buf.extend_from_slice(&self.data);
         }
@@ -432,8 +433,10 @@ impl BacSession {
             let enc = marty_crypto::des::tdes_cbc_encrypt(&k24, &iv, &padded)
                 .map_err(|e| VerificationError::internal(format!("SM encrypt: {}", e)))?;
             // DO'87 = tag 87, length, 01 (padding indicator), ciphertext
+            let do87_len = u8::try_from(enc.len() + 1)
+                .map_err(|_| VerificationError::internal("DO87 data exceeds short-form TLV limit (254)".to_string()))?;
             do87.push(0x87);
-            do87.push((enc.len() + 1) as u8);
+            do87.push(do87_len);
             do87.push(0x01); // padding indicator
             do87.extend_from_slice(&enc);
         }
@@ -639,8 +642,10 @@ impl PaceSession {
             let padded = iso7816_pad(&cmd.data);
             let enc = marty_crypto::symmetric::aes_128_cbc_encrypt_nopad(&self.k_enc, &self.ssc, &padded)
                 .map_err(|e| VerificationError::internal(format!("PACE SM encrypt: {}", e)))?;
+            let do87_len = u8::try_from(enc.len() + 1)
+                .map_err(|_| VerificationError::internal("PACE DO87 data exceeds short-form TLV limit (254)".to_string()))?;
             do87.push(0x87);
-            do87.push((enc.len() + 1) as u8);
+            do87.push(do87_len);
             do87.push(0x01);
             do87.extend_from_slice(&enc);
         }

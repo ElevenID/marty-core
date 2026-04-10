@@ -91,3 +91,210 @@ pub struct ClaimEvaluationResult {
     pub missing_claims: Vec<String>,
     pub satisfied_claims: Vec<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::types::*;
+    use serde_json::json;
+
+    fn make_policy(
+        required: Vec<RequiredClaim>,
+        derived: HashMap<String, String>,
+    ) -> PresentationPolicy {
+        PresentationPolicy {
+            id: "test-policy".to_string(),
+            name: "Test".to_string(),
+            description: None,
+            purpose: "testing".to_string(),
+            accepted_credential_types: vec![],
+            required_claims: required,
+            holder_binding: HolderBindingMethod::None,
+            trust_profile_id: None,
+            allowed_issuers: vec![],
+            freshness_requirements: FreshnessRequirements::default(),
+            prefer_predicates: false,
+            single_presentation: false,
+            derived_attribute_preferences: derived,
+            credential_ranking_strategy: CredentialRankingStrategy::FreshestFirst,
+            credential_ranking_weights: HashMap::new(),
+            metadata: HashMap::new(),
+            version: 1,
+        }
+    }
+
+    fn required(name: &str) -> RequiredClaim {
+        RequiredClaim {
+            claim_name: name.to_string(),
+            credential_type: "TestCredential".to_string(),
+            accept_predicate: false,
+            required_value: None,
+        }
+    }
+
+    fn required_with_value(name: &str, value: serde_json::Value) -> RequiredClaim {
+        RequiredClaim {
+            claim_name: name.to_string(),
+            credential_type: "TestCredential".to_string(),
+            accept_predicate: false,
+            required_value: Some(value),
+        }
+    }
+
+    // ====================================================================
+    // evaluate()
+    // ====================================================================
+
+    #[test]
+    fn test_evaluate_empty_policy_always_satisfied() {
+        let policy = make_policy(vec![], HashMap::new());
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+        let claims = HashMap::new();
+        let result = evaluator.evaluate(&claims);
+        assert!(result.is_satisfied);
+        assert!(result.missing_claims.is_empty());
+    }
+
+    #[test]
+    fn test_evaluate_all_claims_present() {
+        let policy = make_policy(
+            vec![required("name"), required("birth_date")],
+            HashMap::new(),
+        );
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+        let mut claims = HashMap::new();
+        claims.insert("name".to_string(), json!("Alice"));
+        claims.insert("birth_date".to_string(), json!("1990-01-01"));
+
+        let result = evaluator.evaluate(&claims);
+        assert!(result.is_satisfied);
+        assert_eq!(result.satisfied_claims.len(), 2);
+    }
+
+    #[test]
+    fn test_evaluate_missing_claim() {
+        let policy = make_policy(
+            vec![required("name"), required("birth_date")],
+            HashMap::new(),
+        );
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+        let mut claims = HashMap::new();
+        claims.insert("name".to_string(), json!("Alice"));
+
+        let result = evaluator.evaluate(&claims);
+        assert!(!result.is_satisfied);
+        assert_eq!(result.missing_claims, vec!["birth_date"]);
+        assert_eq!(result.satisfied_claims, vec!["name"]);
+    }
+
+    #[test]
+    fn test_evaluate_required_value_match() {
+        let policy = make_policy(
+            vec![required_with_value("country", json!("US"))],
+            HashMap::new(),
+        );
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+        let mut claims = HashMap::new();
+        claims.insert("country".to_string(), json!("US"));
+
+        let result = evaluator.evaluate(&claims);
+        assert!(result.is_satisfied);
+    }
+
+    #[test]
+    fn test_evaluate_required_value_mismatch() {
+        let policy = make_policy(
+            vec![required_with_value("country", json!("US"))],
+            HashMap::new(),
+        );
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+        let mut claims = HashMap::new();
+        claims.insert("country".to_string(), json!("CA"));
+
+        let result = evaluator.evaluate(&claims);
+        assert!(!result.is_satisfied);
+        assert!(result.missing_claims[0].contains("expected"));
+    }
+
+    #[test]
+    fn test_evaluate_derived_attribute_preference() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_18".to_string());
+
+        let policy = make_policy(vec![required("birth_date")], derived);
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+
+        let mut claims = HashMap::new();
+        claims.insert("age_over_18".to_string(), json!(true));
+
+        let result = evaluator.evaluate(&claims);
+        assert!(result.is_satisfied);
+        assert_eq!(result.satisfied_claims, vec!["age_over_18"]);
+    }
+
+    #[test]
+    fn test_evaluate_derived_fallback_to_direct() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_18".to_string());
+
+        let policy = make_policy(vec![required("birth_date")], derived);
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+
+        // Derived attr not present, but original is
+        let mut claims = HashMap::new();
+        claims.insert("birth_date".to_string(), json!("1990-01-01"));
+
+        let result = evaluator.evaluate(&claims);
+        assert!(result.is_satisfied);
+        assert_eq!(result.satisfied_claims, vec!["birth_date"]);
+    }
+
+    // ====================================================================
+    // get_preferred_claims()
+    // ====================================================================
+
+    #[test]
+    fn test_preferred_claims_no_derived() {
+        let policy = make_policy(vec![], HashMap::new());
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+
+        let available = vec!["name".to_string(), "birth_date".to_string()];
+        let preferred = evaluator.get_preferred_claims(&available);
+        assert_eq!(preferred, vec!["name", "birth_date"]);
+    }
+
+    #[test]
+    fn test_preferred_claims_with_derived() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_21".to_string());
+
+        let policy = make_policy(vec![], derived);
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+
+        let available = vec![
+            "name".to_string(),
+            "birth_date".to_string(),
+            "age_over_21".to_string(),
+        ];
+        let preferred = evaluator.get_preferred_claims(&available);
+
+        // birth_date should be replaced by age_over_21
+        assert!(preferred.contains(&"name".to_string()));
+        assert!(preferred.contains(&"age_over_21".to_string()));
+        assert!(!preferred.contains(&"birth_date".to_string()));
+    }
+
+    #[test]
+    fn test_preferred_claims_derived_not_available() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_21".to_string());
+
+        let policy = make_policy(vec![], derived);
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+
+        // age_over_21 not available → fall back to birth_date
+        let available = vec!["name".to_string(), "birth_date".to_string()];
+        let preferred = evaluator.get_preferred_claims(&available);
+        assert!(preferred.contains(&"birth_date".to_string()));
+    }
+}

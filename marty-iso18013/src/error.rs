@@ -79,3 +79,56 @@ impl From<Error> for pyo3::PyErr {
         pyo3::exceptions::PyRuntimeError::new_err(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display_variants() {
+        let err = Error::SessionEstablishment("key mismatch".into());
+        assert_eq!(err.to_string(), "Session establishment failed: key mismatch");
+
+        let err = Error::InvalidState("wrong state".into());
+        assert_eq!(err.to_string(), "Invalid session state: wrong state");
+
+        let err = Error::Timeout;
+        assert_eq!(err.to_string(), "Session timeout");
+
+        let err = Error::Encryption("bad key".into());
+        assert_eq!(err.to_string(), "Encryption error: bad key");
+
+        let err = Error::Decryption("corrupt".into());
+        assert_eq!(err.to_string(), "Decryption error: corrupt");
+
+        let err = Error::Verification("cert expired".into());
+        assert_eq!(err.to_string(), "Verification error: cert expired");
+
+        let err = Error::Transport("BLE failed".into());
+        assert_eq!(err.to_string(), "Transport error: BLE failed");
+
+        let err = Error::TransportNotSupported;
+        assert_eq!(err.to_string(), "Transport not supported");
+
+        let err = Error::CredentialNotFound;
+        assert_eq!(err.to_string(), "Credential not found");
+
+        let err = Error::ConsentDenied;
+        assert_eq!(err.to_string(), "Consent denied");
+    }
+
+    #[test]
+    fn test_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let err: Error = io_err.into();
+        assert!(err.to_string().contains("file missing"));
+    }
+
+    #[test]
+    fn test_error_is_debug() {
+        // Ensure Debug is implemented
+        let err = Error::Other("test".into());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("Other"));
+    }
+}

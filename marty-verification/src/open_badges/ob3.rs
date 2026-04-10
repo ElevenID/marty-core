@@ -291,6 +291,7 @@ fn build_verification_method(
 }
 
 // For X509 verification methods, this function extracts PEM from the credential's verificationMethod
+#[allow(dead_code)]
 fn build_x509_verification_method(
     pem: &str,
     verification_method: &IriBuf,

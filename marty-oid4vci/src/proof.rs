@@ -437,11 +437,11 @@ fn verify_rsa_signature(
     _message: &str,
     _signature: &[u8],
 ) -> Oid4vciResult<()> {
-    // RSA verification using the rsa crate
-    // For now, RSA proofs are uncommon in OID4VCI; most wallets use ES256 or EdDSA.
-    // TODO: Implement full RSA verification when needed.
-    tracing::warn!("RSA proof verification not yet implemented — accepting based on structure only");
-    Ok(())
+    // RSA proofs are uncommon in OID4VCI; most wallets use ES256 or EdDSA.
+    // Reject rather than silently accepting unverified signatures.
+    Err(Oid4vciError::ProofVerificationFailed(
+        "RSA proof verification is not yet implemented; use ES256 or EdDSA".into(),
+    ))
 }
 
 /// Extract JWT proof(s) from a credential request, handling both v1 and legacy formats.

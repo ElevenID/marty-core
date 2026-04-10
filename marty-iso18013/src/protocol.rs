@@ -103,6 +103,7 @@ pub struct Session {
     key_agreement: Arc<RwLock<SessionKeyAgreement>>,
     
     /// Configuration
+    #[allow(dead_code)]
     config: SessionConfig,
 }
 
@@ -140,9 +141,15 @@ impl Session {
         ka.set_peer_key(peer_public_key.to_vec());
         let shared_secret = ka.derive_shared_secret()?;
         
-        // Create session encryption
-        let session_transcript = b"session_transcript"; // TODO: Actual transcript
-        let encryption = SessionEncryption::new(&shared_secret, session_transcript)?;
+        // Build session transcript per ISO 18013-5 §9.1.5.1:
+        // SessionTranscript = [DeviceEngagementBytes, EReaderKeyBytes, Handover]
+        // We bind the transcript to both parties' public keys to prevent replay.
+        let our_public_key = ka.public_key();
+        let session_transcript = Self::build_session_transcript(
+            &our_public_key,
+            peer_public_key,
+        );
+        let encryption = SessionEncryption::new(&shared_secret, &session_transcript)?;
         
         *self.encryption.write().await = Some(encryption);
         *state = SessionState::Established;
@@ -173,6 +180,26 @@ impl Session {
         let mut state = self.state.write().await;
         *state = SessionState::Terminated;
         Ok(())
+    }
+
+    /// Build session transcript binding both parties' ephemeral keys.
+    ///
+    /// Per ISO 18013-5 §9.1.5.1 the SessionTranscript is a CBOR array:
+    ///   `[DeviceEngagementBytes, EReaderKeyBytes, Handover]`
+    ///
+    /// Until full CBOR DeviceEngagement serialisation is implemented we use a
+    /// SHA-256 hash of both public keys concatenated.  This is sufficient to
+    /// bind the session to the specific engagement and prevent replay — the
+    /// derived session keys will differ for any other key pair combination.
+    fn build_session_transcript(
+        our_public_key: &[u8],
+        peer_public_key: &[u8],
+    ) -> Vec<u8> {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(our_public_key);
+        hasher.update(peer_public_key);
+        hasher.finalize().to_vec()
     }
 }
 
@@ -216,4 +243,176 @@ pub enum ResponseStatus {
     DataNotAvailable,
     /// Internal error
     Error,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // SessionState
+    // ====================================================================
+
+    #[test]
+    fn test_session_state_variants() {
+        let states = [
+            SessionState::Idle,
+            SessionState::Engagement,
+            SessionState::Establishing,
+            SessionState::Established,
+            SessionState::Processing,
+            SessionState::Responding,
+            SessionState::Terminated,
+        ];
+        // Verify all states are distinct
+        for (i, a) in states.iter().enumerate() {
+            for (j, b) in states.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_session_state_serialization() {
+        let json = serde_json::to_string(&SessionState::Established).unwrap();
+        let deserialized: SessionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, SessionState::Established);
+    }
+
+    #[test]
+    fn test_session_state_clone() {
+        let state = SessionState::Processing;
+        let cloned = state;
+        assert_eq!(state, cloned);
+    }
+
+    // ====================================================================
+    // SessionConfig
+    // ====================================================================
+
+    #[test]
+    fn test_session_config_default() {
+        let config = SessionConfig::default();
+        assert_eq!(config.timeout_secs, 300);
+        assert_eq!(config.max_message_size, 1024 * 1024);
+        assert!(!config.verbose);
+    }
+
+    #[test]
+    fn test_session_config_custom() {
+        let config = SessionConfig {
+            timeout_secs: 60,
+            max_message_size: 512,
+            verbose: true,
+        };
+        assert_eq!(config.timeout_secs, 60);
+        assert_eq!(config.max_message_size, 512);
+        assert!(config.verbose);
+    }
+
+    // ====================================================================
+    // ResponseStatus
+    // ====================================================================
+
+    #[test]
+    fn test_response_status_equality() {
+        assert_eq!(ResponseStatus::Ok, ResponseStatus::Ok);
+        assert_ne!(ResponseStatus::Ok, ResponseStatus::Error);
+        assert_ne!(ResponseStatus::ConsentDenied, ResponseStatus::DataNotAvailable);
+    }
+
+    #[test]
+    fn test_response_status_serialization() {
+        let json = serde_json::to_string(&ResponseStatus::ConsentDenied).unwrap();
+        let deserialized: ResponseStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, ResponseStatus::ConsentDenied);
+    }
+
+    // ====================================================================
+    // MdlRequest
+    // ====================================================================
+
+    #[test]
+    fn test_mdl_request_serialization() {
+        let mut data_elements = std::collections::HashMap::new();
+        data_elements.insert(
+            "org.iso.18013.5.1".to_string(),
+            vec!["family_name".to_string(), "birth_date".to_string()],
+        );
+
+        let request = MdlRequest {
+            doc_type: "org.iso.18013.5.1.mDL".to_string(),
+            data_elements,
+            nonce: vec![1, 2, 3, 4],
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+        let deserialized: MdlRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.doc_type, "org.iso.18013.5.1.mDL");
+        assert_eq!(
+            deserialized.data_elements["org.iso.18013.5.1"],
+            vec!["family_name", "birth_date"]
+        );
+        assert_eq!(deserialized.nonce, vec![1, 2, 3, 4]);
+    }
+
+    // ====================================================================
+    // MdlResponse
+    // ====================================================================
+
+    #[test]
+    fn test_mdl_response_serialization() {
+        let response = MdlResponse {
+            doc_type: "org.iso.18013.5.1.mDL".to_string(),
+            data: vec![0xA1, 0x01],
+            status: ResponseStatus::Ok,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: MdlResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.status, ResponseStatus::Ok);
+        assert_eq!(deserialized.data, vec![0xA1, 0x01]);
+    }
+
+    // ====================================================================
+    // Session (async tests)
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_session_terminate() {
+        let engagement = DeviceEngagement::new_qr().unwrap();
+        let config = SessionConfig::default();
+        let session = Session::from_engagement(&engagement, config).await.unwrap();
+
+        assert_eq!(session.state().await, SessionState::Engagement);
+
+        session.terminate().await.unwrap();
+        assert_eq!(session.state().await, SessionState::Terminated);
+    }
+
+    #[tokio::test]
+    async fn test_session_send_encrypted_before_established() {
+        let engagement = DeviceEngagement::new_qr().unwrap();
+        let session = Session::from_engagement(&engagement, SessionConfig::default())
+            .await
+            .unwrap();
+
+        let result = session.send_encrypted(b"hello").await;
+        assert!(result.is_err(), "should fail when session not established");
+    }
+
+    #[tokio::test]
+    async fn test_session_receive_encrypted_before_established() {
+        let engagement = DeviceEngagement::new_qr().unwrap();
+        let session = Session::from_engagement(&engagement, SessionConfig::default())
+            .await
+            .unwrap();
+
+        let result = session.receive_encrypted(b"cipher").await;
+        assert!(result.is_err(), "should fail when session not established");
+    }
 }

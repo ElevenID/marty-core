@@ -24,7 +24,7 @@
 use crate::{CryptoError, CryptoResult};
 use zkryptium::bbsplus::keys::{BBSplusPublicKey, BBSplusSecretKey};
 use zkryptium::keys::pair::KeyPair;
-use zkryptium::schemes::algorithms::{BBSplus, BbsBls12381Sha256, BbsBls12381Shake256};
+use zkryptium::schemes::algorithms::{BbsBls12381Sha256, BbsBls12381Shake256};
 use zkryptium::schemes::generics::{PoKSignature, Signature};
 
 /// BBS+ ciphersuite selection.

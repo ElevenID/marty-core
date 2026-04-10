@@ -23,7 +23,7 @@ nec = []        # NEC integration
 idemia = []     # IDEMIA integration
 
 # Liveness challenge signing/validation
-liveness = ["chrono"]
+liveness = ["chrono", "hmac", "sha2"]
 
 # Python bindings (native only)
 python = [
@@ -50,8 +50,21 @@ native = [
     "tracing",
 ]
 
+# ONNX Runtime inference (face detection, recognition, age, liveness, deepfake)
+onnx = [
+    "native",
+    "ort",
+    "ndarray",
+]
+
+# ONNX with CoreML acceleration (macOS/iOS)
+onnx-coreml = ["onnx", "ort/coreml"]
+
+# ONNX with CUDA acceleration (server GPU)
+onnx-gpu = ["onnx", "ort/cuda"]
+
 # Full feature set
-full = ["native", "liveness", "opencv"]
+full = ["native", "liveness", "onnx"]
 
 [dependencies]
 # Always included - core types
@@ -76,8 +89,14 @@ tokio = { workspace = true, features = ["sync"], optional = true }
 tracing = { workspace = true, optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png"] }
 
-# Liveness (chrono for timestamp handling)
+# Liveness (chrono for timestamp handling, hmac+sha2 for challenge signing)
 chrono = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+# ONNX Runtime inference
+ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native"] }
+ndarray = { version = "0.17", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

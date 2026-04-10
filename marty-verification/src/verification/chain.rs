@@ -442,10 +442,61 @@ impl ChainValidator {
         Err(format!("No trust anchor found for issuer: {}", last_issuer))
     }
 
-    fn check_key_usage(&self, _cert: &Certificate) -> Result<(), String> {
-        // Key usage extension check would go here
-        // For now, just return Ok
-        // TODO: Parse key usage extension and validate
+    fn check_key_usage(&self, cert: &Certificate) -> Result<(), String> {
+        use const_oid::db::rfc5280::ID_CE_KEY_USAGE;
+        use der::Decode;
+
+        if self.config.required_key_usage.is_empty() {
+            return Ok(());
+        }
+
+        let extensions = match &cert.tbs_certificate.extensions {
+            Some(exts) => exts,
+            None => {
+                // Certificate has no extensions at all — RFC 5280 §4.2.1.3:
+                // KeyUsage is optional. When absent, no usage constraint applies.
+                return Ok(());
+            }
+        };
+
+        let ku_ext = extensions
+            .iter()
+            .find(|ext| ext.extn_id == ID_CE_KEY_USAGE);
+
+        let ku_ext = match ku_ext {
+            Some(ext) => ext,
+            None => {
+                // RFC 5280 §4.2.1.3: KeyUsage is optional. When absent,
+                // the certificate is not constrained to any particular usage.
+                return Ok(());
+            }
+        };
+
+        // KeyUsage is a BIT STRING (RFC 5280 §4.2.1.3)
+        let ku_bits = der::asn1::BitString::from_der(ku_ext.extn_value.as_bytes())
+            .map_err(|e| format!("Failed to parse KeyUsage extension: {e}"))?;
+        let raw = ku_bits.raw_bytes();
+
+        for required in &self.config.required_key_usage {
+            let (byte_idx, bit_mask) = match required {
+                KeyUsage::DigitalSignature => (0, 0x80),
+                KeyUsage::NonRepudiation => (0, 0x40),
+                KeyUsage::KeyEncipherment => (0, 0x20),
+                KeyUsage::DataEncipherment => (0, 0x10),
+                KeyUsage::KeyAgreement => (0, 0x08),
+                KeyUsage::KeyCertSign => (0, 0x04),
+                KeyUsage::CrlSign => (0, 0x02),
+                KeyUsage::EncipherOnly => (0, 0x01),
+                KeyUsage::DecipherOnly => (1, 0x80),
+            };
+            let byte_val = raw.get(byte_idx).copied().unwrap_or(0);
+            if byte_val & bit_mask == 0 {
+                return Err(format!(
+                    "Certificate missing required key usage: {:?}", required
+                ));
+            }
+        }
+
         Ok(())
     }
 

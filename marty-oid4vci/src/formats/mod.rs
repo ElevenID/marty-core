@@ -12,6 +12,7 @@ pub mod sd_jwt;
 pub mod zk_mdoc;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
+use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, CredentialFormat, IssuerKey, SignedCredential};
 
 /// Sign a credential in the requested format.
@@ -29,6 +30,27 @@ pub fn sign_credential(
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt(issuer_key, claims),
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc(issuer_key, claims),
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc(issuer_key, claims),
+    }
+}
+
+/// Sign a credential using any [`CredentialSigner`] implementation.
+///
+/// This is the BYOK-aware entry point. Pass an `&IssuerKey` for local JWK
+/// signing, or a custom [`CredentialSigner`] for HSM/KMS-backed signing.
+pub fn sign_credential_with_signer(
+    format: &CredentialFormat,
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<SignedCredential> {
+    match format {
+        CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc_with_signer(signer, claims),
+        CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt_with_signer(signer, claims),
+        CredentialFormat::MsoMdoc => mdoc::sign_mdoc_with_signer(signer, claims),
+        CredentialFormat::ZkMdoc => Err(Oid4vciError::KeyError(
+            "ZK mDoc does not yet support external signers. \
+             Use sign_credential() with an IssuerKey instead."
+                .into(),
+        )),
     }
 }
 

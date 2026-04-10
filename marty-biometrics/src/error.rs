@@ -57,6 +57,14 @@ pub enum BiometricError {
     /// Invalid signature
     #[error("Invalid signature")]
     InvalidSignature,
+
+    /// Model loading or inference error
+    #[error("Model error: {0}")]
+    ModelError(String),
+
+    /// Feature not supported by this provider
+    #[error("Not supported: {0}")]
+    NotSupported(String),
 }
 
 impl serde::Serialize for BiometricError {
@@ -65,6 +73,78 @@ impl serde::Serialize for BiometricError {
         S: serde::Serializer,
     {
         serializer.serialize_str(&self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_face_not_detected() {
+        let err = BiometricError::FaceNotDetected;
+        assert_eq!(err.to_string(), "Face not detected in image");
+    }
+
+    #[test]
+    fn test_multiple_faces_detected() {
+        let err = BiometricError::MultipleFacesDetected;
+        assert_eq!(err.to_string(), "Multiple faces detected");
+    }
+
+    #[test]
+    fn test_low_quality_message() {
+        let err = BiometricError::LowQuality("blurry image".into());
+        assert_eq!(err.to_string(), "Image quality too low: blurry image");
+    }
+
+    #[test]
+    fn test_verification_failed_with_scores() {
+        let err = BiometricError::VerificationFailed {
+            similarity: 0.45,
+            threshold: 0.70,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("0.45"));
+        assert!(msg.contains("0.70"));
+    }
+
+    #[test]
+    fn test_provider_unavailable() {
+        let err = BiometricError::ProviderUnavailable("OpenCV".into());
+        assert_eq!(err.to_string(), "Provider not available: OpenCV");
+    }
+
+    #[test]
+    fn test_challenge_expired() {
+        let err = BiometricError::ChallengeExpired;
+        assert_eq!(err.to_string(), "Challenge expired");
+    }
+
+    #[test]
+    fn test_invalid_signature() {
+        let err = BiometricError::InvalidSignature;
+        assert_eq!(err.to_string(), "Invalid signature");
+    }
+
+    #[test]
+    fn test_liveness_validation() {
+        let err = BiometricError::LivenessValidation("session timeout".into());
+        assert_eq!(err.to_string(), "Liveness validation failed: session timeout");
+    }
+
+    #[test]
+    fn test_error_serialization() {
+        let err = BiometricError::FaceNotDetected;
+        let json = serde_json::to_string(&err).unwrap();
+        assert_eq!(json, "\"Face not detected in image\"");
+    }
+
+    #[test]
+    fn test_error_debug() {
+        let err = BiometricError::Configuration("bad config".into());
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Configuration"));
     }
 }
 

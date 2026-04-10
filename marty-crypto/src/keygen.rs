@@ -331,6 +331,13 @@ pub fn generate_rsa_pem(bits: usize) -> CryptoResult<(String, String)> {
     use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey, LineEnding};
     use rsa::RsaPrivateKey;
 
+    if bits < 2048 {
+        return Err(CryptoError::internal(format!(
+            "RSA key size {} is below minimum 2048 bits",
+            bits
+        )));
+    }
+
     let private_key = RsaPrivateKey::new(&mut OsRng, bits)
         .map_err(|e| CryptoError::internal(format!("RSA key generation failed: {}", e)))?;
 

@@ -8,11 +8,11 @@
 //! VCDM v2  — `https://www.w3.org/ns/credentials/v2`,  `validFrom`,    `validUntil`
 
 use base64::Engine;
-use ssi::crypto::AlgorithmInstance;
-use ssi::jwk::{Params, JWK};
+use ssi::jwk::JWK;
 use std::collections::HashMap;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
+use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -118,6 +118,138 @@ pub fn sign_jwt_vc(issuer_key: &IssuerKey, claims: &CredentialClaims) -> Oid4vci
     })
 }
 
+/// Sign a W3C VC-JWT credential using any [`CredentialSigner`].
+///
+/// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
+/// For remote/KMS signing, pass a custom `CredentialSigner` implementation.
+pub fn sign_jwt_vc_with_signer(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<SignedCredential> {
+    let prepared = prepare_jwt_vc(signer, claims)?;
+    let signature = signer.sign(prepared.signing_input.as_bytes())?;
+    Ok(assemble_jwt_vc(prepared, &signature))
+}
+
+/// Intermediate state between JWT-VC preparation and signing.
+///
+/// Returned by [`prepare_jwt_vc()`] — the caller signs `signing_input`
+/// and passes the result to [`assemble_jwt_vc()`].
+pub struct PreparedJwtVc {
+    /// The base64url-encoded `header.payload` string to be signed.
+    pub signing_input: String,
+    /// The credential ID (urn:uuid:...) assigned during preparation.
+    pub credential_id: String,
+}
+
+/// Prepare a JWT-VC for signing (build header + payload, but don't sign).
+///
+/// Returns a [`PreparedJwtVc`] whose `signing_input` field contains the
+/// base64url-encoded `header.payload` ready for an external signer.
+pub fn prepare_jwt_vc(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<PreparedJwtVc> {
+    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
+    let now = chrono::Utc::now();
+
+    let mut credential_subject: HashMap<String, serde_json::Value> = claims.claims.clone();
+    if let Some(ref subject_id) = claims.subject_id {
+        credential_subject.insert("id".to_string(), serde_json::json!(subject_id));
+    }
+
+    let use_vcdm_v2 = claims.credential_payload_format == CredentialPayloadFormat::W3cVcdmV2JwtVc;
+
+    let mut vc_types = vec!["VerifiableCredential".to_string()];
+    if !claims.credential_type.is_empty() {
+        vc_types.push(claims.credential_type.clone());
+    }
+    vc_types.extend(claims.w3c_types.iter().cloned());
+
+    let vc = if use_vcdm_v2 {
+        let valid_from = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let mut context = vec!["https://www.w3.org/ns/credentials/v2".to_string()];
+        context.extend(claims.w3c_context.iter().cloned());
+        let mut v = serde_json::json!({
+            "@context": context,
+            "id": credential_id,
+            "type": vc_types,
+            "issuer": signer.issuer_id(),
+            "validFrom": valid_from,
+            "credentialSubject": credential_subject,
+        });
+        if let Some(exp_secs) = claims.expiration_seconds {
+            let valid_until = (now + chrono::Duration::seconds(exp_secs))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            v["validUntil"] = serde_json::json!(valid_until);
+        }
+        v
+    } else {
+        let issuance_date = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let mut v = serde_json::json!({
+            "@context": ["https://www.w3.org/2018/credentials/v1"],
+            "id": credential_id,
+            "type": vc_types,
+            "issuer": signer.issuer_id(),
+            "issuanceDate": issuance_date,
+            "credentialSubject": credential_subject,
+        });
+        if let Some(exp_secs) = claims.expiration_seconds {
+            let expiration_date = (now + chrono::Duration::seconds(exp_secs))
+                .format("%Y-%m-%dT%H:%M:%SZ")
+                .to_string();
+            v["expirationDate"] = serde_json::json!(expiration_date);
+        }
+        v
+    };
+
+    let mut payload = serde_json::json!({
+        "iss": signer.issuer_id(),
+        "iat": now.timestamp(),
+        "jti": credential_id,
+        "vc": vc,
+    });
+    if let Some(ref subject_id) = claims.subject_id {
+        payload["sub"] = serde_json::json!(subject_id);
+    }
+    if let Some(exp_secs) = claims.expiration_seconds {
+        payload["exp"] = serde_json::json!(now.timestamp() + exp_secs);
+    }
+
+    let alg_str = signer.algorithm().as_str();
+    let header = serde_json::json!({
+        "alg": alg_str,
+        "typ": "vc+jwt",
+        "kid": signer.kid_url()
+    });
+
+    let header_str = serde_json::to_string(&header)
+        .map_err(|e| Oid4vciError::SigningError(format!("Header serialization failed: {}", e)))?;
+    let payload_str = serde_json::to_string(&payload)
+        .map_err(|e| Oid4vciError::SigningError(format!("Payload serialization failed: {}", e)))?;
+
+    let header_b64 = B64.encode(header_str.as_bytes());
+    let payload_b64 = B64.encode(payload_str.as_bytes());
+
+    Ok(PreparedJwtVc {
+        signing_input: format!("{}.{}", header_b64, payload_b64),
+        credential_id,
+    })
+}
+
+/// Assemble a signed JWT-VC from the prepared data and a raw signature.
+///
+/// The `signature` must be the raw bytes produced by signing
+/// `prepared.signing_input` with the issuer's key.
+pub fn assemble_jwt_vc(prepared: PreparedJwtVc, signature: &[u8]) -> SignedCredential {
+    let signature_b64 = B64.encode(signature);
+    SignedCredential::JwtVcJson {
+        jwt: format!("{}.{}", prepared.signing_input, signature_b64),
+        credential_id: prepared.credential_id,
+    }
+}
+
 /// Encode header and payload as base64url, sign, and produce a compact JWT.
 pub(crate) fn encode_and_sign_jwt(
     jwk: &JWK,
@@ -133,73 +265,10 @@ pub(crate) fn encode_and_sign_jwt(
     let payload_b64 = B64.encode(payload_str.as_bytes());
 
     let message = format!("{}.{}", header_b64, payload_b64);
-    let signature = sign_with_jwk(jwk, message.as_bytes())?;
+    let signature = crate::signer::sign_with_jwk(jwk, message.as_bytes())?;
     let signature_b64 = B64.encode(&signature);
 
     Ok(format!("{}.{}", message, signature_b64))
-}
-
-/// Sign a message with a JWK using the appropriate algorithm.
-fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-    let secret_key = extract_secret_key(jwk)?;
-    let alg_instance = get_algorithm_instance(jwk)?;
-
-    let signature = secret_key
-        .sign(alg_instance, message)
-        .map_err(|e| Oid4vciError::SigningError(format!("Signing failed: {:?}", e)))?;
-
-    Ok(signature)
-}
-
-/// Extract a SecretKey from a JWK for signing.
-fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::SecretKey> {
-    match &jwk.params {
-        Params::OKP(params) => {
-            let d = params
-                .private_key
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing private key (d) in OKP JWK".into()))?;
-            ssi::crypto::SecretKey::new_ed25519(&d.0)
-                .map_err(|e| Oid4vciError::KeyError(format!("Invalid Ed25519 key: {:?}", e)))
-        }
-        Params::EC(params) => {
-            let d = params
-                .ecc_private_key
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing private key (d) in EC JWK".into()))?;
-            match params.curve.as_deref() {
-                Some("P-256") => ssi::crypto::SecretKey::new_p256(&d.0)
-                    .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 key: {:?}", e))),
-                Some("secp256k1") => ssi::crypto::SecretKey::new_secp256k1(&d.0)
-                    .map_err(|e| Oid4vciError::KeyError(format!("Invalid secp256k1 key: {:?}", e))),
-                curve => Err(Oid4vciError::KeyError(format!(
-                    "Unsupported EC curve: {:?}",
-                    curve
-                ))),
-            }
-        }
-        _ => Err(Oid4vciError::KeyError(
-            "Unsupported key type for signing (need OKP or EC)".into(),
-        )),
-    }
-}
-
-/// Get the AlgorithmInstance for a JWK.
-fn get_algorithm_instance(jwk: &JWK) -> Oid4vciResult<AlgorithmInstance> {
-    match &jwk.params {
-        Params::OKP(_) => Ok(AlgorithmInstance::EdDSA),
-        Params::EC(ec) => match ec.curve.as_deref() {
-            Some("P-256") => Ok(AlgorithmInstance::ES256),
-            Some("secp256k1") => Ok(AlgorithmInstance::ES256K),
-            curve => Err(Oid4vciError::KeyError(format!(
-                "Unsupported EC curve: {:?}",
-                curve
-            ))),
-        },
-        _ => Err(Oid4vciError::KeyError(
-            "Unsupported key type for algorithm selection".into(),
-        )),
-    }
 }
 
 #[cfg(test)]

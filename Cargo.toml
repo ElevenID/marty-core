@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-bindings", "marty-oid4vci"]
+members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-bindings", "marty-oid4vci", "marty-didcomm"]
 resolver = "2"
 
 [workspace.package]

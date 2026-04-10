@@ -5,7 +5,7 @@ This module defines the abstract interface for face verification providers.
 Adapters implement this interface to provide different verification backends.
 """
 
-from typing import Protocol
+from typing import List, Protocol
 
 from marty_biometrics.ports.types import (
     FaceVerificationRequest,
@@ -59,4 +59,28 @@ class IFaceVerifier(Protocol):
         Raises:
             BiometricError: If assessment could not be performed.
         """
+        ...
+
+    def extract_template(self, image: str):
+        """Extract a face template from an image."""
+        ...
+
+    def compare_templates(self, reference, probe) -> float:
+        """Compare two face templates, returning a similarity score."""
+        ...
+
+    def estimate_age(self, image: str):
+        """Estimate the age of the subject in the image."""
+        ...
+
+    def detect_passive_liveness(self, frames: List[str]):
+        """Passive liveness detection from multiple frames."""
+        ...
+
+    def detect_deepfake(self, image: str):
+        """Deepfake / synthetic face analysis."""
+        ...
+
+    def match_face_to_document(self, selfie: str, document_photo: str):
+        """Match a selfie against a document photo."""
         ...

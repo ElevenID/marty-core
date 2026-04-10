@@ -1,8 +1,8 @@
 //! WebAssembly bindings for marty-biometrics
 //!
-//! This module exposes biometric types and synchronous operations to WASM.
-//! Async operations are not directly supported; use wasm-bindgen-futures
-//! for promise-based APIs.
+//! This module exposes biometric types and a mock verifier to WASM.
+//! The mock verifier is useful for integration testing in the browser
+//! without requiring actual model files.
 //!
 //! # Building
 //!
@@ -25,6 +25,10 @@ pub fn init_panic_hook() {
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
+
+// ========================================================================
+// JSON helpers (existing)
+// ========================================================================
 
 /// Create a face verification request from JSON
 ///
@@ -178,4 +182,97 @@ pub fn add_head_pose_step(
 #[wasm_bindgen]
 pub fn log(message: &str) {
     web_sys::console::log_1(&message.into());
+}
+
+// ========================================================================
+// Mock face verifier for browser testing
+// ========================================================================
+
+/// A mock face verifier exposed to JavaScript.
+///
+/// Returns deterministic results without model files, useful for
+/// integration testing the browser UI.
+#[wasm_bindgen]
+pub struct WasmMockVerifier {
+    similarity: f32,
+}
+
+#[wasm_bindgen]
+impl WasmMockVerifier {
+    /// Create a new mock verifier with default similarity (0.95)
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self { similarity: 0.95 }
+    }
+
+    /// Create a mock verifier with a custom similarity score
+    #[wasm_bindgen(js_name = withSimilarity)]
+    pub fn with_similarity(similarity: f32) -> Self {
+        Self { similarity }
+    }
+
+    /// Get provider capabilities as a JS object
+    pub fn capabilities(&self) -> Result<JsValue, JsValue> {
+        let caps = ProviderCapabilities {
+            name: "wasm-mock".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            supports_verification: true,
+            supports_quality: true,
+            supports_templates: false,
+            supports_liveness: false,
+            offline_capable: true,
+        };
+        serde_json::to_string(&caps)
+            .map(|s| JsValue::from_str(&s))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Verify two images.
+    ///
+    /// Accepts JSON request string, returns JSON result string.
+    pub fn verify(&self, request_json: &str) -> Result<String, JsValue> {
+        let request: FaceVerificationRequest =
+            serde_json::from_str(request_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let threshold = request.threshold.unwrap_or(0.7);
+        let result = FaceVerificationResult {
+            verified: self.similarity >= threshold,
+            similarity: self.similarity,
+            threshold,
+            reference_quality: Some(0.95),
+            probe_quality: Some(0.9),
+            processing_time_ms: 1,
+            provider: "wasm-mock".to_string(),
+            liveness: None,
+        };
+
+        serde_json::to_string(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Assess quality of an image.
+    ///
+    /// Accepts a base64 encoded image, returns JSON quality assessment string.
+    #[wasm_bindgen(js_name = assessQuality)]
+    pub fn assess_quality(&self, _image: &str) -> Result<String, JsValue> {
+        let assessment = FaceQualityAssessment {
+            overall_score: 0.95,
+            face_detected: true,
+            face_count: 1,
+            face_bounds: Some(FaceBounds {
+                x: 0.25,
+                y: 0.15,
+                width: 0.5,
+                height: 0.7,
+            }),
+            factors: FaceQualityFactors {
+                sharpness: 0.95,
+                brightness: 0.5,
+                contrast: 0.85,
+                face_size: 0.65,
+                pose: 0.98,
+            },
+        };
+
+        serde_json::to_string(&assessment).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
 }

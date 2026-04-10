@@ -46,6 +46,12 @@ pub use provider::{BiometricProvider, LocalProvider, MockProvider};
 #[cfg(any(feature = "native", feature = "python"))]
 pub use traits::FaceVerifier;
 
+// ONNX Runtime inference (face detection, recognition, age, liveness, deepfake)
+#[cfg(feature = "onnx")]
+pub mod onnx;
+#[cfg(feature = "onnx")]
+pub use onnx::OnnxProvider;
+
 // Liveness challenge validation
 #[cfg(feature = "liveness")]
 mod liveness;
