@@ -7,6 +7,7 @@
 
 use ciborium::Value as CborValue;
 use coset::{
+    cbor::value::Value as CosetValue,
     iana, CoseSign1Builder, HeaderBuilder, TaggedCborSerializable,
 };
 use rand::Rng;
@@ -19,6 +20,8 @@ use crate::types::{CredentialClaims, IssuerKey, SignedCredential};
 // ── CBOR tag number for `encoded-cbor` (tag 24, RFC 8949 §3.4.5.1) ──
 // Used for tagged CBOR byte strings inside IssuerSignedItem and issuerAuth.
 const CBOR_TAG_ENCODED_CBOR: u64 = 24;
+const COSE_HEADER_X5CHAIN_LABEL: i64 = 33;
+const MDOC_X5C_CLAIM_KEY: &str = "_mdoc_x5c";
 
 /// Sign an mDoc credential.
 ///
@@ -46,12 +49,18 @@ pub fn sign_mdoc(
         .mdoc_namespace
         .as_deref()
         .unwrap_or("org.iso.18013.5.1");
+    let x5chain_der = extract_mdoc_x5chain_from_claims(claims)?;
 
     // 1. Build IssuerSignedItems and collect digests for the MSO
     let mut issuer_signed_items = Vec::new();
     let mut value_digests = Vec::new(); // (digest_id, sha256_digest)
 
-    for (i, (claim_name, claim_value)) in claims.claims.iter().enumerate() {
+    for (i, (claim_name, claim_value)) in claims
+        .claims
+        .iter()
+        .filter(|(claim_name, _)| claim_name.as_str() != MDOC_X5C_CLAIM_KEY)
+        .enumerate()
+    {
         let digest_id = i as u64;
 
         // Generate 32 bytes of random salt
@@ -84,7 +93,7 @@ pub fn sign_mdoc(
     let mso_bytes = cbor_encode(&mso)?;
 
     // 3. Sign the MSO with COSE_Sign1
-    let issuer_auth = sign_cose_sign1(&mso_bytes, &jwk, issuer_key)?;
+    let issuer_auth = sign_cose_sign1(&mso_bytes, &jwk, issuer_key, &x5chain_der)?;
 
     // 4. Assemble IssuerSigned = { nameSpaces, issuerAuth }
     // issuerAuth must be the COSE_Sign1 CBOR structure (array), NOT a byte
@@ -171,12 +180,18 @@ pub fn prepare_mdoc(
         .mdoc_namespace
         .as_deref()
         .unwrap_or("org.iso.18013.5.1");
+    let x5chain_der = extract_mdoc_x5chain_from_claims(claims)?;
 
     // Build IssuerSignedItems and collect digests
     let mut issuer_signed_items = Vec::new();
     let mut value_digests = Vec::new();
 
-    for (i, (claim_name, claim_value)) in claims.claims.iter().enumerate() {
+    for (i, (claim_name, claim_value)) in claims
+        .claims
+        .iter()
+        .filter(|(claim_name, _)| claim_name.as_str() != MDOC_X5C_CLAIM_KEY)
+        .enumerate()
+    {
         let digest_id = i as u64;
         let mut salt = [0u8; 32];
         rand::thread_rng().fill(&mut salt);
@@ -209,7 +224,7 @@ pub fn prepare_mdoc(
         crate::types::SigningAlgorithm::RS256 => iana::Algorithm::PS256,
     };
 
-    let protected = HeaderBuilder::new().algorithm(alg).build();
+    let protected = build_protected_header(alg, &x5chain_der);
 
     // Compute TBS data
     let cose_for_tbs = CoseSign1Builder::new()
@@ -390,6 +405,7 @@ fn sign_cose_sign1(
     payload: &[u8],
     jwk: &ssi::jwk::JWK,
     issuer_key: &IssuerKey,
+    x5chain_der: &[Vec<u8>],
 ) -> Oid4vciResult<Vec<u8>> {
     use ssi::crypto::{AlgorithmInstance, SecretKey};
     use ssi::jwk::Params;
@@ -407,9 +423,7 @@ fn sign_cose_sign1(
     };
 
     // Build protected header
-    let protected = HeaderBuilder::new()
-        .algorithm(alg)
-        .build();
+    let protected = build_protected_header(alg, x5chain_der);
 
     // Build the COSE_Sign1 without signature to get the TBS data
     let cose_for_tbs = CoseSign1Builder::new()
@@ -471,6 +485,54 @@ fn sign_cose_sign1(
     cose_sign1.to_tagged_vec().map_err(|e| {
         Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e))
     })
+}
+
+fn build_protected_header(alg: iana::Algorithm, x5chain_der: &[Vec<u8>]) -> coset::Header {
+    let mut builder = HeaderBuilder::new().algorithm(alg);
+    if !x5chain_der.is_empty() {
+        let chain = x5chain_der
+            .iter()
+            .map(|cert| CosetValue::Bytes(cert.clone()))
+            .collect();
+        builder = builder.value(COSE_HEADER_X5CHAIN_LABEL, CosetValue::Array(chain));
+    }
+    builder.build()
+}
+
+fn extract_mdoc_x5chain_from_claims(claims: &CredentialClaims) -> Oid4vciResult<Vec<Vec<u8>>> {
+    let raw = match claims.claims.get(MDOC_X5C_CLAIM_KEY) {
+        Some(value) => value,
+        None => return Ok(Vec::new()),
+    };
+
+    let entries = raw.as_array().ok_or_else(|| {
+        Oid4vciError::MdocError(format!(
+            "{MDOC_X5C_CLAIM_KEY} must be an array of base64-encoded DER certificates"
+        ))
+    })?;
+
+    let mut chain = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let encoded = entry.as_str().ok_or_else(|| {
+            Oid4vciError::MdocError(format!(
+                "{MDOC_X5C_CLAIM_KEY}[{index}] must be a base64 string"
+            ))
+        })?;
+
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+            .or_else(|_| {
+                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, encoded)
+            })
+            .map_err(|_| {
+                Oid4vciError::MdocError(format!(
+                    "{MDOC_X5C_CLAIM_KEY}[{index}] is not valid base64-encoded DER"
+                ))
+            })?;
+
+        chain.push(decoded);
+    }
+
+    Ok(chain)
 }
 
 /// CBOR-encode a CborValue into bytes.
@@ -646,5 +708,91 @@ mod tests {
             }
             _ => panic!("Expected MsoMdoc"),
         }
+    }
+
+    #[test]
+    fn test_sign_mdoc_includes_x5chain_header_when_present() {
+        let key = test_p256_key();
+        let cert_a = vec![0x30, 0x82, 0x01, 0x0a];
+        let cert_b = vec![0x30, 0x82, 0x01, 0x0b];
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "mDL".into(),
+            claims: [
+                ("family_name".into(), serde_json::json!("Smith")),
+                (
+                    MDOC_X5C_CLAIM_KEY.into(),
+                    serde_json::json!([
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &cert_a),
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &cert_b),
+                    ]),
+                ),
+            ]
+            .into(),
+            expiration_seconds: Some(365 * 86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+
+        let result = sign_mdoc(&key, &claims).unwrap();
+        let issuer_signed_b64 = match result {
+            SignedCredential::MsoMdoc { issuer_signed_b64, .. } => issuer_signed_b64,
+            _ => panic!("Expected MsoMdoc"),
+        };
+
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            &issuer_signed_b64,
+        )
+        .unwrap();
+        let top: CborValue = ciborium::from_reader(&bytes[..]).unwrap();
+
+        let issuer_auth = match top {
+            CborValue::Map(entries) => entries
+                .into_iter()
+                .find_map(|(k, v)| match k {
+                    CborValue::Text(key) if key == "issuerAuth" => Some(v),
+                    _ => None,
+                })
+                .expect("issuerAuth present"),
+            _ => panic!("Expected top-level map"),
+        };
+
+        let protected_bstr = match issuer_auth {
+            CborValue::Array(parts) => match parts.first() {
+                Some(CborValue::Bytes(b)) => b.clone(),
+                _ => panic!("COSE protected header bytes missing"),
+            },
+            CborValue::Tag(_, boxed) => match *boxed {
+                CborValue::Array(parts) => match parts.first() {
+                    Some(CborValue::Bytes(b)) => b.clone(),
+                    _ => panic!("COSE protected header bytes missing"),
+                },
+                _ => panic!("issuerAuth tagged value should wrap a COSE array"),
+            },
+            _ => panic!("issuerAuth should be a COSE array"),
+        };
+
+        let protected: CborValue = ciborium::from_reader(&protected_bstr[..]).unwrap();
+        let mut found_x5chain = false;
+        if let CborValue::Map(headers) = protected {
+            for (k, v) in headers {
+                if k == CborValue::Integer(COSE_HEADER_X5CHAIN_LABEL.into()) {
+                    found_x5chain = true;
+                    if let CborValue::Array(chain) = v {
+                        assert_eq!(chain.len(), 2);
+                    } else {
+                        panic!("x5chain header should be an array of byte strings");
+                    }
+                }
+            }
+        }
+
+        assert!(found_x5chain, "Expected x5chain header in protected COSE header");
     }
 }

@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 marty-crypto = { path = "../marty-crypto" }
-marty-oid4vci = { path = "../marty-oid4vci" }
+marty-oid4vci = { path = "../marty-oid4vci", features = ["lti"] }
 marty-didcomm = { path = "../marty-didcomm" }
 marty-verification = { path = "../marty-verification" }
 marty-types = { path = "../marty-types" }

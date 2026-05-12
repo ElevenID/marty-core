@@ -198,6 +198,31 @@ pub const IO_ERROR: &str = "E901";
 /// E902: Configuration error (invalid settings).
 pub const CONFIG_ERROR: &str = "E902";
 
+//=========================================================================
+// VDS-NC errors (Axx) - Visible Digital Seal Non-Constrained
+//=========================================================================
+
+/// EA01: VDS-NC barcode is malformed or cannot be parsed.
+pub const VDS_NC_INVALID: &str = "EA01";
+
+/// EA02: VDS-NC required field is missing from the payload.
+pub const VDS_NC_MISSING_FIELD: &str = "EA02";
+
+/// EA03: VDS-NC uses an unsupported algorithm or key type.
+pub const VDS_NC_UNSUPPORTED: &str = "EA03";
+
+/// EA04: VDS-NC signature verification failed.
+pub const VDS_NC_SIGNATURE_INVALID: &str = "EA04";
+
+/// EA05: VDS-NC trust chain validation failed.
+pub const VDS_NC_TRUST_CHAIN_INVALID: &str = "EA05";
+
+/// EA06: VDS-NC has expired.
+pub const VDS_NC_EXPIRED: &str = "EA06";
+
+/// EA07: VDS-NC has been revoked.
+pub const VDS_NC_REVOKED: &str = "EA07";
+
 /// E999: Internal error (unexpected condition).
 pub const INTERNAL_ERROR: &str = "E999";
 

@@ -19,6 +19,7 @@ default = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
 issuer = []         # OID4VCI credential issuer support
 verifier = []       # OID4VP verifiable presentation support
 wallet = ["dep:reqwest", "dep:tokio"]  # OID4VCI/OID4VP wallet/holder support
+lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
 jwt_vc_json = []    # W3C VC-JWT credential format
 sd_jwt = []         # IETF SD-JWT credential format
 mso_mdoc = []       # ISO 18013-5 mDoc credential format
@@ -44,6 +45,7 @@ base64 = { workspace = true }
 
 # Key management
 p256 = { workspace = true }
+p384 = { workspace = true }
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }

@@ -49,6 +49,8 @@
 pub mod error;
 pub mod formats;
 pub mod issuer;
+#[cfg(feature = "lti")]
+pub mod lti;
 pub mod metadata;
 pub mod proof;
 pub mod signer;
@@ -69,4 +71,11 @@ pub use types::{
 pub use verifier::VerificationEngine;
 
 #[cfg(feature = "wallet")]
-pub use wallet::{IssuerMetadata, PresentationResponse, WalletEngine, ZkProofEntry};
+pub use wallet::{
+    DcqlClaimQuery, DcqlCredentialQuery, DcqlQuery, IssuerMetadata,
+    ParsedPresentationRequest, PresentationRequestQueryType, PresentationResponse,
+    WalletEngine, ZkProofEntry,
+};
+
+#[cfg(feature = "lti")]
+pub use lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};

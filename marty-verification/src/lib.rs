@@ -65,6 +65,7 @@ pub use error::{VerificationError, VerificationResult};
 pub use trust_anchor::CscaRegistry;
 pub use trust_anchor::{BasicTrustRegistry, TrustAnchor, TrustPurpose, TrustRegistry};
 pub use trust_anchor::{IacaRegistry, Jurisdiction};
+pub use verification::vds_nc::{verify_vds_nc, verify_vds_nc_jwk_json, SignatureVerificationStatus, VdsNcVerificationResult};
 
 // Re-export commonly used types
 #[cfg(feature = "csca")]

@@ -5,10 +5,12 @@
 //! - `vc+sd-jwt` → IETF SD-JWT with selective disclosure
 //! - `mso_mdoc` → ISO 18013-5 CBOR/COSE
 //! - `zk_mdoc` → ISO 18013-5 mDoc with ZK proof capability (Longfellow/Ligero)
+//! - `vds_nc` → ICAO 9303 VDS-NC barcode payload
 
 pub mod jwt_vc;
 pub mod mdoc;
 pub mod sd_jwt;
+pub mod vds_nc;
 pub mod zk_mdoc;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
@@ -30,6 +32,7 @@ pub fn sign_credential(
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt(issuer_key, claims),
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc(issuer_key, claims),
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc(issuer_key, claims),
+        CredentialFormat::VdsNc => vds_nc::sign_vds_nc(issuer_key, claims),
     }
 }
 
@@ -46,11 +49,8 @@ pub fn sign_credential_with_signer(
         CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc_with_signer(signer, claims),
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt_with_signer(signer, claims),
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc_with_signer(signer, claims),
-        CredentialFormat::ZkMdoc => Err(Oid4vciError::KeyError(
-            "ZK mDoc does not yet support external signers. \
-             Use sign_credential() with an IssuerKey instead."
-                .into(),
-        )),
+        CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc_with_signer(signer, claims),
+        CredentialFormat::VdsNc => vds_nc::sign_vds_nc_with_signer(signer, claims),
     }
 }
 
@@ -63,7 +63,7 @@ pub fn negotiate_format(
     if let Some(req) = requested {
         let format = CredentialFormat::from_str_loose(req).ok_or_else(|| {
             Oid4vciError::UnsupportedFormat(format!(
-                "Unknown format '{}'. Supported: jwt_vc_json, spruce-vc+sd-jwt, mso_mdoc, zk_mdoc",
+                "Unknown format '{}'. Supported: jwt_vc_json, spruce-vc+sd-jwt, mso_mdoc, zk_mdoc, vds_nc",
                 req
             ))
         })?;

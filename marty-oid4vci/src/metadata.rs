@@ -316,6 +316,7 @@ fn format_config_id(type_id: &str, format: &CredentialFormat) -> String {
         CredentialFormat::SdJwt => format!("{}_sd_jwt", type_id),
         CredentialFormat::MsoMdoc => format!("{}_mso_mdoc", type_id),
         CredentialFormat::ZkMdoc => format!("{}_zk_mdoc", type_id),
+        CredentialFormat::VdsNc => format!("{}_vds_nc", type_id),
     }
 }
 
@@ -444,6 +445,33 @@ fn build_config_for_format(
                 zk_predicates: None,
             }
         }
+        CredentialFormat::VdsNc => CredentialConfiguration {
+            format: "vds_nc".into(),
+            scope: Some(ctype.id.clone()),
+            cryptographic_binding_methods_supported: binding_methods.to_vec(),
+            credential_signing_alg_values_supported: {
+                signing_algs
+                    .iter()
+                    .filter(|a| *a != "RS256")
+                    .cloned()
+                    .collect()
+            },
+            proof_types_supported: proof_types.clone(),
+            credential_definition: None,
+            doctype: None,
+            claims: build_claims_metadata(ctype),
+            display: Some(vec![DisplayEntry {
+                name: display_name,
+                locale: Some("en-US".into()),
+                logo: None,
+                description: None,
+                background_color: None,
+                text_color: None,
+            }]),
+            vct: ctype.vct.clone().or_else(|| Some(ctype.id.clone())),
+            order: Some(ctype.claims.keys().cloned().collect()),
+            zk_predicates: None,
+        },
     }
 }
 

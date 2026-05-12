@@ -406,7 +406,95 @@ impl VerificationError {
         })
     }
 
-    /// Create an Open Badges revoked error.
+    // =========================================================================
+    // VDS-NC error builders
+    // =========================================================================
+
+    /// Create a VDS-NC invalid/parse error.
+    pub fn vds_nc_invalid(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::VdsNcError {
+            reason: reason.into(),
+            code: codes::VDS_NC_INVALID,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a VDS-NC missing field error.
+    pub fn vds_nc_missing_field(field: impl Into<String>) -> Box<Self> {
+        Box::new(Self::VdsNcError {
+            reason: format!("Missing required field: {}", field.into()),
+            code: codes::VDS_NC_MISSING_FIELD,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a VDS-NC unsupported algorithm/key error.
+    pub fn vds_nc_unsupported(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::VdsNcError {
+            reason: reason.into(),
+            code: codes::VDS_NC_UNSUPPORTED,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a VDS-NC signature invalid error.
+    pub fn vds_nc_signature_invalid(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::VdsNcError {
+            reason: reason.into(),
+            code: codes::VDS_NC_SIGNATURE_INVALID,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a VDS-NC trust chain invalid error.
+    pub fn vds_nc_trust_chain_invalid(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::VdsNcError {
+            reason: reason.into(),
+            code: codes::VDS_NC_TRUST_CHAIN_INVALID,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a VDS-NC expired error.
+    pub fn vds_nc_expired(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::VdsNcError {
+            reason: reason.into(),
+            code: codes::VDS_NC_EXPIRED,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a VDS-NC revoked error.
+    pub fn vds_nc_revoked(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::VdsNcError {
+            reason: reason.into(),
+            code: codes::VDS_NC_REVOKED,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+
     pub fn open_badges_revoked(reason: impl Into<String>) -> Box<Self> {
         Box::new(Self::OpenBadgesError {
             reason: reason.into(),

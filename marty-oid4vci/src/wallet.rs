@@ -95,6 +95,55 @@ pub struct ZkProofEntry {
     pub proof_bytes: Vec<u8>,
 }
 
+/// The credential query shape used in an OpenID4VP request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationRequestQueryType {
+    PresentationDefinition,
+    DcqlQuery,
+}
+
+/// A requested DCQL claim path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DcqlClaimQuery {
+    pub id: String,
+    pub path: Vec<String>,
+}
+
+/// One credential entry in a DCQL query.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DcqlCredentialQuery {
+    pub id: String,
+    pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<DcqlClaimQuery>,
+}
+
+/// DCQL query object carried in an OpenID4VP request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DcqlQuery {
+    pub credentials: Vec<DcqlCredentialQuery>,
+}
+
+/// Parsed OpenID4VP request object retained in its original query shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedPresentationRequest {
+    pub client_id: String,
+    pub nonce: String,
+    pub response_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    pub query_type: PresentationRequestQueryType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation_definition: Option<PresentationDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dcql_query: Option<DcqlQuery>,
+}
+
 /// The verifier's response after receiving a VP token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PresentationResponse {
@@ -500,13 +549,14 @@ impl WalletEngine {
     // OID4VP — parse incoming presentation request (§5)
     // ──────────────────────────────────────────────────────────────────────
 
-    /// Parse an `openid4vp://` request URI into a [`PresentationDefinition`].
+    /// Parse an `openid4vp://` request URI into a full request object.
     ///
-    /// Handles both inline JSON and `request_uri` redirect.
+    /// Handles inline JSON, `request_uri`, `presentation_definition_uri`, and
+    /// request objects returned as signed JWT payloads.
     pub async fn parse_presentation_request(
         &self,
         input: &str,
-    ) -> Oid4vciResult<PresentationDefinition> {
+    ) -> Oid4vciResult<ParsedPresentationRequest> {
         let url_str = if input.starts_with("openid4vp://") {
             input.replacen("openid4vp://", "https://vp.invalid/", 1)
         } else {
@@ -519,61 +569,37 @@ impl WalletEngine {
 
         let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
 
-        // Direct `presentation_definition` parameter
-        if let Some(pd_json) = params.get("presentation_definition") {
-            let pd: PresentationDefinition = serde_json::from_str(pd_json).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "Invalid presentation_definition JSON: {}",
-                    e
-                ))
-            })?;
-            return Ok(pd);
+        let inline_request = Self::request_object_from_params(&params)?;
+
+        if let Some(request_uri) = params.get("request_uri") {
+            let fetched = self.fetch_request_object_value(request_uri).await?;
+            return Self::parsed_request_from_value(
+                Self::merge_request_objects(fetched, serde_json::Value::Object(inline_request)),
+            );
         }
 
-        // `request_uri` or `presentation_definition_uri` redirect
-        let uri = params
-            .get("request_uri")
-            .or_else(|| params.get("presentation_definition_uri"));
-
-        if let Some(uri) = uri {
-            let resp = self
-                .client
-                .get(uri.as_str())
-                .send()
-                .await
-                .map_err(|e| {
-                    Oid4vciError::InvalidRequest(format!(
-                        "presentation_definition_uri fetch failed: {}",
-                        e
-                    ))
-                })?;
-
-            // The response may be a full request object or just a PD
-            let body: serde_json::Value = resp.json().await.map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "presentation_definition_uri response parse error: {}",
-                    e
-                ))
-            })?;
-
-            // Try nested `presentation_definition` key first, then root
-            let pd_value = body
+        if let Some(presentation_definition_uri) = params.get("presentation_definition_uri") {
+            let fetched = self.fetch_request_object_value(presentation_definition_uri).await?;
+            let pd_value = fetched
                 .get("presentation_definition")
                 .cloned()
-                .unwrap_or(body);
+                .unwrap_or(fetched);
+            let mut inline_with_pd = inline_request;
+            inline_with_pd.insert("presentation_definition".into(), pd_value);
+            return Self::parsed_request_from_value(serde_json::Value::Object(inline_with_pd));
+        }
 
-            let pd: PresentationDefinition =
-                serde_json::from_value(pd_value).map_err(|e| {
-                    Oid4vciError::InvalidRequest(format!(
-                        "presentation_definition parse error: {}",
-                        e
-                    ))
-                })?;
-            return Ok(pd);
+        if !inline_request.is_empty() {
+            return Self::parsed_request_from_value(serde_json::Value::Object(inline_request));
+        }
+
+        if input.starts_with("http://") || input.starts_with("https://") {
+            let fetched = self.fetch_request_object_value(input).await?;
+            return Self::parsed_request_from_value(fetched);
         }
 
         Err(Oid4vciError::InvalidRequest(
-            "No presentation_definition, request_uri or presentation_definition_uri found".into(),
+            "No presentation_definition, dcql_query, request_uri or presentation_definition_uri found".into(),
         ))
     }
 
@@ -632,6 +658,52 @@ impl WalletEngine {
         };
 
         Ok((vp_token, submission))
+    }
+
+    /// Build a VP for either a Presentation Exchange or a DCQL request.
+    pub fn build_presentation_for_request(
+        &self,
+        request: &ParsedPresentationRequest,
+        credentials: HashMap<String, String>,
+    ) -> Oid4vciResult<(String, Option<PresentationSubmission>)> {
+        if request.query_type == PresentationRequestQueryType::DcqlQuery {
+            let dcql_query = request.dcql_query.as_ref().ok_or_else(|| {
+                Oid4vciError::InvalidRequest(
+                    "DCQL request is missing dcql_query payload".into(),
+                )
+            })?;
+            return self.build_dcql_presentation(dcql_query, credentials);
+        }
+
+        let definition = request.presentation_definition.as_ref().ok_or_else(|| {
+            Oid4vciError::InvalidRequest(
+                "Presentation definition request is missing presentation_definition payload".into(),
+            )
+        })?;
+        let (vp_token, submission) = self.build_presentation_submission(definition, credentials)?;
+        Ok((vp_token, Some(submission)))
+    }
+
+    fn build_dcql_presentation(
+        &self,
+        dcql_query: &DcqlQuery,
+        credentials: HashMap<String, String>,
+    ) -> Oid4vciResult<(String, Option<PresentationSubmission>)> {
+        let vp_claims: Vec<serde_json::Value> = dcql_query
+            .credentials
+            .iter()
+            .filter_map(|credential| credentials.get(&credential.id))
+            .map(|credential| serde_json::Value::String(credential.clone()))
+            .collect();
+
+        let vp_token = serde_json::json!({
+            "@context": ["https://www.w3.org/2018/credentials/v1"],
+            "type": ["VerifiablePresentation"],
+            "verifiableCredential": vp_claims,
+        })
+        .to_string();
+
+        Ok((vp_token, None))
     }
 
     /// Build a ZK presentation submission.
@@ -724,17 +796,27 @@ impl WalletEngine {
         vp_token: &str,
         presentation_submission: &PresentationSubmission,
     ) -> Oid4vciResult<PresentationResponse> {
-        let submission_json = serde_json::to_string(presentation_submission).map_err(|e| {
-            Oid4vciError::InvalidRequest(format!(
-                "Presentation submission serialization error: {}",
-                e
-            ))
-        })?;
+        self.submit_presentation_optional(response_uri, vp_token, Some(presentation_submission))
+            .await
+    }
 
-        let params = [
-            ("vp_token", vp_token),
-            ("presentation_submission", &submission_json),
-        ];
+    /// POST a VP token and an optional presentation submission to the verifier.
+    pub async fn submit_presentation_optional(
+        &self,
+        response_uri: &str,
+        vp_token: &str,
+        presentation_submission: Option<&PresentationSubmission>,
+    ) -> Oid4vciResult<PresentationResponse> {
+        let mut params: Vec<(String, String)> = vec![("vp_token".to_string(), vp_token.to_string())];
+        if let Some(submission) = presentation_submission {
+            let submission_json = serde_json::to_string(submission).map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "Presentation submission serialization error: {}",
+                    e
+                ))
+            })?;
+            params.push(("presentation_submission".to_string(), submission_json));
+        }
 
         let resp = self
             .client
@@ -793,6 +875,221 @@ impl WalletEngine {
             Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e))
         })
     }
+
+    fn request_object_from_params(
+        params: &HashMap<String, String>,
+    ) -> Oid4vciResult<serde_json::Map<String, serde_json::Value>> {
+        let mut request = serde_json::Map::new();
+
+        for key in [
+            "response_type",
+            "client_id",
+            "client_id_scheme",
+            "nonce",
+            "response_mode",
+            "response_uri",
+            "redirect_uri",
+            "state",
+        ] {
+            if let Some(value) = params.get(key) {
+                request.insert(key.to_string(), serde_json::Value::String(value.clone()));
+            }
+        }
+
+        if let Some(pd_json) = params.get("presentation_definition") {
+            let pd_value = serde_json::from_str(pd_json).map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "Invalid presentation_definition JSON: {}",
+                    e
+                ))
+            })?;
+            request.insert("presentation_definition".into(), pd_value);
+        }
+
+        if let Some(dcql_json) = params.get("dcql_query") {
+            let dcql_value = serde_json::from_str(dcql_json).map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "Invalid dcql_query JSON: {}",
+                    e
+                ))
+            })?;
+            request.insert("dcql_query".into(), dcql_value);
+        }
+
+        Ok(request)
+    }
+
+    fn merge_request_objects(
+        primary: serde_json::Value,
+        fallback: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut merged = match primary {
+            serde_json::Value::Object(object) => object,
+            other => return other,
+        };
+
+        if let serde_json::Value::Object(fallback_object) = fallback {
+            for (key, value) in fallback_object {
+                merged.entry(key).or_insert(value);
+            }
+        }
+
+        serde_json::Value::Object(merged)
+    }
+
+    async fn fetch_request_object_value(
+        &self,
+        uri: &str,
+    ) -> Oid4vciResult<serde_json::Value> {
+        let resp = self
+            .client
+            .get(uri)
+            .send()
+            .await
+            .map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("Request object fetch failed: {}", e))
+            })?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Request object endpoint returned HTTP {}: {}",
+                status, body
+            )));
+        }
+
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = resp.text().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Request object read failed: {}", e))
+        })?;
+
+        Self::decode_request_object_body(&body, Some(content_type.as_str()))
+    }
+
+    fn decode_request_object_body(
+        body: &str,
+        content_type: Option<&str>,
+    ) -> Oid4vciResult<serde_json::Value> {
+        let trimmed = body.trim();
+        let is_jwt = content_type.map(|value| value.contains("jwt")).unwrap_or(false)
+            || Self::looks_like_compact_jwt(trimmed);
+
+        if is_jwt {
+            return Self::decode_jwt_payload(trimmed);
+        }
+
+        serde_json::from_str(trimmed).map_err(|e| {
+            Oid4vciError::InvalidRequest(format!(
+                "Request object response parse error: {}",
+                e
+            ))
+        })
+    }
+
+    fn looks_like_compact_jwt(body: &str) -> bool {
+        let trimmed = body.trim();
+        trimmed.split('.').count() == 3 && !trimmed.starts_with('{')
+    }
+
+    fn decode_jwt_payload(jwt: &str) -> Oid4vciResult<serde_json::Value> {
+        let parts: Vec<&str> = jwt.split('.').collect();
+        if parts.len() != 3 {
+            return Err(Oid4vciError::InvalidRequest(
+                "Request object JWT must use compact serialization".into(),
+            ));
+        }
+
+        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(parts[1]))
+            .map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "Request object JWT payload decode error: {}",
+                    e
+                ))
+            })?;
+
+        serde_json::from_slice(&payload_bytes).map_err(|e| {
+            Oid4vciError::InvalidRequest(format!(
+                "Request object JWT payload parse error: {}",
+                e
+            ))
+        })
+    }
+
+    fn parsed_request_from_value(value: serde_json::Value) -> Oid4vciResult<ParsedPresentationRequest> {
+        let Some(request) = value.as_object() else {
+            return Err(Oid4vciError::InvalidRequest(
+                "Presentation request object must be a JSON object".into(),
+            ));
+        };
+
+        let presentation_definition = match request.get("presentation_definition") {
+            Some(pd_value) => Some(serde_json::from_value(pd_value.clone()).map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "presentation_definition parse error: {}",
+                    e
+                ))
+            })?),
+            None => None,
+        };
+
+        let dcql_query = match request.get("dcql_query") {
+            Some(dcql_value) => Some(serde_json::from_value(dcql_value.clone()).map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "dcql_query parse error: {}",
+                    e
+                ))
+            })?),
+            None => None,
+        };
+
+        let query_type = if dcql_query.is_some() {
+            PresentationRequestQueryType::DcqlQuery
+        } else if presentation_definition.is_some() {
+            PresentationRequestQueryType::PresentationDefinition
+        } else {
+            return Err(Oid4vciError::InvalidRequest(
+                "Presentation request must include presentation_definition or dcql_query".into(),
+            ));
+        };
+
+        Ok(ParsedPresentationRequest {
+            client_id: request
+                .get("client_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            nonce: request
+                .get("nonce")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            response_uri: request
+                .get("response_uri")
+                .or_else(|| request.get("redirect_uri"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            response_mode: request
+                .get("response_mode")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            state: request
+                .get("state")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            query_type,
+            presentation_definition,
+            dcql_query,
+        })
+    }
 }
 
 impl Default for WalletEngine {
@@ -845,5 +1142,93 @@ fn infer_format(cred: &str) -> Option<&'static str> {
     } else {
         // Treat as JWT
         Some("jwt_vc_json")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode_query_json(value: &str) -> String {
+        url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+    }
+
+    #[tokio::test]
+    async fn parse_presentation_request_by_value_dcql() {
+        let engine = WalletEngine::new();
+        let dcql_query = r#"{"credentials":[{"id":"member_credential","format":"dc+sd-jwt","claims":[{"id":"claim_email","path":["email"]}]}]}"#;
+        let request_uri = format!(
+            "openid4vp://authorize?client_id={}&nonce=nonce-123&response_uri={}&dcql_query={}",
+            encode_query_json("https://verifier.example"),
+            encode_query_json("https://verifier.example/submit"),
+            encode_query_json(dcql_query),
+        );
+
+        let parsed = engine.parse_presentation_request(&request_uri).await.unwrap();
+
+        assert_eq!(parsed.client_id, "https://verifier.example");
+        assert_eq!(parsed.nonce, "nonce-123");
+        assert_eq!(parsed.response_uri, "https://verifier.example/submit");
+        assert_eq!(parsed.query_type, PresentationRequestQueryType::DcqlQuery);
+        assert!(parsed.presentation_definition.is_none());
+        let dcql_query = parsed.dcql_query.expect("dcql_query should be present");
+        assert_eq!(dcql_query.credentials.len(), 1);
+        assert_eq!(dcql_query.credentials[0].id, "member_credential");
+        assert_eq!(dcql_query.credentials[0].format, "dc+sd-jwt");
+    }
+
+    #[test]
+    fn decode_request_object_body_supports_signed_request_jwt() {
+        let body = format!(
+            "eyJhbGciOiJFUzI1NiJ9.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+                r#"{"client_id":"https://verifier.example","nonce":"nonce-123","response_uri":"https://verifier.example/submit","dcql_query":{"credentials":[{"id":"member_credential","format":"dc+sd-jwt"}]}}"#
+            )
+        );
+
+        let decoded = WalletEngine::decode_request_object_body(
+            &body,
+            Some("application/oauth-authz-req+jwt"),
+        )
+        .unwrap();
+
+        assert_eq!(decoded["client_id"], "https://verifier.example");
+        assert!(decoded.get("dcql_query").is_some());
+    }
+
+    #[test]
+    fn build_presentation_for_dcql_omits_presentation_submission() {
+        let engine = WalletEngine::new();
+        let request = ParsedPresentationRequest {
+            client_id: "https://verifier.example".into(),
+            nonce: "nonce-123".into(),
+            response_uri: "https://verifier.example/submit".into(),
+            response_mode: Some("direct_post".into()),
+            state: None,
+            query_type: PresentationRequestQueryType::DcqlQuery,
+            presentation_definition: None,
+            dcql_query: Some(DcqlQuery {
+                credentials: vec![DcqlCredentialQuery {
+                    id: "member_credential".into(),
+                    format: "dc+sd-jwt".into(),
+                    meta: None,
+                    claims: vec![DcqlClaimQuery {
+                        id: "claim_email".into(),
+                        path: vec!["email".into()],
+                    }],
+                }],
+            }),
+        };
+        let credentials = HashMap::from([(
+            "member_credential".to_string(),
+            "credential.jwt".to_string(),
+        )]);
+
+        let (vp_token, submission) = engine
+            .build_presentation_for_request(&request, credentials)
+            .unwrap();
+
+        assert!(submission.is_none());
+        assert!(vp_token.contains("credential.jwt"));
     }
 }

@@ -74,6 +74,8 @@ pub enum ErrorCategory {
     OpenBadges,
     /// Digital Travel Credential related
     Dtc,
+    /// Visible Digital Seal (VDS-NC) related
+    VdsNc,
     /// I/O related
     Io,
     /// Internal/unexpected errors
@@ -91,6 +93,7 @@ impl fmt::Display for ErrorCategory {
             ErrorCategory::Encoding => write!(f, "ENCODING"),
             ErrorCategory::OpenBadges => write!(f, "OPENBADGES"),
             ErrorCategory::Dtc => write!(f, "DTC"),
+            ErrorCategory::VdsNc => write!(f, "VDS_NC"),
             ErrorCategory::Io => write!(f, "IO"),
             ErrorCategory::Internal => write!(f, "INTERNAL"),
         }

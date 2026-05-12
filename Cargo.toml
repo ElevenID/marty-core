@@ -122,3 +122,6 @@ codegen-units = 1
 [profile.dev]
 opt-level = 0
 debug = true
+
+[patch.crates-io]
+core2 = { path = "vendor/core2-0.4.0" }

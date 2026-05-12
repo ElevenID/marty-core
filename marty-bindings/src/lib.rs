@@ -215,6 +215,68 @@ fn base64_url_encode(data: &[u8]) -> String {
 }
 
 // ============================================================================
+// Canvas LTI / Sandbox Hardening
+// ============================================================================
+
+#[pyfunction]
+#[pyo3(signature = (base_url, allow_private_networks=false, allow_http_localhost=false))]
+fn canvas_normalize_base_url(
+    base_url: &str,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> PyResult<String> {
+    marty_oid4vci::lti::normalize_canvas_base_url(
+        base_url,
+        allow_private_networks,
+        allow_http_localhost,
+    )
+    .map_err(to_pyerr)
+}
+
+#[pyfunction]
+#[pyo3(signature = (base_url, timeout_seconds=5, allow_private_networks=false, allow_http_localhost=false))]
+fn canvas_probe_lti_platform(
+    base_url: &str,
+    timeout_seconds: u64,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> PyResult<String> {
+    let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
+    let probe = rt.block_on(marty_oid4vci::lti::probe_canvas_lti_platform(
+        base_url,
+        timeout_seconds,
+        allow_private_networks,
+        allow_http_localhost,
+    ))
+    .map_err(to_pyerr)?;
+    serde_json::to_string(&probe).map_err(to_pyerr)
+}
+
+#[pyfunction]
+#[pyo3(signature = (id_token, expected_issuer, expected_client_id, expected_deployment_id, jwks_json, expected_nonce=None, leeway_seconds=120))]
+fn lti_verify_launch_jwt(
+    id_token: &str,
+    expected_issuer: &str,
+    expected_client_id: &str,
+    expected_deployment_id: &str,
+    jwks_json: &str,
+    expected_nonce: Option<&str>,
+    leeway_seconds: u64,
+) -> PyResult<String> {
+    let verified = marty_oid4vci::lti::verify_lti_launch_jwt(
+        id_token,
+        expected_issuer,
+        expected_client_id,
+        expected_deployment_id,
+        jwks_json,
+        expected_nonce,
+        leeway_seconds,
+    )
+    .map_err(to_pyerr)?;
+    serde_json::to_string(&verified).map_err(to_pyerr)
+}
+
+// ============================================================================
 // OID4VCI Protocol Functions
 //
 // These thin wrappers delegate entirely to the marty-oid4vci crate so Python
@@ -443,7 +505,7 @@ fn oid4vci_verify_proof_jwt(
 
 /// Create an OID4VCI format-aware verifiable credential via the Rust signing engine.
 ///
-/// Supports all credential formats: jwt_vc_json, vc+sd-jwt, mso_mdoc, zk_mdoc.
+/// Supports all credential formats: jwt_vc_json, vc+sd-jwt, mso_mdoc, zk_mdoc, vds_nc.
 /// Delegates entirely to marty-oid4vci — no protocol logic lives in Python.
 ///
 /// Args:
@@ -453,7 +515,7 @@ fn oid4vci_verify_proof_jwt(
 ///     credential_type: Credential type string
 ///     claims_json: JSON object of credential subject claims
 ///     expiration_seconds: Optional validity in seconds
-///     format: Credential wire format ("jwt_vc_json", "vc+sd-jwt", "mso_mdoc", "zk_mdoc")
+///     format: Credential wire format ("jwt_vc_json", "vc+sd-jwt", "mso_mdoc", "zk_mdoc", "vds_nc")
 ///     selective_disclosure_claims: Claims to make selectively disclosable (SD-JWT only)
 ///     zk_predicate_claims: Claims eligible for ZK predicate proofs (zk_mdoc only)
 ///     credential_payload_format: SD-JWT payload structure ("ietf_sd_jwt" or "w3c_vcdm_v2_sd_jwt")
@@ -522,6 +584,7 @@ fn oid4vci_sign_credential(
         SignedCredential::SdJwt { compact, .. } => compact.clone(),
         SignedCredential::MsoMdoc { issuer_signed_b64, .. } => issuer_signed_b64.clone(),
         SignedCredential::ZkMdoc { issuer_signed_b64, .. } => issuer_signed_b64.clone(),
+        SignedCredential::VdsNc { barcode_data, .. } => barcode_data.clone(),
     };
 
     Ok((credential_str, signed.credential_id().to_string()))
@@ -627,6 +690,11 @@ fn oid4vci_prepare_credential(
             let tbs_b64 = b64.encode(&prepared.tbs_data);
             Ok((tbs_b64, prepared.credential_id, "mso_mdoc".to_string()))
         }
+        CredentialFormat::VdsNc => {
+            let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc(&signer, &cred_claims)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
+            Ok((prepared.signing_input, prepared.credential_id, "vds_nc".to_string()))
+        }
         _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
             format!("Format '{}' does not support prepare/assemble yet", format)
         )),
@@ -664,6 +732,21 @@ fn oid4vci_assemble_credential(
                 SignedCredential::JwtVcJson { jwt, credential_id } => {
                     Ok((jwt, credential_id))
                 }
+                _ => unreachable!(),
+            }
+        }
+        "vds_nc" => {
+            let prepared = marty_oid4vci::formats::vds_nc::PreparedVdsNc::from_signing_input(
+                signing_input.to_string(),
+                credential_id.to_string(),
+            )
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
+            let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc(prepared, &signature);
+            match signed {
+                SignedCredential::VdsNc {
+                    barcode_data,
+                    credential_id,
+                } => Ok((barcode_data, credential_id)),
                 _ => unreachable!(),
             }
         }
@@ -943,8 +1026,66 @@ fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyRes
 }
 
 // ============================================================================
-// Module Definition
+// VDS-NC Verification
 // ============================================================================
+
+/// Verify a VDS-NC barcode string against an issuer JWK.
+///
+/// Parses the tilde-separated `header~payload_json~signature_b64` barcode,
+/// validates the header structure, and verifies the ECDSA/EdDSA signature
+/// using the supplied issuer public key JWK.
+///
+/// Supported algorithms: ES256 (P-256/SHA-256), ES384 (P-384/SHA-384),
+/// EdDSA (Ed25519).  The algorithm is taken from the JWK `alg` field; if
+/// absent it is inferred from the key type/curve.
+///
+/// Args:
+///     barcode: Full VDS-NC tilde-separated barcode string.
+///     issuer_jwk_json: Issuer public key as a JSON Web Key string.
+///
+/// Returns:
+///     A dict with keys:
+///       - ``verified`` (bool): overall verification result
+///       - ``country`` (str | None): 3-letter country code from header
+///       - ``header`` (str | None): full header segment
+///       - ``payload`` (dict | None): parsed payload object
+///       - ``signature_status`` (str): "Valid", "Invalid", or "Unknown"
+///       - ``errors`` (list[str]): list of error descriptions; empty if verified
+///
+/// Raises:
+///     ``RuntimeError`` if the JWK JSON cannot be parsed.
+#[pyfunction]
+fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<pyo3::PyObject> {
+    pyo3::Python::with_gil(|py| {
+        let result =
+            marty_verification::verify_vds_nc_jwk_json(barcode, issuer_jwk_json)
+                .map_err(to_pyerr)?;
+
+        let sig_status = match result.signature_status {
+            marty_verification::SignatureVerificationStatus::Valid => "Valid",
+            marty_verification::SignatureVerificationStatus::Invalid => "Invalid",
+            marty_verification::SignatureVerificationStatus::Unknown => "Unknown",
+        };
+
+        let dict = pyo3::types::PyDict::new_bound(py);
+        dict.set_item("verified", result.verified)?;
+        dict.set_item("country", result.country)?;
+        dict.set_item("header", result.header)?;
+        dict.set_item(
+            "payload",
+            result
+                .payload
+                .as_ref()
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+        )?;
+        dict.set_item("signature_status", sig_status)?;
+        dict.set_item("errors", result.errors)?;
+        Ok(dict.into())
+    })
+}
+
+
 
 /// Python module for Marty cryptographic operations.
 ///
@@ -978,9 +1119,15 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_p256, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p384, m)?)?;
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
     
     // Verifiable Credentials
     m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
+
+    // Canvas LTI / Sandbox Hardening
+    m.add_function(wrap_pyfunction!(canvas_normalize_base_url, m)?)?;
+    m.add_function(wrap_pyfunction!(canvas_probe_lti_platform, m)?)?;
+    m.add_function(wrap_pyfunction!(lti_verify_launch_jwt, m)?)?;
     
     // OID4VCI Protocol
     m.add_function(wrap_pyfunction!(oid4vci_create_credential_offer, m)?)?;

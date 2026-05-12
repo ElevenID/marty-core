@@ -29,6 +29,9 @@ pub enum CredentialFormat {
     /// mDoc with ZK proof capability (Longfellow/Ligero).
     #[serde(rename = "zk_mdoc")]
     ZkMdoc,
+    /// ICAO 9303 Visible Digital Seal - Non-Constrained.
+    #[serde(rename = "vds_nc", alias = "vds-nc", alias = "VDS-NC")]
+    VdsNc,
 }
 
 impl CredentialFormat {
@@ -38,6 +41,7 @@ impl CredentialFormat {
             Self::SdJwt => "dc+sd-jwt",
             Self::MsoMdoc => "mso_mdoc",
             Self::ZkMdoc => "zk_mdoc",
+            Self::VdsNc => "vds_nc",
         }
     }
 
@@ -48,6 +52,7 @@ impl CredentialFormat {
             "dc+sd-jwt" | "spruce-vc+sd-jwt" | "vc+sd-jwt" | "sd_jwt" | "sd-jwt" => Some(Self::SdJwt),
             "mso_mdoc" | "mdoc" => Some(Self::MsoMdoc),
             "zk_mdoc" | "zk-mdoc" | "zkp_mdoc" => Some(Self::ZkMdoc),
+            "vds_nc" | "vds-nc" | "VDS-NC" => Some(Self::VdsNc),
             _ => None,
         }
     }
@@ -735,6 +740,13 @@ pub enum SignedCredential {
         /// The credential ID.
         credential_id: String,
     },
+    /// A VDS-NC credential represented as barcode payload text.
+    VdsNc {
+        /// Header + payload + signature string (tilde-separated).
+        barcode_data: String,
+        /// The credential ID.
+        credential_id: String,
+    },
 }
 
 impl SignedCredential {
@@ -745,6 +757,7 @@ impl SignedCredential {
             Self::SdJwt { .. } => CredentialFormat::SdJwt,
             Self::MsoMdoc { .. } => CredentialFormat::MsoMdoc,
             Self::ZkMdoc { .. } => CredentialFormat::ZkMdoc,
+            Self::VdsNc { .. } => CredentialFormat::VdsNc,
         }
     }
 
@@ -755,6 +768,7 @@ impl SignedCredential {
             Self::SdJwt { credential_id, .. } => credential_id,
             Self::MsoMdoc { credential_id, .. } => credential_id,
             Self::ZkMdoc { credential_id, .. } => credential_id,
+            Self::VdsNc { credential_id, .. } => credential_id,
         }
     }
 
@@ -778,6 +792,7 @@ impl SignedCredential {
                     "predicate_bindings": zk_predicate_bindings,
                 }
             }),
+            Self::VdsNc { barcode_data, .. } => serde_json::Value::String(barcode_data.clone()),
         }
     }
 }
