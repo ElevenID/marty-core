@@ -482,7 +482,7 @@ fn oid4vci_create_proof_jwt(aud: &str, c_nonce: &str) -> PyResult<String> {
 ///     issuer_url: Expected `aud` — omit or pass `""` to skip the aud check
 ///
 /// Returns:
-///     `(holder_did, nonce)` tuple on success
+///     `(holder_did, nonce, holder_public_jwk_json)` tuple on success
 ///
 /// Raises:
 ///     `RuntimeError` on any verification failure
@@ -492,7 +492,7 @@ fn oid4vci_verify_proof_jwt(
     proof_jwt: &str,
     expected_c_nonce: Option<&str>,
     issuer_url: Option<&str>,
-) -> PyResult<(String, Option<String>)> {
+) -> PyResult<(String, Option<String>, Option<String>)> {
     let url = issuer_url.unwrap_or("");
     let verified = marty_oid4vci::proof::verify_jwt_proof(proof_jwt, url, expected_c_nonce, 300)
         .map_err(|e| {
@@ -500,7 +500,16 @@ fn oid4vci_verify_proof_jwt(
                 "Proof JWT verification failed: {e}"
             ))
         })?;
-    Ok((verified.holder_id, verified.nonce))
+    let holder_jwk_json = verified
+        .holder_jwk
+        .map(|jwk| serde_json::to_string(&jwk))
+        .transpose()
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Holder JWK serialization failed: {e}"
+            ))
+        })?;
+    Ok((verified.holder_id, verified.nonce, holder_jwk_json))
 }
 
 /// Create an OID4VCI format-aware verifiable credential via the Rust signing engine.

@@ -363,15 +363,15 @@ pub struct CredentialRequest {
     /// The credential format requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// Credential configuration selected from issuer metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_configuration_id: Option<String>,
     /// Credential configuration ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_identifier: Option<String>,
     /// Proof of possession (§8.2) — v1 format with `proofs` object.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proofs: Option<ProofsObject>,
-    /// Legacy proof format (Draft 13 compatibility).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proof: Option<SingleProof>,
     /// Credential definition (for jwt_vc_json).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_definition: Option<serde_json::Value>,
@@ -392,15 +392,6 @@ pub struct ProofsObject {
     /// JWT proofs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwt: Option<Vec<String>>,
-}
-
-/// Single proof (Draft 13 legacy compatibility).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SingleProof {
-    /// Proof type (e.g., "jwt").
-    pub proof_type: String,
-    /// JWT proof value.
-    pub jwt: String,
 }
 
 /// Credential response (§8.3).

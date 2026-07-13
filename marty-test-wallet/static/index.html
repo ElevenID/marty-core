@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marty Test Wallet</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #18211d; background: #f4f6f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { padding: 18px 24px; background: #183b32; color: white; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0; }
+    main { width: min(960px, 100%); margin: 0 auto; padding: 24px; display: grid; gap: 24px; }
+    section { border-top: 1px solid #c9d0cc; padding-top: 20px; }
+    h2 { margin: 0 0 14px; font-size: 16px; letter-spacing: 0; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+    label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
+    input { width: 100%; min-width: 0; height: 42px; border: 1px solid #8b9992; border-radius: 4px; padding: 0 12px; background: white; font: inherit; }
+    button { height: 42px; border: 0; border-radius: 4px; padding: 0 16px; font: inherit; font-weight: 650; cursor: pointer; color: white; background: #16775e; }
+    button.secondary { background: #dfe5e2; color: #183b32; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #status { min-height: 24px; margin: 0; color: #46534d; font-size: 14px; }
+    #status.error { color: #a32121; }
+    ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+    li { background: white; border: 1px solid #d4dad7; border-radius: 6px; padding: 14px; display: grid; gap: 5px; overflow-wrap: anywhere; }
+    li strong { font-size: 14px; }
+    li span { color: #53615a; font-size: 12px; }
+    .empty { color: #6b7771; font-size: 14px; }
+    @media (max-width: 600px) { header { align-items: flex-start; } main { padding: 18px 14px; } form { grid-template-columns: 1fr; } form button { width: 100%; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Marty Test Wallet</h1>
+    <button id="reset" class="secondary" type="button">Reset wallet</button>
+  </header>
+  <main>
+    <p id="status" role="status" aria-live="polite">Wallet ready</p>
+    <section>
+      <h2>Receive credential</h2>
+      <form id="receive-form">
+        <label>Credential offer URI<input id="offer-uri" name="offer_uri" autocomplete="off" required></label>
+        <button type="submit">Receive</button>
+      </form>
+    </section>
+    <section>
+      <h2>Present credential</h2>
+      <form id="present-form">
+        <label>Presentation request URI<input id="request-uri" name="request_uri" autocomplete="off" required></label>
+        <button type="submit">Present</button>
+      </form>
+    </section>
+    <section>
+      <h2>Credentials</h2>
+      <ul id="credentials"><li class="empty">No credentials</li></ul>
+    </section>
+  </main>
+  <script>
+    const statusNode = document.querySelector('#status');
+    const credentialsNode = document.querySelector('#credentials');
+    const setStatus = (message, error = false) => {
+      statusNode.textContent = message;
+      statusNode.classList.toggle('error', error);
+    };
+    const request = async (path, options = {}) => {
+      const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Request failed (${response.status})`);
+      }
+      return response.status === 204 ? null : response.json();
+    };
+    const refresh = async () => {
+      const credentials = await request('/api/credentials');
+      credentialsNode.replaceChildren();
+      if (!credentials.length) {
+        const empty = document.createElement('li');
+        empty.className = 'empty';
+        empty.textContent = 'No credentials';
+        credentialsNode.append(empty);
+        return;
+      }
+      for (const credential of credentials) {
+        const item = document.createElement('li');
+        const name = document.createElement('strong');
+        name.textContent = credential.vct || credential.credential_configuration_id;
+        const details = document.createElement('span');
+        details.textContent = `${credential.format} · ${credential.claim_names.join(', ') || 'No disclosed claims'}`;
+        item.append(name, details);
+        credentialsNode.append(item);
+      }
+    };
+    const runForm = async (form, action, success) => {
+      const button = form.querySelector('button');
+      button.disabled = true;
+      setStatus('Working…');
+      try { await action(); setStatus(success); await refresh(); }
+      catch (error) { setStatus(error.message, true); }
+      finally { button.disabled = false; }
+    };
+    document.querySelector('#receive-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      runForm(event.currentTarget, () => request('/api/receive', {
+        method: 'POST', body: JSON.stringify({ offer_uri: document.querySelector('#offer-uri').value })
+      }), 'Credential received');
+    });
+    document.querySelector('#present-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      runForm(event.currentTarget, () => request('/api/present', {
+        method: 'POST', body: JSON.stringify({ request_uri: document.querySelector('#request-uri').value })
+      }), 'Presentation accepted');
+    });
+    document.querySelector('#reset').addEventListener('click', async () => {
+      try { await request('/api/reset', { method: 'POST', body: '{}' }); setStatus('Wallet reset'); await refresh(); }
+      catch (error) { setStatus(error.message, true); }
+    });
+    refresh().catch((error) => setStatus(error.message, true));
+  </script>
+</body>
+</html>

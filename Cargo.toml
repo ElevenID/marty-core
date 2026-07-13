@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-bindings", "marty-oid4vci", "marty-didcomm"]
+members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-bindings", "marty-oid4vci", "marty-didcomm", "marty-test-wallet"]
 resolver = "2"
 
 [workspace.package]
@@ -87,6 +87,7 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-error = "0.2"
+axum = "0.8"
 
 # Database (for marty-secure-storage)
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }

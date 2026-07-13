@@ -46,13 +46,21 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: Require reproducible release sources
+        shell: bash
+        run: |
+          test -f Cargo.lock
+          test -f vendor/core2-0.4.0/Cargo.toml
+          test -f marty-test-wallet/Cargo.toml
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+
       - name: Run tests (workspace, excluding marty-zkp)
-        run: cargo test --workspace --exclude marty-zkp --features test-fixtures
+        run: cargo test --locked --workspace --exclude marty-zkp --features test-fixtures
 
       - name: Run marty-zkp tests (ZK mock)
         env:
           USE_ZK_MOCK: "1"
-        run: cargo test -p marty-zkp
+        run: cargo test --locked -p marty-zkp
 
   clippy:
     name: Clippy
@@ -63,7 +71,7 @@ jobs:
         with:
           components: clippy
       - name: Run clippy
-        run: cargo clippy --workspace --features test-fixtures -- -D warnings
+        run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
 
   fmt:
     name: Format
@@ -157,10 +165,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Test no default features
-        run: cargo test -p ${{ matrix.crate }} --no-default-features
+        run: cargo test --locked -p ${{ matrix.crate }} --no-default-features
 
       - name: Test default features
-        run: cargo test -p ${{ matrix.crate }}
+        run: cargo test --locked -p ${{ matrix.crate }}
 
   feature-matrix-verification:
     name: Feature Matrix (marty-verification)
@@ -170,13 +178,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build no default features
-        run: cargo build -p marty-verification --no-default-features
+        run: cargo build --locked -p marty-verification --no-default-features
 
       - name: Build with default features
-        run: cargo build -p marty-verification
+        run: cargo build --locked -p marty-verification
 
       - name: Run tests with fixtures
-        run: cargo test -p marty-verification --features test-fixtures
+        run: cargo test --locked -p marty-verification --features test-fixtures
 
   feature-matrix-oid4vci:
     name: Feature Matrix (marty-oid4vci)
@@ -186,16 +194,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Check no default features
-        run: cargo check -p marty-oid4vci --no-default-features
+        run: cargo check --locked -p marty-oid4vci --no-default-features
 
       - name: Test default features
-        run: cargo test -p marty-oid4vci
+        run: cargo test --locked -p marty-oid4vci
 
       - name: Check issuer role alone
-        run: cargo check -p marty-oid4vci --no-default-features --features issuer
+        run: cargo check --locked -p marty-oid4vci --no-default-features --features issuer
 
       - name: Check verifier role alone
-        run: cargo check -p marty-oid4vci --no-default-features --features verifier
+        run: cargo check --locked -p marty-oid4vci --no-default-features --features verifier
 
   feature-combinations:
     name: Feature Combinations

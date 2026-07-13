@@ -1,0 +1,37 @@
+name: MIP Release Wallet
+
+on:
+  push:
+    branches: [main, "release/**", "agent/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-wallet:
+    name: Final-Spec OID4VCI And Browser Wallet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Require reproducible release sources
+        shell: bash
+        run: |
+          test -f Cargo.lock
+          test -f vendor/core2-0.4.0/Cargo.toml
+          test -f marty-test-wallet/Cargo.toml
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+
+      - name: Test final-spec protocol engine and browser wallet
+        run: cargo test --locked -p marty-oid4vci -p marty-test-wallet
+
+      - name: Check Python bindings against the same protocol engine
+        run: cargo check --locked -p marty-bindings

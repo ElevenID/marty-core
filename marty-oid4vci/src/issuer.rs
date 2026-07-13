@@ -417,32 +417,17 @@ impl IssuanceEngine {
         expected_nonce: &str,
         audience: &str,
     ) -> Oid4vciResult<()> {
-        // Extract JWT from v1 `proofs` or Draft 13 `proof`
-        let jwt = if let Some(ref proofs) = request.proofs {
-            proofs
-                .jwt
-                .as_ref()
-                .and_then(|jwts| jwts.first())
-                .ok_or_else(|| {
-                    Oid4vciError::ProofVerificationFailed("No JWT in proofs object".into())
-                })?
-                .clone()
-        } else if let Some(ref single) = request.proof {
-            if single.proof_type != "jwt" {
-                return Err(Oid4vciError::ProofVerificationFailed(format!(
-                    "Unsupported proof type: {}",
-                    single.proof_type
-                )));
-            }
-            single.jwt.clone()
-        } else {
-            return Err(Oid4vciError::ProofVerificationFailed(
-                "No proof provided in credential request".into(),
-            ));
-        };
+        let jwt = request
+            .proofs
+            .as_ref()
+            .and_then(|proofs| proofs.jwt.as_ref())
+            .and_then(|jwts| jwts.first())
+            .ok_or_else(|| {
+                Oid4vciError::ProofVerificationFailed("No JWT in proofs object".into())
+            })?;
 
         // Verify the PoP JWT
-        proof::verify_jwt_proof(&jwt, expected_nonce, Some(audience), 300)?;
+        proof::verify_jwt_proof(jwt, audience, Some(expected_nonce), 300)?;
         Ok(())
     }
 }
