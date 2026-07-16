@@ -33,7 +33,7 @@ use crate::issuer::generate_pkce_challenge_s256;
 use crate::types::{
     AuthorizationDetail, AuthorizationRequest,
     CodeChallengeMethod, CredentialFormat, CredentialOffer, CredentialRequest, CredentialResponse,
-    GrantType, ProofsObject, TokenResponse,
+    GrantType, NonceResponse, ProofsObject, TokenResponse,
 };
 use crate::verifier::{
     DescriptorMapEntry, PresentationDefinition, PresentationSubmission,
@@ -340,6 +340,29 @@ impl WalletEngine {
         Self::parse_token_response(resp).await
     }
 
+    /// Fetch a fresh proof nonce from the OID4VCI Final Nonce Endpoint.
+    pub async fn fetch_nonce(&self, nonce_endpoint: &str) -> Oid4vciResult<NonceResponse> {
+        let resp = self
+            .client
+            .post(nonce_endpoint)
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Nonce request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Nonce endpoint returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        resp.json::<NonceResponse>().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Nonce response parse error: {}", e))
+        })
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Token endpoint — authorization code + PKCE flow (§6.2 / RFC 7636)
     // ──────────────────────────────────────────────────────────────────────
@@ -472,7 +495,7 @@ impl WalletEngine {
     ///
     /// # Arguments
     /// * `holder_kid`   — the holder DID or key URL to use as the proof issuer
-    /// * `c_nonce`      — the nonce from the token response (OID4VCI §8.2)
+    /// * `c_nonce`      — the nonce from the issuer's Nonce Endpoint
     /// * `issuer_url`   — the credential issuer URL (goes in `aud`)
     /// * `jwk_json`     — holder's P-256 JWK (private key, JSON string)
     pub fn create_proof_jwt(

@@ -342,15 +342,16 @@ pub struct TokenResponse {
     pub token_type: String,
     /// Token lifetime in seconds.
     pub expires_in: u64,
-    /// A nonce for the credential proof (OID4VCI 1.0: was `c_nonce`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<String>,
-    /// Lifetime of the nonce in seconds (OID4VCI 1.0: was `c_nonce_expires_in`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce_expires_in: Option<u64>,
     /// Scope granted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+}
+
+/// Response from the OID4VCI 1.0 Nonce Endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NonceResponse {
+    /// Fresh proof nonce. The response must be delivered with `Cache-Control: no-store`.
+    pub c_nonce: String,
 }
 
 // =============================================================================
@@ -403,12 +404,6 @@ pub struct CredentialResponse {
     /// Multiple credentials (v1 batch).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Vec<serde_json::Value>>,
-    /// Updated nonce for next request (OID4VCI 1.0: was `c_nonce`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<String>,
-    /// Updated nonce lifetime (OID4VCI 1.0: was `c_nonce_expires_in`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce_expires_in: Option<u64>,
     /// Transaction ID for deferred issuance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_id: Option<String>,

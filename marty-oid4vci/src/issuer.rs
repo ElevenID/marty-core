@@ -5,7 +5,9 @@
 //! ```text
 //!   [Issuer] ──offer──> [Wallet]
 //!   [Wallet] ──token──> [Issuer]  (pre-authorized code exchange)
-//!   [Issuer] ──token──> [Wallet]  (access_token + c_nonce)
+//!   [Issuer] ──token──> [Wallet]  (access_token)
+//!   [Wallet] ──nonce──> [Issuer]  (empty, unauthenticated POST)
+//!   [Issuer] ──nonce──> [Wallet]  (c_nonce, no-store)
 //!   [Wallet] ──cred───> [Issuer]  (credential request with PoP proof)
 //!   [Issuer] ──cred───> [Wallet]  (signed credential)
 //! ```
@@ -218,26 +220,29 @@ impl IssuanceEngine {
     /// The caller is responsible for:
     /// 1. Validating the pre-authorized code is genuine and not expired
     /// 2. Verifying the tx_code (PIN) if required
-    /// 3. Persisting the access_token and c_nonce for later validation
+    /// 3. Persisting the access token for later validation
     ///
-    /// This function generates the token response structure with fresh
-    /// access_token and c_nonce values.
+    /// This function generates an OID4VCI 1.0 Final token response. Proof
+    /// nonces are obtained separately from the Nonce Endpoint.
     pub fn create_token_response(
         &self,
         _pre_authorized_code: &str,
         token_lifetime_secs: u64,
     ) -> Oid4vciResult<TokenResponse> {
         let access_token = format!("at_{}", uuid::Uuid::new_v4());
-        let nonce = uuid::Uuid::new_v4().to_string();
-
         Ok(TokenResponse {
             access_token,
             token_type: "Bearer".into(),
             expires_in: token_lifetime_secs,
-            nonce: Some(nonce),
-            nonce_expires_in: Some(300), // 5 minutes
             scope: None,
         })
+    }
+
+    /// Create a response for the unauthenticated OID4VCI Nonce Endpoint.
+    pub fn create_nonce_response(&self) -> NonceResponse {
+        NonceResponse {
+            c_nonce: uuid::Uuid::new_v4().to_string(),
+        }
     }
 
     /// Create a token response for an authorization code exchange.
@@ -246,7 +251,7 @@ impl IssuanceEngine {
     /// 1. Looking up the [`AuthorizationSession`] by the provided code
     /// 2. Verifying the session is not expired
     /// 3. Invalidating the session after use (one-time use)
-    /// 4. Persisting the access_token and c_nonce for later validation
+    /// 4. Persisting the access token for later validation
     ///
     /// This method validates:
     /// - The grant_type is `authorization_code`
@@ -301,14 +306,10 @@ impl IssuanceEngine {
 
         // Generate token response (same shape as pre-auth flow)
         let access_token = format!("at_{}", uuid::Uuid::new_v4());
-        let nonce = uuid::Uuid::new_v4().to_string();
-
         Ok(TokenResponse {
             access_token,
             token_type: "Bearer".into(),
             expires_in: token_lifetime_secs,
-            nonce: Some(nonce),
-            nonce_expires_in: Some(300),
             scope: None,
         })
     }
@@ -321,7 +322,8 @@ impl IssuanceEngine {
     /// 1. Format negotiation (from request.format or credential_identifier)
     /// 2. Proof of possession verification (PoP JWT signature + c_nonce)
     /// 3. Credential signing in the negotiated format
-    /// 4. Response construction with fresh c_nonce
+    /// 4. Response construction; a later proof nonce is obtained from the
+    ///    Nonce Endpoint rather than embedded in this response
     ///
     /// # Arguments
     /// - `request` — The credential request from the wallet
@@ -354,14 +356,10 @@ impl IssuanceEngine {
         // 3. Sign the credential
         let signed = formats::sign_credential(&format, &self.config.issuer_key, claims)?;
 
-        // 4. Build response with fresh nonce
-        let new_nonce = uuid::Uuid::new_v4().to_string();
-
+        // 4. Build the credential response. Nonces come from the Nonce Endpoint.
         Ok(CredentialResponse {
             credential: Some(signed.to_response_value()),
             credentials: None,
-            nonce: Some(new_nonce),
-            nonce_expires_in: Some(300),
             transaction_id: None,
         })
     }
@@ -704,7 +702,10 @@ mod tests {
         assert!(resp.access_token.starts_with("at_"));
         assert_eq!(resp.token_type, "Bearer");
         assert_eq!(resp.expires_in, 300);
-        assert!(resp.nonce.is_some());
+        assert!(serde_json::to_value(&resp).unwrap().get("c_nonce").is_none());
+
+        let nonce = engine.create_nonce_response();
+        assert!(!nonce.c_nonce.is_empty());
     }
 
     #[test]
@@ -853,7 +854,7 @@ mod tests {
         assert!(resp.access_token.starts_with("at_"));
         assert_eq!(resp.token_type, "Bearer");
         assert_eq!(resp.expires_in, 1800);
-        assert!(resp.nonce.is_some());
+        assert!(serde_json::to_value(&resp).unwrap().get("c_nonce").is_none());
     }
 
     #[test]
