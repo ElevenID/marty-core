@@ -125,7 +125,7 @@ pub fn encrypt_for_recipient(
             },
             "encrypted_key": URL_SAFE_NO_PAD.encode(&wrapped_cek)
         }],
-        "iv": URL_SAFE_NO_PAD.encode(&iv),
+        "iv": URL_SAFE_NO_PAD.encode(iv),
         "ciphertext": URL_SAFE_NO_PAD.encode(ct),
         "tag": URL_SAFE_NO_PAD.encode(tag)
     });
@@ -287,10 +287,10 @@ fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> DidcommResult<Vec<u8>> {
         .map_err(|e| DidcommError::Crypto(format!("AES key init: {e}")))?;
 
     for j in 0..6u64 {
-        for i in 0..n {
+        for (i, r_block) in r.iter_mut().enumerate() {
             let mut block = [0u8; 16];
             block[..8].copy_from_slice(&a.to_be_bytes());
-            block[8..].copy_from_slice(&r[i]);
+            block[8..].copy_from_slice(r_block);
 
             let b = aes::Block::from(block);
             let encrypted = cipher.encrypt_with_backend_b(b);
@@ -298,7 +298,7 @@ fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> DidcommResult<Vec<u8>> {
 
             let t = (n as u64) * j + (i as u64) + 1;
             a = u64::from_be_bytes(encrypted_bytes[..8].try_into().unwrap()) ^ t;
-            r[i].copy_from_slice(&encrypted_bytes[8..]);
+            r_block.copy_from_slice(&encrypted_bytes[8..]);
         }
     }
 

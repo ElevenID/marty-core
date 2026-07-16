@@ -102,7 +102,7 @@ base64 = "0.22"
 zeroize = "1.7"
 
 # Python bindings
-pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.22.6", features = ["abi3-py311"] }
 
 # Internal crates
 marty-crypto = { path = "marty-crypto" }
