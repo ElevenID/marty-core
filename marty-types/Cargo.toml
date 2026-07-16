@@ -2,10 +2,10 @@
 name = "marty-types"
 version = "0.1.0"
 edition = "2021"
-authors = ["NetKnights GmbH"]
+authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
 description = "Shared type definitions and constants for Marty ecosystem"
-repository = "https://github.com/netknights/marty"
+repository = "https://github.com/ElevenID/marty-core"
 
 [lib]
 name = "marty_types"

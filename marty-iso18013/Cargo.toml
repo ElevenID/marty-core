@@ -2,10 +2,10 @@
 name = "marty-iso18013"
 version = "0.1.0"
 edition = "2021"
-authors = ["NetKnights GmbH"]
+authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
 description = "ISO 18013-5 mobile driving license protocol implementation"
-repository = "https://github.com/netknights/marty"
+repository = "https://github.com/ElevenID/marty-core"
 
 [lib]
 name = "marty_iso18013"
@@ -13,10 +13,10 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # Internal dependencies
-marty-types = { path = "../marty-types" }
-marty-crypto = { path = "../marty-crypto" }
-marty-verification = { path = "../marty-verification" }
-marty-secure-storage = { path = "../marty-secure-storage" }
+marty-types = { version = "0.1.0", path = "../marty-types" }
+marty-crypto = { version = "0.1.0", path = "../marty-crypto" }
+marty-verification = { version = "0.1.0", path = "../marty-verification" }
+marty-secure-storage = { version = "0.1.0", path = "../marty-secure-storage" }
 
 # CBOR and COSE
 ciborium = "0.2"

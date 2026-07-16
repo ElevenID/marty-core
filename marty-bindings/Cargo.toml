@@ -6,17 +6,19 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+publish = false
+description = "Python extension module for the Marty credential libraries"
 
 [lib]
 name = "_marty_rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-marty-crypto = { path = "../marty-crypto" }
-marty-oid4vci = { path = "../marty-oid4vci", features = ["lti"] }
-marty-didcomm = { path = "../marty-didcomm" }
-marty-verification = { path = "../marty-verification" }
-marty-types = { path = "../marty-types" }
+marty-crypto = { version = "0.1.0", path = "../marty-crypto" }
+marty-oid4vci = { version = "0.1.0", path = "../marty-oid4vci", features = ["lti"] }
+marty-didcomm = { version = "0.1.0", path = "../marty-didcomm" }
+marty-verification = { version = "0.1.0", path = "../marty-verification" }
+marty-types = { version = "0.1.0", path = "../marty-types" }
 
 # PyO3 for Python bindings (use workspace version)
 pyo3 = { workspace = true, features = ["abi3-py311"] }
