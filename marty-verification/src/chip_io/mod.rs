@@ -534,11 +534,7 @@ impl BacSession {
                         plain_data = iso7816_unpad(&decrypted)?;
                     }
                 }
-                0x8E => {
-                    if len == 8 {
-                        received_mac.copy_from_slice(value);
-                    }
-                }
+                0x8E if len == 8 => received_mac.copy_from_slice(value),
                 _ => {}
             }
             i += 2 + len;
@@ -762,11 +758,7 @@ impl PaceSession {
                         plain_data = iso7816_unpad(&decrypted)?;
                     }
                 }
-                0x8E => {
-                    if len >= 8 {
-                        received_mac.copy_from_slice(&value[..8]);
-                    }
-                }
+                0x8E if len >= 8 => received_mac.copy_from_slice(&value[..8]),
                 _ => {}
             }
             i += 2 + len;

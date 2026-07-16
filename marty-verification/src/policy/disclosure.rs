@@ -82,10 +82,9 @@ impl MinimumDisclosureResolver {
                 .iter()
                 .any(|r| r.claim_name == *claim_name);
 
-            if is_required || include_optional {
-                if !result.contains(&claim_name.to_string()) {
-                    result.push(claim_name.clone());
-                }
+            if (is_required || include_optional) && !result.iter().any(|claim| claim == claim_name)
+            {
+                result.push(claim_name.clone());
             }
         }
 

@@ -741,7 +741,6 @@ impl SecureStorage {
         )?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            pii_encryptor: None,
         })
     }
 }

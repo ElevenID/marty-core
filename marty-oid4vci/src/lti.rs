@@ -11,12 +11,6 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 const CANVAS_OPENID_CONFIGURATION_PATH: &str = "/.well-known/openid-configuration";
 const MAX_OPENID_CONFIGURATION_BYTES: u64 = 1024 * 1024;
 const MAX_JWKS_BYTES: u64 = 1024 * 1024;
-const LTI_DEPLOYMENT_ID_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/deployment_id";
-const LTI_CONTEXT_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/context";
-const LTI_ROLES_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/roles";
-const LTI_TARGET_LINK_URI_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/target_link_uri";
-const LTI_MESSAGE_TYPE_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/message_type";
-const LTI_VERSION_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/version";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasLtiPlatformProbe {

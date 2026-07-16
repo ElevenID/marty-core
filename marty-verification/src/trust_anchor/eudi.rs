@@ -269,7 +269,7 @@ impl EudiRegistry {
 
         self.member_state_index
             .entry(member_state.code().to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(index);
     }
 
@@ -359,7 +359,7 @@ impl TrustRegistry for EudiRegistry {
             let index = self.inner.get_anchors().len();
             self.member_state_index
                 .entry(jurisdiction.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(index);
         }
         self.inner.add_anchor(anchor)

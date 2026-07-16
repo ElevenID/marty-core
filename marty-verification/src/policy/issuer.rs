@@ -21,13 +21,16 @@ impl IssuerConstraintChecker {
     /// * `trust_profile_verified` - Whether issuer was verified against trust profile
     pub fn check_issuer(&self, issuer_id: &str, trust_profile_verified: bool) -> IssuerCheckResult {
         // If explicit allowlist exists, issuer must be in it
-        if !self.allowed_issuers.is_empty() {
-            if !self.allowed_issuers.contains(&issuer_id.to_string()) {
-                return IssuerCheckResult::NotAllowed(format!(
-                    "Issuer '{}' not in allowed issuers list",
-                    issuer_id
-                ));
-            }
+        if !self.allowed_issuers.is_empty()
+            && !self
+                .allowed_issuers
+                .iter()
+                .any(|allowed| allowed == issuer_id)
+        {
+            return IssuerCheckResult::NotAllowed(format!(
+                "Issuer '{}' not in allowed issuers list",
+                issuer_id
+            ));
         }
 
         // If trust profile is specified, issuer must be verified against it

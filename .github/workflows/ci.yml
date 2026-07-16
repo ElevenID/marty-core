@@ -54,8 +54,11 @@ jobs:
           test -f marty-test-wallet/Cargo.toml
           cargo metadata --locked --no-deps --format-version 1 >/dev/null
 
-      - name: Run tests (workspace, excluding marty-zkp)
-        run: cargo test --locked --workspace --exclude marty-zkp --features test-fixtures
+      - name: Run tests (workspace, excluding native extension crates)
+        run: cargo test --locked --workspace --exclude marty-zkp --exclude marty-bindings --features test-fixtures
+
+      - name: Run binding tests without extension-module linking
+        run: cargo test --locked -p marty-bindings --no-default-features
 
       - name: Run marty-zkp tests (ZK mock)
         env:

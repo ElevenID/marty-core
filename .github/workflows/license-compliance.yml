@@ -120,10 +120,10 @@ jobs:
         run: cargo install cargo-cyclonedx --locked
 
       - name: Generate CycloneDX SBOM
-        run: cargo cyclonedx --format json --output-cdx sbom.cdx.json
+        run: cargo cyclonedx --format json --override-filename sbom.cdx
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
         with:
           name: sbom
-          path: sbom.cdx.json
+          path: '**/sbom.cdx.json'

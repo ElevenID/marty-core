@@ -1308,7 +1308,10 @@ mod tests {
             val.get("access_token").is_some(),
             "must contain access_token"
         );
-        assert!(val.get("nonce").is_some(), "must contain nonce");
+        assert!(
+            val.get("nonce").is_none(),
+            "OID4VCI Final token responses must not contain a proof nonce"
+        );
         assert_eq!(val["token_type"], "Bearer");
     }
 
