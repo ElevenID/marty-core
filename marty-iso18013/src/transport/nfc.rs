@@ -273,7 +273,7 @@ pub struct NfcTransport;
 
 #[cfg(not(feature = "nfc"))]
 impl NfcTransport {
-    pub fn new() -> Result<(), crate::error::Error> {
+    pub fn new() -> Result<Self, crate::error::Error> {
         Err(crate::error::Error::TransportNotSupported)
     }
 }

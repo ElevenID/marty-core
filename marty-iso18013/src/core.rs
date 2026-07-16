@@ -124,7 +124,7 @@ impl DeviceEngagement {
 
     /// Decode device engagement from CBOR
     pub fn from_cbor(data: &[u8]) -> Result<Self> {
-        ciborium::de::from_reader(data).map_err(|e| Error::CborDecode(e))
+        ciborium::de::from_reader(data).map_err(Error::CborDecode)
     }
 
     /// Generate a QR code containing the device engagement

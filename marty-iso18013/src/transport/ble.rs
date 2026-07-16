@@ -279,3 +279,10 @@ impl BleTransport {
         Self
     }
 }
+
+#[cfg(not(feature = "ble"))]
+impl Default for BleTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
