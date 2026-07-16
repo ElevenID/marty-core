@@ -140,10 +140,7 @@ impl ModelRegistry {
     /// Validate that required models are present on disk.
     ///
     /// Returns a list of missing models on failure.
-    pub fn validate_required(
-        &self,
-        required: &[ModelKind],
-    ) -> Result<(), BiometricError> {
+    pub fn validate_required(&self, required: &[ModelKind]) -> Result<(), BiometricError> {
         let missing: Vec<String> = required
             .iter()
             .filter(|k| !self.is_available(**k))

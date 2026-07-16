@@ -10,35 +10,35 @@ pub struct PresentationPolicy {
     pub name: String,
     pub description: Option<String>,
     pub purpose: String,
-    
+
     /// Accepted credential types/templates
     pub accepted_credential_types: Vec<String>,
-    
+
     /// Required claims with optional predicate support
     pub required_claims: Vec<RequiredClaim>,
-    
+
     /// Holder binding requirement
     pub holder_binding: HolderBindingMethod,
-    
+
     /// Trust constraints
     pub trust_profile_id: Option<String>,
     pub allowed_issuers: Vec<String>,
-    
+
     /// Freshness constraints
     pub freshness_requirements: FreshnessRequirements,
-    
+
     /// Data minimization rules
     pub prefer_predicates: bool,
     pub single_presentation: bool,
     pub derived_attribute_preferences: HashMap<String, String>,
-    
+
     /// Credential ranking
     pub credential_ranking_strategy: CredentialRankingStrategy,
     pub credential_ranking_weights: HashMap<String, f64>,
-    
+
     /// Extension point
     pub metadata: HashMap<String, serde_json::Value>,
-    
+
     /// Version for sync conflict detection
     pub version: i32,
 }

@@ -22,7 +22,10 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL
 /// Branches on `claims.credential_payload_format`:
 /// - `W3cVcdmV2JwtVc` → VCDM v2 (`validFrom`/`validUntil`, v2 `@context`)
 /// - any other value  → VCDM v1 (`issuanceDate`/`expirationDate`, v1 `@context`)
-pub fn sign_jwt_vc(issuer_key: &IssuerKey, claims: &CredentialClaims) -> Oid4vciResult<SignedCredential> {
+pub fn sign_jwt_vc(
+    issuer_key: &IssuerKey,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<SignedCredential> {
     let jwk: JWK = serde_json::from_str(&issuer_key.jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
 
@@ -112,10 +115,7 @@ pub fn sign_jwt_vc(issuer_key: &IssuerKey, claims: &CredentialClaims) -> Oid4vci
 
     let jwt = encode_and_sign_jwt(&jwk, &header, &payload)?;
 
-    Ok(SignedCredential::JwtVcJson {
-        jwt,
-        credential_id,
-    })
+    Ok(SignedCredential::JwtVcJson { jwt, credential_id })
 }
 
 /// Sign a W3C VC-JWT credential using any [`CredentialSigner`].

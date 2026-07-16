@@ -11,10 +11,9 @@
 //!       than testing against a fixed known signature byte-string.
 
 use marty_crypto::rsa::{
-    generate_rsa_keypair, sign_pkcs1_sha256, sign_pkcs1_sha384, sign_pkcs1_sha512,
-    sign_pss_sha256, sign_pss_sha384, sign_pss_sha512, verify_pkcs1_sha256,
-    verify_pkcs1_sha384, verify_pkcs1_sha512, verify_pss_sha256, verify_pss_sha384,
-    verify_pss_sha512,
+    generate_rsa_keypair, sign_pkcs1_sha256, sign_pkcs1_sha384, sign_pkcs1_sha512, sign_pss_sha256,
+    sign_pss_sha384, sign_pss_sha512, verify_pkcs1_sha256, verify_pkcs1_sha384,
+    verify_pkcs1_sha512, verify_pss_sha256, verify_pss_sha384, verify_pss_sha512,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -32,8 +31,16 @@ fn rsa_keygen_2048_produces_valid_keys() {
     let (priv_der, pub_der) = rsa2048_keypair();
     // PKCS#8 DER has a minimum overhead (~26 bytes).  2048-bit key is 256 bytes
     // of modulus → private key DER > 600 bytes; public SPKI DER > 250 bytes.
-    assert!(priv_der.len() > 600, "private key too short: {} bytes", priv_der.len());
-    assert!(pub_der.len() > 250, "public key too short: {} bytes", pub_der.len());
+    assert!(
+        priv_der.len() > 600,
+        "private key too short: {} bytes",
+        priv_der.len()
+    );
+    assert!(
+        pub_der.len() > 250,
+        "public key too short: {} bytes",
+        pub_der.len()
+    );
 }
 
 /// Key-size guard: reject < 2048-bit keys.
@@ -52,10 +59,14 @@ fn rsa_pkcs1_rs256_sign_verify_roundtrip() {
     let message = b"FIPS 186-4 RS256 test message";
 
     let sig = sign_pkcs1_sha256(&priv_der, message).expect("RS256 sign");
-    assert_eq!(sig.len(), 256, "2048-bit RS256 signature should be 256 bytes");
+    assert_eq!(
+        sig.len(),
+        256,
+        "2048-bit RS256 signature should be 256 bytes"
+    );
 
-    let valid = verify_pkcs1_sha256(&pub_der, message, &sig)
-        .expect("RS256 verify should not error");
+    let valid =
+        verify_pkcs1_sha256(&pub_der, message, &sig).expect("RS256 verify should not error");
     assert!(valid, "RS256 signature should verify successfully");
 }
 
@@ -68,8 +79,7 @@ fn rsa_pkcs1_rs384_sign_verify_roundtrip() {
     let sig = sign_pkcs1_sha384(&priv_der, message).expect("RS384 sign");
     assert_eq!(sig.len(), 256);
 
-    let valid = verify_pkcs1_sha384(&pub_der, message, &sig)
-        .expect("RS384 verify");
+    let valid = verify_pkcs1_sha384(&pub_der, message, &sig).expect("RS384 verify");
     assert!(valid);
 }
 
@@ -82,8 +92,7 @@ fn rsa_pkcs1_rs512_sign_verify_roundtrip() {
     let sig = sign_pkcs1_sha512(&priv_der, message).expect("RS512 sign");
     assert_eq!(sig.len(), 256);
 
-    let valid = verify_pkcs1_sha512(&pub_der, message, &sig)
-        .expect("RS512 verify");
+    let valid = verify_pkcs1_sha512(&pub_der, message, &sig).expect("RS512 verify");
     assert!(valid);
 }
 
@@ -98,8 +107,7 @@ fn rsa_pss_ps256_sign_verify_roundtrip() {
     let sig = sign_pss_sha256(&priv_der, message).expect("PS256 sign");
     assert_eq!(sig.len(), 256);
 
-    let valid = verify_pss_sha256(&pub_der, message, &sig)
-        .expect("PS256 verify");
+    let valid = verify_pss_sha256(&pub_der, message, &sig).expect("PS256 verify");
     assert!(valid, "PS256 signature should verify");
 }
 
@@ -112,8 +120,7 @@ fn rsa_pss_ps384_sign_verify_roundtrip() {
     let sig = sign_pss_sha384(&priv_der, message).expect("PS384 sign");
     assert_eq!(sig.len(), 256);
 
-    let valid = verify_pss_sha384(&pub_der, message, &sig)
-        .expect("PS384 verify");
+    let valid = verify_pss_sha384(&pub_der, message, &sig).expect("PS384 verify");
     assert!(valid);
 }
 
@@ -126,8 +133,7 @@ fn rsa_pss_ps512_sign_verify_roundtrip() {
     let sig = sign_pss_sha512(&priv_der, message).expect("PS512 sign");
     assert_eq!(sig.len(), 256);
 
-    let valid = verify_pss_sha512(&pub_der, message, &sig)
-        .expect("PS512 verify");
+    let valid = verify_pss_sha512(&pub_der, message, &sig).expect("PS512 verify");
     assert!(valid);
 }
 
@@ -142,8 +148,7 @@ fn rsa_pkcs1_rs256_rejects_tampered_signature() {
     let mut sig = sign_pkcs1_sha256(&priv_der, message).expect("RS256 sign");
     sig[128] ^= 0x01; // flip a bit in the middle of the signature
 
-    let valid = verify_pkcs1_sha256(&pub_der, message, &sig)
-        .unwrap_or(false);
+    let valid = verify_pkcs1_sha256(&pub_der, message, &sig).unwrap_or(false);
     assert!(!valid, "tampered RS256 signature must not verify");
 }
 
@@ -156,8 +161,7 @@ fn rsa_pss_ps256_rejects_tampered_signature() {
     let mut sig = sign_pss_sha256(&priv_der, message).expect("PS256 sign");
     sig[100] ^= 0x80;
 
-    let valid = verify_pss_sha256(&pub_der, message, &sig)
-        .unwrap_or(false);
+    let valid = verify_pss_sha256(&pub_der, message, &sig).unwrap_or(false);
     assert!(!valid, "tampered PS256 signature must not verify");
 }
 
@@ -166,27 +170,31 @@ fn rsa_pss_ps256_rejects_tampered_signature() {
 fn rsa_pkcs1_rs256_rejects_wrong_message() {
     let (priv_der, pub_der) = rsa2048_keypair();
     let message = b"correct message";
-    let wrong   = b"different message";
+    let wrong = b"different message";
 
     let sig = sign_pkcs1_sha256(&priv_der, message).expect("RS256 sign");
 
-    let valid = verify_pkcs1_sha256(&pub_der, wrong, &sig)
-        .unwrap_or(false);
-    assert!(!valid, "RS256 signature should not verify under wrong message");
+    let valid = verify_pkcs1_sha256(&pub_der, wrong, &sig).unwrap_or(false);
+    assert!(
+        !valid,
+        "RS256 signature should not verify under wrong message"
+    );
 }
 
 /// RS256: verification with the wrong key must fail.
 #[test]
 fn rsa_pkcs1_rs256_rejects_wrong_key() {
     let (priv_der1, _) = rsa2048_keypair();
-    let (_, pub_der2)  = rsa2048_keypair();
+    let (_, pub_der2) = rsa2048_keypair();
     let message = b"wrong key test";
 
     let sig = sign_pkcs1_sha256(&priv_der1, message).expect("RS256 sign");
 
-    let valid = verify_pkcs1_sha256(&pub_der2, message, &sig)
-        .unwrap_or(false);
-    assert!(!valid, "RS256 signature should not verify under a different public key");
+    let valid = verify_pkcs1_sha256(&pub_der2, message, &sig).unwrap_or(false);
+    assert!(
+        !valid,
+        "RS256 signature should not verify under a different public key"
+    );
 }
 
 // ── cross-scheme rejection ────────────────────────────────────────────────────
@@ -201,7 +209,10 @@ fn rsa_pkcs1_signature_fails_pss_verifier() {
 
     let result = verify_pss_sha256(&pub_der, message, &pkcs1_sig);
     let valid = result.unwrap_or(false);
-    assert!(!valid, "PKCS#1 signature must not verify under PSS verifier");
+    assert!(
+        !valid,
+        "PKCS#1 signature must not verify under PSS verifier"
+    );
 }
 
 /// A PSS signature must not pass PKCS#1 v1.5 verification.
@@ -214,7 +225,10 @@ fn rsa_pss_signature_fails_pkcs1_verifier() {
 
     let result = verify_pkcs1_sha256(&pub_der, message, &pss_sig);
     let valid = result.unwrap_or(false);
-    assert!(!valid, "PSS signature must not verify under PKCS#1 verifier");
+    assert!(
+        !valid,
+        "PSS signature must not verify under PKCS#1 verifier"
+    );
 }
 
 // ── PSS is randomised (non-deterministic) ────────────────────────────────────
@@ -234,5 +248,8 @@ fn rsa_pss_ps256_is_randomised() {
     assert!(verify_pss_sha256(&pub_der, message, &sig2).unwrap_or(false));
 
     // They should differ (randomised salt)
-    assert_ne!(sig1, sig2, "Two PSS signatures of the same message should differ");
+    assert_ne!(
+        sig1, sig2,
+        "Two PSS signatures of the same message should differ"
+    );
 }

@@ -87,7 +87,10 @@ mod tests {
     #[test]
     fn test_error_display_variants() {
         let err = Error::SessionEstablishment("key mismatch".into());
-        assert_eq!(err.to_string(), "Session establishment failed: key mismatch");
+        assert_eq!(
+            err.to_string(),
+            "Session establishment failed: key mismatch"
+        );
 
         let err = Error::InvalidState("wrong state".into());
         assert_eq!(err.to_string(), "Invalid session state: wrong state");

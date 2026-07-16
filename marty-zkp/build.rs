@@ -42,12 +42,10 @@ fn main() {
 
     let libzk_path = env::var("LIBZK_PATH").unwrap_or_else(|_| {
         let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let workspace_root = PathBuf::from(&manifest_dir)
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("longfellow-zk"))
-            .unwrap_or_else(|| PathBuf::from("../../../longfellow-zk"));
-        workspace_root.to_string_lossy().to_string()
+        PathBuf::from(manifest_dir)
+            .join("vendor/longfellow-zk")
+            .to_string_lossy()
+            .to_string()
     });
     compile_libzk(&PathBuf::from(libzk_path));
 }

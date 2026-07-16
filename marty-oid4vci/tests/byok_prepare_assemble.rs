@@ -6,13 +6,15 @@
 //! 3. The `CredentialSigner` trait is correctly implemented for `IssuerKey`
 //! 4. `sign_jwt_vc_with_signer()` is equivalent to manual prepare+sign+assemble
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use std::collections::HashMap;
 
 use marty_oid4vci::{
-    formats::jwt_vc::{prepare_jwt_vc, assemble_jwt_vc, sign_jwt_vc, sign_jwt_vc_with_signer},
+    formats::jwt_vc::{assemble_jwt_vc, prepare_jwt_vc, sign_jwt_vc, sign_jwt_vc_with_signer},
     signer::CredentialSigner,
-    types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential, SigningAlgorithm},
+    types::{
+        CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential, SigningAlgorithm,
+    },
 };
 use serde_json::{json, Value};
 
@@ -77,7 +79,10 @@ fn prepare_returns_valid_signing_input() {
     // Payload should contain issuer and credential type
     let payload: Value = serde_json::from_slice(&payload_bytes).expect("payload JSON");
     assert_eq!(payload["iss"], "https://issuer.example.com");
-    assert!(payload["vc"]["type"].as_array().unwrap().contains(&json!("TestCredential")));
+    assert!(payload["vc"]["type"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("TestCredential")));
     assert_eq!(payload["sub"], "did:key:z6Mktest");
 
     // credential_id should be a URN
@@ -102,7 +107,11 @@ fn assemble_produces_three_part_jwt() {
         SignedCredential::JwtVcJson { jwt, credential_id } => {
             // JWT should be three base64url segments
             let parts: Vec<&str> = jwt.split('.').collect();
-            assert_eq!(parts.len(), 3, "assembled JWT should have header.payload.signature");
+            assert_eq!(
+                parts.len(),
+                3,
+                "assembled JWT should have header.payload.signature"
+            );
 
             // credential_id should match
             assert_eq!(credential_id, cred_id);
@@ -140,11 +149,15 @@ fn prepare_assemble_equivalent_to_sign_jwt_vc() {
 
             // Headers should be structurally identical (same alg, typ, kid)
             let header_a: Value = serde_json::from_slice(
-                &URL_SAFE_NO_PAD.decode(jwt_a.split('.').next().unwrap()).unwrap(),
+                &URL_SAFE_NO_PAD
+                    .decode(jwt_a.split('.').next().unwrap())
+                    .unwrap(),
             )
             .unwrap();
             let header_b: Value = serde_json::from_slice(
-                &URL_SAFE_NO_PAD.decode(jwt_b.split('.').next().unwrap()).unwrap(),
+                &URL_SAFE_NO_PAD
+                    .decode(jwt_b.split('.').next().unwrap())
+                    .unwrap(),
             )
             .unwrap();
             assert_eq!(header_a["alg"], header_b["alg"]);
@@ -181,7 +194,11 @@ fn issuer_key_implements_credential_signer() {
 
     // kid_url should contain the issuer_id
     let kid = key.kid_url();
-    assert!(kid.contains("issuer.example.com"), "kid_url should reference issuer: {}", kid);
+    assert!(
+        kid.contains("issuer.example.com"),
+        "kid_url should reference issuer: {}",
+        kid
+    );
 
     // sign should produce non-empty output
     let sig = key.sign(b"test data").expect("sign");

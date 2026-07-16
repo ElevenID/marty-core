@@ -14,7 +14,7 @@ pub mod registry;
 #[cfg(feature = "csca")]
 pub mod csca;
 
-pub use eudi::{EudiRegistry, EuMemberState, TrustServiceProvider, TspStatus};
+pub use eudi::{EuMemberState, EudiRegistry, TrustServiceProvider, TspStatus};
 pub use iaca::{IacaRegistry, Jurisdiction};
 pub use registry::{BasicTrustRegistry, PemTrustAnchor, TrustAnchor, TrustPurpose, TrustRegistry};
 

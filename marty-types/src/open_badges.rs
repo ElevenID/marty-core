@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Open Badge verification method record
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +78,10 @@ mod tests {
         let json = serde_json::to_string(&method).unwrap();
         let deserialized: OpenBadgeVerificationMethod = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, "key-1");
-        assert_eq!(deserialized.controller, Some("did:example:issuer".to_string()));
+        assert_eq!(
+            deserialized.controller,
+            Some("did:example:issuer".to_string())
+        );
         assert_eq!(deserialized.source, OpenBadgeKeySource::Sync);
     }
 

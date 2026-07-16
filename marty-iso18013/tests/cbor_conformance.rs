@@ -175,7 +175,10 @@ fn cbor_nested_array() {
         Value::Array(vec![Value::Integer(2.into()), Value::Integer(3.into())]),
         Value::Array(vec![Value::Integer(4.into()), Value::Integer(5.into())]),
     ]);
-    assert_eq!(to_cbor(&val), vec![0x83, 0x01, 0x82, 0x02, 0x03, 0x82, 0x04, 0x05]);
+    assert_eq!(
+        to_cbor(&val),
+        vec![0x83, 0x01, 0x82, 0x02, 0x03, 0x82, 0x04, 0x05]
+    );
     roundtrip(&val);
 }
 

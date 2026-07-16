@@ -7,8 +7,7 @@
 
 use ciborium::Value as CborValue;
 use coset::{
-    cbor::value::Value as CosetValue,
-    iana, CoseSign1Builder, HeaderBuilder, TaggedCborSerializable,
+    cbor::value::Value as CosetValue, iana, CoseSign1Builder, HeaderBuilder, TaggedCborSerializable,
 };
 use rand::Rng;
 use sha2::{Digest, Sha256};
@@ -75,20 +74,18 @@ pub fn sign_mdoc(
         let digest = Sha256::digest(&item_bytes).to_vec();
 
         value_digests.push((digest_id, digest));
-        issuer_signed_items.push(CborValue::Tag(CBOR_TAG_ENCODED_CBOR, Box::new(CborValue::Bytes(item_bytes))));
+        issuer_signed_items.push(CborValue::Tag(
+            CBOR_TAG_ENCODED_CBOR,
+            Box::new(CborValue::Bytes(item_bytes)),
+        ));
     }
 
     // 2. Build the MobileSecurityObject
     let validity_days = claims.expiration_seconds.map(|s| s / 86400).unwrap_or(365);
     let valid_until = now + chrono::Duration::days(validity_days);
 
-    let mso = build_mobile_security_object(
-        doc_type,
-        namespace,
-        &value_digests,
-        &now,
-        &valid_until,
-    )?;
+    let mso =
+        build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
 
     let mso_bytes = cbor_encode(&mso)?;
 
@@ -111,10 +108,7 @@ pub fn sign_mdoc(
 
     let issuer_signed = CborValue::Map(vec![
         (CborValue::Text("nameSpaces".into()), name_spaces),
-        (
-            CborValue::Text("issuerAuth".into()),
-            issuer_auth_cbor,
-        ),
+        (CborValue::Text("issuerAuth".into()), issuer_auth_cbor),
     ]);
 
     let result_bytes = cbor_encode(&issuer_signed)?;
@@ -139,7 +133,7 @@ pub fn sign_mdoc_with_signer(
 ) -> Oid4vciResult<SignedCredential> {
     let prepared = prepare_mdoc(signer, claims)?;
     let signature = signer.sign(&prepared.tbs_data)?;
-    Ok(assemble_mdoc(prepared, &signature)?)
+    assemble_mdoc(prepared, &signature)
 }
 
 /// Intermediate state between mDoc preparation and signing.
@@ -208,7 +202,8 @@ pub fn prepare_mdoc(
     // Build MSO
     let validity_days = claims.expiration_seconds.map(|s| s / 86400).unwrap_or(365);
     let valid_until = now + chrono::Duration::days(validity_days);
-    let mso = build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
+    let mso =
+        build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
     let mso_bytes = cbor_encode(&mso)?;
 
     // Build COSE_Sign1 protected header
@@ -251,9 +246,9 @@ pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<
         .signature(signature.to_vec())
         .build();
 
-    let issuer_auth = cose_sign1.to_tagged_vec().map_err(|e| {
-        Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e))
-    })?;
+    let issuer_auth = cose_sign1
+        .to_tagged_vec()
+        .map_err(|e| Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e)))?;
 
     // Deserialize COSE_Sign1 bytes back to a CborValue so issuerAuth is
     // embedded as the COSE_Sign1 array structure, not as a byte string.
@@ -267,10 +262,7 @@ pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<
 
     let issuer_signed = CborValue::Map(vec![
         (CborValue::Text("nameSpaces".into()), name_spaces),
-        (
-            CborValue::Text("issuerAuth".into()),
-            issuer_auth_cbor,
-        ),
+        (CborValue::Text("issuerAuth".into()), issuer_auth_cbor),
     ]);
 
     let result_bytes = cbor_encode(&issuer_signed)?;
@@ -318,10 +310,7 @@ fn build_issuer_signed_item(
             CborValue::Text("elementIdentifier".into()),
             CborValue::Text(element_identifier.into()),
         ),
-        (
-            CborValue::Text("elementValue".into()),
-            cbor_value,
-        ),
+        (CborValue::Text("elementValue".into()), cbor_value),
     ]))
 }
 
@@ -360,10 +349,7 @@ fn build_mobile_security_object(
 
     // ValidityInfo
     let validity_info = CborValue::Map(vec![
-        (
-            CborValue::Text("signed".into()),
-            cbor_date_time(signed_at),
-        ),
+        (CborValue::Text("signed".into()), cbor_date_time(signed_at)),
         (
             CborValue::Text("validFrom".into()),
             cbor_date_time(signed_at),
@@ -383,18 +369,12 @@ fn build_mobile_security_object(
             CborValue::Text("digestAlgorithm".into()),
             CborValue::Text("SHA-256".into()),
         ),
-        (
-            CborValue::Text("valueDigests".into()),
-            all_digests,
-        ),
+        (CborValue::Text("valueDigests".into()), all_digests),
         (
             CborValue::Text("docType".into()),
             CborValue::Text(doc_type.into()),
         ),
-        (
-            CborValue::Text("validityInfo".into()),
-            validity_info,
-        ),
+        (CborValue::Text("validityInfo".into()), validity_info),
     ]))
 }
 
@@ -451,12 +431,15 @@ fn sign_cose_sign1(
                 Some("P-256") => SecretKey::new_p256(&d.0)
                     .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 key: {:?}", e))),
                 Some(curve) => Err(Oid4vciError::KeyError(format!(
-                    "Unsupported EC curve for COSE: {}", curve
+                    "Unsupported EC curve for COSE: {}",
+                    curve
                 ))),
                 None => Err(Oid4vciError::KeyError("Missing curve in EC JWK".into())),
             }
         }
-        _ => Err(Oid4vciError::KeyError("Unsupported key type for COSE signing".into())),
+        _ => Err(Oid4vciError::KeyError(
+            "Unsupported key type for COSE signing".into(),
+        )),
     }?;
 
     let ssi_alg = match issuer_key.algorithm {
@@ -482,9 +465,9 @@ fn sign_cose_sign1(
         .build();
 
     // Serialize the COSE_Sign1 to tagged CBOR bytes
-    cose_sign1.to_tagged_vec().map_err(|e| {
-        Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e))
-    })
+    cose_sign1
+        .to_tagged_vec()
+        .map_err(|e| Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e)))
 }
 
 fn build_protected_header(alg: iana::Algorithm, x5chain_der: &[Vec<u8>]) -> coset::Header {
@@ -595,10 +578,9 @@ fn is_date_string(s: &str) -> bool {
 fn cbor_date_time(dt: &chrono::DateTime<chrono::Utc>) -> CborValue {
     CborValue::Tag(
         0,
-        Box::new(CborValue::Text(dt.to_rfc3339_opts(
-            chrono::SecondsFormat::Secs,
-            true,
-        ))),
+        Box::new(CborValue::Text(
+            dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        )),
     )
 }
 
@@ -635,13 +617,8 @@ mod tests {
     #[test]
     fn test_build_issuer_signed_item() {
         let salt = [0u8; 32];
-        let item = build_issuer_signed_item(
-            0,
-            &salt,
-            "family_name",
-            &serde_json::json!("Smith"),
-        )
-        .unwrap();
+        let item =
+            build_issuer_signed_item(0, &salt, "family_name", &serde_json::json!("Smith")).unwrap();
 
         // Should be a CBOR map with 4 entries
         if let CborValue::Map(entries) = item {
@@ -679,7 +656,10 @@ mod tests {
                 issuer_signed_b64,
                 credential_id,
             } => {
-                assert!(!issuer_signed_b64.is_empty(), "Should produce non-empty output");
+                assert!(
+                    !issuer_signed_b64.is_empty(),
+                    "Should produce non-empty output"
+                );
                 assert!(credential_id.starts_with("urn:uuid:"));
 
                 // Decode and verify it's valid CBOR
@@ -741,7 +721,9 @@ mod tests {
 
         let result = sign_mdoc(&key, &claims).unwrap();
         let issuer_signed_b64 = match result {
-            SignedCredential::MsoMdoc { issuer_signed_b64, .. } => issuer_signed_b64,
+            SignedCredential::MsoMdoc {
+                issuer_signed_b64, ..
+            } => issuer_signed_b64,
             _ => panic!("Expected MsoMdoc"),
         };
 
@@ -793,6 +775,9 @@ mod tests {
             }
         }
 
-        assert!(found_x5chain, "Expected x5chain header in protected COSE header");
+        assert!(
+            found_x5chain,
+            "Expected x5chain header in protected COSE header"
+        );
     }
 }

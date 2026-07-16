@@ -1,7 +1,9 @@
 # Build artifacts
 /target/
 **/*.rs.bk
-Cargo.lock
+
+# This is an application workspace and release builds use --locked.
+!Cargo.lock
 
 # IDE
 .idea/

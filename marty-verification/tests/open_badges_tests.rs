@@ -12,8 +12,7 @@ fn assert_invalid(label: &str, result_json: &str) {
     assert!(
         !is_valid,
         "{} verification unexpectedly valid: {:?}",
-        label,
-        value
+        label, value
     );
 }
 
@@ -47,7 +46,10 @@ fn ob2_issue_fixture() -> (Value, BTreeMap<String, Value>, String) {
     let issue_result = issue_ob2_json(&issue_request.to_string()).expect("OB2 issue failed");
     let issue_value: Value = serde_json::from_str(&issue_result).expect("invalid OB2 issue JSON");
     assert!(
-        issue_value.get("issued").and_then(|v| v.as_bool()).unwrap_or(false),
+        issue_value
+            .get("issued")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "expected issue to succeed"
     );
 
@@ -92,9 +94,13 @@ fn ob2_issue_verify_round_trip() {
     });
 
     let verify_result = verify_ob2_json(&verify_request.to_string()).expect("OB2 verify failed");
-    let verify_value: Value = serde_json::from_str(&verify_result).expect("invalid OB2 verify JSON");
+    let verify_value: Value =
+        serde_json::from_str(&verify_result).expect("invalid OB2 verify JSON");
     assert!(
-        verify_value.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+        verify_value
+            .get("valid")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "expected verification to succeed: {:?}",
         verify_value
     );
@@ -201,9 +207,13 @@ mod ob3_tests {
         });
 
         let issue_result = issue_ob3_json(&issue_request.to_string()).expect("OB3 issue failed");
-        let issue_value: Value = serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
+        let issue_value: Value =
+            serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
         assert!(
-            issue_value.get("issued").and_then(|v| v.as_bool()).unwrap_or(false),
+            issue_value
+                .get("issued")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             "expected OB3 issue to succeed"
         );
 
@@ -220,11 +230,15 @@ mod ob3_tests {
             "document_store": store
         });
 
-        let verify_result = verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
+        let verify_result =
+            verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
         let verify_value: Value =
             serde_json::from_str(&verify_result).expect("invalid OB3 verify JSON");
         assert!(
-            verify_value.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+            verify_value
+                .get("valid")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             "expected OB3 verification to succeed: {:?}",
             verify_value
         );
@@ -243,7 +257,14 @@ mod ob3_tests {
             "publicKeyJwk": serde_json::to_value(&public_jwk).expect("failed to serialize OB3 public JWK")
         });
 
-        issue_and_verify(&jwk, &did, &DIDJWK::generate_url(&jwk).to_string(), None, None, method);
+        issue_and_verify(
+            &jwk,
+            &did,
+            &DIDJWK::generate_url(&jwk).to_string(),
+            None,
+            None,
+            method,
+        );
     }
 
     #[test]
@@ -312,7 +333,8 @@ mod ob3_tests {
         });
 
         let issue_result = issue_ob3_json(&issue_request.to_string()).expect("OB3 issue failed");
-        let issue_value: Value = serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
+        let issue_value: Value =
+            serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
         let issued_credential = issue_value
             .get("credential")
             .cloned()
@@ -322,12 +344,13 @@ mod ob3_tests {
             "credential": issued_credential,
             "document_store": {}
         });
-        let verify_result = verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
+        let verify_result =
+            verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
         assert_invalid("OB3 missing verification method", &verify_result);
     }
 
     /// Test that credential status checking detects a revoked credential.
-    /// 
+    ///
     /// This test verifies the status checking logic by:
     /// 1. Issuing a valid credential (without status field during issuance)
     /// 2. Manually adding the credentialStatus field to the issued credential
@@ -357,7 +380,8 @@ mod ob3_tests {
         });
 
         let issue_result = issue_ob3_json(&issue_request.to_string()).expect("OB3 issue failed");
-        let issue_value: Value = serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
+        let issue_value: Value =
+            serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
         let mut issued_credential = issue_value
             .get("credential")
             .cloned()
@@ -421,12 +445,17 @@ mod ob3_tests {
             "document_store": store
         });
 
-        let verify_result = verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
-        let verify_value: Value = serde_json::from_str(&verify_result).expect("invalid OB3 verify JSON");
+        let verify_result =
+            verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
+        let verify_value: Value =
+            serde_json::from_str(&verify_result).expect("invalid OB3 verify JSON");
 
         // Should be invalid due to revocation
         assert!(
-            !verify_value.get("valid").and_then(|v| v.as_bool()).unwrap_or(true),
+            !verify_value
+                .get("valid")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
             "revoked credential should be invalid: {:?}",
             verify_value
         );
@@ -434,7 +463,9 @@ mod ob3_tests {
         // Check for E707 (OPEN_BADGES_REVOKED) error code
         let error_codes = verify_value.get("error_codes").and_then(|c| c.as_array());
         assert!(
-            error_codes.map(|codes| codes.iter().any(|c| c.as_str() == Some("E707"))).unwrap_or(false),
+            error_codes
+                .map(|codes| codes.iter().any(|c| c.as_str() == Some("E707")))
+                .unwrap_or(false),
             "expected E707 (OPEN_BADGES_REVOKED) in error_codes: {:?}",
             verify_value
         );
@@ -465,7 +496,8 @@ mod ob3_tests {
         });
 
         let issue_result = issue_ob3_json(&issue_request.to_string()).expect("OB3 issue failed");
-        let issue_value: Value = serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
+        let issue_value: Value =
+            serde_json::from_str(&issue_result).expect("invalid OB3 issue JSON");
         let mut issued_credential = issue_value
             .get("credential")
             .cloned()
@@ -523,8 +555,10 @@ mod ob3_tests {
             "document_store": store
         });
 
-        let verify_result = verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
-        let verify_value: Value = serde_json::from_str(&verify_result).expect("invalid OB3 verify JSON");
+        let verify_result =
+            verify_ob3_json(&verify_request.to_string()).expect("OB3 verify failed");
+        let verify_value: Value =
+            serde_json::from_str(&verify_result).expect("invalid OB3 verify JSON");
 
         // The credential status check should NOT add E707 (revoked) since bit 42 is not set
         // Note: Full verification may fail due to JSON-LD expansion issues when credentialStatus

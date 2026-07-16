@@ -53,7 +53,7 @@ ecdsa = { workspace = true }
 ed25519-dalek = { workspace = true }
 
 # SSI
-ssi = { version = "0.12.0", features = ["w3c", "ed25519", "secp256r1"] }
+ssi = { version = "0.16.0", features = ["w3c", "ed25519", "secp256r1"] }
 bs58 = "0.4.0"
 iref = "3.2.2"
 futures = "0.3"

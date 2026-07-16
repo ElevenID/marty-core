@@ -29,8 +29,8 @@ classifiers = [
 keywords = ["cryptography", "verification", "open-badges", "mdl", "mdoc", "emrtd", "x509"]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/marty"
-Repository = "https://github.com/yourusername/marty"
+Homepage = "https://github.com/ElevenID/marty-core"
+Repository = "https://github.com/ElevenID/marty-core"
 Documentation = "https://docs.marty.dev"
 
 [tool.maturin]

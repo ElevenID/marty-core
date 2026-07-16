@@ -31,13 +31,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::issuer::generate_pkce_challenge_s256;
 use crate::types::{
-    AuthorizationDetail, AuthorizationRequest,
-    CodeChallengeMethod, CredentialFormat, CredentialOffer, CredentialRequest, CredentialResponse,
-    GrantType, SingleProof, TokenResponse,
+    AuthorizationDetail, AuthorizationRequest, CodeChallengeMethod, CredentialFormat,
+    CredentialOffer, CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject,
+    TokenResponse,
 };
-use crate::verifier::{
-    DescriptorMapEntry, PresentationDefinition, PresentationSubmission,
-};
+use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Issuer metadata (wallet-parsed)
@@ -55,6 +53,8 @@ pub struct IssuerMetadata {
     pub token_endpoint: Option<String>,
     /// Credential endpoint.
     pub credential_endpoint: String,
+    /// Nonce endpoint used to obtain a fresh proof nonce.
+    pub nonce_endpoint: Option<String>,
     /// Authorization endpoint (for auth-code flow).
     pub authorization_endpoint: Option<String>,
     /// Supported grant types.
@@ -160,6 +160,15 @@ pub struct PresentationResponse {
     pub error_description: Option<String>,
 }
 
+/// Holder key material for wallet-controlled proof and presentation signing.
+#[derive(Debug, Clone)]
+pub struct HolderKeyMaterial {
+    /// Self-contained P-256 did:key identifier.
+    pub holder_id: String,
+    /// Private P-256 JWK. Callers must store this as sensitive key material.
+    pub private_jwk: String,
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // WalletEngine
 // ═══════════════════════════════════════════════════════════════════════════
@@ -180,6 +189,38 @@ impl WalletEngine {
                 .user_agent("marty-wallet/0.1")
                 .build()
                 .expect("reqwest client init failed"),
+        }
+    }
+
+    /// Generate a P-256 holder key represented as a self-contained `did:key`.
+    pub fn generate_holder_key(&self) -> HolderKeyMaterial {
+        use p256::ecdsa::SigningKey;
+        use p256::elliptic_curve::rand_core::OsRng;
+
+        let signing_key = SigningKey::random(&mut OsRng);
+        let encoded_point = signing_key.verifying_key().to_encoded_point(false);
+        let x = encoded_point.x().expect("uncompressed P-256 point has x");
+        let y = encoded_point.y().expect("uncompressed P-256 point has y");
+        let mut multicodec_key = vec![0x80, 0x24];
+        multicodec_key.extend_from_slice(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(true)
+                .as_bytes(),
+        );
+        let holder_id = format!("did:key:z{}", base58btc_encode(&multicodec_key));
+        let private_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(x),
+            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(y),
+            "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
+        })
+        .to_string();
+
+        HolderKeyMaterial {
+            holder_id,
+            private_jwk,
         }
     }
 
@@ -216,12 +257,9 @@ impl WalletEngine {
 
         if let Some(offer_uri) = params.get("credential_offer_uri") {
             // Redirect pattern — fetch the offer
-            let resp = self
-                .client
-                .get(offer_uri)
-                .send()
-                .await
-                .map_err(|e| Oid4vciError::InvalidRequest(format!("credential_offer_uri fetch failed: {}", e)))?;
+            let resp = self.client.get(offer_uri).send().await.map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("credential_offer_uri fetch failed: {}", e))
+            })?;
 
             let offer: CredentialOffer = resp.json().await.map_err(|e| {
                 Oid4vciError::InvalidRequest(format!(
@@ -248,12 +286,10 @@ impl WalletEngine {
             issuer_url.trim_end_matches('/')
         );
 
-        let resp = self
-            .client
-            .get(&well_known)
-            .send()
-            .await
-            .map_err(|e| Oid4vciError::InvalidRequest(format!("Metadata fetch failed: {}", e)))?;
+        let resp =
+            self.client.get(&well_known).send().await.map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("Metadata fetch failed: {}", e))
+            })?;
 
         if !resp.status().is_success() {
             return Err(Oid4vciError::InvalidRequest(format!(
@@ -300,6 +336,29 @@ impl WalletEngine {
             .map_err(|e| Oid4vciError::InvalidRequest(format!("Token request failed: {}", e)))?;
 
         Self::parse_token_response(resp).await
+    }
+
+    /// Fetch a fresh proof nonce from the OID4VCI Final Nonce Endpoint.
+    pub async fn fetch_nonce(&self, nonce_endpoint: &str) -> Oid4vciResult<NonceResponse> {
+        let resp = self
+            .client
+            .post(nonce_endpoint)
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Nonce request failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Nonce endpoint returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        resp.json::<NonceResponse>()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Nonce response parse error: {}", e)))
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -433,8 +492,8 @@ impl WalletEngine {
     /// can be added by extending `SigningAlgorithm` in types.rs.
     ///
     /// # Arguments
-    /// * `holder_kid`   — the `kid` to embed in the JWT header (wallet DID or key URL)
-    /// * `c_nonce`      — the nonce from the token response (OID4VCI §8.2)
+    /// * `holder_kid`   — the holder DID or key URL to use as the proof issuer
+    /// * `c_nonce`      — the nonce from the issuer's Nonce Endpoint
     /// * `issuer_url`   — the credential issuer URL (goes in `aud`)
     /// * `jwk_json`     — holder's P-256 JWK (private key, JSON string)
     pub fn create_proof_jwt(
@@ -444,38 +503,23 @@ impl WalletEngine {
         issuer_url: &str,
         jwk_json: &str,
     ) -> Oid4vciResult<String> {
-        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use jsonwebtoken::{encode, jwk::Jwk, Algorithm, Header};
 
-        let jwk: serde_json::Value = serde_json::from_str(jwk_json).map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Invalid JWK JSON: {}", e))
+        let encoding_key = p256_encoding_key(jwk_json)?;
+        let mut public_jwk: serde_json::Value = serde_json::from_str(jwk_json)
+            .map_err(|e| Oid4vciError::KeyError(format!("Invalid holder JWK: {e}")))?;
+        let public_jwk_object = public_jwk.as_object_mut().ok_or_else(|| {
+            Oid4vciError::KeyError("Holder JWK must be a JSON object".to_string())
         })?;
-
-        // Extract the raw private key bytes from the JWK.
-        // For P-256 (ES256) we expect `crv: "P-256"` + `d` (raw private scalar, base64url).
-        let d_b64 = jwk
-            .get("d")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| Oid4vciError::InvalidRequest("JWK missing 'd' (private key)".into()))?;
-
-        let d_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(d_b64)
-            .map_err(|e| Oid4vciError::InvalidRequest(format!("JWK 'd' decode error: {}", e)))?;
-
-        // Build PKCS#8 DER from the raw P-256 scalar so jsonwebtoken can load it.
-        use p256::pkcs8::EncodePrivateKey as _;
-        let secret_key = p256::SecretKey::from_slice(&d_bytes)
-            .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 private key: {}", e)))?;
-        let der = secret_key
-            .to_pkcs8_der()
-            .map_err(|e| Oid4vciError::KeyError(format!("PKCS#8 DER encoding failed: {}", e)))?;
-
-        // EncodingKey::from_ec_der is infallible in jsonwebtoken 9.x
-        let encoding_key = EncodingKey::from_ec_der(der.as_bytes());
+        public_jwk_object.remove("d");
+        let header_jwk: Jwk = serde_json::from_value(public_jwk)
+            .map_err(|e| Oid4vciError::KeyError(format!("Invalid public holder JWK: {e}")))?;
 
         let now = chrono::Utc::now().timestamp() as u64;
+        let holder_id = holder_kid.split('#').next().unwrap_or(holder_kid);
 
         let claims = ProofJwtClaims {
-            iss: Some(holder_kid.to_string()),
+            iss: Some(holder_id.to_string()),
             aud: issuer_url.to_string(),
             iat: now,
             nonce: c_nonce.to_string(),
@@ -483,10 +527,52 @@ impl WalletEngine {
 
         let mut header = Header::new(Algorithm::ES256);
         header.typ = Some("openid4vci-proof+jwt".into());
-        header.kid = Some(holder_kid.to_string());
+        header.jwk = Some(header_jwk);
 
         encode(&header, &claims, &encoding_key)
             .map_err(|e| Oid4vciError::SigningError(format!("JWT signing failed: {}", e)))
+    }
+
+    /// Create a selectively disclosed SD-JWT VC presentation with a KB-JWT.
+    ///
+    /// The key-binding JWT binds the presentation to the verifier's audience
+    /// and nonce. The private JWK must correspond to the public key in the
+    /// credential's `cnf` claim.
+    pub fn create_sd_jwt_presentation(
+        &self,
+        credential: &str,
+        claims_to_disclose: &[String],
+        nonce: &str,
+        audience: &str,
+        holder_jwk_json: &str,
+    ) -> Oid4vciResult<String> {
+        use sd_jwt_rs::{SDJWTHolder, SDJWTSerializationFormat};
+
+        let disclosures = claims_to_disclose
+            .iter()
+            .map(|claim| (claim.clone(), serde_json::Value::Bool(true)))
+            .collect();
+        let encoding_key = p256_encoding_key(holder_jwk_json)?;
+        let mut holder =
+            SDJWTHolder::new(credential.to_string(), SDJWTSerializationFormat::Compact).map_err(
+                |error| {
+                    Oid4vciError::InvalidRequest(format!("Invalid SD-JWT credential: {error:?}"))
+                },
+            )?;
+
+        holder
+            .create_presentation(
+                disclosures,
+                Some(nonce.to_string()),
+                Some(audience.to_string()),
+                Some(encoding_key),
+                Some("ES256".to_string()),
+            )
+            .map_err(|error| {
+                Oid4vciError::SigningError(format!(
+                    "SD-JWT presentation creation failed: {error:?}"
+                ))
+            })
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -504,16 +590,13 @@ impl WalletEngine {
         credential_configuration_id: Option<&str>,
         proof_jwt: &str,
     ) -> Oid4vciResult<CredentialResponse> {
-        let proof = SingleProof {
-            proof_type: "jwt".into(),
-            jwt: proof_jwt.to_string(),
-        };
-
         let req = CredentialRequest {
             format: Some(format.as_str().to_string()),
-            credential_identifier: credential_configuration_id.map(|s| s.to_string()),
-            proofs: None,
-            proof: Some(proof),
+            credential_configuration_id: credential_configuration_id.map(|s| s.to_string()),
+            credential_identifier: None,
+            proofs: Some(ProofsObject {
+                jwt: Some(vec![proof_jwt.to_string()]),
+            }),
             credential_definition: None,
             vct: None,
             doctype: None,
@@ -573,13 +656,16 @@ impl WalletEngine {
 
         if let Some(request_uri) = params.get("request_uri") {
             let fetched = self.fetch_request_object_value(request_uri).await?;
-            return Self::parsed_request_from_value(
-                Self::merge_request_objects(fetched, serde_json::Value::Object(inline_request)),
-            );
+            return Self::parsed_request_from_value(Self::merge_request_objects(
+                fetched,
+                serde_json::Value::Object(inline_request),
+            ));
         }
 
         if let Some(presentation_definition_uri) = params.get("presentation_definition_uri") {
-            let fetched = self.fetch_request_object_value(presentation_definition_uri).await?;
+            let fetched = self
+                .fetch_request_object_value(presentation_definition_uri)
+                .await?;
             let pd_value = fetched
                 .get("presentation_definition")
                 .cloned()
@@ -668,9 +754,7 @@ impl WalletEngine {
     ) -> Oid4vciResult<(String, Option<PresentationSubmission>)> {
         if request.query_type == PresentationRequestQueryType::DcqlQuery {
             let dcql_query = request.dcql_query.as_ref().ok_or_else(|| {
-                Oid4vciError::InvalidRequest(
-                    "DCQL request is missing dcql_query payload".into(),
-                )
+                Oid4vciError::InvalidRequest("DCQL request is missing dcql_query payload".into())
             })?;
             return self.build_dcql_presentation(dcql_query, credentials);
         }
@@ -689,19 +773,23 @@ impl WalletEngine {
         dcql_query: &DcqlQuery,
         credentials: HashMap<String, String>,
     ) -> Oid4vciResult<(String, Option<PresentationSubmission>)> {
-        let vp_claims: Vec<serde_json::Value> = dcql_query
-            .credentials
-            .iter()
-            .filter_map(|credential| credentials.get(&credential.id))
-            .map(|credential| serde_json::Value::String(credential.clone()))
-            .collect();
+        let mut vp_tokens = serde_json::Map::new();
+        for query in &dcql_query.credentials {
+            if let Some(credential) = credentials.get(&query.id) {
+                vp_tokens.insert(
+                    query.id.clone(),
+                    serde_json::Value::Array(vec![serde_json::Value::String(credential.clone())]),
+                );
+            }
+        }
 
-        let vp_token = serde_json::json!({
-            "@context": ["https://www.w3.org/2018/credentials/v1"],
-            "type": ["VerifiablePresentation"],
-            "verifiableCredential": vp_claims,
-        })
-        .to_string();
+        if vp_tokens.is_empty() {
+            return Err(Oid4vciError::InvalidRequest(
+                "No credentials satisfy the DCQL query".into(),
+            ));
+        }
+
+        let vp_token = serde_json::Value::Object(vp_tokens).to_string();
 
         Ok((vp_token, None))
     }
@@ -720,15 +808,21 @@ impl WalletEngine {
         zk_proofs: Vec<ZkProofEntry>,
     ) -> Oid4vciResult<(String, PresentationSubmission)> {
         let vp_id = uuid::Uuid::new_v4().to_string();
-        let zk_proofs_by_id: HashMap<_, _> =
-            zk_proofs.iter().map(|e| (e.descriptor_id.as_str(), e)).collect();
+        let zk_proofs_by_id: HashMap<_, _> = zk_proofs
+            .iter()
+            .map(|e| (e.descriptor_id.as_str(), e))
+            .collect();
 
         let mut descriptor_map = vec![];
         let mut vp_credentials = vec![];
         let mut zk_proof_map: HashMap<String, serde_json::Value> = HashMap::new();
 
         for desc in &definition.input_descriptors {
-            let has_zk = desc.constraints.fields.iter().any(|f| f.zk_predicate.is_some());
+            let has_zk = desc
+                .constraints
+                .fields
+                .iter()
+                .any(|f| f.zk_predicate.is_some());
 
             if has_zk {
                 // ZK path — embed the proof, not the raw credential
@@ -739,8 +833,8 @@ impl WalletEngine {
                     ))
                 })?;
 
-                let proof_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(&entry.proof_bytes);
+                let proof_b64 =
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&entry.proof_bytes);
 
                 zk_proof_map.insert(
                     desc.id.clone(),
@@ -807,7 +901,35 @@ impl WalletEngine {
         vp_token: &str,
         presentation_submission: Option<&PresentationSubmission>,
     ) -> Oid4vciResult<PresentationResponse> {
-        let mut params: Vec<(String, String)> = vec![("vp_token".to_string(), vp_token.to_string())];
+        self.submit_presentation_form(response_uri, vp_token, presentation_submission, None)
+            .await
+    }
+
+    /// Submit a response for a parsed request, including its state value.
+    pub async fn submit_presentation_for_request(
+        &self,
+        request: &ParsedPresentationRequest,
+        vp_token: &str,
+        presentation_submission: Option<&PresentationSubmission>,
+    ) -> Oid4vciResult<PresentationResponse> {
+        self.submit_presentation_form(
+            &request.response_uri,
+            vp_token,
+            presentation_submission,
+            request.state.as_deref(),
+        )
+        .await
+    }
+
+    async fn submit_presentation_form(
+        &self,
+        response_uri: &str,
+        vp_token: &str,
+        presentation_submission: Option<&PresentationSubmission>,
+        state: Option<&str>,
+    ) -> Oid4vciResult<PresentationResponse> {
+        let mut params: Vec<(String, String)> =
+            vec![("vp_token".to_string(), vp_token.to_string())];
         if let Some(submission) = presentation_submission {
             let submission_json = serde_json::to_string(submission).map_err(|e| {
                 Oid4vciError::InvalidRequest(format!(
@@ -816,6 +938,9 @@ impl WalletEngine {
                 ))
             })?;
             params.push(("presentation_submission".to_string(), submission_json));
+        }
+        if let Some(state) = state {
+            params.push(("state".to_string(), state.to_string()));
         }
 
         let resp = self
@@ -829,8 +954,10 @@ impl WalletEngine {
             })?;
 
         let status = resp.status();
-        let body: serde_json::Value =
-            resp.json().await.unwrap_or(serde_json::Value::Object(Default::default()));
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .unwrap_or(serde_json::Value::Object(Default::default()));
 
         if status.is_success() {
             Ok(PresentationResponse {
@@ -871,9 +998,9 @@ impl WalletEngine {
                 status, body
             )));
         }
-        resp.json::<TokenResponse>().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e))
-        })
+        resp.json::<TokenResponse>()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e)))
     }
 
     fn request_object_from_params(
@@ -898,20 +1025,14 @@ impl WalletEngine {
 
         if let Some(pd_json) = params.get("presentation_definition") {
             let pd_value = serde_json::from_str(pd_json).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "Invalid presentation_definition JSON: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("Invalid presentation_definition JSON: {}", e))
             })?;
             request.insert("presentation_definition".into(), pd_value);
         }
 
         if let Some(dcql_json) = params.get("dcql_query") {
             let dcql_value = serde_json::from_str(dcql_json).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "Invalid dcql_query JSON: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("Invalid dcql_query JSON: {}", e))
             })?;
             request.insert("dcql_query".into(), dcql_value);
         }
@@ -937,18 +1058,10 @@ impl WalletEngine {
         serde_json::Value::Object(merged)
     }
 
-    async fn fetch_request_object_value(
-        &self,
-        uri: &str,
-    ) -> Oid4vciResult<serde_json::Value> {
-        let resp = self
-            .client
-            .get(uri)
-            .send()
-            .await
-            .map_err(|e| {
-                Oid4vciError::InvalidRequest(format!("Request object fetch failed: {}", e))
-            })?;
+    async fn fetch_request_object_value(&self, uri: &str) -> Oid4vciResult<serde_json::Value> {
+        let resp = self.client.get(uri).send().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Request object fetch failed: {}", e))
+        })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -977,7 +1090,9 @@ impl WalletEngine {
         content_type: Option<&str>,
     ) -> Oid4vciResult<serde_json::Value> {
         let trimmed = body.trim();
-        let is_jwt = content_type.map(|value| value.contains("jwt")).unwrap_or(false)
+        let is_jwt = content_type
+            .map(|value| value.contains("jwt"))
+            .unwrap_or(false)
             || Self::looks_like_compact_jwt(trimmed);
 
         if is_jwt {
@@ -985,10 +1100,7 @@ impl WalletEngine {
         }
 
         serde_json::from_str(trimmed).map_err(|e| {
-            Oid4vciError::InvalidRequest(format!(
-                "Request object response parse error: {}",
-                e
-            ))
+            Oid4vciError::InvalidRequest(format!("Request object response parse error: {}", e))
         })
     }
 
@@ -1016,14 +1128,13 @@ impl WalletEngine {
             })?;
 
         serde_json::from_slice(&payload_bytes).map_err(|e| {
-            Oid4vciError::InvalidRequest(format!(
-                "Request object JWT payload parse error: {}",
-                e
-            ))
+            Oid4vciError::InvalidRequest(format!("Request object JWT payload parse error: {}", e))
         })
     }
 
-    fn parsed_request_from_value(value: serde_json::Value) -> Oid4vciResult<ParsedPresentationRequest> {
+    fn parsed_request_from_value(
+        value: serde_json::Value,
+    ) -> Oid4vciResult<ParsedPresentationRequest> {
         let Some(request) = value.as_object() else {
             return Err(Oid4vciError::InvalidRequest(
                 "Presentation request object must be a JSON object".into(),
@@ -1032,20 +1143,14 @@ impl WalletEngine {
 
         let presentation_definition = match request.get("presentation_definition") {
             Some(pd_value) => Some(serde_json::from_value(pd_value.clone()).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "presentation_definition parse error: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("presentation_definition parse error: {}", e))
             })?),
             None => None,
         };
 
         let dcql_query = match request.get("dcql_query") {
             Some(dcql_value) => Some(serde_json::from_value(dcql_value.clone()).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "dcql_query parse error: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("dcql_query parse error: {}", e))
             })?),
             None => None,
         };
@@ -1129,6 +1234,58 @@ fn generate_random_state() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
+fn base58btc_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let leading_zeroes = data.iter().take_while(|&&byte| byte == 0).count();
+    let mut digits: Vec<u8> = Vec::new();
+    for &byte in data {
+        let mut carry = byte as u32;
+        for digit in &mut digits {
+            carry += (*digit as u32) * 256;
+            *digit = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    digits.extend(std::iter::repeat(0).take(leading_zeroes));
+    digits.reverse();
+    digits
+        .iter()
+        .map(|&digit| ALPHABET[digit as usize] as char)
+        .collect()
+}
+
+fn p256_encoding_key(jwk_json: &str) -> Oid4vciResult<jsonwebtoken::EncodingKey> {
+    use p256::pkcs8::EncodePrivateKey as _;
+
+    let jwk: serde_json::Value = serde_json::from_str(jwk_json)
+        .map_err(|e| Oid4vciError::InvalidRequest(format!("Invalid JWK JSON: {e}")))?;
+    if jwk.get("kty").and_then(|value| value.as_str()) != Some("EC")
+        || jwk.get("crv").and_then(|value| value.as_str()) != Some("P-256")
+    {
+        return Err(Oid4vciError::InvalidRequest(
+            "Holder JWK must be an EC P-256 key".into(),
+        ));
+    }
+    let d_b64 = jwk
+        .get("d")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| Oid4vciError::InvalidRequest("JWK missing 'd' (private key)".into()))?;
+    let d_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(d_b64)
+        .map_err(|e| Oid4vciError::InvalidRequest(format!("JWK 'd' decode error: {e}")))?;
+    let secret_key = p256::SecretKey::from_slice(&d_bytes)
+        .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 private key: {e}")))?;
+    let der = secret_key
+        .to_pkcs8_der()
+        .map_err(|e| Oid4vciError::KeyError(format!("PKCS#8 DER encoding failed: {e}")))?;
+
+    Ok(jsonwebtoken::EncodingKey::from_ec_der(der.as_bytes()))
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Format detection heuristic
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1136,7 +1293,7 @@ fn generate_random_state() -> String {
 /// Infer a credential format string from the raw credential value.
 fn infer_format(cred: &str) -> Option<&'static str> {
     if cred.contains('~') {
-        Some("spruce-vc+sd-jwt")
+        Some("dc+sd-jwt")
     } else if cred.starts_with('{') {
         Some("mso_mdoc")
     } else {
@@ -1164,7 +1321,10 @@ mod tests {
             encode_query_json(dcql_query),
         );
 
-        let parsed = engine.parse_presentation_request(&request_uri).await.unwrap();
+        let parsed = engine
+            .parse_presentation_request(&request_uri)
+            .await
+            .unwrap();
 
         assert_eq!(parsed.client_id, "https://verifier.example");
         assert_eq!(parsed.nonce, "nonce-123");
@@ -1175,6 +1335,36 @@ mod tests {
         assert_eq!(dcql_query.credentials.len(), 1);
         assert_eq!(dcql_query.credentials[0].id, "member_credential");
         assert_eq!(dcql_query.credentials[0].format, "dc+sd-jwt");
+    }
+
+    #[test]
+    fn generated_holder_key_creates_verifiable_proof() {
+        let engine = WalletEngine::new();
+        let holder = engine.generate_holder_key();
+        let proof = engine
+            .create_proof_jwt(
+                &format!("{}#{}", holder.holder_id, holder.holder_id),
+                "nonce-123",
+                "https://issuer.example",
+                &holder.private_jwk,
+            )
+            .unwrap();
+
+        let verified = crate::proof::verify_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-123"),
+            300,
+        )
+        .unwrap();
+        assert_eq!(verified.holder_id, holder.holder_id);
+        let holder_jwk = verified
+            .holder_jwk
+            .expect("proof must expose the holder public JWK");
+        let holder_jwk_json = serde_json::to_value(holder_jwk).unwrap();
+        assert_eq!(holder_jwk_json["kty"], "EC");
+        assert_eq!(holder_jwk_json["crv"], "P-256");
+        assert!(holder_jwk_json.get("d").is_none());
     }
 
     #[test]
@@ -1229,6 +1419,69 @@ mod tests {
             .unwrap();
 
         assert!(submission.is_none());
-        assert!(vp_token.contains("credential.jwt"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&vp_token).unwrap(),
+            serde_json::json!({"member_credential": ["credential.jwt"]})
+        );
+    }
+
+    #[test]
+    fn create_sd_jwt_presentation_adds_nonce_audience_and_dcql_shape() {
+        use p256::ecdsa::SigningKey;
+        use p256::elliptic_curve::rand_core::OsRng;
+        use p256::pkcs8::EncodePrivateKey as _;
+        use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
+        use sd_jwt_rs::{SDJWTIssuer, SDJWTSerializationFormat};
+
+        let issuer_key = SigningKey::random(&mut OsRng);
+        let issuer_der = issuer_key.to_pkcs8_der().unwrap();
+        let holder_key = SigningKey::random(&mut OsRng);
+        let holder_point = holder_key.verifying_key().to_encoded_point(false);
+        let private_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.x().unwrap()),
+            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.y().unwrap()),
+            "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_key.to_bytes()),
+        });
+        let public_jwk = serde_json::from_value(serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": private_jwk["x"],
+            "y": private_jwk["y"],
+        }))
+        .unwrap();
+        let credential = SDJWTIssuer::new(
+            jsonwebtoken::EncodingKey::from_ec_der(issuer_der.as_bytes()),
+            Some("ES256".to_string()),
+        )
+        .issue_sd_jwt(
+            serde_json::json!({"email": "member@example.com", "role": "member"}),
+            ClaimsForSelectiveDisclosureStrategy::AllLevels,
+            Some(public_jwk),
+            false,
+            SDJWTSerializationFormat::Compact,
+        )
+        .unwrap();
+
+        let presentation = WalletEngine::new()
+            .create_sd_jwt_presentation(
+                &credential,
+                &["email".to_string()],
+                "nonce-123",
+                "https://verifier.example",
+                &private_jwk.to_string(),
+            )
+            .unwrap();
+        let kb_jwt = presentation
+            .split('~')
+            .rfind(|part| !part.is_empty())
+            .unwrap();
+        let payload = WalletEngine::decode_jwt_payload(kb_jwt).unwrap();
+
+        assert_eq!(payload["nonce"], "nonce-123");
+        assert_eq!(payload["aud"], "https://verifier.example");
+        assert!(payload["sd_hash"].as_str().is_some());
+        assert!(presentation.contains('~'));
     }
 }

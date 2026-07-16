@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 use marty_verification::{
     jwk::generate_ed25519,
     open_badges::{
-        issue_ob2_json, issue_ob3_json, ob2_context_uri, ob3_context_uri,
-        verify_ob2_json, verify_ob3_json,
+        issue_ob2_json, issue_ob3_json, ob2_context_uri, ob3_context_uri, verify_ob2_json,
+        verify_ob3_json,
     },
 };
 use ssi::{dids::DIDJWK, JWK};
@@ -94,11 +94,17 @@ fn issue_ob3(issuer_did: &str, issuer_jwk: &JWK, achievement_id: &str) -> Value 
     let result_str = issue_ob3_json(&req.to_string()).expect("issue_ob3_json");
     let result: Value = serde_json::from_str(&result_str).expect("issue result JSON");
     assert!(
-        result.get("issued").and_then(|v| v.as_bool()).unwrap_or(false),
+        result
+            .get("issued")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "OB3 issuance must succeed: {:?}",
         result
     );
-    result.get("credential").cloned().expect("issued credential")
+    result
+        .get("credential")
+        .cloned()
+        .expect("issued credential")
 }
 
 // ── §1  Achievement structure ─────────────────────────────────────────────────
@@ -150,10 +156,7 @@ fn ob3_achievement_name_is_non_empty_string() {
         .and_then(|v| v.as_str())
         .expect("Achievement.name must be a string");
 
-    assert!(
-        !name.is_empty(),
-        "Achievement.name must be non-empty"
-    );
+    assert!(!name.is_empty(), "Achievement.name must be non-empty");
 }
 
 /// `Achievement.criteria` is optional per OB3 §8.1 but when present must have
@@ -193,7 +196,10 @@ fn ob3_credential_context_includes_required_uris() {
     let has_vcdm = context
         .iter()
         .any(|v| v.as_str() == Some("https://www.w3.org/ns/credentials/v2"));
-    assert!(has_vcdm, "@context must include 'https://www.w3.org/ns/credentials/v2'");
+    assert!(
+        has_vcdm,
+        "@context must include 'https://www.w3.org/ns/credentials/v2'"
+    );
 
     // OB3 context URI must also be present
     let ob3_ctx = ob3_context_uri();
@@ -390,7 +396,10 @@ fn ob3_credential_with_image_issues_and_verifies() {
     let result_str = issue_ob3_json(&req.to_string()).expect("issue");
     let result: Value = serde_json::from_str(&result_str).expect("json");
     assert!(
-        result.get("issued").and_then(|v| v.as_bool()).unwrap_or(false),
+        result
+            .get("issued")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "OB3 credential with image must issue successfully: {:?}",
         result
     );
@@ -477,7 +486,10 @@ fn ob2_hashed_recipient_round_trip() {
     let issue_result_str = issue_ob2_json(&req.to_string()).expect("OB2 issue");
     let issue_result: Value = serde_json::from_str(&issue_result_str).expect("json");
     assert!(
-        issue_result.get("issued").and_then(|v| v.as_bool()).unwrap_or(false),
+        issue_result
+            .get("issued")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "OB2 hashed recipient must issue: {:?}",
         issue_result
     );
@@ -493,9 +505,18 @@ fn ob2_hashed_recipient_round_trip() {
 
     // Verify with correct identity
     let mut store = std::collections::BTreeMap::new();
-    store.insert("urn:uuid:badge-2".to_string(), json!({ "id": "urn:uuid:badge-2", "issuer": "did:example:ob2-issuer" }));
-    store.insert("did:example:ob2-issuer".to_string(), json!({ "id": "did:example:ob2-issuer" }));
-    store.insert("did:example:ob2-issuer#key-1".to_string(), json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }));
+    store.insert(
+        "urn:uuid:badge-2".to_string(),
+        json!({ "id": "urn:uuid:badge-2", "issuer": "did:example:ob2-issuer" }),
+    );
+    store.insert(
+        "did:example:ob2-issuer".to_string(),
+        json!({ "id": "did:example:ob2-issuer" }),
+    );
+    store.insert(
+        "did:example:ob2-issuer#key-1".to_string(),
+        json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }),
+    );
 
     let verify_req = json!({
         "assertion": cred,
@@ -537,9 +558,18 @@ fn ob2_wrong_recipient_identity_fails() {
     let cred = issue_v.get("credential").cloned().expect("credential");
 
     let mut store = std::collections::BTreeMap::new();
-    store.insert("urn:uuid:badge-3".to_string(), json!({ "id": "urn:uuid:badge-3", "issuer": "did:example:ob2-issuer" }));
-    store.insert("did:example:ob2-issuer".to_string(), json!({ "id": "did:example:ob2-issuer" }));
-    store.insert("did:example:ob2-issuer#key-2".to_string(), json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }));
+    store.insert(
+        "urn:uuid:badge-3".to_string(),
+        json!({ "id": "urn:uuid:badge-3", "issuer": "did:example:ob2-issuer" }),
+    );
+    store.insert(
+        "did:example:ob2-issuer".to_string(),
+        json!({ "id": "did:example:ob2-issuer" }),
+    );
+    store.insert(
+        "did:example:ob2-issuer#key-2".to_string(),
+        json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }),
+    );
 
     let verify_req = json!({
         "assertion": cred,

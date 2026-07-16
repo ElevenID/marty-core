@@ -71,11 +71,7 @@ impl CscaAuthority {
     /// * `country`       – ISO 3166-1 alpha-3 country code (e.g. `"DEU"`)
     /// * `organization`  – Full organisation name
     /// * `validity_days` – Certificate validity in days (recommend ≥ 10 years)
-    pub fn new(
-        country: &str,
-        organization: &str,
-        validity_days: u32,
-    ) -> VerificationResult<Self> {
+    pub fn new(country: &str, organization: &str, validity_days: u32) -> VerificationResult<Self> {
         let (cert_der, private_key_pem) = marty_crypto::cert_builder::create_csca_certificate(
             country,
             organization,
@@ -94,11 +90,7 @@ impl CscaAuthority {
     /// Load a CSCA from an existing certificate + private key PEM.
     ///
     /// Use this when the key material was generated externally (e.g. HSM export).
-    pub fn from_pem(
-        country: &str,
-        cert_der: Vec<u8>,
-        private_key_pem: String,
-    ) -> Self {
+    pub fn from_pem(country: &str, cert_der: Vec<u8>, private_key_pem: String) -> Self {
         Self {
             cert_der,
             private_key_pem,
@@ -247,7 +239,8 @@ impl PassportPersonalizer {
     pub fn build(self) -> VerificationResult<PersonalizedPassport> {
         if self.data_groups.is_empty() {
             return Err(VerificationError::internal(
-                "PassportPersonalizer: at least one data group must be set before build()".to_string(),
+                "PassportPersonalizer: at least one data group must be set before build()"
+                    .to_string(),
             ));
         }
 
@@ -374,8 +367,8 @@ mod tests {
 
         let passport = dsc
             .personalizer()
-            .set_mrz(b"MRZ_DG1")          // DG1
-            .set_signature_image(b"SIG")   // DG7
+            .set_mrz(b"MRZ_DG1") // DG1
+            .set_signature_image(b"SIG") // DG7
             .set_data_group(14, b"AA_CHIP_AUTH".to_vec()) // DG14
             .build()
             .unwrap();
@@ -418,7 +411,7 @@ mod tests {
         use x509_cert::Certificate;
 
         use crate::trust_anchor::{CscaRegistry, TrustAnchor, TrustPurpose};
-        use crate::verification::emrtd::{SecurityObject, verify_emrtd};
+        use crate::verification::emrtd::{verify_emrtd, SecurityObject};
 
         // 1. Build CSCA → DSC → PersonalizedPassport
         let csca = CscaAuthority::new("TST", "Test Issuance Country", 3650).unwrap();
@@ -436,8 +429,8 @@ mod tests {
         assert!(!passport.sod_der.is_empty(), "SOD must be non-empty");
 
         // 2. Build a CscaRegistry containing the issuing CSCA
-        let csca_cert = Certificate::from_der(&csca.cert_der)
-            .expect("CSCA cert_der must be valid DER");
+        let csca_cert =
+            Certificate::from_der(&csca.cert_der).expect("CSCA cert_der must be valid DER");
         let mut registry = CscaRegistry::new();
         registry
             .add_country_csca("TST", csca_cert)
@@ -454,9 +447,18 @@ mod tests {
             "Freshly issued passport must pass full eMRTD verification; errors: {:?}",
             result.errors
         );
-        assert_eq!(result.dsc_chain_status, crate::verification::emrtd::ChainStatus::Valid);
-        assert_eq!(result.dg_hash_status,   crate::verification::emrtd::HashStatus::Valid);
-        assert_eq!(result.sod_signature_status, crate::verification::emrtd::SignatureStatus::Valid);
+        assert_eq!(
+            result.dsc_chain_status,
+            crate::verification::emrtd::ChainStatus::Valid
+        );
+        assert_eq!(
+            result.dg_hash_status,
+            crate::verification::emrtd::HashStatus::Valid
+        );
+        assert_eq!(
+            result.sod_signature_status,
+            crate::verification::emrtd::SignatureStatus::Valid
+        );
     }
 
     #[test]
@@ -465,7 +467,7 @@ mod tests {
         use x509_cert::Certificate;
 
         use crate::trust_anchor::{CscaRegistry, TrustAnchor, TrustPurpose};
-        use crate::verification::emrtd::{SecurityObject, HashStatus, verify_emrtd};
+        use crate::verification::emrtd::{verify_emrtd, HashStatus, SecurityObject};
 
         let csca = CscaAuthority::new("TST", "Tamper Test Country", 365).unwrap();
         let dsc = csca.issue_dsc("TST DSC Tamper", 30).unwrap();

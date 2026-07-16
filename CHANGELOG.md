@@ -129,7 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enable all features including test-fixtures in CI ([fbc9ecd](fbc9ecdb373929b223b867a03d09b0b110e9a48a))
 - Add repository_dispatch to notify downstream repos on release ([f21287e](f21287e22a1f7d7ac53112dc4aabe6f18f538de7))
-- Use REPO_ACCESS_TOKEN for cross-repo dispatch ([438d0f8](438d0f817b6f6c5e19827045d92d4bf28280eb99))
+- Legacy cross-repository dispatch update (retired) ([438d0f8](438d0f817b6f6c5e19827045d92d4bf28280eb99))
 
 ### Security
 
@@ -191,7 +191,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enable all features including test-fixtures in CI ([fbc9ecd](fbc9ecdb373929b223b867a03d09b0b110e9a48a))
 - Add repository_dispatch to notify downstream repos on release ([f21287e](f21287e22a1f7d7ac53112dc4aabe6f18f538de7))
-- Use REPO_ACCESS_TOKEN for cross-repo dispatch ([438d0f8](438d0f817b6f6c5e19827045d92d4bf28280eb99))
+- Legacy cross-repository dispatch update (retired) ([438d0f8](438d0f817b6f6c5e19827045d92d4bf28280eb99))
 
 ### Security
 
@@ -251,7 +251,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enable all features including test-fixtures in CI ([fbc9ecd](fbc9ecdb373929b223b867a03d09b0b110e9a48a))
 - Add repository_dispatch to notify downstream repos on release ([f21287e](f21287e22a1f7d7ac53112dc4aabe6f18f538de7))
-- Use REPO_ACCESS_TOKEN for cross-repo dispatch ([438d0f8](438d0f817b6f6c5e19827045d92d4bf28280eb99))
+- Legacy cross-repository dispatch update (retired) ([438d0f8](438d0f817b6f6c5e19827045d92d4bf28280eb99))
 
 ### Security
 

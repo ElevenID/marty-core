@@ -459,9 +459,7 @@ impl ChainValidator {
             }
         };
 
-        let ku_ext = extensions
-            .iter()
-            .find(|ext| ext.extn_id == ID_CE_KEY_USAGE);
+        let ku_ext = extensions.iter().find(|ext| ext.extn_id == ID_CE_KEY_USAGE);
 
         let ku_ext = match ku_ext {
             Some(ext) => ext,
@@ -492,7 +490,8 @@ impl ChainValidator {
             let byte_val = raw.get(byte_idx).copied().unwrap_or(0);
             if byte_val & bit_mask == 0 {
                 return Err(format!(
-                    "Certificate missing required key usage: {:?}", required
+                    "Certificate missing required key usage: {:?}",
+                    required
                 ));
             }
         }

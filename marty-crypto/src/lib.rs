@@ -31,6 +31,7 @@
 //! ecdsa::verify_p256(&public_key, message, &signature)?;
 //! ```
 
+pub mod bbs;
 pub mod cert_builder;
 pub mod certificate;
 pub mod crl;
@@ -50,7 +51,6 @@ pub mod rsa;
 pub mod serialization;
 pub mod sod_builder;
 pub mod symmetric;
-pub mod bbs;
 
 pub use error::{CryptoError, CryptoResult};
 

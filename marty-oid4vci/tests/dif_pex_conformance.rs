@@ -31,13 +31,11 @@ use serde_json::{json, Value};
 
 /// Minimal single-descriptor PD — multi-path field presence.
 /// Source: test/presentation-definition/minimal_example.json
-const PD_MINIMAL_JSON: &str =
-    include_str!("fixtures/dif_pex/pd_minimal.json");
+const PD_MINIMAL_JSON: &str = include_str!("fixtures/dif_pex/pd_minimal.json");
 
 /// Filter-by-type PD — `contains` filter with regex pattern on `$.type`.
 /// Source: test/presentation-definition/pd_filter.json
-const PD_FILTER_JSON: &str =
-    include_str!("fixtures/dif_pex/pd_filter.json");
+const PD_FILTER_JSON: &str = include_str!("fixtures/dif_pex/pd_filter.json");
 
 /// Two-filter simplified PD — three `pattern` constraints on flat fields.
 /// Source: test/presentation-definition/pd_filter2_simplified.json
@@ -48,32 +46,27 @@ const PD_FILTER2_SIMPLIFIED_JSON: &str =
 /// and the extra `intent_to_retain` / `purpose` hints (spec-defined, silently
 /// ignored by our evaluator as per DIF PE v2 §5).
 /// Source: test/presentation-definition/basic_example.json
-const PD_BASIC_JSON: &str =
-    include_str!("fixtures/dif_pex/pd_basic.json");
+const PD_BASIC_JSON: &str = include_str!("fixtures/dif_pex/pd_basic.json");
 
 /// Complex banking PD — four fields with `pattern` and wildcard paths,
 /// `group` annotation (spec-defined, silently ignored by our evaluator).
 /// Source: test/presentation-definition/input_descriptors_example.json
-const PD_INPUT_DESCRIPTORS_JSON: &str =
-    include_str!("fixtures/dif_pex/pd_input_descriptors.json");
+const PD_INPUT_DESCRIPTORS_JSON: &str = include_str!("fixtures/dif_pex/pd_input_descriptors.json");
 
 /// Multi-descriptor PS with one descriptor using 2-level `path_nested`.
 /// Source: test/presentation-submission/example.json
-const PS_EXAMPLE_JSON: &str =
-    include_str!("fixtures/dif_pex/ps_example.json");
+const PS_EXAMPLE_JSON: &str = include_str!("fixtures/dif_pex/ps_example.json");
 
 /// Single-descriptor PS with 3-level `path_nested`.
 /// Source: test/presentation-submission/nested_submission_example.json
-const PS_NESTED_JSON: &str =
-    include_str!("fixtures/dif_pex/ps_nested.json");
+const PS_NESTED_JSON: &str = include_str!("fixtures/dif_pex/ps_nested.json");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Extract the `presentation_definition` object from the spec's JSON envelope
 /// and deserialize it into our `PresentationDefinition` type.
 fn extract_pd(envelope_json: &str) -> PresentationDefinition {
-    let envelope: Value =
-        serde_json::from_str(envelope_json).expect("fixture must be valid JSON");
+    let envelope: Value = serde_json::from_str(envelope_json).expect("fixture must be valid JSON");
     let pd_val = envelope
         .get("presentation_definition")
         .expect("envelope must contain 'presentation_definition'");
@@ -83,8 +76,7 @@ fn extract_pd(envelope_json: &str) -> PresentationDefinition {
 
 /// Deserialize a PS from the spec's JSON envelope (`presentation_submission` key).
 fn extract_ps(envelope_json: &str) -> PresentationSubmission {
-    let envelope: Value =
-        serde_json::from_str(envelope_json).expect("fixture must be valid JSON");
+    let envelope: Value = serde_json::from_str(envelope_json).expect("fixture must be valid JSON");
     let ps_val = envelope
         .get("presentation_submission")
         .expect("envelope must contain 'presentation_submission'");
@@ -94,7 +86,11 @@ fn extract_ps(envelope_json: &str) -> PresentationSubmission {
 
 /// Build a single-descriptor PS that points `$` at the root of the VP payload.
 /// Used to drive `verify_presentation` with a flat credential payload.
-fn single_descriptor_ps(definition_id: &str, descriptor_id: &str, format: &str) -> PresentationSubmission {
+fn single_descriptor_ps(
+    definition_id: &str,
+    descriptor_id: &str,
+    format: &str,
+) -> PresentationSubmission {
     PresentationSubmission {
         id: "ps-test".to_string(),
         definition_id: definition_id.to_string(),
@@ -131,8 +127,11 @@ fn k1_pd_minimal_parses() {
     let desc = &pd.input_descriptors[0];
     assert_eq!(desc.id, "wa_driver_license");
     assert_eq!(desc.constraints.fields.len(), 1);
-    assert_eq!(desc.constraints.fields[0].path.len(), 4,
-        "multi-path field must have 4 candidate JSONPaths");
+    assert_eq!(
+        desc.constraints.fields[0].path.len(),
+        4,
+        "multi-path field must have 4 candidate JSONPaths"
+    );
 }
 
 /// DIF PEX test: "should validate the Filter By Credential Type example"
@@ -146,7 +145,10 @@ fn k2_pd_filter_parses() {
     assert_eq!(field.path, vec!["$.type"]);
     let filter = field.filter.as_ref().expect("filter must be present");
     assert_eq!(filter["type"], "array");
-    assert!(filter.get("contains").is_some(), "contains schema must be present");
+    assert!(
+        filter.get("contains").is_some(),
+        "contains schema must be present"
+    );
 }
 
 /// DIF PEX test: "should validate the Two Filters (simplified) example"
@@ -161,7 +163,11 @@ fn k3_pd_filter2_simplified_parses() {
     // All three have pattern filters
     for field in fields {
         let filter = field.filter.as_ref().expect("filter present");
-        assert!(filter.get("pattern").is_some(), "pattern must be in filter: {:?}", filter);
+        assert!(
+            filter.get("pattern").is_some(),
+            "pattern must be in filter: {:?}",
+            filter
+        );
     }
 }
 
@@ -219,8 +225,11 @@ fn k5_pd_input_descriptors_parses() {
     assert_eq!(pd.input_descriptors.len(), 1);
     let desc = &pd.input_descriptors[0];
     assert_eq!(desc.id, "banking_input_1");
-    assert_eq!(desc.constraints.fields.len(), 4,
-        "banking descriptor must have 4 field constraints");
+    assert_eq!(
+        desc.constraints.fields.len(),
+        4,
+        "banking descriptor must have 4 field constraints"
+    );
 
     // Verify wildcard paths are preserved verbatim (we store them as strings)
     let account_id_field = &desc.constraints.fields[2];
@@ -497,9 +506,10 @@ fn m4_pd_basic_limit_disclosure_required_non_sdjwt_fails() {
         "limit_disclosure:required with non-SD-JWT format MUST fail"
     );
     assert!(
-        result.errors.iter().any(|e| {
-            e.contains("limit_disclosure") || e.contains("SD-JWT")
-        }),
+        result
+            .errors
+            .iter()
+            .any(|e| { e.contains("limit_disclosure") || e.contains("SD-JWT") }),
         "error must mention limit_disclosure or SD-JWT: {:?}",
         result.errors
     );

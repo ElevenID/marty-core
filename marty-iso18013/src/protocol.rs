@@ -39,10 +39,10 @@ pub enum SessionState {
 pub struct SessionConfig {
     /// Session timeout in seconds
     pub timeout_secs: u64,
-    
+
     /// Maximum message size in bytes
     pub max_message_size: usize,
-    
+
     /// Enable verbose logging
     pub verbose: bool,
 }
@@ -59,22 +59,22 @@ impl SessionConfig {
             verbose,
         }
     }
-    
+
     #[getter]
     fn get_timeout_secs(&self) -> u64 {
         self.timeout_secs
     }
-    
+
     #[setter]
     fn set_timeout_secs(&mut self, value: u64) {
         self.timeout_secs = value;
     }
-    
+
     #[getter]
     fn get_max_message_size(&self) -> usize {
         self.max_message_size
     }
-    
+
     #[setter]
     fn set_max_message_size(&mut self, value: usize) {
         self.max_message_size = value;
@@ -84,7 +84,7 @@ impl SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            timeout_secs: 300, // 5 minutes
+            timeout_secs: 300,             // 5 minutes
             max_message_size: 1024 * 1024, // 1 MB
             verbose: false,
         }
@@ -95,13 +95,13 @@ impl Default for SessionConfig {
 pub struct Session {
     /// Session state
     state: Arc<RwLock<SessionState>>,
-    
+
     /// Session encryption
     encryption: Arc<RwLock<Option<SessionEncryption>>>,
-    
+
     /// Key agreement
     key_agreement: Arc<RwLock<SessionKeyAgreement>>,
-    
+
     /// Configuration
     #[allow(dead_code)]
     config: SessionConfig,
@@ -114,7 +114,7 @@ impl Session {
         config: SessionConfig,
     ) -> Result<Self> {
         let key_agreement = SessionKeyAgreement::new()?;
-        
+
         Ok(Self {
             state: Arc::new(RwLock::new(SessionState::Engagement)),
             encryption: Arc::new(RwLock::new(None)),
@@ -131,47 +131,48 @@ impl Session {
     /// Establish secure session
     pub async fn establish(&self, peer_public_key: &[u8]) -> Result<()> {
         let mut state = self.state.write().await;
-        
+
         if *state != SessionState::Engagement {
-            return Err(Error::InvalidState("Cannot establish from current state".to_string()));
+            return Err(Error::InvalidState(
+                "Cannot establish from current state".to_string(),
+            ));
         }
-        
+
         // Set peer key and derive shared secret
         let mut ka = self.key_agreement.write().await;
         ka.set_peer_key(peer_public_key.to_vec());
         let shared_secret = ka.derive_shared_secret()?;
-        
+
         // Build session transcript per ISO 18013-5 §9.1.5.1:
         // SessionTranscript = [DeviceEngagementBytes, EReaderKeyBytes, Handover]
         // We bind the transcript to both parties' public keys to prevent replay.
         let our_public_key = ka.public_key();
-        let session_transcript = Self::build_session_transcript(
-            &our_public_key,
-            peer_public_key,
-        );
+        let session_transcript = Self::build_session_transcript(&our_public_key, peer_public_key);
         let encryption = SessionEncryption::new(&shared_secret, &session_transcript)?;
-        
+
         *self.encryption.write().await = Some(encryption);
         *state = SessionState::Established;
-        
+
         Ok(())
     }
 
     /// Encrypt and send a message
     pub async fn send_encrypted(&self, message: &[u8]) -> Result<Vec<u8>> {
         let mut encryption = self.encryption.write().await;
-        let encryption = encryption.as_mut()
+        let encryption = encryption
+            .as_mut()
             .ok_or_else(|| Error::InvalidState("Session not established".to_string()))?;
-        
+
         encryption.encrypt(message)
     }
 
     /// Receive and decrypt a message
     pub async fn receive_encrypted(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let mut encryption = self.encryption.write().await;
-        let encryption = encryption.as_mut()
+        let encryption = encryption
+            .as_mut()
             .ok_or_else(|| Error::InvalidState("Session not established".to_string()))?;
-        
+
         encryption.decrypt(ciphertext)
     }
 
@@ -191,10 +192,7 @@ impl Session {
     /// SHA-256 hash of both public keys concatenated.  This is sufficient to
     /// bind the session to the specific engagement and prevent replay — the
     /// derived session keys will differ for any other key pair combination.
-    fn build_session_transcript(
-        our_public_key: &[u8],
-        peer_public_key: &[u8],
-    ) -> Vec<u8> {
+    fn build_session_transcript(our_public_key: &[u8], peer_public_key: &[u8]) -> Vec<u8> {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(our_public_key);
@@ -209,10 +207,10 @@ impl Session {
 pub struct MdlRequest {
     /// Document type being requested
     pub doc_type: String,
-    
+
     /// Requested data elements by namespace
     pub data_elements: std::collections::HashMap<String, Vec<String>>,
-    
+
     /// Request nonce
     pub nonce: Vec<u8>,
 }
@@ -223,10 +221,10 @@ pub struct MdlRequest {
 pub struct MdlResponse {
     /// Document type
     pub doc_type: String,
-    
+
     /// Provided data elements
     pub data: Vec<u8>, // CBOR-encoded DeviceResponse
-    
+
     /// Response status
     pub status: ResponseStatus,
 }
@@ -322,7 +320,10 @@ mod tests {
     fn test_response_status_equality() {
         assert_eq!(ResponseStatus::Ok, ResponseStatus::Ok);
         assert_ne!(ResponseStatus::Ok, ResponseStatus::Error);
-        assert_ne!(ResponseStatus::ConsentDenied, ResponseStatus::DataNotAvailable);
+        assert_ne!(
+            ResponseStatus::ConsentDenied,
+            ResponseStatus::DataNotAvailable
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //!  §7  SD-JWT verification — round-trip issuance + verification
 //!  §8  Holder selective disclosure — only chosen disclosures are revealed
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use std::collections::HashMap;
 
 use marty_oid4vci::{
@@ -148,10 +148,7 @@ fn ietf_sd_jwt_has_required_top_level_claims() {
         Some("IdentityCredential"),
         "'vct' must match credential_type"
     );
-    assert!(
-        payload.get("iat").is_some(),
-        "'iat' must be present"
-    );
+    assert!(payload.get("iat").is_some(), "'iat' must be present");
     assert_eq!(
         payload.get("sub").and_then(|v| v.as_str()),
         Some("did:example:alice"),
@@ -222,15 +219,25 @@ fn w3c_vcdm_v2_has_required_fields() {
 
     let payload = decode_jwt_payload(&compact);
 
-    let context = payload.get("@context").and_then(|v| v.as_array()).expect("@context array");
+    let context = payload
+        .get("@context")
+        .and_then(|v| v.as_array())
+        .expect("@context array");
     assert!(
-        context.iter().any(|v| v.as_str() == Some("https://www.w3.org/ns/credentials/v2")),
+        context
+            .iter()
+            .any(|v| v.as_str() == Some("https://www.w3.org/ns/credentials/v2")),
         "@context must include the W3C credentials base context"
     );
 
-    let types = payload.get("type").and_then(|v| v.as_array()).expect("type array");
+    let types = payload
+        .get("type")
+        .and_then(|v| v.as_array())
+        .expect("type array");
     assert!(
-        types.iter().any(|v| v.as_str() == Some("VerifiableCredential")),
+        types
+            .iter()
+            .any(|v| v.as_str() == Some("VerifiableCredential")),
         "'VerifiableCredential' must be in the type array"
     );
 
@@ -423,7 +430,10 @@ fn credential_id_is_urn_uuid() {
     // Remainder must be a parseable UUID
     let uuid_part = cred_id.trim_start_matches("urn:uuid:");
     uuid::Uuid::parse_str(uuid_part).unwrap_or_else(|e| {
-        panic!("credential_id UUID part must be valid: {} ({})", uuid_part, e)
+        panic!(
+            "credential_id UUID part must be valid: {} ({})",
+            uuid_part, e
+        )
     });
 }
 
@@ -446,7 +456,10 @@ fn credential_id_matches_jwt_jti() {
 
     let result = sign_sd_jwt(&test_issuer_key(), &claims).unwrap();
     let (compact, cred_id) = match result {
-        SignedCredential::SdJwt { compact, credential_id } => (compact, credential_id),
+        SignedCredential::SdJwt {
+            compact,
+            credential_id,
+        } => (compact, credential_id),
         _ => panic!(),
     };
 
@@ -456,10 +469,7 @@ fn credential_id_matches_jwt_jti() {
         .and_then(|v| v.as_str())
         .expect("jti must be present in SD-JWT payload");
 
-    assert_eq!(
-        jti, cred_id,
-        "JWT 'jti' must equal credential_id"
-    );
+    assert_eq!(jti, cred_id, "JWT 'jti' must equal credential_id");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -540,10 +550,7 @@ fn verify_sd_jwt_round_trip_with_disclosures() {
         credential_type: "IdentityCredential".to_string(),
         claims: base_claims(),
         expiration_seconds: Some(3600),
-        selective_disclosure_claims: vec![
-            "given_name".to_string(),
-            "birth_date".to_string(),
-        ],
+        selective_disclosure_claims: vec!["given_name".to_string(), "birth_date".to_string()],
         mdoc_namespace: None,
         mdoc_doctype: None,
         zk_predicate_claims: Vec::new(),
@@ -566,8 +573,8 @@ fn verify_sd_jwt_round_trip_with_disclosures() {
         parts.len()
     );
 
-    let verified = verify_sd_jwt(&compact, &public_jwk, None, None)
-        .expect("verify_sd_jwt must succeed");
+    let verified =
+        verify_sd_jwt(&compact, &public_jwk, None, None).expect("verify_sd_jwt must succeed");
 
     // The non-SD claim `family_name` must always be present
     assert_eq!(
@@ -624,7 +631,10 @@ fn verify_sd_jwt_tampered_signature_rejected() {
     sig_bytes[last] ^= 0xFF;
     let corrupted_sig = URL_SAFE_NO_PAD.encode(&sig_bytes);
     jws_parts[2] = &corrupted_sig;
-    let tampered = format!("{}.{}.{}~{}", jws_parts[0], jws_parts[1], corrupted_sig, disclosures);
+    let tampered = format!(
+        "{}.{}.{}~{}",
+        jws_parts[0], jws_parts[1], corrupted_sig, disclosures
+    );
 
     let result = verify_sd_jwt(&tampered, &public_jwk, None, None);
     assert!(
@@ -698,7 +708,10 @@ fn sd_claims_payload_contains_only_hashes_not_plaintext() {
     };
 
     let payload = decode_jwt_payload(&compact);
-    let sd_array = payload.get("_sd").and_then(|v| v.as_array()).expect("_sd array");
+    let sd_array = payload
+        .get("_sd")
+        .and_then(|v| v.as_array())
+        .expect("_sd array");
 
     // Each element of _sd must be a string (base64url-encoded hash), not an object
     for entry in sd_array {
@@ -770,15 +783,12 @@ fn sd_jwt_disclosures_have_valid_structure() {
     );
 
     for disc in &disclosures {
-        let bytes = URL_SAFE_NO_PAD.decode(disc).unwrap_or_else(|e| {
-            panic!("disclosure must be valid base64url: {} ({})", disc, e)
-        });
-        let decoded: Value = serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-            panic!("disclosure must be valid JSON: {:?} ({})", bytes, e)
-        });
-        let arr = decoded
-            .as_array()
-            .expect("disclosure must be a JSON array");
+        let bytes = URL_SAFE_NO_PAD
+            .decode(disc)
+            .unwrap_or_else(|e| panic!("disclosure must be valid base64url: {} ({})", disc, e));
+        let decoded: Value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|e| panic!("disclosure must be valid JSON: {:?} ({})", bytes, e));
+        let arr = decoded.as_array().expect("disclosure must be a JSON array");
         assert_eq!(
             arr.len(),
             3,

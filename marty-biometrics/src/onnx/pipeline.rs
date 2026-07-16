@@ -35,10 +35,14 @@ impl BiometricPipeline {
     pub fn new(registry: ModelRegistry) -> Result<Self, BiometricError> {
         registry.validate_required(&[ModelKind::FaceDetection, ModelKind::FaceRecognition])?;
 
-        let detection = Self::load_session(registry.get(ModelKind::FaceDetection)
-            .ok_or_else(|| BiometricError::Configuration("FaceDetection model not registered".into()))?)?;
-        let recognition = Self::load_session(registry.get(ModelKind::FaceRecognition)
-            .ok_or_else(|| BiometricError::Configuration("FaceRecognition model not registered".into()))?)?;
+        let detection =
+            Self::load_session(registry.get(ModelKind::FaceDetection).ok_or_else(|| {
+                BiometricError::Configuration("FaceDetection model not registered".into())
+            })?)?;
+        let recognition =
+            Self::load_session(registry.get(ModelKind::FaceRecognition).ok_or_else(|| {
+                BiometricError::Configuration("FaceRecognition model not registered".into())
+            })?)?;
 
         let age_gender = registry
             .get(ModelKind::AgeGender)
@@ -72,8 +76,9 @@ impl BiometricPipeline {
     pub fn detect_faces(&self, base64_image: &str) -> Result<Vec<DetectedFace>, BiometricError> {
         let (rgb, width, height) = decode_base64_image(base64_image)?;
 
-        let det_config = self.registry.get(ModelKind::FaceDetection)
-            .ok_or_else(|| BiometricError::Configuration("FaceDetection model not registered".into()))?;
+        let det_config = self.registry.get(ModelKind::FaceDetection).ok_or_else(|| {
+            BiometricError::Configuration("FaceDetection model not registered".into())
+        })?;
         let input_tensor = prepare_detection_input(
             &rgb,
             width,
@@ -206,8 +211,9 @@ impl BiometricPipeline {
         let faces = self.detect_faces(base64_image)?;
         let face = faces.first().ok_or(BiometricError::FaceNotDetected)?;
 
-        let spoof_config = self.registry.get(ModelKind::AntiSpoof)
-            .ok_or_else(|| BiometricError::Configuration("AntiSpoof model not registered".into()))?;
+        let spoof_config = self.registry.get(ModelKind::AntiSpoof).ok_or_else(|| {
+            BiometricError::Configuration("AntiSpoof model not registered".into())
+        })?;
 
         // Crop face region and resize to model input
         let crop = crop_face_region(&rgb, width, height, &face.bbox);
@@ -261,8 +267,12 @@ impl BiometricPipeline {
             .ok_or_else(|| BiometricError::NotSupported("deepfake model not loaded".into()))?;
 
         let (rgb, width, height) = decode_base64_image(base64_image)?;
-        let deepfake_config = self.registry.get(ModelKind::DeepfakeDetection)
-            .ok_or_else(|| BiometricError::Configuration("DeepfakeDetection model not registered".into()))?;
+        let deepfake_config = self
+            .registry
+            .get(ModelKind::DeepfakeDetection)
+            .ok_or_else(|| {
+                BiometricError::Configuration("DeepfakeDetection model not registered".into())
+            })?;
 
         let input = prepare_detection_input(
             &rgb,
@@ -331,9 +341,7 @@ impl BiometricPipeline {
     // Internal helpers
     // ====================================================================
 
-    fn load_session(
-        config: &super::models::ModelConfig,
-    ) -> Result<Session, BiometricError> {
+    fn load_session(config: &super::models::ModelConfig) -> Result<Session, BiometricError> {
         Session::builder()
             .map_err(|e| BiometricError::ModelError(format!("session builder: {e}")))?
             .commit_from_file(&config.path)
@@ -376,7 +384,13 @@ fn parse_scrfd_output(
     // Simplified: if model has a single output with shape [N, 15+]
     // (score, x1, y1, x2, y2, lm0_x, lm0_y, ... lm4_x, lm4_y)
     if num_outputs == 1 {
-        return parse_scrfd_single_output(outputs, model_width, model_height, img_width, img_height);
+        return parse_scrfd_single_output(
+            outputs,
+            model_width,
+            model_height,
+            img_width,
+            img_height,
+        );
     }
 
     // Multi-output (stride-based): parse per-stride
@@ -427,7 +441,11 @@ fn parse_scrfd_single_output(
         });
     }
 
-    faces.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    faces.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(faces)
 }
 
@@ -525,7 +543,11 @@ fn parse_scrfd_multi_output(
     }
 
     // NMS (simple greedy)
-    faces.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    faces.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let faces = nms(&faces, 0.4);
 
     Ok(faces)

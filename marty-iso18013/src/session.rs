@@ -12,14 +12,14 @@ use marty_crypto::symmetric::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
 pub struct SessionEncryption {
     /// Session encryption key (derived from ECDH)
     sk_encryption: Vec<u8>,
-    
+
     /// Session MAC key (derived from ECDH)
     #[allow(dead_code)]
     sk_mac: Vec<u8>,
-    
+
     /// Message counter for encryption
     send_counter: u32,
-    
+
     /// Message counter for decryption (validation)
     receive_counter: u32,
 }
@@ -27,11 +27,8 @@ pub struct SessionEncryption {
 impl SessionEncryption {
     /// Create new session encryption from ECDH shared secret
     pub fn new(shared_secret: &[u8], session_transcript: &[u8]) -> Result<Self> {
-        let (sk_encryption, sk_mac) = derive_mdl_session_keys(
-            shared_secret,
-            session_transcript,
-        )?;
-        
+        let (sk_encryption, sk_mac) = derive_mdl_session_keys(shared_secret, session_transcript)?;
+
         Ok(Self {
             sk_encryption,
             sk_mac,
@@ -45,9 +42,9 @@ impl SessionEncryption {
         // Construct IV from counter
         let mut iv = vec![0u8; 12];
         iv[8..].copy_from_slice(&self.send_counter.to_be_bytes());
-        
+
         let ciphertext = aes_256_gcm_encrypt(&self.sk_encryption, &iv, plaintext, &[])?;
-        
+
         self.send_counter += 1;
         Ok(ciphertext)
     }
@@ -57,9 +54,9 @@ impl SessionEncryption {
         // Construct IV from counter
         let mut iv = vec![0u8; 12];
         iv[8..].copy_from_slice(&self.receive_counter.to_be_bytes());
-        
+
         let plaintext = aes_256_gcm_decrypt(&self.sk_encryption, &iv, ciphertext, &[])?;
-        
+
         self.receive_counter += 1;
         Ok(plaintext)
     }
@@ -79,7 +76,7 @@ impl SessionEncryption {
 pub struct SessionKeyAgreement {
     /// Our ephemeral key pair
     key_pair: P256KeyPair,
-    
+
     /// Peer's public key
     peer_public_key: Option<Vec<u8>>,
 }
@@ -88,7 +85,7 @@ impl SessionKeyAgreement {
     /// Create a new session key agreement with an ephemeral key pair
     pub fn new() -> Result<Self> {
         let key_pair = P256KeyPair::generate();
-        
+
         Ok(Self {
             key_pair,
             peer_public_key: None,
@@ -107,9 +104,11 @@ impl SessionKeyAgreement {
 
     /// Perform ECDH and derive shared secret
     pub fn derive_shared_secret(&self) -> Result<Vec<u8>> {
-        let peer_key = self.peer_public_key.as_ref()
+        let peer_key = self
+            .peer_public_key
+            .as_ref()
             .ok_or_else(|| Error::InvalidState("Peer public key not set".to_string()))?;
-        
+
         Ok(self.key_pair.agree(peer_key)?)
     }
 }
@@ -123,18 +122,18 @@ mod tests {
         // Simulate two parties
         let mut alice = SessionKeyAgreement::new().unwrap();
         let mut bob = SessionKeyAgreement::new().unwrap();
-        
+
         // Exchange public keys
         let alice_pub = alice.public_key();
         let bob_pub = bob.public_key();
-        
+
         alice.set_peer_key(bob_pub);
         bob.set_peer_key(alice_pub);
-        
+
         // Derive shared secrets
         let alice_secret = alice.derive_shared_secret().unwrap();
         let bob_secret = bob.derive_shared_secret().unwrap();
-        
+
         // Secrets should match
         assert_eq!(alice_secret, bob_secret);
     }
@@ -143,15 +142,15 @@ mod tests {
     fn test_session_encryption() {
         let shared_secret = vec![0x42; 32];
         let session_transcript = b"test session";
-        
+
         let mut alice = SessionEncryption::new(&shared_secret, session_transcript).unwrap();
         let mut bob = SessionEncryption::new(&shared_secret, session_transcript).unwrap();
-        
+
         // Encrypt with Alice, decrypt with Bob
         let plaintext = b"Hello, World!";
         let ciphertext = alice.encrypt(plaintext).unwrap();
         let decrypted = bob.decrypt(&ciphertext).unwrap();
-        
+
         assert_eq!(plaintext, &decrypted[..]);
     }
 
@@ -159,14 +158,14 @@ mod tests {
     fn test_message_counters() {
         let shared_secret = vec![0x42; 32];
         let session_transcript = b"test session";
-        
+
         let mut encryption = SessionEncryption::new(&shared_secret, session_transcript).unwrap();
-        
+
         assert_eq!(encryption.send_counter(), 0);
-        
+
         encryption.encrypt(b"message 1").unwrap();
         assert_eq!(encryption.send_counter(), 1);
-        
+
         encryption.encrypt(b"message 2").unwrap();
         assert_eq!(encryption.send_counter(), 2);
     }

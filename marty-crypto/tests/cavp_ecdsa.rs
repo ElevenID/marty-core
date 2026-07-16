@@ -12,12 +12,11 @@
 //!     and that tampered signatures are rejected.
 //!   * Round-trip (property): key gen → sign → verify for all three curves.
 
-use marty_crypto::ecdsa::{
-    generate_p256_keypair, generate_p384_keypair, generate_p521_keypair,
-    sign_p256_sha256, sign_p384_sha384, sign_p521_sha512,
-    verify_p256_sha256, verify_p384_sha384, verify_p521_sha512,
-};
 use marty_crypto::ecdh::P256KeyPair;
+use marty_crypto::ecdsa::{
+    generate_p256_keypair, generate_p384_keypair, generate_p521_keypair, sign_p256_sha256,
+    sign_p384_sha384, sign_p521_sha512, verify_p256_sha256, verify_p384_sha384, verify_p521_sha512,
+};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -34,12 +33,15 @@ fn hex(s: &str) -> Vec<u8> {
 /// Round-trip: generate, sign, verify for P-256 / SHA-256.
 #[test]
 fn cavp_ecdsa_p256_round_trip() {
-    let (priv_key, pub_key) = generate_p256_keypair()
-        .expect("P-256 key generation");
+    let (priv_key, pub_key) = generate_p256_keypair().expect("P-256 key generation");
 
     assert_eq!(priv_key.len(), 32, "P-256 private key must be 32 bytes");
-    assert_eq!(pub_key.len(), 65,  "P-256 uncompressed public key must be 65 bytes");
-    assert_eq!(pub_key[0], 0x04,   "Uncompressed point prefix");
+    assert_eq!(
+        pub_key.len(),
+        65,
+        "P-256 uncompressed public key must be 65 bytes"
+    );
+    assert_eq!(pub_key[0], 0x04, "Uncompressed point prefix");
 
     let msg = b"NIST P-256 conformance test message";
     let sig = sign_p256_sha256(&priv_key, msg).expect("P-256 sign");
@@ -115,14 +117,20 @@ fn cavp_ecdsa_p256_sigver_pass() {
                             c049b8923b61fa6ce669622e60f29fb6\
                             7903fe1008b8bc99a41ae9e95628bc64\
                             f2f1b20c2d7e9f5177a3c294d4462299");
-    assert_eq!(pub_key, expected_pub, "P-256 public key from known scalar must match RFC 6979");
+    assert_eq!(
+        pub_key, expected_pub,
+        "P-256 public key from known scalar must match RFC 6979"
+    );
 
     let msg = b"sample";
 
     // Sign and verify (proves sign ↔ verify pipeline is correct)
     let sig1 = sign_p256_sha256(&priv_key, msg).expect("sign");
     let ok = verify_p256_sha256(&pub_key, msg, &sig1).expect("verify");
-    assert!(ok, "RFC 6979 P-256 signature must verify with matching public key");
+    assert!(
+        ok,
+        "RFC 6979 P-256 signature must verify with matching public key"
+    );
 
     // Determinism: signing the same message twice must produce the same DER sig
     let sig2 = sign_p256_sha256(&priv_key, msg).expect("sign #2");
@@ -158,8 +166,12 @@ fn cavp_ecdsa_p384_round_trip() {
     let (priv_key, pub_key) = generate_p384_keypair().expect("P-384 key generation");
 
     assert_eq!(priv_key.len(), 48, "P-384 private key must be 48 bytes");
-    assert_eq!(pub_key.len(), 97,  "P-384 uncompressed public key must be 97 bytes");
-    assert_eq!(pub_key[0], 0x04,   "Uncompressed point prefix");
+    assert_eq!(
+        pub_key.len(),
+        97,
+        "P-384 uncompressed public key must be 97 bytes"
+    );
+    assert_eq!(pub_key[0], 0x04, "Uncompressed point prefix");
 
     let msg = b"NIST P-384 conformance test message";
     let sig = sign_p384_sha384(&priv_key, msg).expect("P-384 sign");
@@ -200,8 +212,12 @@ fn cavp_ecdsa_p521_round_trip() {
     let (priv_key, pub_key) = generate_p521_keypair().expect("P-521 key generation");
 
     assert_eq!(priv_key.len(), 66, "P-521 private key must be 66 bytes");
-    assert_eq!(pub_key.len(), 133, "P-521 uncompressed public key must be 133 bytes");
-    assert_eq!(pub_key[0], 0x04,  "Uncompressed point prefix");
+    assert_eq!(
+        pub_key.len(),
+        133,
+        "P-521 uncompressed public key must be 133 bytes"
+    );
+    assert_eq!(pub_key[0], 0x04, "Uncompressed point prefix");
 
     let msg = b"NIST P-521 conformance test message";
     let sig = sign_p521_sha512(&priv_key, msg).expect("P-521 sign");

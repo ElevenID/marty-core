@@ -84,7 +84,7 @@ mod tests {
     fn default_requirements() -> FreshnessRequirements {
         FreshnessRequirements {
             max_credential_age_seconds: Some(3600), // 1 hour
-            max_proof_age_seconds: 300,              // 5 minutes
+            max_proof_age_seconds: 300,             // 5 minutes
             require_live_revocation_check: true,
         }
     }

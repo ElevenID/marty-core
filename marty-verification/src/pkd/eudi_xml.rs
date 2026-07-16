@@ -19,11 +19,11 @@ pub const DSIG_NS: &str = "http://www.w3.org/2000/09/xmldsig#";
 pub struct TrustServiceStatusList {
     #[serde(rename = "SchemeInformation")]
     pub scheme_information: SchemeInformation,
-    
+
     /// Present in LoTL only - points to member state TLs
     #[serde(rename = "PointersToOtherTSL", default)]
     pub pointers: Option<PointersToOtherTSL>,
-    
+
     /// Present in member state TLs - contains trust service providers
     #[serde(rename = "TrustServiceProviderList", default)]
     pub tsp_list: Option<TrustServiceProviderList>,
@@ -34,16 +34,16 @@ pub struct TrustServiceStatusList {
 pub struct SchemeInformation {
     #[serde(rename = "TSLSequenceNumber")]
     pub sequence_number: u64,
-    
+
     #[serde(rename = "SchemeTerritory")]
     pub territory: String,
-    
+
     #[serde(rename = "ListIssueDateTime")]
     pub issue_date: String,
-    
+
     #[serde(rename = "NextUpdate", default)]
     pub next_update: Option<NextUpdate>,
-    
+
     #[serde(rename = "TSLType")]
     pub tsl_type: String,
 }
@@ -66,10 +66,10 @@ pub struct PointersToOtherTSL {
 pub struct OtherTSLPointer {
     #[serde(rename = "ServiceDigitalIdentities", default)]
     pub identities: Option<ServiceDigitalIdentities>,
-    
+
     #[serde(rename = "TSLLocation")]
     pub location: String,
-    
+
     #[serde(rename = "AdditionalInformation", default)]
     pub additional_info: Option<AdditionalInformation>,
 }
@@ -93,7 +93,7 @@ pub struct DigitalId {
     /// Base64-encoded X.509 certificate
     #[serde(rename = "X509Certificate", default)]
     pub x509_certificate: Option<String>,
-    
+
     /// Subject name (alternative to certificate)
     #[serde(rename = "X509SubjectName", default)]
     pub x509_subject_name: Option<String>,
@@ -104,7 +104,7 @@ pub struct DigitalId {
 pub struct AdditionalInformation {
     #[serde(rename = "TextualInformation", default)]
     pub textual_info: Option<TextualInformation>,
-    
+
     #[serde(rename = "OtherInformation", default)]
     pub other_info: Vec<OtherInformation>,
 }
@@ -120,10 +120,10 @@ pub struct TextualInformation {
 pub struct OtherInformation {
     #[serde(rename = "SchemeTerritory", default)]
     pub territory: Option<String>,
-    
+
     #[serde(rename = "SchemeOperatorName", default)]
     pub operator_name: Option<SchemeOperatorName>,
-    
+
     #[serde(rename = "MimeType", default)]
     pub mime_type: Option<String>,
 }
@@ -139,7 +139,7 @@ pub struct SchemeOperatorName {
 pub struct LocalizedName {
     #[serde(rename = "$value")]
     pub text: String,
-    
+
     #[serde(rename = "lang", default)]
     pub lang: Option<String>,
 }
@@ -156,7 +156,7 @@ pub struct TrustServiceProviderList {
 pub struct XmlTrustServiceProvider {
     #[serde(rename = "TSPInformation")]
     pub info: TspInformation,
-    
+
     #[serde(rename = "TSPServices")]
     pub services: TspServices,
 }
@@ -166,7 +166,7 @@ pub struct XmlTrustServiceProvider {
 pub struct TspInformation {
     #[serde(rename = "TSPName")]
     pub name: MultiLangString,
-    
+
     #[serde(rename = "TSPTradeName", default)]
     pub trade_name: Option<MultiLangString>,
 }
@@ -197,16 +197,16 @@ pub struct XmlTspService {
 pub struct ServiceInformation {
     #[serde(rename = "ServiceTypeIdentifier")]
     pub service_type: String,
-    
+
     #[serde(rename = "ServiceName")]
     pub name: MultiLangString,
-    
+
     #[serde(rename = "ServiceStatus")]
     pub status: String,
-    
+
     #[serde(rename = "StatusStartingTime")]
     pub status_starting_time: String,
-    
+
     #[serde(rename = "ServiceDigitalIdentity")]
     pub digital_identity: ServiceDigitalIdentity,
 }
@@ -239,7 +239,7 @@ mod tests {
                 lang: Some("en".to_string()),
             },
         ];
-        
+
         assert_eq!(LocalizedName::get_best_text(&names), "English name");
     }
 
@@ -249,7 +249,7 @@ mod tests {
             text: "Deutscher Name".to_string(),
             lang: Some("de".to_string()),
         }];
-        
+
         assert_eq!(LocalizedName::get_best_text(&names), "Deutscher Name");
     }
 }

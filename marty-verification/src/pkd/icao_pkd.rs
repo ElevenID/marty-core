@@ -122,25 +122,31 @@ impl IcaoPkdClient {
     #[cfg(feature = "icao-client")]
     async fn fetch_master_list_ldap(&self) -> VerificationResult<Vec<MasterListEntry>> {
         // ICAO PKD uses LDAP/LDIF format
-        let ldap_url = format!("ldap://{}:389", self.config.base_url.replace("https://", ""));
+        let ldap_url = format!(
+            "ldap://{}:389",
+            self.config.base_url.replace("https://", "")
+        );
         let base_dn = "ou=CSCA,dc=pkd,dc=icao,dc=int";
 
-        let (conn, mut ldap) = LdapConnAsync::new(&ldap_url)
-            .await
-            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP connection failed: {}", e)))?;
+        let (conn, mut ldap) = LdapConnAsync::new(&ldap_url).await.map_err(|e| {
+            VerificationError::pkd_fetch(&ldap_url, format!("LDAP connection failed: {}", e))
+        })?;
 
         ldap3::drive!(conn);
 
         // Bind
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
             let bind_dn = format!("uid={},{}", username, base_dn);
-            ldap.simple_bind(&bind_dn, password)
-                .await
-                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP bind failed: {}", e)))?;
+            ldap.simple_bind(&bind_dn, password).await.map_err(|e| {
+                VerificationError::pkd_fetch(&ldap_url, format!("LDAP bind failed: {}", e))
+            })?;
         } else {
-            ldap.simple_bind("", "")
-                .await
-                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP anonymous bind failed: {}", e)))?;
+            ldap.simple_bind("", "").await.map_err(|e| {
+                VerificationError::pkd_fetch(
+                    &ldap_url,
+                    format!("LDAP anonymous bind failed: {}", e),
+                )
+            })?;
         }
 
         // Search for CSCA certificates
@@ -152,9 +158,16 @@ impl IcaoPkdClient {
                 vec!["cACertificate", "c", "serialNumber"],
             )
             .await
-            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search failed: {}", e)))?
+            .map_err(|e| {
+                VerificationError::pkd_fetch(&ldap_url, format!("LDAP search failed: {}", e))
+            })?
             .success()
-            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search result failed: {:?}", e)))?;
+            .map_err(|e| {
+                VerificationError::pkd_fetch(
+                    &ldap_url,
+                    format!("LDAP search result failed: {:?}", e),
+                )
+            })?;
 
         let mut entries = Vec::new();
 
@@ -198,25 +211,31 @@ impl IcaoPkdClient {
     #[cfg(feature = "icao-client")]
     #[allow(dead_code)]
     async fn fetch_country_dsc_ldap(&self, country: &str) -> VerificationResult<Vec<DscEntry>> {
-        let ldap_url = format!("ldap://{}:389", self.config.base_url.replace("https://", ""));
+        let ldap_url = format!(
+            "ldap://{}:389",
+            self.config.base_url.replace("https://", "")
+        );
         let base_dn = "ou=DSC,dc=pkd,dc=icao,dc=int";
 
-        let (conn, mut ldap) = LdapConnAsync::new(&ldap_url)
-            .await
-            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP connection failed: {}", e)))?;
+        let (conn, mut ldap) = LdapConnAsync::new(&ldap_url).await.map_err(|e| {
+            VerificationError::pkd_fetch(&ldap_url, format!("LDAP connection failed: {}", e))
+        })?;
 
         ldap3::drive!(conn);
 
         // Bind
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
             let bind_dn = format!("uid={},{}", username, base_dn);
-            ldap.simple_bind(&bind_dn, password)
-                .await
-                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP bind failed: {}", e)))?;
+            ldap.simple_bind(&bind_dn, password).await.map_err(|e| {
+                VerificationError::pkd_fetch(&ldap_url, format!("LDAP bind failed: {}", e))
+            })?;
         } else {
-            ldap.simple_bind("", "")
-                .await
-                .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP anonymous bind failed: {}", e)))?;
+            ldap.simple_bind("", "").await.map_err(|e| {
+                VerificationError::pkd_fetch(
+                    &ldap_url,
+                    format!("LDAP anonymous bind failed: {}", e),
+                )
+            })?;
         }
 
         // Search for DSC certificates for this country
@@ -229,9 +248,16 @@ impl IcaoPkdClient {
                 vec!["userCertificate", "c"],
             )
             .await
-            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search failed: {}", e)))?
+            .map_err(|e| {
+                VerificationError::pkd_fetch(&ldap_url, format!("LDAP search failed: {}", e))
+            })?
             .success()
-            .map_err(|e| VerificationError::pkd_fetch(&ldap_url, format!("LDAP search result failed: {:?}", e)))?;
+            .map_err(|e| {
+                VerificationError::pkd_fetch(
+                    &ldap_url,
+                    format!("LDAP search result failed: {:?}", e),
+                )
+            })?;
 
         let mut entries = Vec::new();
 
@@ -258,7 +284,11 @@ impl IcaoPkdClient {
 
         let _ = ldap.unbind().await;
 
-        tracing::info!("Fetched {} DSC certificates for country {} from ICAO PKD", entries.len(), country);
+        tracing::info!(
+            "Fetched {} DSC certificates for country {} from ICAO PKD",
+            entries.len(),
+            country
+        );
         Ok(entries)
     }
 

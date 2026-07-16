@@ -73,7 +73,7 @@ impl ClaimConstraintEvaluator {
                     continue;
                 }
             }
-            
+
             // Otherwise use the original claim
             if !preferred.contains(&claim_name.to_string()) {
                 preferred.push(claim_name.clone());

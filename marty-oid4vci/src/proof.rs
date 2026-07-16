@@ -96,20 +96,22 @@ pub fn verify_jwt_proof(
         ));
     }
 
-    let header_bytes = B64
-        .decode(parts[0])
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid header base64: {}", e)))?;
-    let payload_bytes = B64
-        .decode(parts[1])
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid payload base64: {}", e)))?;
-    let signature_bytes = B64
-        .decode(parts[2])
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid signature base64: {}", e)))?;
+    let header_bytes = B64.decode(parts[0]).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid header base64: {}", e))
+    })?;
+    let payload_bytes = B64.decode(parts[1]).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid payload base64: {}", e))
+    })?;
+    let signature_bytes = B64.decode(parts[2]).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid signature base64: {}", e))
+    })?;
 
-    let header: ProofHeader = serde_json::from_slice(&header_bytes)
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid header JSON: {}", e)))?;
-    let payload: ProofPayload = serde_json::from_slice(&payload_bytes)
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid payload JSON: {}", e)))?;
+    let header: ProofHeader = serde_json::from_slice(&header_bytes).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid header JSON: {}", e))
+    })?;
+    let payload: ProofPayload = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid payload JSON: {}", e))
+    })?;
 
     // Step 2: Validate typ header
     if let Some(typ) = &header.typ {
@@ -123,7 +125,8 @@ pub fn verify_jwt_proof(
     // Note: typ is recommended but not strictly required per some wallet implementations
 
     // Step 3: Extract public key from kid or jwk
-    let (holder_id, holder_jwk) = extract_holder_key(&header)?;
+    let (derived_holder_id, holder_jwk) = extract_holder_key(&header)?;
+    let holder_id = payload.iss.clone().unwrap_or(derived_holder_id);
 
     // Step 4: Cryptographic signature verification
     if let Some(ref jwk) = holder_jwk {
@@ -212,14 +215,11 @@ fn base58btc_decode(input: &str) -> Oid4vciResult<Vec<u8>> {
     let n_leading = input.bytes().take_while(|&b| b == b'1').count();
     let mut result: Vec<u8> = Vec::new();
     for &c in input.as_bytes() {
-        let digit = ALPHA
-            .iter()
-            .position(|&a| a == c)
-            .ok_or_else(|| {
-                Oid4vciError::ProofVerificationFailed(
-                    format!("Invalid base58btc character 0x{c:02x} in did:key"),
-                )
-            })? as u32;
+        let digit = ALPHA.iter().position(|&a| a == c).ok_or_else(|| {
+            Oid4vciError::ProofVerificationFailed(format!(
+                "Invalid base58btc character 0x{c:02x} in did:key"
+            ))
+        })? as u32;
         let mut carry = digit;
         for byte in result.iter_mut() {
             carry += 58 * (*byte as u32);
@@ -379,10 +379,7 @@ fn verify_signature(
     public_key
         .verify(alg_instance, message.as_bytes(), signature)
         .map_err(|e| {
-            Oid4vciError::ProofVerificationFailed(format!(
-                "Signature verification failed: {:?}",
-                e
-            ))
+            Oid4vciError::ProofVerificationFailed(format!("Signature verification failed: {:?}", e))
         })?;
 
     Ok(())
@@ -405,11 +402,9 @@ fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::PublicKey> {
                 .ok_or_else(|| Oid4vciError::KeyError("Missing EC y coordinate".into()))?;
 
             match params.curve.as_deref() {
-                Some("P-256") => {
-                    ssi::crypto::PublicKey::new_p256(&x.0, &y.0).map_err(|e| {
-                        Oid4vciError::KeyError(format!("Invalid P-256 public key: {:?}", e))
-                    })
-                }
+                Some("P-256") => ssi::crypto::PublicKey::new_p256(&x.0, &y.0).map_err(|e| {
+                    Oid4vciError::KeyError(format!("Invalid P-256 public key: {:?}", e))
+                }),
                 Some("secp256k1") => {
                     ssi::crypto::PublicKey::new_secp256k1(&x.0, &y.0).map_err(|e| {
                         Oid4vciError::KeyError(format!("Invalid secp256k1 public key: {:?}", e))
@@ -419,9 +414,7 @@ fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::PublicKey> {
                     "Unsupported EC curve for proof verification: {}",
                     curve
                 ))),
-                None => Err(Oid4vciError::KeyError(
-                    "Missing curve in EC JWK".into(),
-                )),
+                None => Err(Oid4vciError::KeyError("Missing curve in EC JWK".into())),
             }
         }
         _ => Err(Oid4vciError::KeyError(
@@ -444,12 +437,8 @@ fn verify_rsa_signature(
     ))
 }
 
-/// Extract JWT proof(s) from a credential request, handling both v1 and legacy formats.
-///
-/// OID4VCI v1 uses `proofs.jwt: [...]` while Draft 13 uses `proof.jwt: "..."`.
-/// This function normalizes both into a Vec<String>.
+/// Extract JWT proof(s) from an OID4VCI v1 credential request.
 pub fn extract_proof_jwts(request: &crate::types::CredentialRequest) -> Oid4vciResult<Vec<String>> {
-    // v1 format: proofs.jwt array
     if let Some(ref proofs) = request.proofs {
         if let Some(ref jwts) = proofs.jwt {
             if jwts.is_empty() {
@@ -461,19 +450,8 @@ pub fn extract_proof_jwts(request: &crate::types::CredentialRequest) -> Oid4vciR
         }
     }
 
-    // Legacy Draft 13 format: proof.jwt string
-    if let Some(ref proof) = request.proof {
-        if proof.proof_type != "jwt" {
-            return Err(Oid4vciError::ProofVerificationFailed(format!(
-                "Unsupported proof type: {}. Only 'jwt' is supported.",
-                proof.proof_type
-            )));
-        }
-        return Ok(vec![proof.jwt.clone()]);
-    }
-
     Err(Oid4vciError::ProofVerificationFailed(
-        "No proof provided in credential request. Either 'proofs' (v1) or 'proof' (legacy) is required.".into(),
+        "No proof provided in credential request. 'proofs.jwt' is required.".into(),
     ))
 }
 
@@ -555,11 +533,11 @@ mod tests {
     fn test_extract_proof_jwts_v1_format() {
         let request = crate::types::CredentialRequest {
             format: Some("jwt_vc_json".into()),
+            credential_configuration_id: Some("employee".into()),
             credential_identifier: None,
             proofs: Some(crate::types::ProofsObject {
                 jwt: Some(vec!["header.payload.sig".into()]),
             }),
-            proof: None,
             credential_definition: None,
             vct: None,
             doctype: None,
@@ -571,32 +549,12 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_proof_jwts_legacy_format() {
-        let request = crate::types::CredentialRequest {
-            format: Some("jwt_vc_json".into()),
-            credential_identifier: None,
-            proofs: None,
-            proof: Some(crate::types::SingleProof {
-                proof_type: "jwt".into(),
-                jwt: "legacy.proof.jwt".into(),
-            }),
-            credential_definition: None,
-            vct: None,
-            doctype: None,
-            claims: None,
-        };
-
-        let jwts = extract_proof_jwts(&request).unwrap();
-        assert_eq!(jwts, vec!["legacy.proof.jwt"]);
-    }
-
-    #[test]
     fn test_extract_proof_jwts_no_proof() {
         let request = crate::types::CredentialRequest {
             format: Some("jwt_vc_json".into()),
+            credential_configuration_id: Some("employee".into()),
             credential_identifier: None,
             proofs: None,
-            proof: None,
             credential_definition: None,
             vct: None,
             doctype: None,

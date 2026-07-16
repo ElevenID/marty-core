@@ -30,7 +30,10 @@ fn assert_valid(label: &str, result_json: &str) {
     let value: Value = serde_json::from_str(result_json)
         .unwrap_or_else(|e| panic!("{} output is not JSON: {}", label, e));
     assert!(
-        value.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+        value
+            .get("valid")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         "{} verification failed: {:?}",
         label,
         value

@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-bindings", "marty-oid4vci", "marty-didcomm"]
+members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-bindings", "marty-oid4vci", "marty-didcomm", "marty-test-wallet"]
 resolver = "2"
 
 [workspace.package]
@@ -7,8 +7,8 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-org/marty-core"
-rust-version = "1.75"
+repository = "https://github.com/ElevenID/marty-core"
+rust-version = "1.87"
 
 [workspace.dependencies]
 # Crypto and certificates
@@ -87,6 +87,7 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-error = "0.2"
+axum = "0.8"
 
 # Database (for marty-secure-storage)
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
@@ -101,13 +102,13 @@ base64 = "0.22"
 zeroize = "1.7"
 
 # Python bindings
-pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.22.6", features = ["abi3-py311"] }
 
 # Internal crates
-marty-crypto = { path = "marty-crypto" }
-marty-verification = { path = "marty-verification" }
-marty-secure-storage = { path = "marty-secure-storage" }
-marty-biometrics = { path = "marty-biometrics" }
+marty-crypto = { version = "0.1.0", path = "marty-crypto" }
+marty-verification = { version = "0.1.0", path = "marty-verification" }
+marty-secure-storage = { version = "0.1.0", path = "marty-secure-storage" }
+marty-biometrics = { version = "0.1.0", path = "marty-biometrics" }
 
 # Test/dev dependencies
 rcgen = "0.13"
@@ -122,6 +123,3 @@ codegen-units = 1
 [profile.dev]
 opt-level = 0
 debug = true
-
-[patch.crates-io]
-core2 = { path = "vendor/core2-0.4.0" }

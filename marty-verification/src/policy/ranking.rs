@@ -20,7 +20,7 @@ impl CredentialRanker {
     }
 
     /// Rank a list of credentials according to the configured strategy.
-    /// 
+    ///
     /// Returns credentials sorted from most to least preferred.
     pub fn rank(&self, credentials: &mut [RankableCredential]) {
         match self.strategy {
@@ -53,12 +53,12 @@ impl CredentialRanker {
                 let claim_weight = self.weights.get("claim_count").copied().unwrap_or(-0.1);
 
                 credentials.sort_by(|a, b| {
-                    let score_a = self.compute_custom_score(a, freshness_weight, trust_weight, claim_weight);
-                    let score_b = self.compute_custom_score(b, freshness_weight, trust_weight, claim_weight);
-                    
-                    score_b
-                        .partial_cmp(&score_a)
-                        .unwrap_or(Ordering::Equal)
+                    let score_a =
+                        self.compute_custom_score(a, freshness_weight, trust_weight, claim_weight);
+                    let score_b =
+                        self.compute_custom_score(b, freshness_weight, trust_weight, claim_weight);
+
+                    score_b.partial_cmp(&score_a).unwrap_or(Ordering::Equal)
                 });
             }
         }
@@ -85,9 +85,7 @@ impl CredentialRanker {
         // Claim count score: fewer claims is better (inverted)
         let claim_score = cred.claim_count as f64;
 
-        freshness_weight * freshness_score
-            + trust_weight * trust_score
-            + claim_weight * claim_score
+        freshness_weight * freshness_score + trust_weight * trust_score + claim_weight * claim_score
     }
 }
 
@@ -97,7 +95,7 @@ pub struct RankableCredential {
     pub credential_id: String,
     pub issuer_id: String,
     pub issued_at: SystemTime,
-    pub trust_level: f64,     // 0.0 - 1.0, higher is more trusted
+    pub trust_level: f64, // 0.0 - 1.0, higher is more trusted
     pub claim_count: usize,
 }
 

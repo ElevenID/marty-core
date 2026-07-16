@@ -28,17 +28,20 @@ impl Apdu {
     /// Encode APDU to bytes
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![self.cla, self.ins, self.p1, self.p2];
-        
+
         if !self.data.is_empty() {
-            debug_assert!(self.data.len() <= 255, "APDU data exceeds short-form Lc limit");
+            debug_assert!(
+                self.data.len() <= 255,
+                "APDU data exceeds short-form Lc limit"
+            );
             bytes.push(self.data.len() as u8);
             bytes.extend_from_slice(&self.data);
         }
-        
+
         if let Some(le) = self.le {
             bytes.push(le);
         }
-        
+
         bytes
     }
 
@@ -95,7 +98,7 @@ impl NfcTransport {
     pub fn new() -> Result<Self> {
         // ISO 18013-5 mDL AID: A0000002480200
         let mdl_aid = vec![0xA0, 0x00, 0x00, 0x02, 0x48, 0x02, 0x00];
-        
+
         Ok(Self {
             context: Arc::new(Mutex::new(None)),
             card: Arc::new(Mutex::new(None)),
@@ -112,27 +115,40 @@ impl NfcTransport {
 
         // List available readers
         let mut readers_buf = [0; 2048];
-        let mut readers = ctx.list_readers(&mut readers_buf)
+        let mut readers = ctx
+            .list_readers(&mut readers_buf)
             .map_err(|e| crate::error::Error::Transport(format!("No NFC readers found: {}", e)))?;
 
-        let reader = readers.next()
+        let reader = readers
+            .next()
             .ok_or_else(|| crate::error::Error::Transport("No NFC reader available".to_string()))?;
 
         // Connect to card
-        let card = ctx.connect(reader, ShareMode::Shared, Protocols::ANY)
-            .map_err(|e| crate::error::Error::ConnectionFailed(format!("Card connection failed: {}", e)))?;
+        let card = ctx
+            .connect(reader, ShareMode::Shared, Protocols::ANY)
+            .map_err(|e| {
+                crate::error::Error::ConnectionFailed(format!("Card connection failed: {}", e))
+            })?;
 
         // Select mDL application
         let select_apdu = Apdu::select(&self.mdl_aid);
         let response = self.transmit_apdu(&card, &select_apdu)?;
-        
+
         // Check SW1SW2 = 0x9000 (success)
         if response.len() < 2 || response[response.len() - 2..] != [0x90, 0x00] {
-            return Err(crate::error::Error::Transport("Failed to select mDL application".to_string()));
+            return Err(crate::error::Error::Transport(
+                "Failed to select mDL application".to_string(),
+            ));
         }
 
-        *self.context.lock().map_err(|_| crate::error::Error::Transport("NFC context mutex poisoned".to_string()))? = Some(ctx);
-        *self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))? = Some(card);
+        *self.context.lock().map_err(|_| {
+            crate::error::Error::Transport("NFC context mutex poisoned".to_string())
+        })? = Some(ctx);
+        *self
+            .card
+            .lock()
+            .map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))? =
+            Some(card);
         self.connected = true;
 
         Ok(())
@@ -142,8 +158,9 @@ impl NfcTransport {
     fn transmit_apdu(&self, card: &Card, apdu: &Apdu) -> Result<Vec<u8>> {
         let mut response_buf = [0; 512];
         let command = apdu.to_bytes();
-        
-        let response_len = card.transmit(&command, &mut response_buf)
+
+        let response_len = card
+            .transmit(&command, &mut response_buf)
             .map_err(|e| crate::error::Error::Transport(format!("APDU transmit failed: {}", e)))?;
 
         Ok(response_buf[..response_len].to_vec())
@@ -152,7 +169,9 @@ impl NfcTransport {
     /// Extract data from APDU response (excluding SW1SW2)
     fn extract_data(response: &[u8]) -> Result<Vec<u8>> {
         if response.len() < 2 {
-            return Err(crate::error::Error::ReceiveFailed("Invalid response".to_string()));
+            return Err(crate::error::Error::ReceiveFailed(
+                "Invalid response".to_string(),
+            ));
         }
 
         let sw1 = response[response.len() - 2];
@@ -161,9 +180,10 @@ impl NfcTransport {
         if sw1 == 0x90 && sw2 == 0x00 {
             Ok(response[..response.len() - 2].to_vec())
         } else {
-            Err(crate::error::Error::ReceiveFailed(
-                format!("APDU error: SW={:02X}{:02X}", sw1, sw2)
-            ))
+            Err(crate::error::Error::ReceiveFailed(format!(
+                "APDU error: SW={:02X}{:02X}",
+                sw1, sw2
+            )))
         }
     }
 }
@@ -184,11 +204,17 @@ impl Transport for NfcTransport {
 
     async fn send(&mut self, data: &[u8]) -> Result<()> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
 
-        let card_guard = self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))?;
-        let card = card_guard.as_ref()
+        let card_guard = self
+            .card
+            .lock()
+            .map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))?;
+        let card = card_guard
+            .as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No card connected".to_string()))?;
 
         // Send data using ENVELOPE command
@@ -203,11 +229,17 @@ impl Transport for NfcTransport {
 
     async fn receive(&mut self) -> Result<Vec<u8>> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
 
-        let card_guard = self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))?;
-        let card = card_guard.as_ref()
+        let card_guard = self
+            .card
+            .lock()
+            .map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))?;
+        let card = card_guard
+            .as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No card connected".to_string()))?;
 
         // Get response data (tag 0x53 - device response)
@@ -218,8 +250,14 @@ impl Transport for NfcTransport {
     }
 
     async fn close(&mut self) -> Result<()> {
-        *self.card.lock().map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))? = None;
-        *self.context.lock().map_err(|_| crate::error::Error::Transport("NFC context mutex poisoned".to_string()))? = None;
+        *self
+            .card
+            .lock()
+            .map_err(|_| crate::error::Error::Transport("NFC card mutex poisoned".to_string()))? =
+            None;
+        *self.context.lock().map_err(|_| {
+            crate::error::Error::Transport("NFC context mutex poisoned".to_string())
+        })? = None;
         self.connected = false;
         Ok(())
     }
@@ -235,7 +273,7 @@ pub struct NfcTransport;
 
 #[cfg(not(feature = "nfc"))]
 impl NfcTransport {
-    pub fn new() -> Result<(), crate::error::Error> {
+    pub fn new() -> Result<Self, crate::error::Error> {
         Err(crate::error::Error::TransportNotSupported)
     }
 }

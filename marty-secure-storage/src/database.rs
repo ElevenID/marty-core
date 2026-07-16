@@ -741,7 +741,6 @@ impl SecureStorage {
         )?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
-            pii_encryptor: None,
         })
     }
 }
@@ -937,11 +936,17 @@ mod tests {
             storage.store_trust_anchor(&anchor).await.unwrap();
 
             assert_eq!(
-                storage.count_trust_anchors(TrustAnchorType::Csca).await.unwrap(),
+                storage
+                    .count_trust_anchors(TrustAnchorType::Csca)
+                    .await
+                    .unwrap(),
                 1
             );
             assert_eq!(
-                storage.count_trust_anchors(TrustAnchorType::Iaca).await.unwrap(),
+                storage
+                    .count_trust_anchors(TrustAnchorType::Iaca)
+                    .await
+                    .unwrap(),
                 0
             );
         });
@@ -957,7 +962,10 @@ mod tests {
         rt.block_on(async {
             let storage = SecureStorage::new_in_memory().unwrap();
             let payload = serde_json::json!({"type": "verification", "status": "ok"});
-            let id = storage.queue_event("verification_complete", &payload).await.unwrap();
+            let id = storage
+                .queue_event("verification_complete", &payload)
+                .await
+                .unwrap();
             assert!(!id.is_empty());
 
             let pending = storage.get_pending_events(10).await.unwrap();
@@ -990,7 +998,10 @@ mod tests {
             assert_eq!(status.pending_events, 0);
             assert_eq!(status.data_size_bytes, 0);
 
-            storage.queue_event("test", &serde_json::json!({"a":"b"})).await.unwrap();
+            storage
+                .queue_event("test", &serde_json::json!({"a":"b"}))
+                .await
+                .unwrap();
             let status = storage.get_queue_status().await.unwrap();
             assert_eq!(status.pending_events, 1);
             assert!(status.data_size_bytes > 0);

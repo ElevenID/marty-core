@@ -101,24 +101,16 @@ impl FaceVerifier for OnnxProvider {
         let (probe_emb, _probe_face) = self.pipeline.extract_embedding(&request.probe_image)?;
 
         let elapsed = start.elapsed().as_millis() as u64;
-        Ok(self.pipeline.verify_embeddings(
-            &ref_emb,
-            &probe_emb,
-            threshold,
-            "marty-onnx",
-            elapsed,
-        ))
+        Ok(self
+            .pipeline
+            .verify_embeddings(&ref_emb, &probe_emb, threshold, "marty-onnx", elapsed))
     }
 
-    async fn assess_quality(
-        &self,
-        image: &str,
-    ) -> Result<FaceQualityAssessment, BiometricError> {
+    async fn assess_quality(&self, image: &str) -> Result<FaceQualityAssessment, BiometricError> {
         let faces = self.pipeline.detect_faces(image)?;
         let face = faces.first().ok_or(BiometricError::FaceNotDetected)?;
 
-        let (rgb, width, height) =
-            super::preprocessing::decode_base64_image(image)?;
+        let (rgb, width, height) = super::preprocessing::decode_base64_image(image)?;
         let (crop_rgb, crop_w, crop_h) =
             super::pipeline::crop_face_region(&rgb, width, height, &face.bbox);
         let quality = super::preprocessing::compute_image_quality(&crop_rgb, crop_w, crop_h);
@@ -148,21 +140,12 @@ impl FaceVerifier for OnnxProvider {
         })
     }
 
-    async fn extract_template(
-        &self,
-        image: &str,
-    ) -> Result<FaceTemplate, BiometricError> {
+    async fn extract_template(&self, image: &str) -> Result<FaceTemplate, BiometricError> {
         let (embedding, face) = self.pipeline.extract_embedding(image)?;
 
         // Encode the 512-d embedding as base64 for portable storage
-        let bytes: Vec<u8> = embedding
-            .iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
-        let data = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &bytes,
-        );
+        let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
 
         Ok(FaceTemplate {
             data,
@@ -183,10 +166,7 @@ impl FaceVerifier for OnnxProvider {
         Ok(cosine_similarity(&ref_emb, &probe_emb))
     }
 
-    async fn estimate_age(
-        &self,
-        image: &str,
-    ) -> Result<AgeEstimate, BiometricError> {
+    async fn estimate_age(&self, image: &str) -> Result<AgeEstimate, BiometricError> {
         self.pipeline.estimate_age(image)
     }
 
@@ -195,9 +175,7 @@ impl FaceVerifier for OnnxProvider {
         frames: &[String],
     ) -> Result<PassiveLivenessResult, BiometricError> {
         if frames.is_empty() {
-            return Err(BiometricError::ImageProcessing(
-                "no frames provided".into(),
-            ));
+            return Err(BiometricError::ImageProcessing("no frames provided".into()));
         }
 
         let start = Instant::now();
@@ -212,8 +190,8 @@ impl FaceVerifier for OnnxProvider {
         let attack_count = pad_scores.iter().filter(|p| p.attack_detected).count();
         let is_live = attack_count * 2 < frames.len(); // Less than half flagged
 
-        let avg_confidence: f32 = pad_scores.iter().map(|p| p.confidence).sum::<f32>()
-            / pad_scores.len() as f32;
+        let avg_confidence: f32 =
+            pad_scores.iter().map(|p| p.confidence).sum::<f32>() / pad_scores.len() as f32;
 
         Ok(PassiveLivenessResult {
             is_live,
@@ -224,10 +202,7 @@ impl FaceVerifier for OnnxProvider {
         })
     }
 
-    async fn detect_deepfake(
-        &self,
-        image: &str,
-    ) -> Result<DeepfakeAnalysis, BiometricError> {
+    async fn detect_deepfake(&self, image: &str) -> Result<DeepfakeAnalysis, BiometricError> {
         self.pipeline.detect_deepfake(image)
     }
 
@@ -288,11 +263,8 @@ impl FaceVerifier for OnnxProvider {
 
 /// Decode a base64-encoded f32 embedding from a FaceTemplate.
 fn decode_template_embedding(base64_data: &str) -> Result<Vec<f32>, BiometricError> {
-    let bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        base64_data,
-    )
-    .map_err(|e| BiometricError::TemplateExtraction(format!("base64: {e}")))?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_data)
+        .map_err(|e| BiometricError::TemplateExtraction(format!("base64: {e}")))?;
 
     if bytes.len() % 4 != 0 {
         return Err(BiometricError::TemplateExtraction(
@@ -314,10 +286,7 @@ mod tests {
     fn test_decode_template_roundtrip() {
         let embedding: Vec<f32> = vec![0.1, 0.2, 0.3, -0.4, 0.5];
         let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &bytes,
-        );
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
 
         let decoded = decode_template_embedding(&encoded).unwrap();
         for (a, b) in embedding.iter().zip(decoded.iter()) {

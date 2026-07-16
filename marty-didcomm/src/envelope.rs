@@ -12,8 +12,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 
 /// PIURI for DIDComm credential issuance message
-const ISSUE_CREDENTIAL_TYPE: &str =
-    "https://didcomm.org/issue-credential/3.0/issue-credential";
+const ISSUE_CREDENTIAL_TYPE: &str = "https://didcomm.org/issue-credential/3.0/issue-credential";
 
 /// Pack a signed credential into a DIDComm v2 plaintext message.
 ///
@@ -82,9 +81,7 @@ pub fn unpack_didcomm_message(json: &str) -> DidcommResult<DidcommMessage> {
 /// Map credential format to IANA media type.
 fn format_to_media_type(format: &str) -> &str {
     match format {
-        "vc+sd-jwt" | "dc+sd-jwt" | "w3c_vcdm_v2_sd_jwt" | "ietf_sd_jwt" => {
-            "application/vc+sd-jwt"
-        }
+        "vc+sd-jwt" | "dc+sd-jwt" | "w3c_vcdm_v2_sd_jwt" | "ietf_sd_jwt" => "application/vc+sd-jwt",
         "mso_mdoc" | "mdoc" => "application/cbor",
         "jwt_vc_json" | "jwt_vc" => "application/jwt",
         _ => "application/octet-stream",
@@ -109,9 +106,15 @@ mod tests {
 
         let msg: DidcommMessage = serde_json::from_str(&result).unwrap();
         assert_eq!(msg.r#type, ISSUE_CREDENTIAL_TYPE);
-        assert_eq!(msg.from.as_deref(), Some("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"));
+        assert_eq!(
+            msg.from.as_deref(),
+            Some("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+        );
         assert_eq!(msg.attachments.len(), 1);
-        assert_eq!(msg.attachments[0].media_type.as_deref(), Some("application/vc+sd-jwt"));
+        assert_eq!(
+            msg.attachments[0].media_type.as_deref(),
+            Some("application/vc+sd-jwt")
+        );
         assert_eq!(msg.thid.as_deref(), Some("thread-123"));
     }
 

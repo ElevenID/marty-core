@@ -32,26 +32,22 @@
 //! }
 //! ```
 
-pub mod types;
 pub mod claim_evaluator;
+pub mod disclosure;
 pub mod freshness;
 pub mod issuer;
-pub mod disclosure;
 pub mod ranking;
+pub mod types;
 
 pub use types::{
-    PresentationPolicy,
-    HolderBindingMethod,
-    CredentialRankingStrategy,
-    RequiredClaim,
-    FreshnessRequirements,
-    PolicyEvaluationResult,
+    CredentialRankingStrategy, FreshnessRequirements, HolderBindingMethod, PolicyEvaluationResult,
+    PresentationPolicy, RequiredClaim,
 };
 
 pub use claim_evaluator::ClaimConstraintEvaluator;
+pub use disclosure::MinimumDisclosureResolver;
 pub use freshness::FreshnessChecker;
 pub use issuer::IssuerConstraintChecker;
-pub use disclosure::MinimumDisclosureResolver;
 pub use ranking::CredentialRanker;
 
 /// Policy evaluator that orchestrates all constraint checks.

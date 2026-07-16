@@ -28,7 +28,7 @@ impl X509Signature2021 {
     pub fn new(trust_anchors: Vec<Vec<u8>>) -> VerificationResult<Self> {
         Ok(Self { trust_anchors })
     }
-    
+
     /// Verify a signature using X.509 certificate.
     ///
     /// # Arguments
@@ -50,10 +50,10 @@ impl X509Signature2021 {
         // 2. Validate certificate chain against trust_anchors
         // 3. Verify signature using certificate public key
         Err(VerificationError::open_badges_unsupported(
-            "X.509 signature verification not yet implemented".to_string()
+            "X.509 signature verification not yet implemented".to_string(),
         ))
     }
-    
+
     /// Add a CRL for revocation checking.
     ///
     /// # Arguments
@@ -61,7 +61,7 @@ impl X509Signature2021 {
     pub fn add_crl(&mut self, _crl_der: Vec<u8>) -> VerificationResult<()> {
         // TODO: Implement CRL addition — parse DER, store revoked serials
         Err(VerificationError::open_badges_unsupported(
-            "CRL processing is not yet implemented".to_string()
+            "CRL processing is not yet implemented".to_string(),
         ))
     }
 }
@@ -70,30 +70,30 @@ impl X509Signature2021 {
 mod tests {
     use super::*;
     use crate::testdata::NIST_TRUST_ANCHOR_DER;
-    
+
     #[test]
     fn test_create_x509_suite() {
         let trust_anchors = vec![NIST_TRUST_ANCHOR_DER.to_vec()];
         let suite = X509Signature2021::new(trust_anchors);
         assert!(suite.is_ok());
     }
-    
+
     #[test]
     fn test_x509_suite_with_empty_trust_anchors() {
         let result = X509Signature2021::new(vec![]);
         // Should succeed but won't validate any chains
         assert!(result.is_ok());
     }
-    
+
     #[test]
     fn test_add_crl() {
         let trust_anchors = vec![NIST_TRUST_ANCHOR_DER.to_vec()];
         let mut suite = X509Signature2021::new(trust_anchors).unwrap();
-        
+
         // Empty CRL for testing
         let mock_crl = vec![0x30, 0x82]; // DER CRL start
         let result = suite.add_crl(mock_crl);
-        
+
         // May fail due to invalid CRL format, but tests the interface
         let _ = result;
     }

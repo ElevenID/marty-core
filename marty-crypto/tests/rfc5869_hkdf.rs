@@ -20,7 +20,7 @@ fn hex(s: &str) -> Vec<u8> {
 /// Hash=SHA-256, basic with salt
 #[test]
 fn rfc5869_hkdf_sha256_tc1() {
-    let ikm  = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    let ikm = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     let salt = hex("000102030405060708090a0b0c");
     let info = hex("f0f1f2f3f4f5f6f7f8f9");
     let l = 42;
@@ -38,27 +38,21 @@ fn rfc5869_hkdf_sha256_tc1() {
 /// Hash=SHA-256, longer inputs/outputs
 #[test]
 fn rfc5869_hkdf_sha256_tc2() {
-    let ikm = hex(
-        "000102030405060708090a0b0c0d0e0f\
+    let ikm = hex("000102030405060708090a0b0c0d0e0f\
          101112131415161718191a1b1c1d1e1f\
          202122232425262728292a2b2c2d2e2f\
          303132333435363738393a3b3c3d3e3f\
-         404142434445464748494a4b4c4d4e4f",
-    );
-    let salt = hex(
-        "606162636465666768696a6b6c6d6e6f\
+         404142434445464748494a4b4c4d4e4f");
+    let salt = hex("606162636465666768696a6b6c6d6e6f\
          707172737475767778797a7b7c7d7e7f\
          808182838485868788898a8b8c8d8e8f\
          909192939495969798999a9b9c9d9e9f\
-         a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
-    );
-    let info = hex(
-        "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf\
+         a0a1a2a3a4a5a6a7a8a9aaabacadaeaf");
+    let info = hex("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf\
          c0c1c2c3c4c5c6c7c8c9cacbcccdcecf\
          d0d1d2d3d4d5d6d7d8d9dadbdcdddedf\
          e0e1e2e3e4e5e6e7e8e9eaebecedeeef\
-         f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
-    );
+         f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
     let l = 82;
 
     let okm = hkdf_sha256(&ikm, &salt, &info, l).expect("HKDF-SHA-256 TC2 failed");
@@ -77,9 +71,9 @@ fn rfc5869_hkdf_sha256_tc2() {
 /// Hash=SHA-256, zero-length salt and info
 #[test]
 fn rfc5869_hkdf_sha256_tc3() {
-    let ikm  = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
-    let salt = &[];  // empty → HKDF uses HashLen zeros as default salt
-    let info = &[];  // empty
+    let ikm = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    let salt = &[]; // empty → HKDF uses HashLen zeros as default salt
+    let info = &[]; // empty
     let l = 42;
 
     let okm = hkdf_sha256(&ikm, salt, info, l).expect("HKDF-SHA-256 TC3 failed");
@@ -98,7 +92,7 @@ fn rfc5869_hkdf_sha256_tc3() {
 ///  For SHA-384 we validate structural correctness + determinism.)
 #[test]
 fn hkdf_sha384_deterministic_length() {
-    let ikm  = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    let ikm = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     let salt = hex("000102030405060708090a0b0c");
     let info = hex("f0f1f2f3f4f5f6f7f8f9");
 
@@ -128,7 +122,7 @@ fn hkdf_sha384_no_salt_no_info() {
 /// HKDF-SHA-512 — deterministic, 64 bytes, basic smoke test.
 #[test]
 fn hkdf_sha512_basic() {
-    let ikm  = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
+    let ikm = hex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
     let salt = hex("000102030405060708090a0b0c");
     let info = hex("f0f1f2f3f4f5f6f7f8f9");
     let l = 64;
@@ -185,5 +179,8 @@ fn mdl_session_key_derivation_deterministic() {
     // Different transcript → different keys
     let (sk_enc3, _) =
         derive_mdl_session_keys(shared_secret, b"OtherTranscript").expect("MDL key derivation");
-    assert_ne!(sk_enc, sk_enc3, "different transcripts must produce different keys");
+    assert_ne!(
+        sk_enc, sk_enc3,
+        "different transcripts must produce different keys"
+    );
 }

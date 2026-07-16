@@ -21,56 +21,69 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         rust: [stable]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install Rust ${{ matrix.rust }}
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: ${{ matrix.rust }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run tests (workspace, excluding marty-zkp)
-        run: cargo test --workspace --exclude marty-zkp --features test-fixtures
+      - name: Require reproducible release sources
+        shell: bash
+        run: |
+          test -f Cargo.lock
+          test -f vendor/core2-0.4.0/Cargo.toml
+          test -f marty-test-wallet/Cargo.toml
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+
+      - name: Run tests (workspace, excluding native extension crates)
+        run: cargo test --locked --workspace --exclude marty-zkp --exclude marty-bindings --features test-fixtures
+
+      - name: Run binding tests without extension-module linking
+        run: cargo test --locked -p marty-bindings --no-default-features
 
       - name: Run marty-zkp tests (ZK mock)
         env:
           USE_ZK_MOCK: "1"
-        run: cargo test -p marty-zkp
+        run: cargo test --locked -p marty-zkp
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    env:
+      USE_ZK_MOCK: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: clippy
       - name: Run clippy
-        run: cargo clippy --workspace --features test-fixtures -- -D warnings
+        run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
 
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
       - name: Check formatting
@@ -80,11 +93,11 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Cache cargo-audit
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cargo/bin/cargo-audit
           key: ${{ runner.os }}-cargo-audit
@@ -100,7 +113,7 @@ jobs:
         run: cargo audit
 
       - name: Cache cargo-deny
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cargo/bin/cargo-deny
           key: ${{ runner.os }}-cargo-deny
@@ -122,10 +135,10 @@ jobs:
       run:
         working-directory: marty-biometrics
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
 
@@ -153,58 +166,59 @@ jobs:
           - marty-secure-storage
           - marty-bindings
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Test no default features
-        run: cargo test -p ${{ matrix.crate }} --no-default-features
+        run: cargo test --locked -p ${{ matrix.crate }} --no-default-features
 
       - name: Test default features
-        run: cargo test -p ${{ matrix.crate }}
+        run: cargo test --locked -p ${{ matrix.crate }}
 
   feature-matrix-verification:
     name: Feature Matrix (marty-verification)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Build no default features
-        run: cargo build -p marty-verification --no-default-features
+        run: cargo build --locked -p marty-verification --no-default-features
 
       - name: Build with default features
-        run: cargo build -p marty-verification
+        run: cargo build --locked -p marty-verification
 
       - name: Run tests with fixtures
-        run: cargo test -p marty-verification --features test-fixtures
+        run: cargo test --locked -p marty-verification --features test-fixtures
 
   feature-matrix-oid4vci:
     name: Feature Matrix (marty-oid4vci)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Check no default features
-        run: cargo check -p marty-oid4vci --no-default-features
+        run: cargo check --locked -p marty-oid4vci --no-default-features
 
       - name: Test default features
-        run: cargo test -p marty-oid4vci
+        run: cargo test --locked -p marty-oid4vci
 
       - name: Check issuer role alone
-        run: cargo check -p marty-oid4vci --no-default-features --features issuer
+        run: cargo check --locked -p marty-oid4vci --no-default-features --features issuer
 
       - name: Check verifier role alone
-        run: cargo check -p marty-oid4vci --no-default-features --features verifier
+        run: cargo check --locked -p marty-oid4vci --no-default-features --features verifier
 
   feature-combinations:
     name: Feature Combinations
     runs-on: ubuntu-latest
     env:
       MATRIX_CARGO_TARGET_DIR: target/feature-matrix
+      USE_ZK_MOCK: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Run critical feature combinations
         run: bash ./scripts/test-feature-combinations.sh
@@ -221,14 +235,14 @@ jobs:
       run:
         working-directory: marty-biometrics
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ matrix.python-version }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Create virtualenv and install dependencies (Unix)
         if: runner.os != 'Windows'
@@ -278,8 +292,8 @@ jobs:
       run:
         working-directory: marty-biometrics
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh

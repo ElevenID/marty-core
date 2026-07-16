@@ -130,7 +130,10 @@ mod tests {
     #[test]
     fn test_liveness_validation() {
         let err = BiometricError::LivenessValidation("session timeout".into());
-        assert_eq!(err.to_string(), "Liveness validation failed: session timeout");
+        assert_eq!(
+            err.to_string(),
+            "Liveness validation failed: session timeout"
+        );
     }
 
     #[test]

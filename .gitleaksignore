@@ -1,0 +1,20 @@
+﻿# Exact reviewed false positives from the pre-publication full-history audit.
+# Each entry binds one finding to its commit, path, rule, and line; new findings still fail.
+
+025cefb5fc69d03b68e589231c66be1c6cd3c213:marty-oid4vci/tests/oid4vp_conformance.rs:generic-api-key:49
+1d65c9c981bab956ff1bf73a3a40f83454d78be8:marty-didcomm/src/did_resolver.rs:generic-api-key:495
+1d65c9c981bab956ff1bf73a3a40f83454d78be8:marty-didcomm/src/envelope.rs:generic-api-key:103
+1d65c9c981bab956ff1bf73a3a40f83454d78be8:marty-didcomm/src/envelope.rs:generic-api-key:104
+1d65c9c981bab956ff1bf73a3a40f83454d78be8:marty-didcomm/src/envelope.rs:generic-api-key:112
+418b6d940ae72cdd93eda2cc8ba283062c24d04d:marty-didcomm/src/envelope.rs:generic-api-key:111
+418b6d940ae72cdd93eda2cc8ba283062c24d04d:marty-oid4vci/tests/fixtures/conformance/vp_token_jwt.txt:generic-api-key:1
+418b6d940ae72cdd93eda2cc8ba283062c24d04d:marty-oid4vci/tests/fixtures/conformance/vp_token_jwt.txt:jwt:1
+4c8fed95b5e922c074ebdb2bab059e146670733e:marty-verification/tests/dtc_tests.rs:private-key:3
+4c8fed95b5e922c074ebdb2bab059e146670733e:marty-verification/tests/fixtures/open_badges/ob2_verify_request.json:jwt:13
+82321b38ccf479c5f5eee472e1475ae0c5845dc1:marty-bindings/src/lib.rs:generic-api-key:225
+94cbbd570a487b32413cf09cfb5fe4330da2c51b:marty-crypto/src/keygen.rs:private-key:161
+94cbbd570a487b32413cf09cfb5fe4330da2c51b:marty-crypto/src/keygen.rs:private-key:255
+94cbbd570a487b32413cf09cfb5fe4330da2c51b:marty-crypto/src/keygen.rs:private-key:491
+94cbbd570a487b32413cf09cfb5fe4330da2c51b:marty-crypto/src/keygen.rs:private-key:502
+94cbbd570a487b32413cf09cfb5fe4330da2c51b:marty-crypto/src/serialization.rs:private-key:108
+beda752f039a674a03cfe19e02d53a804139fb52:marty-oid4vci/src/proof.rs:generic-api-key:546

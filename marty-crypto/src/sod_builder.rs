@@ -50,8 +50,7 @@ mod inner {
         ObjectIdentifier::new_unwrap("2.23.136.1.1.1");
 
     /// OID for SHA-256 (`2.16.840.1.101.3.4.2.1`)
-    const ID_SHA_256: ObjectIdentifier =
-        ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
+    const ID_SHA_256: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
 
     // ============================================================================
     // ASN.1 types for LDSSecurityObject
@@ -204,14 +203,8 @@ mod inner {
             oid: ID_SHA_256,
             parameters: None,
         };
-        let sib = SignerInfoBuilder::new(
-            &signing_key,
-            sid,
-            digest_algorithm.clone(),
-            &eci,
-            None,
-        )
-        .map_err(|e| CryptoError::der(format!("SignerInfoBuilder::new: {e}")))?;
+        let sib = SignerInfoBuilder::new(&signing_key, sid, digest_algorithm.clone(), &eci, None)
+            .map_err(|e| CryptoError::der(format!("SignerInfoBuilder::new: {e}")))?;
 
         // ── Step 7: Assemble SignedData ────────────────────────────────────────
         let mut sd_builder = SignedDataBuilder::new(&eci);

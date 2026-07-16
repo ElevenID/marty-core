@@ -73,7 +73,7 @@ impl BleTransport {
     pub fn with_service_uuid(service_uuid: &str) -> Result<Self> {
         let uuid = Uuid::parse_str(service_uuid)
             .map_err(|e| crate::error::Error::Transport(format!("Invalid UUID: {}", e)))?;
-        
+
         Ok(Self {
             peripheral: None,
             service_uuid: uuid,
@@ -90,15 +90,19 @@ impl BleTransport {
             .await
             .map_err(|e| crate::error::Error::Transport(format!("BLE manager error: {}", e)))?;
 
-        let adapters = manager.adapters()
+        let adapters = manager
+            .adapters()
             .await
             .map_err(|e| crate::error::Error::Transport(format!("No BLE adapters: {}", e)))?;
 
-        let adapter = adapters.into_iter().next()
+        let adapter = adapters
+            .into_iter()
+            .next()
             .ok_or_else(|| crate::error::Error::Transport("No BLE adapter found".to_string()))?;
 
         // Start scanning
-        adapter.start_scan(ScanFilter::default())
+        adapter
+            .start_scan(ScanFilter::default())
             .await
             .map_err(|e| crate::error::Error::Transport(format!("Scan failed: {}", e)))?;
 
@@ -106,56 +110,59 @@ impl BleTransport {
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         // Find peripherals with MDL service
-        let peripherals = adapter.peripherals()
-            .await
-            .map_err(|e| crate::error::Error::Transport(format!("Failed to get peripherals: {}", e)))?;
+        let peripherals = adapter.peripherals().await.map_err(|e| {
+            crate::error::Error::Transport(format!("Failed to get peripherals: {}", e))
+        })?;
 
         for peripheral in peripherals {
-            let properties = peripheral.properties().await
-                .map_err(|e| crate::error::Error::Transport(format!("Failed to get properties: {}", e)))?;
+            let properties = peripheral.properties().await.map_err(|e| {
+                crate::error::Error::Transport(format!("Failed to get properties: {}", e))
+            })?;
 
             if let Some(props) = properties {
                 if props.services.contains(&self.service_uuid) {
                     // Found MDL device, connect
-                    peripheral.connect()
-                        .await
-                        .map_err(|e| crate::error::Error::ConnectionFailed(format!("Connection failed: {}", e)))?;
+                    peripheral.connect().await.map_err(|e| {
+                        crate::error::Error::ConnectionFailed(format!("Connection failed: {}", e))
+                    })?;
 
-                    peripheral.discover_services()
-                        .await
-                        .map_err(|e| crate::error::Error::Transport(format!("Service discovery failed: {}", e)))?;
+                    peripheral.discover_services().await.map_err(|e| {
+                        crate::error::Error::Transport(format!("Service discovery failed: {}", e))
+                    })?;
 
                     // Find characteristics
                     let characteristics = peripheral.characteristics();
                     let c2s_uuid = Uuid::parse_str(CHAR_CLIENT2SERVER).unwrap();
                     let s2c_uuid = Uuid::parse_str(CHAR_SERVER2CLIENT).unwrap();
 
-                    self.client2server = characteristics.iter()
-                        .find(|c| c.uuid == c2s_uuid)
-                        .cloned();
-                    
-                    self.server2client = characteristics.iter()
-                        .find(|c| c.uuid == s2c_uuid)
-                        .cloned();
+                    self.client2server =
+                        characteristics.iter().find(|c| c.uuid == c2s_uuid).cloned();
+
+                    self.server2client =
+                        characteristics.iter().find(|c| c.uuid == s2c_uuid).cloned();
 
                     if self.client2server.is_some() && self.server2client.is_some() {
                         self.peripheral = Some(peripheral);
                         self.connected = true;
-                        
+
                         // Subscribe to notifications
-                        if let (Some(peripheral), Some(char)) = (&self.peripheral, &self.server2client) {
-                            peripheral.subscribe(char)
-                                .await
-                                .map_err(|e| crate::error::Error::Transport(format!("Subscribe failed: {}", e)))?;
+                        if let (Some(peripheral), Some(char)) =
+                            (&self.peripheral, &self.server2client)
+                        {
+                            peripheral.subscribe(char).await.map_err(|e| {
+                                crate::error::Error::Transport(format!("Subscribe failed: {}", e))
+                            })?;
                         }
-                        
+
                         return Ok(());
                     }
                 }
             }
         }
 
-        Err(crate::error::Error::ConnectionFailed("No MDL device found".to_string()))
+        Err(crate::error::Error::ConnectionFailed(
+            "No MDL device found".to_string(),
+        ))
     }
 
     /// Fragment a message for BLE transmission
@@ -188,19 +195,26 @@ impl Transport for BleTransport {
 
     async fn send(&mut self, data: &[u8]) -> Result<()> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
 
-        let peripheral = self.peripheral.as_ref()
+        let peripheral = self
+            .peripheral
+            .as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No peripheral".to_string()))?;
-        
-        let characteristic = self.client2server.as_ref()
+
+        let characteristic = self
+            .client2server
+            .as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No characteristic".to_string()))?;
 
         // Fragment and send
         let fragments = self.fragment_message(data);
         for fragment in fragments {
-            peripheral.write(characteristic, &fragment, WriteType::WithResponse)
+            peripheral
+                .write(characteristic, &fragment, WriteType::WithResponse)
                 .await
                 .map_err(|e| crate::error::Error::SendFailed(format!("BLE write failed: {}", e)))?;
         }
@@ -210,39 +224,43 @@ impl Transport for BleTransport {
 
     async fn receive(&mut self) -> Result<Vec<u8>> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
 
-        let peripheral = self.peripheral.as_ref()
+        let peripheral = self
+            .peripheral
+            .as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No peripheral".to_string()))?;
-        
-        let characteristic = self.server2client.as_ref()
+
+        let characteristic = self
+            .server2client
+            .as_ref()
             .ok_or_else(|| crate::error::Error::Transport("No characteristic".to_string()))?;
 
         // Read from characteristic with timeout
-        let result = timeout(
-            Duration::from_secs(30),
-            peripheral.read(characteristic)
-        )
-        .await
-        .map_err(|_| crate::error::Error::Timeout)?
-        .map_err(|e| crate::error::Error::ReceiveFailed(format!("BLE read failed: {}", e)))?;
+        let result = timeout(Duration::from_secs(30), peripheral.read(characteristic))
+            .await
+            .map_err(|_| crate::error::Error::Timeout)?
+            .map_err(|e| crate::error::Error::ReceiveFailed(format!("BLE read failed: {}", e)))?;
 
         Ok(result)
     }
 
     async fn close(&mut self) -> Result<()> {
         if let Some(peripheral) = &self.peripheral {
-            peripheral.disconnect()
+            peripheral
+                .disconnect()
                 .await
                 .map_err(|e| crate::error::Error::Transport(format!("Disconnect failed: {}", e)))?;
         }
-        
+
         self.connected = false;
         self.peripheral = None;
         self.client2server = None;
         self.server2client = None;
-        
+
         Ok(())
     }
 
@@ -259,5 +277,12 @@ pub struct BleTransport;
 impl BleTransport {
     pub fn new() -> Self {
         Self
+    }
+}
+
+#[cfg(not(feature = "ble"))]
+impl Default for BleTransport {
+    fn default() -> Self {
+        Self::new()
     }
 }

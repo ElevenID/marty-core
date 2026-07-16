@@ -74,9 +74,7 @@ pub trait FaceVerifier: Send + Sync {
     /// # Arguments
     /// * `image` - Base64 encoded aligned face image
     async fn estimate_age(&self, _image: &str) -> Result<AgeEstimate, BiometricError> {
-        Err(BiometricError::NotSupported(
-            "age estimation".to_string(),
-        ))
+        Err(BiometricError::NotSupported("age estimation".to_string()))
     }
 
     /// Passive liveness detection from multiple frames
@@ -90,9 +88,7 @@ pub trait FaceVerifier: Send + Sync {
         &self,
         _frames: &[String],
     ) -> Result<PassiveLivenessResult, BiometricError> {
-        Err(BiometricError::NotSupported(
-            "passive liveness".to_string(),
-        ))
+        Err(BiometricError::NotSupported("passive liveness".to_string()))
     }
 
     /// Deepfake / synthetic face analysis
@@ -117,9 +113,7 @@ pub trait FaceVerifier: Send + Sync {
         _gallery: &[FaceTemplate],
         _top_k: usize,
     ) -> Result<Vec<SearchMatch>, BiometricError> {
-        Err(BiometricError::NotSupported(
-            "face search".to_string(),
-        ))
+        Err(BiometricError::NotSupported("face search".to_string()))
     }
 
     /// Match a selfie against a document photo (e.g., mDL portrait)

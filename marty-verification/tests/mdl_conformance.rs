@@ -27,9 +27,7 @@ fn gen_ca(common_name: &str) -> (String, KeyPair) {
     params
         .distinguished_name
         .push(DnType::CommonName, common_name);
-    params
-        .distinguished_name
-        .push(DnType::CountryName, "US");
+    params.distinguished_name.push(DnType::CountryName, "US");
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
     let key = KeyPair::generate().expect("CA key generation");
@@ -48,9 +46,7 @@ fn gen_ee_signed_by(
     params
         .distinguished_name
         .push(DnType::CommonName, common_name);
-    params
-        .distinguished_name
-        .push(DnType::CountryName, "US");
+    params.distinguished_name.push(DnType::CountryName, "US");
     params
         .distinguished_name
         .push(DnType::StateOrProvinceName, state);
@@ -67,8 +63,7 @@ fn gen_ee_signed_by(
 #[test]
 fn x5chain_from_single_pem_cert() {
     let (ca_pem, _) = gen_ca("Conformance Test IACA");
-    let chain = build_x5chain_from_pem(&[ca_pem.as_bytes()])
-        .expect("build_x5chain_from_pem");
+    let chain = build_x5chain_from_pem(&[ca_pem.as_bytes()]).expect("build_x5chain_from_pem");
 
     // X5Chain wraps NonEmptyVec, so end_entity_certificate() is always present
     assert!(
@@ -83,14 +78,17 @@ fn x5chain_from_two_pem_certs() {
     let (ca_pem, ca_key) = gen_ca("Two-Cert IACA");
     let ca_cert_params = {
         let mut p = CertificateParams::default();
-        p.distinguished_name.push(DnType::CommonName, "Two-Cert IACA");
+        p.distinguished_name
+            .push(DnType::CommonName, "Two-Cert IACA");
         p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         p
     };
     let ca_cert = ca_cert_params.self_signed(&ca_key).expect("re-gen CA");
 
     let mut ee_params = CertificateParams::default();
-    ee_params.distinguished_name.push(DnType::CommonName, "mDL Document Signer");
+    ee_params
+        .distinguished_name
+        .push(DnType::CommonName, "mDL Document Signer");
     ee_params.is_ca = rcgen::IsCa::NoCa;
     let ee_key = KeyPair::generate().expect("EE key");
     let ee_pem = ee_params
@@ -102,7 +100,10 @@ fn x5chain_from_two_pem_certs() {
         .expect("build_x5chain_from_pem two-cert");
 
     // X5Chain wraps NonEmptyVec, so the chain is always present if built successfully
-    assert!(!chain.end_entity_common_name().is_empty(), "two-cert X5Chain must not be empty");
+    assert!(
+        !chain.end_entity_common_name().is_empty(),
+        "two-cert X5Chain must not be empty"
+    );
 }
 
 /// Empty certificate list must produce an error (no chain to build).
@@ -144,8 +145,7 @@ fn iaca_registry_add_and_retrieve_jurisdiction() {
     use x509_cert::der::DecodePem;
 
     let (ca_pem, _) = gen_ca("California IACA");
-    let cert =
-        x509_cert::Certificate::from_pem(ca_pem.as_bytes()).expect("parse CA cert");
+    let cert = x509_cert::Certificate::from_pem(ca_pem.as_bytes()).expect("parse CA cert");
 
     let mut registry = IacaRegistry::new();
     registry
@@ -172,10 +172,8 @@ fn iaca_registry_multiple_jurisdictions() {
     let (ca_pem_ny, _) = gen_ca("New York IACA");
     let (ca_pem_tx, _) = gen_ca("Texas IACA");
 
-    let cert_ny =
-        x509_cert::Certificate::from_pem(ca_pem_ny.as_bytes()).expect("parse NY cert");
-    let cert_tx =
-        x509_cert::Certificate::from_pem(ca_pem_tx.as_bytes()).expect("parse TX cert");
+    let cert_ny = x509_cert::Certificate::from_pem(ca_pem_ny.as_bytes()).expect("parse NY cert");
+    let cert_tx = x509_cert::Certificate::from_pem(ca_pem_tx.as_bytes()).expect("parse TX cert");
 
     let mut registry = IacaRegistry::new();
     registry
@@ -185,10 +183,16 @@ fn iaca_registry_multiple_jurisdictions() {
         .add_jurisdiction_iaca(Jurisdiction::Texas, cert_tx)
         .expect("add TX");
 
-    assert!(registry.get_jurisdiction_iaca(Jurisdiction::NewYork).is_some());
-    assert!(registry.get_jurisdiction_iaca(Jurisdiction::Texas).is_some());
+    assert!(registry
+        .get_jurisdiction_iaca(Jurisdiction::NewYork)
+        .is_some());
+    assert!(registry
+        .get_jurisdiction_iaca(Jurisdiction::Texas)
+        .is_some());
     assert!(
-        registry.get_jurisdiction_iaca(Jurisdiction::California).is_none(),
+        registry
+            .get_jurisdiction_iaca(Jurisdiction::California)
+            .is_none(),
         "CA must not be present"
     );
     assert_eq!(registry.supported_jurisdictions().len(), 2);

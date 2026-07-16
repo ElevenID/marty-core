@@ -494,7 +494,6 @@ impl VerificationError {
         })
     }
 
-
     pub fn open_badges_revoked(reason: impl Into<String>) -> Box<Self> {
         Box::new(Self::OpenBadgesError {
             reason: reason.into(),

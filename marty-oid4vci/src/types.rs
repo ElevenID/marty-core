@@ -49,7 +49,9 @@ impl CredentialFormat {
     pub fn from_str_loose(s: &str) -> Option<Self> {
         match s {
             "jwt_vc_json" | "jwt_vc" => Some(Self::JwtVcJson),
-            "dc+sd-jwt" | "spruce-vc+sd-jwt" | "vc+sd-jwt" | "sd_jwt" | "sd-jwt" => Some(Self::SdJwt),
+            "dc+sd-jwt" | "spruce-vc+sd-jwt" | "vc+sd-jwt" | "sd_jwt" | "sd-jwt" => {
+                Some(Self::SdJwt)
+            }
             "mso_mdoc" | "mdoc" => Some(Self::MsoMdoc),
             "zk_mdoc" | "zk-mdoc" | "zkp_mdoc" => Some(Self::ZkMdoc),
             "vds_nc" | "vds-nc" | "VDS-NC" => Some(Self::VdsNc),
@@ -342,15 +344,16 @@ pub struct TokenResponse {
     pub token_type: String,
     /// Token lifetime in seconds.
     pub expires_in: u64,
-    /// A nonce for the credential proof (OID4VCI 1.0: was `c_nonce`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<String>,
-    /// Lifetime of the nonce in seconds (OID4VCI 1.0: was `c_nonce_expires_in`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce_expires_in: Option<u64>,
     /// Scope granted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+}
+
+/// Response from the OID4VCI 1.0 Nonce Endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NonceResponse {
+    /// Fresh proof nonce. The response must be delivered with `Cache-Control: no-store`.
+    pub c_nonce: String,
 }
 
 // =============================================================================
@@ -363,15 +366,15 @@ pub struct CredentialRequest {
     /// The credential format requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// Credential configuration selected from issuer metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_configuration_id: Option<String>,
     /// Credential configuration ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_identifier: Option<String>,
     /// Proof of possession (§8.2) — v1 format with `proofs` object.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proofs: Option<ProofsObject>,
-    /// Legacy proof format (Draft 13 compatibility).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proof: Option<SingleProof>,
     /// Credential definition (for jwt_vc_json).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_definition: Option<serde_json::Value>,
@@ -394,15 +397,6 @@ pub struct ProofsObject {
     pub jwt: Option<Vec<String>>,
 }
 
-/// Single proof (Draft 13 legacy compatibility).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SingleProof {
-    /// Proof type (e.g., "jwt").
-    pub proof_type: String,
-    /// JWT proof value.
-    pub jwt: String,
-}
-
 /// Credential response (§8.3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CredentialResponse {
@@ -412,12 +406,6 @@ pub struct CredentialResponse {
     /// Multiple credentials (v1 batch).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Vec<serde_json::Value>>,
-    /// Updated nonce for next request (OID4VCI 1.0: was `c_nonce`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<String>,
-    /// Updated nonce lifetime (OID4VCI 1.0: was `c_nonce_expires_in`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce_expires_in: Option<u64>,
     /// Transaction ID for deferred issuance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction_id: Option<String>,

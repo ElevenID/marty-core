@@ -65,18 +65,23 @@ pub use error::{VerificationError, VerificationResult};
 pub use trust_anchor::CscaRegistry;
 pub use trust_anchor::{BasicTrustRegistry, TrustAnchor, TrustPurpose, TrustRegistry};
 pub use trust_anchor::{IacaRegistry, Jurisdiction};
-pub use verification::vds_nc::{verify_vds_nc, verify_vds_nc_jwk_json, SignatureVerificationStatus, VdsNcVerificationResult};
+pub use verification::vds_nc::{
+    verify_vds_nc, verify_vds_nc_jwk_json, SignatureVerificationStatus, VdsNcVerificationResult,
+};
 
 // Re-export commonly used types
 #[cfg(feature = "csca")]
-pub use verification::emrtd::{ChainStatus, EmrtdVerificationOptions, EmrtdVerificationResult, HashStatus, RevocationStatus, SignatureStatus};
+pub use verification::emrtd::{
+    ChainStatus, EmrtdVerificationOptions, EmrtdVerificationResult, HashStatus, RevocationStatus,
+    SignatureStatus,
+};
 pub use verification::mdl::{AuthStatus, MdlVerificationResult};
 
 // Re-export chip I/O types for government NFC integration
 #[cfg(feature = "csca")]
 pub use chip_io::{
-    ApduCommand, ApduResponse, BacKeys, BacSession, MrzKeyInfo, MockPassportChip,
-    PaceKeys, PacePassword, PaceSession, PassportChip, derive_bac_base_keys, mrz_check_digit,
+    derive_bac_base_keys, mrz_check_digit, ApduCommand, ApduResponse, BacKeys, BacSession,
+    MockPassportChip, MrzKeyInfo, PaceKeys, PacePassword, PaceSession, PassportChip,
 };
 
 // Re-export crypto primitives from marty-crypto

@@ -11,12 +11,6 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 const CANVAS_OPENID_CONFIGURATION_PATH: &str = "/.well-known/openid-configuration";
 const MAX_OPENID_CONFIGURATION_BYTES: u64 = 1024 * 1024;
 const MAX_JWKS_BYTES: u64 = 1024 * 1024;
-const LTI_DEPLOYMENT_ID_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/deployment_id";
-const LTI_CONTEXT_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/context";
-const LTI_ROLES_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/roles";
-const LTI_TARGET_LINK_URI_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/target_link_uri";
-const LTI_MESSAGE_TYPE_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/message_type";
-const LTI_VERSION_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/version";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasLtiPlatformProbe {
@@ -77,9 +71,15 @@ struct LtiLaunchClaims {
     context: Option<Value>,
     #[serde(rename = "https://purl.imsglobal.org/spec/lti/claim/roles", default)]
     roles: Option<Vec<String>>,
-    #[serde(rename = "https://purl.imsglobal.org/spec/lti/claim/target_link_uri", default)]
+    #[serde(
+        rename = "https://purl.imsglobal.org/spec/lti/claim/target_link_uri",
+        default
+    )]
     target_link_uri: Option<String>,
-    #[serde(rename = "https://purl.imsglobal.org/spec/lti/claim/message_type", default)]
+    #[serde(
+        rename = "https://purl.imsglobal.org/spec/lti/claim/message_type",
+        default
+    )]
     message_type: Option<String>,
     #[serde(rename = "https://purl.imsglobal.org/spec/lti/claim/version", default)]
     lti_version: Option<String>,
@@ -169,13 +169,17 @@ fn validate_url(
         .host_str()
         .ok_or_else(|| invalid_request("Canvas URL must include a host"))?;
 
-    if url.scheme() == "http" && !is_loopback_hostname(host) && host != "127.0.0.1" && host != "::1" {
+    if url.scheme() == "http" && !is_loopback_hostname(host) && host != "127.0.0.1" && host != "::1"
+    {
         return Err(invalid_request(
             "HTTP Canvas URLs are only allowed for localhost in sandbox mode",
         ));
     }
 
-    if is_loopback_hostname(host) && !allow_private_networks && !(allow_http_localhost && url.scheme() == "http") {
+    if is_loopback_hostname(host)
+        && !allow_private_networks
+        && !(allow_http_localhost && url.scheme() == "http")
+    {
         return Err(invalid_request(
             "Canvas URL points to localhost but localhost access is disabled in hardened mode",
         ));
@@ -260,8 +264,10 @@ async fn validate_resolved_host(
     for address in addresses {
         resolved_any = true;
         let ip = address.ip();
-        let allowed_localhost =
-            allow_http_localhost && url.scheme() == "http" && ip.is_loopback() && is_loopback_hostname(host);
+        let allowed_localhost = allow_http_localhost
+            && url.scheme() == "http"
+            && ip.is_loopback()
+            && is_loopback_hostname(host);
         if is_private_ip(ip) && !allowed_localhost {
             return Err(invalid_request(
                 "Canvas host resolves to a private or loopback IP that is blocked in hardened mode",
@@ -283,12 +289,7 @@ pub fn normalize_canvas_base_url(
     allow_private_networks: bool,
     allow_http_localhost: bool,
 ) -> Oid4vciResult<String> {
-    normalize_url(
-        base_url,
-        allow_private_networks,
-        allow_http_localhost,
-        true,
-    )
+    normalize_url(base_url, allow_private_networks, allow_http_localhost, true)
 }
 
 async fn fetch_limited_json(
@@ -342,11 +343,8 @@ pub async fn probe_canvas_lti_platform(
     allow_private_networks: bool,
     allow_http_localhost: bool,
 ) -> Oid4vciResult<CanvasLtiPlatformProbe> {
-    let normalized_base_url = normalize_canvas_base_url(
-        base_url,
-        allow_private_networks,
-        allow_http_localhost,
-    )?;
+    let normalized_base_url =
+        normalize_canvas_base_url(base_url, allow_private_networks, allow_http_localhost)?;
     let configuration_url = format!("{normalized_base_url}{CANVAS_OPENID_CONFIGURATION_PATH}");
     let parsed_configuration_url = Url::parse(&configuration_url)?;
     validate_resolved_host(
@@ -397,13 +395,8 @@ pub async fn probe_canvas_lti_platform(
     )
     .await?;
 
-    let jwks_json: Value = fetch_limited_json(
-        &client,
-        &normalized_jwks_uri,
-        "JWKS",
-        MAX_JWKS_BYTES,
-    )
-    .await?;
+    let jwks_json: Value =
+        fetch_limited_json(&client, &normalized_jwks_uri, "JWKS", MAX_JWKS_BYTES).await?;
 
     if jwks_json
         .get("keys")
@@ -442,7 +435,9 @@ pub fn verify_lti_launch_jwt(
         .ok_or_else(|| invalid_request("LTI id_token is missing a kid header"))?;
 
     let jwks_value: Value = serde_json::from_str(jwks_json).map_err(|e| {
-        invalid_request(format!("Invalid JWKS JSON supplied for LTI verification: {e}"))
+        invalid_request(format!(
+            "Invalid JWKS JSON supplied for LTI verification: {e}"
+        ))
     })?;
     let keys = jwks_value
         .get("keys")
@@ -471,7 +466,9 @@ pub fn verify_lti_launch_jwt(
         .claims;
 
     let claims: LtiLaunchClaims = serde_json::from_value(raw_claims.clone()).map_err(|e| {
-        invalid_request(format!("Verified LTI id_token is missing expected claims: {e}"))
+        invalid_request(format!(
+            "Verified LTI id_token is missing expected claims: {e}"
+        ))
     })?;
 
     if claims.iss != expected_issuer {
@@ -481,7 +478,10 @@ pub fn verify_lti_launch_jwt(
     }
 
     let audience = decode_audience(&claims.aud)?;
-    if !audience.iter().any(|candidate| candidate == expected_client_id) {
+    if !audience
+        .iter()
+        .any(|candidate| candidate == expected_client_id)
+    {
         return Err(invalid_request(
             "LTI audience does not include the configured client id",
         ));
@@ -573,7 +573,8 @@ mod tests {
 
     #[test]
     fn normalize_canvas_base_url_rejects_paths() {
-        let err = normalize_canvas_base_url("https://canvas.example.edu/oidc", false, false).unwrap_err();
+        let err =
+            normalize_canvas_base_url("https://canvas.example.edu/oidc", false, false).unwrap_err();
         assert!(err.to_string().contains("without a path segment"));
     }
 
@@ -613,7 +614,10 @@ mod tests {
         assert_eq!(verified.subject, "student-123");
         assert_eq!(verified.deployment_id, "deployment-xyz");
         assert_eq!(verified.roles, vec!["Learner"]);
-        assert_eq!(verified.target_link_uri.as_deref(), Some("https://tool.example.edu/launch"));
+        assert_eq!(
+            verified.target_link_uri.as_deref(),
+            Some("https://tool.example.edu/launch")
+        );
     }
 
     #[test]

@@ -5,14 +5,14 @@
 use crate::error::Result;
 use async_trait::async_trait;
 
-pub mod mock;
 pub mod ble;
-pub mod nfc;
 pub mod https;
+pub mod mock;
+pub mod nfc;
 
 // Re-export transport implementations
-pub use mock::MockTransport;
 pub use https::HttpsTransport;
+pub use mock::MockTransport;
 
 #[cfg(feature = "ble")]
 pub use ble::BleTransport;
@@ -25,16 +25,16 @@ pub use nfc::NfcTransport;
 pub trait Transport: Send + Sync {
     /// Connect to the transport
     async fn connect(&mut self) -> Result<()>;
-    
+
     /// Send data over the transport
     async fn send(&mut self, data: &[u8]) -> Result<()>;
-    
+
     /// Receive data from the transport
     async fn receive(&mut self) -> Result<Vec<u8>>;
-    
+
     /// Close the transport connection
     async fn close(&mut self) -> Result<()>;
-    
+
     /// Check if the transport is connected
     fn is_connected(&self) -> bool;
 }

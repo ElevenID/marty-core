@@ -152,7 +152,7 @@ RUN echo 'alias ll="ls -la"' >> /root/.bashrc \
 # Label for easy identification
 LABEL org.opencontainers.image.title="marty-dev" \
       org.opencontainers.image.description="Development environment for marty-core Rust/Python ecosystem" \
-      org.opencontainers.image.source="https://github.com/adamburdett/marty-core"
+      org.opencontainers.image.source="https://github.com/ElevenID/marty-core"
 
 WORKDIR /workspace
 

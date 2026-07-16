@@ -38,17 +38,15 @@ impl DetectedFace {
 /// These are the target landmark positions after affine alignment,
 /// matching InsightFace's reference implementation.
 pub const ARCFACE_REFERENCE_LANDMARKS: [[f32; 2]; 5] = [
-    [38.2946, 51.6963],  // left eye
-    [73.5318, 51.5014],  // right eye
-    [56.0252, 71.7366],  // nose tip
-    [41.5493, 92.3655],  // left mouth corner
-    [70.7299, 92.2041],  // right mouth corner
+    [38.2946, 51.6963], // left eye
+    [73.5318, 51.5014], // right eye
+    [56.0252, 71.7366], // nose tip
+    [41.5493, 92.3655], // left mouth corner
+    [70.7299, 92.2041], // right mouth corner
 ];
 
 /// Decode a base64 image string into raw RGB bytes and dimensions.
-pub fn decode_base64_image(
-    base64_data: &str,
-) -> Result<(Vec<u8>, u32, u32), BiometricError> {
+pub fn decode_base64_image(base64_data: &str) -> Result<(Vec<u8>, u32, u32), BiometricError> {
     // Strip optional data URI prefix
     let data = if let Some(pos) = base64_data.find(",") {
         &base64_data[pos + 1..]
@@ -56,11 +54,8 @@ pub fn decode_base64_image(
         base64_data
     };
 
-    let bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        data,
-    )
-    .map_err(|e| BiometricError::ImageProcessing(format!("base64 decode: {e}")))?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+        .map_err(|e| BiometricError::ImageProcessing(format!("base64 decode: {e}")))?;
 
     let img = image::load_from_memory(&bytes)
         .map_err(|e| BiometricError::ImageProcessing(format!("image decode: {e}")))?;
@@ -151,9 +146,7 @@ pub fn align_face_112x112(
 /// Prepare an aligned 112x112 face as a NCHW tensor (for ArcFace/age models).
 ///
 /// Applies standard InsightFace normalization: (pixel - 127.5) / 127.5
-pub fn prepare_recognition_input(
-    aligned_rgb: &[u8],
-) -> Result<Array4<f32>, BiometricError> {
+pub fn prepare_recognition_input(aligned_rgb: &[u8]) -> Result<Array4<f32>, BiometricError> {
     if aligned_rgb.len() != 112 * 112 * 3 {
         return Err(BiometricError::ImageProcessing(format!(
             "expected 112x112x3={} bytes, got {}",
@@ -293,11 +286,7 @@ pub struct ImageQualityMetrics {
 /// - **Sharpness**: Laplacian variance (discrete 2D Laplacian kernel) mapped to [0,1].
 /// - **Brightness**: Mean luminance (BT.601) normalized to [0,1].
 /// - **Contrast**: RMS deviation of luminance normalized to [0,1].
-pub fn compute_image_quality(
-    rgb: &[u8],
-    width: u32,
-    height: u32,
-) -> ImageQualityMetrics {
+pub fn compute_image_quality(rgb: &[u8], width: u32, height: u32) -> ImageQualityMetrics {
     let w = width as usize;
     let h = height as usize;
     let npixels = w * h;
@@ -325,8 +314,11 @@ pub fn compute_image_quality(
     let brightness = mean_lum / 255.0;
 
     // RMS contrast: std_dev of luminance / 255
-    let variance: f32 =
-        lum.iter().map(|&l| (l - mean_lum) * (l - mean_lum)).sum::<f32>() / npixels as f32;
+    let variance: f32 = lum
+        .iter()
+        .map(|&l| (l - mean_lum) * (l - mean_lum))
+        .sum::<f32>()
+        / npixels as f32;
     let contrast = (variance.sqrt() / 127.5).min(1.0); // Normalize: max std_dev ≈ 127.5
 
     // Laplacian variance for sharpness
@@ -447,7 +439,10 @@ mod tests {
     fn test_quality_bright_image() {
         let rgb = vec![250u8; 10 * 10 * 3];
         let q = compute_image_quality(&rgb, 10, 10);
-        assert!(q.brightness > 0.9, "bright image brightness should be > 0.9");
+        assert!(
+            q.brightness > 0.9,
+            "bright image brightness should be > 0.9"
+        );
     }
 
     #[test]
@@ -471,7 +466,11 @@ mod tests {
             }
         }
         let q = compute_image_quality(&rgb, 10, 10);
-        assert!(q.contrast > 0.5, "checkerboard should have high contrast: {}", q.contrast);
+        assert!(
+            q.contrast > 0.5,
+            "checkerboard should have high contrast: {}",
+            q.contrast
+        );
     }
 
     #[test]
@@ -488,7 +487,11 @@ mod tests {
             }
         }
         let q = compute_image_quality(&rgb, 20, 20);
-        assert!(q.sharpness > 0.5, "sharp edges should score high: {}", q.sharpness);
+        assert!(
+            q.sharpness > 0.5,
+            "sharp edges should score high: {}",
+            q.sharpness
+        );
     }
 
     #[test]

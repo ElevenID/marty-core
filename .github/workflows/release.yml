@@ -1,0 +1,217 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - name: Verify tag and workspace version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          workspace_version="$(awk '/^\[workspace.package\]/{found=1; next} found && /^version =/{gsub(/[\" ]/, "", $3); print $3; exit}' Cargo.toml)"
+          test "$version" = "$workspace_version"
+      - name: Test workspace
+        env:
+          USE_ZK_MOCK: "1"
+        run: cargo test --workspace --locked
+
+  build-crates:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - name: Build GitHub bootstrap source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/crates
+          version="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz \
+            --prefix="marty-core-${version}/" \
+            --output="release/crates/marty-core-workspace-${version}.tar.gz" \
+            HEAD
+          cargo metadata --locked --format-version 1 > release/marty-core-metadata.json
+      - name: Generate source SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          path: .
+          format: spdx-json
+          output-file: release/marty-core.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: crate-release-assets
+          path: release
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-crates:
+    if: vars.ENABLE_PUBLIC_REGISTRY_PUBLISHING == 'true'
+    needs: build-crates
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - name: Publish crates in dependency order
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+
+          wait_for_index() {
+            local crate="$1"
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent --show-error \
+                "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+                return 0
+              fi
+              echo "Waiting for ${crate}@${version} to reach the crates.io index (${attempt}/30)"
+              sleep 10
+            done
+            echo "Timed out waiting for ${crate}@${version}" >&2
+            return 1
+          }
+
+          publish() {
+            local crate="$1"
+            if curl --fail --silent \
+              "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+              echo "${crate}@${version} is already present; continuing an interrupted release"
+            else
+              cargo publish --locked -p "$crate"
+            fi
+            wait_for_index "$crate"
+          }
+
+          for crate in marty-types marty-crypto marty-biometrics marty-didcomm; do publish "$crate"; done
+          for crate in marty-verification marty-secure-storage marty-zkp; do publish "$crate"; done
+          publish marty-oid4vci
+          publish marty-iso18013
+
+  build-python-wheels:
+    needs: build-crates
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        package: [marty-bindings, marty-verification, marty-biometrics, marty-iso18013]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
+        with:
+          working-directory: ${{ matrix.package }}
+          command: build
+          args: --release --out dist --find-interpreter
+          manylinux: auto
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wheels-${{ matrix.package }}-${{ matrix.os }}
+          path: ${{ matrix.package }}/dist/*
+          retention-days: 7
+          if-no-files-found: error
+
+  build-python-sdists:
+    needs: build-crates
+    strategy:
+      matrix:
+        package: [marty-bindings, marty-verification, marty-biometrics, marty-iso18013]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
+        with:
+          working-directory: ${{ matrix.package }}
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sdist-${{ matrix.package }}
+          path: ${{ matrix.package }}/dist/*
+          retention-days: 7
+          if-no-files-found: error
+
+  publish-python:
+    if: vars.ENABLE_PUBLIC_REGISTRY_PUBLISHING == 'true'
+    needs: [build-python-wheels, build-python-sdists]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: "wheels-*"
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: "sdist-*"
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+        with:
+          packages-dir: dist
+
+  release:
+    needs: [build-crates, build-python-wheels, build-python-sdists]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+      - name: Sign and checksum release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-assets -type f ! -name '*.sigstore.json' -print0 | while IFS= read -r -d '' file; do
+            cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"
+          done
+          (cd release-assets && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: release-assets/**
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          generate_release_notes: true
+          files: release-assets/**

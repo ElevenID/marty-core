@@ -35,12 +35,12 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 
 use crate::dtc;
 use crate::error::VerificationError;
+#[cfg(feature = "csca")]
+use crate::trust_anchor::csca::CscaRegistry;
+use crate::trust_anchor::eudi::{EuMemberState, EudiRegistry, TrustServiceProvider, TspStatus};
 use crate::trust_anchor::{
     BasicTrustRegistry, IacaRegistry, PemTrustAnchor, TrustPurpose, TrustRegistry,
 };
-#[cfg(feature = "csca")]
-use crate::trust_anchor::csca::CscaRegistry;
-use crate::trust_anchor::eudi::{EudiRegistry, EuMemberState, TrustServiceProvider, TspStatus};
 use crate::verification::mdl::{AuthStatus, MdlVerificationResult, ValidationRuleset};
 
 /// Trait for converting various error types to PyErr
@@ -419,11 +419,7 @@ impl PyEudiRegistry {
     }
 
     /// Add a trust anchor for a specific member state.
-    fn add_member_state_anchor(
-        &mut self,
-        member_state_code: &str,
-        cert_pem: &str,
-    ) -> PyResult<()> {
+    fn add_member_state_anchor(&mut self, member_state_code: &str, cert_pem: &str) -> PyResult<()> {
         use der::DecodePem;
         use x509_cert::Certificate;
 
@@ -467,7 +463,10 @@ impl PyEudiRegistry {
     }
 
     /// Get QTSPs for a specific member state.
-    fn get_qtsps_by_member_state(&self, member_state_code: &str) -> PyResult<Vec<PyTrustServiceProvider>> {
+    fn get_qtsps_by_member_state(
+        &self,
+        member_state_code: &str,
+    ) -> PyResult<Vec<PyTrustServiceProvider>> {
         let member_state = EuMemberState::from_code(member_state_code).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "Invalid member state code: {}",
@@ -1758,7 +1757,10 @@ fn tdes_cbc_decrypt<'py>(
 #[pyfunction]
 fn ed25519_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ed25519::generate_keypair();
-    Ok((PyBytes::new_bound(py, &secret), PyBytes::new_bound(py, &public)))
+    Ok((
+        PyBytes::new_bound(py, &secret),
+        PyBytes::new_bound(py, &public),
+    ))
 }
 
 /// Sign a message with Ed25519.
@@ -1788,7 +1790,10 @@ fn ed25519_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResu
 #[pyfunction]
 fn x25519_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdh::x25519_generate_keypair();
-    Ok((PyBytes::new_bound(py, &secret), PyBytes::new_bound(py, &public)))
+    Ok((
+        PyBytes::new_bound(py, &secret),
+        PyBytes::new_bound(py, &public),
+    ))
 }
 
 /// Perform X25519 key agreement.
@@ -1808,7 +1813,10 @@ fn x25519_agree<'py>(
 #[pyfunction]
 fn p256_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdh::p256_generate_keypair();
-    Ok((PyBytes::new_bound(py, &secret), PyBytes::new_bound(py, &public)))
+    Ok((
+        PyBytes::new_bound(py, &secret),
+        PyBytes::new_bound(py, &public),
+    ))
 }
 
 /// Perform P-256 ECDH key agreement.
@@ -1832,7 +1840,10 @@ fn ecdsa_p256_generate<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new_bound(py, &secret), PyBytes::new_bound(py, &public)))
+    Ok((
+        PyBytes::new_bound(py, &secret),
+        PyBytes::new_bound(py, &public),
+    ))
 }
 
 /// Generate a P-384 ECDSA key pair for signing.
@@ -1841,7 +1852,10 @@ fn ecdsa_p384_generate<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new_bound(py, &secret), PyBytes::new_bound(py, &public)))
+    Ok((
+        PyBytes::new_bound(py, &secret),
+        PyBytes::new_bound(py, &public),
+    ))
 }
 
 /// Sign a message with ECDSA P-256 SHA-256 (ES256).
@@ -1884,7 +1898,10 @@ fn ecdsa_p521_generate<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p521_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new_bound(py, &secret), PyBytes::new_bound(py, &public)))
+    Ok((
+        PyBytes::new_bound(py, &secret),
+        PyBytes::new_bound(py, &public),
+    ))
 }
 
 /// Sign a message with ECDSA P-521 SHA-512 (ES512).
