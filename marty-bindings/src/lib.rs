@@ -3,6 +3,10 @@
 //! This crate provides Python bindings for essential cryptographic functions
 //! from marty-crypto and marty-verification, focused on credential issuance and verification.
 
+// PyO3 0.22's `#[pyfunction]` expansion emits same-type PyErr conversions that
+// Rust 1.97 flags even though they are outside the handwritten function bodies.
+#![allow(clippy::useless_conversion)]
+
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -374,7 +378,7 @@ fn oid4vci_create_token_response(
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Token response error: {e}"))
         })?;
-    Ok(serde_json::to_string(&resp).map_err(to_pyerr)?)
+    serde_json::to_string(&resp).map_err(to_pyerr)
 }
 
 /// Create an OID4VCI authorization response from an authorization request.
@@ -452,7 +456,7 @@ fn oid4vci_exchange_auth_code_for_token(
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Token exchange error: {e}"))
         })?;
 
-    Ok(serde_json::to_string(&token_response).map_err(to_pyerr)?)
+    serde_json::to_string(&token_response).map_err(to_pyerr)
 }
 
 /// Verify a PKCE S256 code_verifier against a code_challenge.
@@ -554,6 +558,7 @@ fn oid4vci_verify_proof_jwt(
 /// Returns:
 ///     (credential_string, credential_id)
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (issuer_id, jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
 fn oid4vci_sign_credential(
     issuer_id: &str,
@@ -634,6 +639,7 @@ fn oid4vci_sign_credential(
 /// The caller signs `signing_input` externally and passes the result to
 /// `oid4vci_assemble_credential()`.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (issuer_id, algorithm, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
 fn oid4vci_prepare_credential(
     issuer_id: &str,
