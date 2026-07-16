@@ -221,8 +221,8 @@ run_check \
     cargo check -p marty-bindings
 
 run_check \
-    "marty-bindings: async split" \
-    cargo check -p marty-bindings --no-default-features --features async
+    "marty-bindings: no default features" \
+    cargo check -p marty-bindings --no-default-features
 
 # =============================================================================
 # 9. System-dependent combos (opt-in)
