@@ -659,8 +659,9 @@ impl CrlBuilder {
                         let reason_code = reason.to_code();
                         // DER-encode an ENUMERATED: tag 0x0A, length 0x01, value
                         let enum_der = vec![0x0A, 0x01, reason_code];
-                        let extn_value = der::asn1::OctetString::new(enum_der)
-                            .map_err(|e| CryptoError::internal(format!("DER OctetString error: {}", e)))?;
+                        let extn_value = der::asn1::OctetString::new(enum_der).map_err(|e| {
+                            CryptoError::internal(format!("DER OctetString error: {}", e))
+                        })?;
                         // id-ce-cRLReasons = 2.5.29.21
                         let oid = ObjectIdentifier::new_unwrap("2.5.29.21");
                         let ext = Extension {

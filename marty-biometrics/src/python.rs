@@ -573,9 +573,10 @@ impl PyFaceVerifier {
         reference: &PyFaceTemplate,
         probe: &PyFaceTemplate,
     ) -> PyResult<f32> {
-        let result = self
-            .runtime
-            .block_on(self.provider.compare_templates(&reference.inner, &probe.inner))?;
+        let result = self.runtime.block_on(
+            self.provider
+                .compare_templates(&reference.inner, &probe.inner),
+        )?;
         Ok(result)
     }
 
@@ -611,9 +612,9 @@ impl PyFaceVerifier {
         top_k: usize,
     ) -> PyResult<Vec<PySearchMatch>> {
         let gallery_inner: Vec<FaceTemplate> = gallery.into_iter().map(|t| t.inner).collect();
-        let results = self
-            .runtime
-            .block_on(self.provider.search(&probe.inner, &gallery_inner, top_k))?;
+        let results =
+            self.runtime
+                .block_on(self.provider.search(&probe.inner, &gallery_inner, top_k))?;
         Ok(results
             .into_iter()
             .map(|m| PySearchMatch { inner: m })

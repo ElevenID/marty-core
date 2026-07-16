@@ -72,8 +72,8 @@ fn session_encryption_round_trip() {
     let shared_secret = [0x42u8; 32];
     let session_transcript = b"test-session-transcript-bytes";
 
-    let mut enc = SessionEncryption::new(&shared_secret, session_transcript)
-        .expect("SessionEncryption::new");
+    let mut enc =
+        SessionEncryption::new(&shared_secret, session_transcript).expect("SessionEncryption::new");
 
     let plaintext = b"Hello, ISO 18013-5 session encryption!";
     let ciphertext = enc.encrypt(plaintext).expect("encrypt");
@@ -97,8 +97,7 @@ fn session_encryption_send_counter_increments() {
     let shared_secret = [0x01u8; 32];
     let transcript = b"counter-test-transcript";
 
-    let mut enc =
-        SessionEncryption::new(&shared_secret, transcript).expect("create");
+    let mut enc = SessionEncryption::new(&shared_secret, transcript).expect("create");
 
     assert_eq!(enc.send_counter(), 0, "initial send counter must be 0");
 
@@ -118,12 +117,14 @@ fn session_encryption_receive_counter_increments() {
     let shared_secret = [0x02u8; 32];
     let transcript = b"receive-counter-transcript";
 
-    let mut enc =
-        SessionEncryption::new(&shared_secret, transcript).expect("enc");
-    let mut dec =
-        SessionEncryption::new(&shared_secret, transcript).expect("dec");
+    let mut enc = SessionEncryption::new(&shared_secret, transcript).expect("enc");
+    let mut dec = SessionEncryption::new(&shared_secret, transcript).expect("dec");
 
-    assert_eq!(dec.receive_counter(), 0, "initial receive counter must be 0");
+    assert_eq!(
+        dec.receive_counter(),
+        0,
+        "initial receive counter must be 0"
+    );
 
     let ct1 = enc.encrypt(b"alpha").expect("encrypt");
     dec.decrypt(&ct1).expect("decrypt");
@@ -142,8 +143,7 @@ fn session_encryption_nonces_are_unique_per_message() {
     let shared_secret = [0x77u8; 32];
     let transcript = b"nonce-uniqueness-transcript";
 
-    let mut enc =
-        SessionEncryption::new(&shared_secret, transcript).expect("enc");
+    let mut enc = SessionEncryption::new(&shared_secret, transcript).expect("enc");
 
     let ct1 = enc.encrypt(b"same plaintext").expect("encrypt first");
     let ct2 = enc.encrypt(b"same plaintext").expect("encrypt second");
@@ -161,10 +161,8 @@ fn session_encryption_tampered_ciphertext_rejected() {
     let shared_secret = [0x33u8; 32];
     let transcript = b"tamper-test-transcript";
 
-    let mut enc =
-        SessionEncryption::new(&shared_secret, transcript).expect("enc");
-    let mut dec =
-        SessionEncryption::new(&shared_secret, transcript).expect("dec");
+    let mut enc = SessionEncryption::new(&shared_secret, transcript).expect("enc");
+    let mut dec = SessionEncryption::new(&shared_secret, transcript).expect("dec");
 
     let ct = enc.encrypt(b"sensitive data").expect("encrypt");
 
@@ -186,15 +184,16 @@ fn session_encryption_empty_plaintext_round_trip() {
     let shared_secret = [0xABu8; 32];
     let transcript = b"empty-plaintext-transcript";
 
-    let mut enc =
-        SessionEncryption::new(&shared_secret, transcript).expect("enc");
-    let mut dec =
-        SessionEncryption::new(&shared_secret, transcript).expect("dec");
+    let mut enc = SessionEncryption::new(&shared_secret, transcript).expect("enc");
+    let mut dec = SessionEncryption::new(&shared_secret, transcript).expect("dec");
 
     let ct = enc.encrypt(b"").expect("encrypt empty");
     let recovered = dec.decrypt(&ct).expect("decrypt empty");
 
-    assert!(recovered.is_empty(), "decrypted empty plaintext must be empty");
+    assert!(
+        recovered.is_empty(),
+        "decrypted empty plaintext must be empty"
+    );
 }
 
 /// Two independent sessions derived from different shared secrets must not
@@ -205,10 +204,8 @@ fn session_encryption_cross_session_isolation() {
     let secret_b = [0xBBu8; 32];
     let transcript = b"isolation-transcript";
 
-    let mut enc_a =
-        SessionEncryption::new(&secret_a, transcript).expect("enc_a");
-    let mut dec_b =
-        SessionEncryption::new(&secret_b, transcript).expect("dec_b");
+    let mut enc_a = SessionEncryption::new(&secret_a, transcript).expect("enc_a");
+    let mut dec_b = SessionEncryption::new(&secret_b, transcript).expect("dec_b");
 
     let ct = enc_a.encrypt(b"session A message").expect("encrypt");
     let result = dec_b.decrypt(&ct);
@@ -239,14 +236,15 @@ fn session_full_handshake_holder_to_reader() {
 
     let transcript = b"SessionTranscript{...}";
 
-    let mut holder_enc =
-        SessionEncryption::new(&shared, transcript).expect("holder enc");
-    let mut reader_dec =
-        SessionEncryption::new(&shared, transcript).expect("reader dec");
+    let mut holder_enc = SessionEncryption::new(&shared, transcript).expect("holder enc");
+    let mut reader_dec = SessionEncryption::new(&shared, transcript).expect("reader dec");
 
     let plaintext = b"mDoc response data";
     let ct = holder_enc.encrypt(plaintext).expect("holder encrypt");
     let recovered = reader_dec.decrypt(&ct).expect("reader decrypt");
 
-    assert_eq!(recovered, plaintext, "full handshake: decrypt must recover plaintext");
+    assert_eq!(
+        recovered, plaintext,
+        "full handshake: decrypt must recover plaintext"
+    );
 }

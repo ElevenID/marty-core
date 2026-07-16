@@ -47,7 +47,8 @@ fn namespace_format_is_reversed_domain() {
         );
         // Per spec all chars are lowercase or digit or dot
         assert!(
-            ns.chars().all(|c| c.is_ascii_lowercase() || c == '.' || c.is_ascii_digit()),
+            ns.chars()
+                .all(|c| c.is_ascii_lowercase() || c == '.' || c.is_ascii_digit()),
             "namespace must be lowercase dotted: {}",
             ns
         );
@@ -183,10 +184,7 @@ fn mdl_request_structure() {
 
     assert_eq!(req.doc_type, "org.iso.18013.5.1.mDL");
     assert_eq!(req.nonce, nonce);
-    assert_eq!(
-        req.data_elements.get("org.iso.18013.5.1").unwrap().len(),
-        2
-    );
+    assert_eq!(req.data_elements.get("org.iso.18013.5.1").unwrap().len(), 2);
 }
 
 /// `ResponseStatus::Ok` must be the success sentinel (§8.3.2.1).
@@ -271,7 +269,9 @@ fn selective_disclosure_add_namespace() {
     let mut request_map: HashMap<String, Vec<String>> = HashMap::new();
     request_map.insert(ns.to_string(), elements.clone());
 
-    let filtered = sd.filter_request(&request_map, &request_map).unwrap_or_default();
+    let filtered = sd
+        .filter_request(&request_map, &request_map)
+        .unwrap_or_default();
     let allowed = filtered.get(ns).expect("namespace must be present");
     assert_eq!(
         allowed.len(),
@@ -293,7 +293,13 @@ fn selective_disclosure_mandatory_elements_always_present() {
         "document_number",
     ];
 
-    sd.add_namespace(ns.to_string(), all_elements.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    sd.add_namespace(
+        ns.to_string(),
+        all_elements
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+    );
 
     // Mark family_name and document_number as mandatory
     sd.add_mandatory("family_name".to_string());
@@ -303,7 +309,9 @@ fn selective_disclosure_mandatory_elements_always_present() {
     let mut request_map: HashMap<String, Vec<String>> = HashMap::new();
     request_map.insert(ns.to_string(), vec!["birth_date".to_string()]);
 
-    let filtered = sd.filter_request(&request_map, &request_map).unwrap_or_default();
+    let filtered = sd
+        .filter_request(&request_map, &request_map)
+        .unwrap_or_default();
     let allowed = filtered.get(ns).expect("namespace must be present");
 
     assert!(
@@ -331,7 +339,9 @@ fn selective_disclosure_excludes_unknown_elements() {
     let mut request_map: HashMap<String, Vec<String>> = HashMap::new();
     request_map.insert(ns.to_string(), vec!["portrait_capture_date".to_string()]);
 
-    let filtered = sd.filter_request(&request_map, &request_map).unwrap_or_default();
+    let filtered = sd
+        .filter_request(&request_map, &request_map)
+        .unwrap_or_default();
     let allowed = filtered.get(ns).map(|v| v.as_slice()).unwrap_or(&[]);
     assert!(
         !allowed.contains(&"portrait_capture_date".to_string()),
@@ -343,7 +353,10 @@ fn selective_disclosure_excludes_unknown_elements() {
 #[test]
 fn selective_disclosure_excludes_unknown_namespaces() {
     let mut sd = SelectiveDisclosure::new();
-    sd.add_namespace("org.iso.18013.5.1".to_string(), vec!["family_name".to_string()]);
+    sd.add_namespace(
+        "org.iso.18013.5.1".to_string(),
+        vec!["family_name".to_string()],
+    );
 
     // Request an unknown namespace
     let mut request_map: HashMap<String, Vec<String>> = HashMap::new();
@@ -354,10 +367,7 @@ fn selective_disclosure_excludes_unknown_namespaces() {
 
     // An unknown namespace must produce an error
     let result = sd.filter_request(&request_map, &request_map);
-    assert!(
-        result.is_err(),
-        "unknown namespace must return an error"
-    );
+    assert!(result.is_err(), "unknown namespace must return an error");
 }
 
 // ── §6  Transport method model (§8.2.1) ──────────────────────────────────────
@@ -397,15 +407,22 @@ fn transport_info_construction() {
 #[test]
 fn error_implements_display_and_debug() {
     let err = Error::Other("conformance test error".to_string());
-    assert!(!format!("{}", err).is_empty(), "Error::Display must not be empty");
-    assert!(!format!("{:?}", err).is_empty(), "Error::Debug must not be empty");
+    assert!(
+        !format!("{}", err).is_empty(),
+        "Error::Display must not be empty"
+    );
+    assert!(
+        !format!("{:?}", err).is_empty(),
+        "Error::Debug must not be empty"
+    );
 }
 
 /// `Result<T, Error>` must be constructible with standard `?` propagation.
 #[test]
 fn result_type_is_std_result() {
     fn parse_version(s: &str) -> marty_iso18013::Result<u32> {
-        s.parse::<u32>().map_err(|_| Error::Other(format!("not a u32: {}", s)))
+        s.parse::<u32>()
+            .map_err(|_| Error::Other(format!("not a u32: {}", s)))
     }
     assert!(parse_version("1").is_ok());
     assert!(parse_version("not-a-number").is_err());

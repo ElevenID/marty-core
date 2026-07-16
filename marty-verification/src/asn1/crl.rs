@@ -93,22 +93,20 @@ pub fn parse_crl(der_bytes: &[u8]) -> VerificationResult<CrlInfo> {
                 let serial_number = format_serial(&entry.serial_number);
                 let revocation_date = time_to_datetime(&entry.revocation_date);
                 // Parse CRL entry extensions for reason code (OID 2.5.29.21)
-                let reason = entry
-                    .crl_entry_extensions
-                    .as_ref()
-                    .and_then(|exts| {
-                        exts.iter().find_map(|ext| {
-                            // id-ce-cRLReasons = 2.5.29.21
-                            if ext.extn_id.to_string() == "2.5.29.21" {
-                                // CRLReason is an ENUMERATED (single byte value)
-                                ext.extn_value.as_bytes().last().map(|&code| {
-                                    RevocationReason::from_code(code)
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                    });
+                let reason = entry.crl_entry_extensions.as_ref().and_then(|exts| {
+                    exts.iter().find_map(|ext| {
+                        // id-ce-cRLReasons = 2.5.29.21
+                        if ext.extn_id.to_string() == "2.5.29.21" {
+                            // CRLReason is an ENUMERATED (single byte value)
+                            ext.extn_value
+                                .as_bytes()
+                                .last()
+                                .map(|&code| RevocationReason::from_code(code))
+                        } else {
+                            None
+                        }
+                    })
+                });
 
                 RevokedCertificate {
                     serial_number,
@@ -122,28 +120,25 @@ pub fn parse_crl(der_bytes: &[u8]) -> VerificationResult<CrlInfo> {
     };
 
     // Extract CRL number from extensions (OID 2.5.29.20)
-    let crl_number = tbs
-        .crl_extensions
-        .as_ref()
-        .and_then(|exts| {
-            exts.iter().find_map(|ext| {
-                // id-ce-cRLNumber = 2.5.29.20
-                if ext.extn_id.to_string() == "2.5.29.20" {
-                    // CRLNumber is an INTEGER — parse from DER bytes
-                    let bytes = ext.extn_value.as_bytes();
-                    // Skip DER tag (0x02) and length byte
-                    if bytes.len() >= 3 && bytes[0] == 0x02 {
-                        let len = bytes[1] as usize;
-                        let num_bytes = &bytes[2..2 + len.min(bytes.len() - 2)];
-                        Some(num_bytes.iter().fold(0u64, |acc, &b| (acc << 8) | b as u64))
-                    } else {
-                        None
-                    }
+    let crl_number = tbs.crl_extensions.as_ref().and_then(|exts| {
+        exts.iter().find_map(|ext| {
+            // id-ce-cRLNumber = 2.5.29.20
+            if ext.extn_id.to_string() == "2.5.29.20" {
+                // CRLNumber is an INTEGER — parse from DER bytes
+                let bytes = ext.extn_value.as_bytes();
+                // Skip DER tag (0x02) and length byte
+                if bytes.len() >= 3 && bytes[0] == 0x02 {
+                    let len = bytes[1] as usize;
+                    let num_bytes = &bytes[2..2 + len.min(bytes.len() - 2)];
+                    Some(num_bytes.iter().fold(0u64, |acc, &b| (acc << 8) | b as u64))
                 } else {
                     None
                 }
-            })
-        });
+            } else {
+                None
+            }
+        })
+    });
 
     Ok(CrlInfo {
         issuer,

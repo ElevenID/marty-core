@@ -81,12 +81,9 @@ fn selective_disclosure_withholds_unapproved_elements() {
     .collect();
 
     // User only approves family_name, not birth_date
-    let approved: HashMap<String, Vec<String>> = [(
-        iso_ns(),
-        vec!["family_name".to_string()],
-    )]
-    .into_iter()
-    .collect();
+    let approved: HashMap<String, Vec<String>> = [(iso_ns(), vec!["family_name".to_string()])]
+        .into_iter()
+        .collect();
 
     let result = sd.filter_request(&requested, &approved).expect("filter");
     let disclosed = result.get(&iso_ns()).expect("namespace in result");

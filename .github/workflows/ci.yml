@@ -65,6 +65,8 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    env:
+      USE_ZK_MOCK: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -210,6 +212,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MATRIX_CARGO_TARGET_DIR: target/feature-matrix
+      USE_ZK_MOCK: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

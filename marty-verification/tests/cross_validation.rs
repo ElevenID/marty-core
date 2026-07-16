@@ -230,15 +230,11 @@ mod nist_pkits {
         println!("Marty: valid={}, reason={}", marty_valid, marty_reason);
 
         // NIST PKITS certs from 2011 are expired, OpenSSL should detect this
-        let cert =
-            Certificate::from_der(NIST_VALID_EE_DER).expect("Failed to parse NIST EE cert");
+        let cert = Certificate::from_der(NIST_VALID_EE_DER).expect("Failed to parse NIST EE cert");
         let not_after = cert.tbs_certificate.validity.not_after.to_system_time();
         let not_after_dt = DateTime::<Utc>::from(not_after);
         if Utc::now() > not_after_dt {
-            assert!(
-                !openssl_valid,
-                "OpenSSL should reject expired certs"
-            );
+            assert!(!openssl_valid, "OpenSSL should reject expired certs");
             assert!(
                 !marty_valid,
                 "Marty should reject expired certs: {}",
@@ -512,7 +508,11 @@ mod cert_generation {
 
         // Both should show the cert is expired (not_after is in the past)
         let now = std::time::SystemTime::now();
-        let not_after_system = x509_cert.tbs_certificate.validity.not_after.to_system_time();
+        let not_after_system = x509_cert
+            .tbs_certificate
+            .validity
+            .not_after
+            .to_system_time();
         assert!(
             now > not_after_system,
             "Expected generated cert to be expired"

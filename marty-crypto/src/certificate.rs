@@ -195,8 +195,9 @@ pub fn der_to_pem(der_data: &[u8]) -> CryptoResult<String> {
     let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
     for chunk in b64.as_bytes().chunks(64) {
         pem.push_str(
-            std::str::from_utf8(chunk)
-                .map_err(|e| CryptoError::internal(format!("UTF-8 error in base64 chunk: {}", e)))?,
+            std::str::from_utf8(chunk).map_err(|e| {
+                CryptoError::internal(format!("UTF-8 error in base64 chunk: {}", e))
+            })?,
         );
         pem.push('\n');
     }

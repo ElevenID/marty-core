@@ -218,12 +218,11 @@ fn verify_challenge_signature(
     let canonical = challenge_canonical_bytes(challenge);
     // HMAC-SHA256 accepts any key length per RFC 2104, but handle the
     // theoretical error to avoid panicking in library code.
-    let mut mac = Hmac::<Sha256>::new_from_slice(hmac_key)
-        .map_err(|_| BiometricError::InvalidSignature)?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(hmac_key).map_err(|_| BiometricError::InvalidSignature)?;
     mac.update(&canonical);
 
-    let sig_bytes = hex_to_bytes(&challenge.signature)
-        .ok_or(BiometricError::InvalidSignature)?;
+    let sig_bytes = hex_to_bytes(&challenge.signature).ok_or(BiometricError::InvalidSignature)?;
 
     mac.verify_slice(&sig_bytes)
         .map_err(|_| BiometricError::InvalidSignature)
@@ -297,7 +296,10 @@ mod tests {
         assert_eq!(challenge.signature.len(), 64);
 
         let result = validate_challenge(&challenge, TEST_KEY);
-        assert!(result.is_ok(), "valid signed challenge should pass: {result:?}");
+        assert!(
+            result.is_ok(),
+            "valid signed challenge should pass: {result:?}"
+        );
     }
 
     #[test]

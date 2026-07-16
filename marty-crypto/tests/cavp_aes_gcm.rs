@@ -30,20 +30,22 @@ fn hex(s: &str) -> Vec<u8> {
 /// The "ciphertext" is only the authentication tag (16 bytes) since plaintext is empty.
 #[test]
 fn cavp_aes128_gcm_tc1_empty_plaintext() {
-    let key   = hex("00000000000000000000000000000000");
+    let key = hex("00000000000000000000000000000000");
     let nonce = hex("000000000000000000000000");
     let plaintext = b"";
     let aad = b"";
 
     // Encryption of empty plaintext produces only an auth tag
-    let ct = aes_128_gcm_encrypt(&key, &nonce, plaintext, aad)
-        .expect("AES-128-GCM encrypt TC1");
+    let ct = aes_128_gcm_encrypt(&key, &nonce, plaintext, aad).expect("AES-128-GCM encrypt TC1");
     // Auth tag is 16 bytes appended
-    assert_eq!(ct.len(), 16, "ciphertext of empty plaintext must be 16-byte tag only");
+    assert_eq!(
+        ct.len(),
+        16,
+        "ciphertext of empty plaintext must be 16-byte tag only"
+    );
 
     // Round-trip: decrypt should return empty plaintext
-    let pt = aes_128_gcm_decrypt(&key, &nonce, &ct, aad)
-        .expect("AES-128-GCM decrypt TC1");
+    let pt = aes_128_gcm_decrypt(&key, &nonce, &ct, aad).expect("AES-128-GCM decrypt TC1");
     assert_eq!(&pt, plaintext);
 }
 
@@ -51,75 +53,80 @@ fn cavp_aes128_gcm_tc1_empty_plaintext() {
 /// Reference: NIST SP 800-38D Table B-1 TC2.
 #[test]
 fn cavp_aes128_gcm_tc2_128bit_zeros() {
-    let key       = hex("00000000000000000000000000000000");
-    let nonce     = hex("000000000000000000000000");
+    let key = hex("00000000000000000000000000000000");
+    let nonce = hex("000000000000000000000000");
     let plaintext = hex("00000000000000000000000000000000");
-    let aad       = b"";
+    let aad = b"";
 
-    let ct = aes_128_gcm_encrypt(&key, &nonce, &plaintext, aad)
-        .expect("AES-128-GCM encrypt TC2");
+    let ct = aes_128_gcm_encrypt(&key, &nonce, &plaintext, aad).expect("AES-128-GCM encrypt TC2");
     assert_eq!(ct.len(), 32, "16-byte ciphertext + 16-byte auth tag");
 
     // Expected ciphertext bytes (first 16): 0388dace60b6a392f328c2b971b2fe78
     // Expected auth tag (last 16):          ab6e47d42cec13bdf53a67b21257bddf
     // (NIST SP 800-38D §B.1 Table TC2)
-    let expected_ct   = hex("0388dace60b6a392f328c2b971b2fe78");
-    let expected_tag  = hex("ab6e47d42cec13bdf53a67b21257bddf");
+    let expected_ct = hex("0388dace60b6a392f328c2b971b2fe78");
+    let expected_tag = hex("ab6e47d42cec13bdf53a67b21257bddf");
     assert_eq!(&ct[..16], &expected_ct[..], "ciphertext mismatch");
     assert_eq!(&ct[16..], &expected_tag[..], "auth-tag mismatch");
 
     // Decrypt round-trip
-    let pt = aes_128_gcm_decrypt(&key, &nonce, &ct, aad)
-        .expect("AES-128-GCM decrypt TC2");
+    let pt = aes_128_gcm_decrypt(&key, &nonce, &ct, aad).expect("AES-128-GCM decrypt TC2");
     assert_eq!(pt, plaintext);
 }
 
 /// Custom AAD test — ensure AAD is authenticated (wrong AAD produces an error).
 #[test]
 fn cavp_aes128_gcm_aad_authentication() {
-    let key       = hex("feffe9928665731c6d6a8f9467308308");
-    let nonce     = hex("cafebabefacedbaddecaf888");
+    let key = hex("feffe9928665731c6d6a8f9467308308");
+    let nonce = hex("cafebabefacedbaddecaf888");
     let plaintext = hex("d9313225f88406e5a55909c5aff5269a");
-    let aad       = hex("feedfacedeadbeeffeedfacedeadbeef");
+    let aad = hex("feedfacedeadbeeffeedfacedeadbeef");
 
-    let ct = aes_128_gcm_encrypt(&key, &nonce, &plaintext, &aad)
-        .expect("encrypt with AAD");
+    let ct = aes_128_gcm_encrypt(&key, &nonce, &plaintext, &aad).expect("encrypt with AAD");
 
     // Correct AAD — must decrypt
-    let pt = aes_128_gcm_decrypt(&key, &nonce, &ct, &aad)
-        .expect("decrypt with correct AAD");
+    let pt = aes_128_gcm_decrypt(&key, &nonce, &ct, &aad).expect("decrypt with correct AAD");
     assert_eq!(pt, plaintext);
 
     // Wrong AAD — must fail with authentication error
     let wrong_aad = hex("feedfacedeadbeeffeedfacedeadbeee");
     let result = aes_128_gcm_decrypt(&key, &nonce, &ct, &wrong_aad);
-    assert!(result.is_err(), "Wrong AAD must cause authentication failure");
+    assert!(
+        result.is_err(),
+        "Wrong AAD must cause authentication failure"
+    );
 }
 
 /// Nonce reuse check — different nonces produce different ciphertexts.
 #[test]
 fn cavp_aes128_gcm_nonce_uniqueness() {
-    let key       = hex("feffe9928665731c6d6a8f9467308308");
-    let nonce1    = hex("cafebabefacedbaddecaf888");
-    let nonce2    = hex("cafebabefacedbaddecaf889");
+    let key = hex("feffe9928665731c6d6a8f9467308308");
+    let nonce1 = hex("cafebabefacedbaddecaf888");
+    let nonce2 = hex("cafebabefacedbaddecaf889");
     let plaintext = b"nonce reuse test";
 
     let ct1 = aes_128_gcm_encrypt(&key, &nonce1, plaintext, b"").expect("encrypt n1");
     let ct2 = aes_128_gcm_encrypt(&key, &nonce2, plaintext, b"").expect("encrypt n2");
-    assert_ne!(ct1, ct2, "Different nonces must produce different ciphertexts");
+    assert_ne!(
+        ct1, ct2,
+        "Different nonces must produce different ciphertexts"
+    );
 }
 
 /// Wrong key — must fail authentication.
 #[test]
 fn cavp_aes128_gcm_wrong_key_fails() {
-    let key       = hex("00000000000000000000000000000000");
+    let key = hex("00000000000000000000000000000000");
     let wrong_key = hex("ffffffffffffffffffffffffffffffff");
-    let nonce     = hex("000000000000000000000000");
+    let nonce = hex("000000000000000000000000");
     let plaintext = b"authentic message";
 
     let ct = aes_128_gcm_encrypt(&key, &nonce, plaintext, b"").expect("encrypt");
     let result = aes_128_gcm_decrypt(&wrong_key, &nonce, &ct, b"");
-    assert!(result.is_err(), "Wrong key must cause authentication failure");
+    assert!(
+        result.is_err(),
+        "Wrong key must cause authentication failure"
+    );
 }
 
 // ── AES-256-GCM (ISO 18013-5 session encryption) ─────────────────────────────
@@ -130,15 +137,13 @@ fn cavp_aes128_gcm_wrong_key_fails() {
 /// AES-256-GCM round-trip with empty plaintext.
 #[test]
 fn cavp_aes256_gcm_empty_plaintext() {
-    let key   = hex("0000000000000000000000000000000000000000000000000000000000000000");
+    let key = hex("0000000000000000000000000000000000000000000000000000000000000000");
     let nonce = hex("000000000000000000000000");
 
-    let ct = aes_256_gcm_encrypt(&key, &nonce, b"", b"")
-        .expect("AES-256-GCM encrypt empty");
+    let ct = aes_256_gcm_encrypt(&key, &nonce, b"", b"").expect("AES-256-GCM encrypt empty");
     assert_eq!(ct.len(), 16, "Auth tag only");
 
-    let pt = aes_256_gcm_decrypt(&key, &nonce, &ct, b"")
-        .expect("AES-256-GCM decrypt empty");
+    let pt = aes_256_gcm_decrypt(&key, &nonce, &ct, b"").expect("AES-256-GCM decrypt empty");
     assert!(pt.is_empty());
 }
 
@@ -146,20 +151,18 @@ fn cavp_aes256_gcm_empty_plaintext() {
 /// Reference: NIST CAVP AES-GCM-256 EncryptExtIV128.rsp test vector.
 #[test]
 fn cavp_aes256_gcm_128bit_plaintext() {
-    let key       = hex("0000000000000000000000000000000000000000000000000000000000000000");
-    let nonce     = hex("000000000000000000000000");
+    let key = hex("0000000000000000000000000000000000000000000000000000000000000000");
+    let nonce = hex("000000000000000000000000");
     let plaintext = hex("00000000000000000000000000000000");
 
-    let ct = aes_256_gcm_encrypt(&key, &nonce, &plaintext, b"")
-        .expect("AES-256-GCM encrypt");
+    let ct = aes_256_gcm_encrypt(&key, &nonce, &plaintext, b"").expect("AES-256-GCM encrypt");
     // Expected ciphertext (NIST CAVP AES-256-GCM TC1): cea7403d4d606b6e074ec5d3baf39d18
-    let expected_ct  = hex("cea7403d4d606b6e074ec5d3baf39d18");
+    let expected_ct = hex("cea7403d4d606b6e074ec5d3baf39d18");
     let expected_tag = hex("d0d1c8a799996bf0265b98b5d48ab919");
     assert_eq!(&ct[..16], &expected_ct[..], "ciphertext mismatch");
     assert_eq!(&ct[16..], &expected_tag[..], "tag mismatch");
 
-    let pt = aes_256_gcm_decrypt(&key, &nonce, &ct, b"")
-        .expect("AES-256-GCM decrypt");
+    let pt = aes_256_gcm_decrypt(&key, &nonce, &ct, b"").expect("AES-256-GCM decrypt");
     assert_eq!(pt, plaintext);
 }
 
@@ -188,13 +191,16 @@ fn cavp_aes256_gcm_mdl_counter_iv() {
 /// AES-256-GCM: modified ciphertext must fail authentication.
 #[test]
 fn cavp_aes256_gcm_tampered_ciphertext_fails() {
-    let key   = hex("0000000000000000000000000000000000000000000000000000000000000000");
+    let key = hex("0000000000000000000000000000000000000000000000000000000000000000");
     let nonce = hex("000000000000000000000000");
-    let pt    = b"sensitive data";
+    let pt = b"sensitive data";
 
     let mut ct = aes_256_gcm_encrypt(&key, &nonce, pt, b"").expect("encrypt");
     ct[0] ^= 0xff; // flip a bit in the ciphertext
 
     let result = aes_256_gcm_decrypt(&key, &nonce, &ct, b"");
-    assert!(result.is_err(), "Tampered ciphertext must fail authentication");
+    assert!(
+        result.is_err(),
+        "Tampered ciphertext must fail authentication"
+    );
 }

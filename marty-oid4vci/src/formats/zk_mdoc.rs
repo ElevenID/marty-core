@@ -190,8 +190,12 @@ mod tests {
                 assert!(!issuer_signed_b64.is_empty());
                 assert_eq!(zk_predicate_bindings.len(), 1);
                 assert_eq!(zk_predicate_bindings[0].claim_name, "birth_date");
-                assert!(zk_predicate_bindings[0].supported_predicates.contains(&"age_over_18".to_string()));
-                assert!(zk_predicate_bindings[0].supported_predicates.contains(&"age_over_21".to_string()));
+                assert!(zk_predicate_bindings[0]
+                    .supported_predicates
+                    .contains(&"age_over_18".to_string()));
+                assert!(zk_predicate_bindings[0]
+                    .supported_predicates
+                    .contains(&"age_over_21".to_string()));
                 assert_eq!(zk_proof_type, ZK_PROOF_TYPE_LIGERO);
                 assert!(credential_id.starts_with("urn:uuid:"));
             }
@@ -210,7 +214,10 @@ mod tests {
             selective_disclosure_claims: vec![],
             mdoc_namespace: None,
             mdoc_doctype: None,
-            zk_predicate_claims: vec![ZkPredicateBinding::single("nonexistent_claim", "age_over_18")],
+            zk_predicate_claims: vec![ZkPredicateBinding::single(
+                "nonexistent_claim",
+                "age_over_18",
+            )],
             credential_payload_format: Default::default(),
             w3c_context: vec![],
             w3c_types: vec![],
@@ -254,7 +261,9 @@ mod tests {
 
     impl TestP256Signer {
         fn new() -> Self {
-            Self { jwk: JWK::generate_p256() }
+            Self {
+                jwk: JWK::generate_p256(),
+            }
         }
     }
 
@@ -305,10 +314,15 @@ mod tests {
                 zk_proof_type,
                 credential_id,
             } => {
-                assert!(!issuer_signed_b64.is_empty(), "issuer_signed_b64 should not be empty");
+                assert!(
+                    !issuer_signed_b64.is_empty(),
+                    "issuer_signed_b64 should not be empty"
+                );
                 assert_eq!(zk_predicate_bindings.len(), 1);
                 assert_eq!(zk_predicate_bindings[0].claim_name, "birth_date");
-                assert!(zk_predicate_bindings[0].supported_predicates.contains(&"age_over_18".to_string()));
+                assert!(zk_predicate_bindings[0]
+                    .supported_predicates
+                    .contains(&"age_over_18".to_string()));
                 assert_eq!(zk_proof_type, ZK_PROOF_TYPE_LIGERO);
                 assert!(credential_id.starts_with("urn:uuid:"));
             }

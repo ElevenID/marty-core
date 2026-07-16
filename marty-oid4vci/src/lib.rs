@@ -72,9 +72,8 @@ pub use verifier::VerificationEngine;
 
 #[cfg(feature = "wallet")]
 pub use wallet::{
-    DcqlClaimQuery, DcqlCredentialQuery, DcqlQuery, IssuerMetadata,
-    ParsedPresentationRequest, PresentationRequestQueryType, PresentationResponse,
-    WalletEngine, ZkProofEntry,
+    DcqlClaimQuery, DcqlCredentialQuery, DcqlQuery, IssuerMetadata, ParsedPresentationRequest,
+    PresentationRequestQueryType, PresentationResponse, WalletEngine, ZkProofEntry,
 };
 
 #[cfg(feature = "lti")]

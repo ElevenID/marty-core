@@ -82,9 +82,7 @@ impl IssuanceEngine {
                         Some(TransactionCode {
                             input_mode: Some("numeric".into()),
                             length: Some(6),
-                            description: Some(
-                                "Please enter the transaction code".into(),
-                            ),
+                            description: Some("Please enter the transaction code".into()),
                         })
                     } else {
                         None
@@ -280,9 +278,7 @@ impl IssuanceEngine {
         // Validate PKCE code_verifier
         if let Some(ref stored_challenge) = session.code_challenge {
             let verifier = request.code_verifier.as_deref().ok_or_else(|| {
-                Oid4vciError::InvalidPreAuthCode(
-                    "code_verifier required (PKCE)".into(),
-                )
+                Oid4vciError::InvalidPreAuthCode("code_verifier required (PKCE)".into())
             })?;
 
             let method = session
@@ -291,9 +287,7 @@ impl IssuanceEngine {
                 .unwrap_or(&CodeChallengeMethod::Plain);
 
             let valid = match method {
-                CodeChallengeMethod::S256 => {
-                    verify_pkce_s256(verifier, stored_challenge)
-                }
+                CodeChallengeMethod::S256 => verify_pkce_s256(verifier, stored_challenge),
                 CodeChallengeMethod::Plain => verifier == stored_challenge.as_str(),
             };
 
@@ -350,8 +344,7 @@ impl IssuanceEngine {
             .flat_map(|ct| ct.formats.iter().cloned())
             .collect();
 
-        let format =
-            formats::negotiate_format(request.format.as_deref(), &supported_formats)?;
+        let format = formats::negotiate_format(request.format.as_deref(), &supported_formats)?;
 
         // 3. Sign the credential
         let signed = formats::sign_credential(&format, &self.config.issuer_key, claims)?;
@@ -381,10 +374,7 @@ impl IssuanceEngine {
             MetadataBuilder::new(&self.config.credential_issuer_url, &self.config.issuer_name);
 
         // Nonce endpoint
-        builder = builder.nonce_endpoint(format!(
-            "{}/nonce",
-            self.config.credential_issuer_url
-        ));
+        builder = builder.nonce_endpoint(format!("{}/nonce", self.config.credential_issuer_url));
 
         // Authorization endpoint (if authorization code flow is supported)
         if let Some(ref auth_ep) = self.config.authorization_endpoint {
@@ -430,9 +420,9 @@ impl IssuanceEngine {
     }
 }
 
-use sha2::{Digest, Sha256};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use sha2::{Digest, Sha256};
 
 /// Verify a PKCE S256 code_verifier against a stored code_challenge.
 ///
@@ -528,6 +518,7 @@ pub fn generate_offer_uri(issuer_url: &str, offer_id: &str, format: &str) -> Str
 /// Sign a verifiable credential (standalone function).
 ///
 /// This is the direct replacement for `create_verifiable_credential` in marty-rs.
+#[allow(clippy::too_many_arguments)]
 pub fn create_verifiable_credential(
     issuer_id: &str,
     jwk_json: &str,
@@ -560,15 +551,20 @@ pub fn create_verifiable_credential(
         w3c_types: vec![],
     };
 
-    let cred_format = CredentialFormat::from_str_loose(format).unwrap_or(CredentialFormat::JwtVcJson);
+    let cred_format =
+        CredentialFormat::from_str_loose(format).unwrap_or(CredentialFormat::JwtVcJson);
 
     let signed = formats::sign_credential(&cred_format, &issuer_key, &cred_claims)?;
 
     let credential_str = match &signed {
         SignedCredential::JwtVcJson { jwt, .. } => jwt.clone(),
         SignedCredential::SdJwt { compact, .. } => compact.clone(),
-        SignedCredential::MsoMdoc { issuer_signed_b64, .. } => issuer_signed_b64.clone(),
-        SignedCredential::ZkMdoc { issuer_signed_b64, .. } => issuer_signed_b64.clone(),
+        SignedCredential::MsoMdoc {
+            issuer_signed_b64, ..
+        } => issuer_signed_b64.clone(),
+        SignedCredential::ZkMdoc {
+            issuer_signed_b64, ..
+        } => issuer_signed_b64.clone(),
         SignedCredential::VdsNc { barcode_data, .. } => barcode_data.clone(),
     };
 
@@ -588,7 +584,10 @@ pub fn detect_algorithm(jwk_json: &str) -> Oid4vciResult<SigningAlgorithm> {
             "ES256K" => Ok(SigningAlgorithm::ES256K),
             "ES384" => Ok(SigningAlgorithm::ES384),
             "RS256" => Ok(SigningAlgorithm::RS256),
-            _ => Err(Oid4vciError::KeyError(format!("Unsupported algorithm: {}", alg))),
+            _ => Err(Oid4vciError::KeyError(format!(
+                "Unsupported algorithm: {}",
+                alg
+            ))),
         };
     }
 
@@ -596,18 +595,27 @@ pub fn detect_algorithm(jwk_json: &str) -> Oid4vciResult<SigningAlgorithm> {
     match jwk.get("kty").and_then(|v| v.as_str()) {
         Some("OKP") => match jwk.get("crv").and_then(|v| v.as_str()) {
             Some("Ed25519") => Ok(SigningAlgorithm::EdDSA),
-            Some(crv) => Err(Oid4vciError::KeyError(format!("Unsupported OKP curve: {}", crv))),
+            Some(crv) => Err(Oid4vciError::KeyError(format!(
+                "Unsupported OKP curve: {}",
+                crv
+            ))),
             None => Err(Oid4vciError::KeyError("Missing curve for OKP key".into())),
         },
         Some("EC") => match jwk.get("crv").and_then(|v| v.as_str()) {
             Some("P-256") => Ok(SigningAlgorithm::ES256),
             Some("P-384") => Ok(SigningAlgorithm::ES384),
             Some("secp256k1") => Ok(SigningAlgorithm::ES256K),
-            Some(crv) => Err(Oid4vciError::KeyError(format!("Unsupported EC curve: {}", crv))),
+            Some(crv) => Err(Oid4vciError::KeyError(format!(
+                "Unsupported EC curve: {}",
+                crv
+            ))),
             None => Err(Oid4vciError::KeyError("Missing curve for EC key".into())),
         },
         Some("RSA") => Ok(SigningAlgorithm::RS256),
-        Some(kty) => Err(Oid4vciError::KeyError(format!("Unsupported key type: {}", kty))),
+        Some(kty) => Err(Oid4vciError::KeyError(format!(
+            "Unsupported key type: {}",
+            kty
+        ))),
         None => Err(Oid4vciError::KeyError("Missing kty in JWK".into())),
     }
 }
@@ -702,7 +710,10 @@ mod tests {
         assert!(resp.access_token.starts_with("at_"));
         assert_eq!(resp.token_type, "Bearer");
         assert_eq!(resp.expires_in, 300);
-        assert!(serde_json::to_value(&resp).unwrap().get("c_nonce").is_none());
+        assert!(serde_json::to_value(&resp)
+            .unwrap()
+            .get("c_nonce")
+            .is_none());
 
         let nonce = engine.create_nonce_response();
         assert!(!nonce.c_nonce.is_empty());
@@ -713,10 +724,7 @@ mod tests {
         let engine = test_engine();
         let metadata = engine.generate_metadata();
 
-        assert_eq!(
-            metadata.credential_issuer,
-            "https://issuer.example.com"
-        );
+        assert_eq!(metadata.credential_issuer, "https://issuer.example.com");
         assert!(metadata
             .credential_configurations_supported
             .contains_key("TestCredential"));
@@ -773,15 +781,19 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["credential_issuer"], "https://issuer.example.com");
-        assert!(parsed["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"]
-            .is_object());
+        assert!(
+            parsed["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"].is_object()
+        );
     }
 
     #[test]
     fn test_detect_algorithm() {
         let p256 = ssi::jwk::JWK::generate_p256();
         let p256_json = serde_json::to_string(&p256).unwrap();
-        assert_eq!(detect_algorithm(&p256_json).unwrap(), SigningAlgorithm::ES256);
+        assert_eq!(
+            detect_algorithm(&p256_json).unwrap(),
+            SigningAlgorithm::ES256
+        );
 
         let ed25519 = ssi::jwk::JWK::generate_ed25519().unwrap();
         let ed_json = serde_json::to_string(&ed25519).unwrap();
@@ -807,14 +819,15 @@ mod tests {
             }]),
         };
 
-        let (response, session) = engine
-            .create_authorization_response(&request, 600)
-            .unwrap();
+        let (response, session) = engine.create_authorization_response(&request, 600).unwrap();
 
         assert!(response.code.starts_with("ac_"));
         assert_eq!(response.state, Some("csrf_token_123".into()));
         assert_eq!(session.client_id, "did:key:z6Mk_wallet");
-        assert_eq!(session.redirect_uri, Some("https://wallet.example/callback".into()));
+        assert_eq!(
+            session.redirect_uri,
+            Some("https://wallet.example/callback".into())
+        );
         assert_eq!(session.issuer_state, Some("offer_state_abc".into()));
         assert_eq!(session.credential_configuration_ids, vec!["TestCredential"]);
         assert_eq!(session.expires_in, 600);
@@ -854,7 +867,10 @@ mod tests {
         assert!(resp.access_token.starts_with("at_"));
         assert_eq!(resp.token_type, "Bearer");
         assert_eq!(resp.expires_in, 1800);
-        assert!(serde_json::to_value(&resp).unwrap().get("c_nonce").is_none());
+        assert!(serde_json::to_value(&resp)
+            .unwrap()
+            .get("c_nonce")
+            .is_none());
     }
 
     #[test]
@@ -898,8 +914,7 @@ mod tests {
             code_verifier: Some("wrong_verifier".into()),
         };
 
-        let err = engine
-            .create_token_response_for_auth_code(&bad_request, &session, 1800);
+        let err = engine.create_token_response_for_auth_code(&bad_request, &session, 1800);
         assert!(err.is_err());
     }
 

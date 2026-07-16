@@ -9,8 +9,8 @@ compile_error!(
      in release mode. Remove --features marty-zkp/zk-mock and unset USE_ZK_MOCK."
 );
 
-use std::ffi::CString;
 use serde::{Deserialize, Serialize};
+use std::ffi::CString;
 use thiserror::Error;
 
 // ── Predicate ────────────────────────────────────────────────────────
@@ -80,11 +80,19 @@ impl ZkPredicate {
     /// Human-readable description of what this predicate proves.
     pub fn description(&self) -> String {
         match self {
-            Self::AgeOver(n) => format!("Proves age is at least {} without revealing exact birth date", n),
-            Self::ValueInRange { min, max } => format!("Proves value is between {} and {}", min, max),
+            Self::AgeOver(n) => format!(
+                "Proves age is at least {} without revealing exact birth date",
+                n
+            ),
+            Self::ValueInRange { min, max } => {
+                format!("Proves value is between {} and {}", min, max)
+            }
             Self::Membership => "Proves value is a member of an authorized set".to_string(),
             Self::Custom(s) => format!("Custom predicate: {}", s),
-            Self::KeyOwnership => "NOT SUPPORTED: key-ownership proof requires raw scalar (HSM-incompatible)".to_string(),
+            Self::KeyOwnership => {
+                "NOT SUPPORTED: key-ownership proof requires raw scalar (HSM-incompatible)"
+                    .to_string()
+            }
         }
     }
 
@@ -211,7 +219,11 @@ pub struct AttributeRequest {
 
 impl AttributeRequest {
     pub fn new(namespace: impl Into<String>, id: impl Into<String>, cbor_value: Vec<u8>) -> Self {
-        Self { namespace: namespace.into(), id: id.into(), cbor_value }
+        Self {
+            namespace: namespace.into(),
+            id: id.into(),
+            cbor_value,
+        }
     }
 
     /// Convert to the C-ABI `RequestedAttribute` struct.
@@ -299,9 +311,7 @@ impl Circuit {
         let mut cb: *mut u8 = std::ptr::null_mut();
         let mut clen: usize = 0;
 
-        let rc = unsafe {
-            ffi::generate_circuit(&ffi::kZkSpecs[spec_index], &mut cb, &mut clen)
-        };
+        let rc = unsafe { ffi::generate_circuit(&ffi::kZkSpecs[spec_index], &mut cb, &mut clen) };
         if rc != ffi::CircuitGenerationErrorCode::Success {
             return Err(ZkError::from(rc));
         }
@@ -348,7 +358,9 @@ impl Prover {
         if input.attributes.len() != expected_n {
             return Err(ZkError::InvalidInput);
         }
-        let ffi_attrs = input.attributes.iter()
+        let ffi_attrs = input
+            .attributes
+            .iter()
             .map(|a| a.to_ffi())
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -435,7 +447,9 @@ impl Verifier {
             return Err(ZkError::InvalidInput);
         }
 
-        let ffi_attrs = input.attributes.iter()
+        let ffi_attrs = input
+            .attributes
+            .iter()
             .map(|a| a.to_ffi())
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -517,7 +531,11 @@ pub mod python {
             issuer_pkx: issuer_pkx.to_string(),
             issuer_pky: issuer_pky.to_string(),
             transcript: transcript.to_vec(),
-            attributes: vec![AttributeRequest::new(namespace, attr_id, cbor_value.to_vec())],
+            attributes: vec![AttributeRequest::new(
+                namespace,
+                attr_id,
+                cbor_value.to_vec(),
+            )],
             now: now.to_string(),
             doc_type: doc_type.to_string(),
         };

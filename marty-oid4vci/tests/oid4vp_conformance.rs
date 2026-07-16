@@ -4,9 +4,8 @@
 //! Presentations 1.0 Final specification, mirroring the OIDF conformance suite
 //! module names used in `test_oid4vp_verifier_conformance.py`.
 //!
-//! Fixture corpus is shared with the Python and Dart test suites:
-//!   `marty-integration-tests/tests/integration/fixtures/conformance/`
-//! Files are loaded at compile time via `include_str!`.
+//! The fixtures are copied into this crate so the tests remain hermetic in an
+//! isolated package checkout. Keep them aligned with the integration corpus.
 //!
 //! Run:
 //!   cargo test --test oid4vp_conformance                (from marty-oid4vci/)
@@ -50,17 +49,13 @@ const HOLDER_DID: &str = "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7
 
 // ── Static fixtures (shared corpus) ──────────────────────────────────────────
 
-const PRESENTATION_DEFINITION_JSON: &str = include_str!(
-    "../../../marty-integration-tests/tests/integration/fixtures/conformance/presentation_definition.json"
-);
-const PRESENTATION_SUBMISSION_JSON: &str = include_str!(
-    "../../../marty-integration-tests/tests/integration/fixtures/conformance/presentation_submission.json"
-);
+const PRESENTATION_DEFINITION_JSON: &str =
+    include_str!("fixtures/conformance/presentation_definition.json");
+const PRESENTATION_SUBMISSION_JSON: &str =
+    include_str!("fixtures/conformance/presentation_submission.json");
 /// Pre-signed VP JWT from the corpus.  Signed with `HOLDER_KEY_SEED`, `aud = VERIFIER_ID`,
 /// `nonce = NONCE`, `exp = 9999999999` (year ~2286 — will not expire for practical purposes).
-const STATIC_VP_TOKEN: &str = include_str!(
-    "../../../marty-integration-tests/tests/integration/fixtures/conformance/vp_token_jwt.txt"
-);
+const STATIC_VP_TOKEN: &str = include_str!("fixtures/conformance/vp_token_jwt.txt");
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -156,8 +151,16 @@ fn happy_path_vp_token_jwt() {
 
     let result = engine.verify_vp_token(&vp, NONCE);
 
-    assert!(result.valid, "expected valid VP, got errors: {:?}", result.errors);
-    assert!(result.errors.is_empty(), "no errors expected: {:?}", result.errors);
+    assert!(
+        result.valid,
+        "expected valid VP, got errors: {:?}",
+        result.errors
+    );
+    assert!(
+        result.errors.is_empty(),
+        "no errors expected: {:?}",
+        result.errors
+    );
     assert!(
         result.descriptor_results.iter().any(|r| r.valid),
         "at least one valid descriptor result expected"
@@ -188,14 +191,22 @@ fn static_fixture_vp_token_verifies() {
 #[test]
 fn invalid_nonce_rejected() {
     let sk = test_signing_key();
-    let vp = make_vp_jwt(&sk, "wrong-nonce-value-that-doesnt-match", VERIFIER_ID, 3600);
+    let vp = make_vp_jwt(
+        &sk,
+        "wrong-nonce-value-that-doesnt-match",
+        VERIFIER_ID,
+        3600,
+    );
     let engine = make_engine();
 
     let result = engine.verify_vp_token(&vp, NONCE);
 
     assert!(!result.valid, "VP with wrong nonce MUST be rejected");
     assert!(
-        result.errors.iter().any(|e| e.to_lowercase().contains("nonce")),
+        result
+            .errors
+            .iter()
+            .any(|e| e.to_lowercase().contains("nonce")),
         "error MUST mention 'nonce', got: {:?}",
         result.errors
     );
@@ -214,7 +225,10 @@ fn nonce_replay_detected() {
     let replay_nonce = "different-nonce-for-second-request";
     let result = engine.verify_vp_token(&vp, replay_nonce);
 
-    assert!(!result.valid, "replayed VP token with stale nonce MUST be rejected");
+    assert!(
+        !result.valid,
+        "replayed VP token with stale nonce MUST be rejected"
+    );
 }
 
 // ── §C  Signature Validation ──────────────────────────────────────────────────
@@ -254,7 +268,10 @@ fn expired_vp_token_rejected() {
 
     let result = engine.verify_vp_token(&vp, NONCE);
 
-    assert!(!result.valid, "expired VP JWT (exp 5 min ago) MUST be rejected");
+    assert!(
+        !result.valid,
+        "expired VP JWT (exp 5 min ago) MUST be rejected"
+    );
 }
 
 // ── §E  Audience Validation ───────────────────────────────────────────────────
@@ -271,7 +288,10 @@ fn audience_mismatch_rejected() {
 
     assert!(!result.valid, "VP with wrong `aud` MUST be rejected");
     assert!(
-        result.errors.iter().any(|e| e.to_lowercase().contains("aud")),
+        result
+            .errors
+            .iter()
+            .any(|e| e.to_lowercase().contains("aud")),
         "error MUST mention 'aud', got: {:?}",
         result.errors
     );
@@ -319,7 +339,10 @@ fn missing_holder_key_rejected() {
     let engine = make_engine();
     let result = engine.verify_vp_token(&vp, NONCE);
 
-    assert!(!result.valid, "VP without embedded holder public key MUST be rejected");
+    assert!(
+        !result.valid,
+        "VP without embedded holder public key MUST be rejected"
+    );
 }
 
 // ── §G  Presentation Structure (DIF PE v2) ────────────────────────────────────
@@ -340,7 +363,11 @@ fn presentation_definition_matching() {
         "matching PD/PS from shared fixtures MUST pass: {:?}",
         result.errors
     );
-    assert!(result.errors.is_empty(), "no errors expected: {:?}", result.errors);
+    assert!(
+        result.errors.is_empty(),
+        "no errors expected: {:?}",
+        result.errors
+    );
 }
 
 /// OIDF: VPVerifierFailOnPresentationDefinitionMismatch —
@@ -383,7 +410,10 @@ fn presentation_definition_missing_descriptor_rejected() {
 
     let result = engine.verify_presentation_structure(&pd, &ps);
 
-    assert!(!result.valid, "empty descriptor_map for required descriptor MUST fail");
+    assert!(
+        !result.valid,
+        "empty descriptor_map for required descriptor MUST fail"
+    );
     assert!(
         result.descriptor_results.iter().any(|r| !r.valid),
         "must have at least one failing descriptor result"
@@ -434,14 +464,20 @@ fn presentation_definition_format_mismatch_rejected() {
 fn malformed_vp_token_too_many_parts_rejected() {
     let engine = make_engine();
     let result = engine.verify_vp_token("not.a.proper.jwt.at.all", NONCE);
-    assert!(!result.valid, "malformed VP token (too many dots) MUST be rejected");
+    assert!(
+        !result.valid,
+        "malformed VP token (too many dots) MUST be rejected"
+    );
 }
 
 #[test]
 fn malformed_vp_token_single_part_rejected() {
     let engine = make_engine();
     let result = engine.verify_vp_token("justonepart", NONCE);
-    assert!(!result.valid, "single-part string MUST be rejected as invalid JWT");
+    assert!(
+        !result.valid,
+        "single-part string MUST be rejected as invalid JWT"
+    );
 }
 
 #[test]
@@ -485,7 +521,10 @@ fn verify_presentation_no_payload_returns_structural_result() {
     let structural = engine.verify_presentation_structure(&pd, &ps);
     let full = engine.verify_presentation(&pd, &ps, None);
 
-    assert_eq!(structural.valid, full.valid, "no-payload results must agree");
+    assert_eq!(
+        structural.valid, full.valid,
+        "no-payload results must agree"
+    );
     assert_eq!(
         structural.errors.len(),
         full.errors.len(),
@@ -613,7 +652,10 @@ fn verify_presentation_field_filter_not_satisfied_fails() {
 
     assert!(!result.valid, "unsatisfied filter MUST fail");
     assert!(
-        result.errors.iter().any(|e| e.contains("filter") || e.contains("const") || e.contains("contain")),
+        result
+            .errors
+            .iter()
+            .any(|e| e.contains("filter") || e.contains("const") || e.contains("contain")),
         "error must mention filter/const/contain: {:?}",
         result.errors
     );
@@ -658,7 +700,10 @@ fn verify_presentation_required_field_missing_fails() {
 
     assert!(!result.valid, "missing required field MUST fail");
     assert!(
-        result.errors.iter().any(|e| e.contains("passport_number") || e.contains("not found")),
+        result
+            .errors
+            .iter()
+            .any(|e| e.contains("passport_number") || e.contains("not found")),
         "error must mention the missing field or 'not found': {:?}",
         result.errors
     );
@@ -860,11 +905,26 @@ fn verify_presentation_multi_descriptor_one_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
-    assert!(!result.valid, "one failing descriptor MUST make result invalid");
-    let failing = result.descriptor_results.iter().filter(|r| !r.valid).count();
-    assert_eq!(failing, 1, "exactly one descriptor should fail; got: {:?}", result.descriptor_results);
+    assert!(
+        !result.valid,
+        "one failing descriptor MUST make result invalid"
+    );
+    let failing = result
+        .descriptor_results
+        .iter()
+        .filter(|r| !r.valid)
+        .count();
+    assert_eq!(
+        failing, 1,
+        "exactly one descriptor should fail; got: {:?}",
+        result.descriptor_results
+    );
     let passing = result.descriptor_results.iter().filter(|r| r.valid).count();
-    assert_eq!(passing, 1, "exactly one descriptor should pass; got: {:?}", result.descriptor_results);
+    assert_eq!(
+        passing, 1,
+        "exactly one descriptor should pass; got: {:?}",
+        result.descriptor_results
+    );
 }
 
 /// DIF PE v2 §5: `path_nested` navigation — the field constraint is evaluated
@@ -954,18 +1014,14 @@ fn verify_presentation_filter_minimum_satisfied() {
         }],
     };
 
-    let result_pass = engine.verify_presentation(
-        &pd,
-        &ps,
-        Some(&json!({ "age": 21 })),
+    let result_pass = engine.verify_presentation(&pd, &ps, Some(&json!({ "age": 21 })));
+    assert!(
+        result_pass.valid,
+        "age 21 >= minimum 18 MUST pass: {:?}",
+        result_pass.errors
     );
-    assert!(result_pass.valid, "age 21 >= minimum 18 MUST pass: {:?}", result_pass.errors);
 
-    let result_fail = engine.verify_presentation(
-        &pd,
-        &ps,
-        Some(&json!({ "age": 16 })),
-    );
+    let result_fail = engine.verify_presentation(&pd, &ps, Some(&json!({ "age": 16 })));
     assert!(!result_fail.valid, "age 16 < minimum 18 MUST fail");
 }
 

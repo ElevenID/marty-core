@@ -133,7 +133,13 @@ impl BbsKeyPair {
     /// Each message is an arbitrary byte vector. The signature covers all
     /// messages jointly — selective disclosure happens at proof generation time.
     pub fn sign(&self, messages: &[Vec<u8>], header: &[u8]) -> CryptoResult<Vec<u8>> {
-        bbs_sign(&self.secret_key, &self.public_key, messages, header, self.ciphersuite)
+        bbs_sign(
+            &self.secret_key,
+            &self.public_key,
+            messages,
+            header,
+            self.ciphersuite,
+        )
     }
 
     /// Get the verifying (public) key.
@@ -167,8 +173,19 @@ impl BbsVerifyingKey {
     }
 
     /// Verify a BBS+ signature over multiple messages.
-    pub fn verify(&self, messages: &[Vec<u8>], header: &[u8], signature: &[u8]) -> CryptoResult<()> {
-        bbs_verify(&self.public_key, messages, header, signature, self.ciphersuite)
+    pub fn verify(
+        &self,
+        messages: &[Vec<u8>],
+        header: &[u8],
+        signature: &[u8],
+    ) -> CryptoResult<()> {
+        bbs_verify(
+            &self.public_key,
+            messages,
+            header,
+            signature,
+            self.ciphersuite,
+        )
     }
 
     /// Verify a selective disclosure proof.
@@ -229,8 +246,9 @@ pub fn bbs_sign(
             Ok(sig.to_bytes().to_vec())
         }
         BbsCiphersuite::Bls12381Shake256 => {
-            let sig = Signature::<BbsBls12381Shake256>::sign(Some(messages), &sk, &pk, Some(header))
-                .map_err(|e| CryptoError::internal(format!("BBS+ sign failed: {:?}", e)))?;
+            let sig =
+                Signature::<BbsBls12381Shake256>::sign(Some(messages), &sk, &pk, Some(header))
+                    .map_err(|e| CryptoError::internal(format!("BBS+ sign failed: {:?}", e)))?;
             Ok(sig.to_bytes().to_vec())
         }
     }
@@ -382,7 +400,8 @@ mod tests {
     #[test]
     fn test_sign_verify_roundtrip_sha256() {
         let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Sha256).unwrap();
-        let messages: Vec<Vec<u8>> = vec![b"claim1".to_vec(), b"claim2".to_vec(), b"claim3".to_vec()];
+        let messages: Vec<Vec<u8>> =
+            vec![b"claim1".to_vec(), b"claim2".to_vec(), b"claim3".to_vec()];
         let header = b"test-header";
 
         let sig = kp.sign(&messages, header).unwrap();
@@ -466,7 +485,13 @@ mod tests {
 
         let disclosed_msgs = vec![b"given_name:Bob".to_vec(), b"country:DE".to_vec()];
         kp.verifying_key()
-            .verify_proof(&proof, &disclosed_msgs, &[0, 3], header, presentation_header)
+            .verify_proof(
+                &proof,
+                &disclosed_msgs,
+                &[0, 3],
+                header,
+                presentation_header,
+            )
             .unwrap();
     }
 
@@ -505,7 +530,9 @@ mod tests {
 
         // Try to verify with wrong disclosed message
         let wrong_disclosed = vec![b"WRONG".to_vec()];
-        let result = kp.verifying_key().verify_proof(&proof, &wrong_disclosed, &[0], header, ph);
+        let result = kp
+            .verifying_key()
+            .verify_proof(&proof, &wrong_disclosed, &[0], header, ph);
         assert!(result.is_err());
     }
 }

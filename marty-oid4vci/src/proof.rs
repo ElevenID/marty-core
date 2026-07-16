@@ -96,20 +96,22 @@ pub fn verify_jwt_proof(
         ));
     }
 
-    let header_bytes = B64
-        .decode(parts[0])
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid header base64: {}", e)))?;
-    let payload_bytes = B64
-        .decode(parts[1])
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid payload base64: {}", e)))?;
-    let signature_bytes = B64
-        .decode(parts[2])
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid signature base64: {}", e)))?;
+    let header_bytes = B64.decode(parts[0]).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid header base64: {}", e))
+    })?;
+    let payload_bytes = B64.decode(parts[1]).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid payload base64: {}", e))
+    })?;
+    let signature_bytes = B64.decode(parts[2]).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid signature base64: {}", e))
+    })?;
 
-    let header: ProofHeader = serde_json::from_slice(&header_bytes)
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid header JSON: {}", e)))?;
-    let payload: ProofPayload = serde_json::from_slice(&payload_bytes)
-        .map_err(|e| Oid4vciError::ProofVerificationFailed(format!("Invalid payload JSON: {}", e)))?;
+    let header: ProofHeader = serde_json::from_slice(&header_bytes).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid header JSON: {}", e))
+    })?;
+    let payload: ProofPayload = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid payload JSON: {}", e))
+    })?;
 
     // Step 2: Validate typ header
     if let Some(typ) = &header.typ {
@@ -213,14 +215,11 @@ fn base58btc_decode(input: &str) -> Oid4vciResult<Vec<u8>> {
     let n_leading = input.bytes().take_while(|&b| b == b'1').count();
     let mut result: Vec<u8> = Vec::new();
     for &c in input.as_bytes() {
-        let digit = ALPHA
-            .iter()
-            .position(|&a| a == c)
-            .ok_or_else(|| {
-                Oid4vciError::ProofVerificationFailed(
-                    format!("Invalid base58btc character 0x{c:02x} in did:key"),
-                )
-            })? as u32;
+        let digit = ALPHA.iter().position(|&a| a == c).ok_or_else(|| {
+            Oid4vciError::ProofVerificationFailed(format!(
+                "Invalid base58btc character 0x{c:02x} in did:key"
+            ))
+        })? as u32;
         let mut carry = digit;
         for byte in result.iter_mut() {
             carry += 58 * (*byte as u32);
@@ -380,10 +379,7 @@ fn verify_signature(
     public_key
         .verify(alg_instance, message.as_bytes(), signature)
         .map_err(|e| {
-            Oid4vciError::ProofVerificationFailed(format!(
-                "Signature verification failed: {:?}",
-                e
-            ))
+            Oid4vciError::ProofVerificationFailed(format!("Signature verification failed: {:?}", e))
         })?;
 
     Ok(())
@@ -406,11 +402,9 @@ fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::PublicKey> {
                 .ok_or_else(|| Oid4vciError::KeyError("Missing EC y coordinate".into()))?;
 
             match params.curve.as_deref() {
-                Some("P-256") => {
-                    ssi::crypto::PublicKey::new_p256(&x.0, &y.0).map_err(|e| {
-                        Oid4vciError::KeyError(format!("Invalid P-256 public key: {:?}", e))
-                    })
-                }
+                Some("P-256") => ssi::crypto::PublicKey::new_p256(&x.0, &y.0).map_err(|e| {
+                    Oid4vciError::KeyError(format!("Invalid P-256 public key: {:?}", e))
+                }),
                 Some("secp256k1") => {
                     ssi::crypto::PublicKey::new_secp256k1(&x.0, &y.0).map_err(|e| {
                         Oid4vciError::KeyError(format!("Invalid secp256k1 public key: {:?}", e))
@@ -420,9 +414,7 @@ fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::PublicKey> {
                     "Unsupported EC curve for proof verification: {}",
                     curve
                 ))),
-                None => Err(Oid4vciError::KeyError(
-                    "Missing curve in EC JWK".into(),
-                )),
+                None => Err(Oid4vciError::KeyError("Missing curve in EC JWK".into())),
             }
         }
         _ => Err(Oid4vciError::KeyError(

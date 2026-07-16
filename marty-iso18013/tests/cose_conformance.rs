@@ -10,15 +10,8 @@
 //! Uses the `coset` crate which is a dependency of marty-iso18013.
 
 use coset::{
-    cbor::Value,
-    iana,
-    CoseSign1, CoseSign1Builder,
-    CoseMac0, CoseMac0Builder,
-    Header, HeaderBuilder,
-    Label,
-    RegisteredLabel,
-    TaggedCborSerializable,
-    CborSerializable,
+    cbor::Value, iana, CborSerializable, CoseMac0, CoseMac0Builder, CoseSign1, CoseSign1Builder,
+    Header, HeaderBuilder, Label, RegisteredLabel, TaggedCborSerializable,
 };
 
 // ── COSE_Sign1 tests ─────────────────────────────────────────────────────────
@@ -47,7 +40,12 @@ fn cose_sign1_structure_has_four_components() {
     // Payload is preserved
     assert_eq!(decoded.payload, Some(payload));
     // Protected header algorithm is preserved
-    let alg = decoded.protected.header.alg.as_ref().expect("algorithm header");
+    let alg = decoded
+        .protected
+        .header
+        .alg
+        .as_ref()
+        .expect("algorithm header");
     assert_eq!(*alg, coset::Algorithm::Assigned(iana::Algorithm::ES256));
 }
 
@@ -114,7 +112,10 @@ fn cose_sign1_nil_payload_detached_content() {
     let bytes = cose.to_vec().unwrap();
     let decoded = CoseSign1::from_slice(&bytes).unwrap();
 
-    assert!(decoded.payload.is_none(), "Detached COSE_Sign1 should have nil payload");
+    assert!(
+        decoded.payload.is_none(),
+        "Detached COSE_Sign1 should have nil payload"
+    );
 }
 
 /// Key ID header parameter (label 4) is preserved.
@@ -205,7 +206,14 @@ fn cose_sign1_custom_header_parameter_preserved() {
     let decoded = CoseSign1::from_slice(&bytes).unwrap();
 
     // x5chain label 33 should be in rest
-    let x5chain = decoded.protected.header.rest.iter()
+    let x5chain = decoded
+        .protected
+        .header
+        .rest
+        .iter()
         .find(|(k, _)| *k == Label::Int(33));
-    assert!(x5chain.is_some(), "x5chain header parameter should be preserved");
+    assert!(
+        x5chain.is_some(),
+        "x5chain header parameter should be preserved"
+    );
 }

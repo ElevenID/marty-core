@@ -214,10 +214,7 @@ pub struct VerificationEngine {
 }
 
 impl VerificationEngine {
-    pub fn new(
-        verifier_id: impl Into<String>,
-        response_uri: impl Into<String>,
-    ) -> Self {
+    pub fn new(verifier_id: impl Into<String>, response_uri: impl Into<String>) -> Self {
         Self {
             verifier_id: verifier_id.into(),
             response_uri: response_uri.into(),
@@ -352,8 +349,7 @@ impl VerificationEngine {
         let mut nonce_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-        let nonce_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(&nonce_bytes);
+        let nonce_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
 
         let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -469,8 +465,7 @@ impl VerificationEngine {
             };
         }
 
-        let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(parts[1])
+        let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1])
         {
             Ok(b) => b,
             Err(e) => {
@@ -496,10 +491,7 @@ impl VerificationEngine {
         };
 
         // ── Step 3: Validate nonce ────────────────────────────────────
-        let token_nonce = payload
-            .get("nonce")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let token_nonce = payload.get("nonce").and_then(|v| v.as_str()).unwrap_or("");
         if token_nonce != expected_nonce {
             return VerificationResult {
                 valid: false,
@@ -759,12 +751,9 @@ impl VerificationEngine {
             };
 
             // Navigate to the credential document using path + path_nested.
-            let root_doc = Self::json_path_get(payload, &map_entry.path)
-                .unwrap_or(payload);
+            let root_doc = Self::json_path_get(payload, &map_entry.path).unwrap_or(payload);
             let credential_doc = match &map_entry.path_nested {
-                Some(nested) => {
-                    Self::json_path_get(root_doc, &nested.path).unwrap_or(root_doc)
-                }
+                Some(nested) => Self::json_path_get(root_doc, &nested.path).unwrap_or(root_doc),
                 None => root_doc,
             };
 
@@ -954,9 +943,7 @@ impl VerificationEngine {
 
         if let Some(expected) = obj.get("const") {
             if value != expected {
-                return Err(format!(
-                    "const mismatch: expected {expected}, got {value}"
-                ));
+                return Err(format!("const mismatch: expected {expected}, got {value}"));
             }
         }
 
@@ -1227,8 +1214,7 @@ mod tests {
         let result = engine.verify_vp_token("not.a.jwt.at.all", "nonce");
         assert!(!result.valid);
         assert!(
-            result.errors[0].contains("header parse error")
-                || result.errors[0].contains("3 parts")
+            result.errors[0].contains("header parse error") || result.errors[0].contains("3 parts")
         );
     }
 
@@ -1281,12 +1267,8 @@ mod tests {
     #[test]
     fn test_presentation_definition_serialization() {
         let engine = test_engine();
-        let desc = engine.zk_predicate_descriptor(
-            "age_check",
-            "$.birth_date",
-            "age_over_18",
-            "nonce123",
-        );
+        let desc =
+            engine.zk_predicate_descriptor("age_check", "$.birth_date", "age_over_18", "nonce123");
         let pd = engine
             .create_presentation_definition("pd_1", vec![desc])
             .unwrap();

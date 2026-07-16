@@ -79,8 +79,9 @@ pub fn negotiate_format(
         }
     } else {
         // Default to the first supported format
-        supported.first().cloned().ok_or_else(|| {
-            Oid4vciError::ConfigError("No credential formats configured".into())
-        })
+        supported
+            .first()
+            .cloned()
+            .ok_or_else(|| Oid4vciError::ConfigError("No credential formats configured".into()))
     }
 }

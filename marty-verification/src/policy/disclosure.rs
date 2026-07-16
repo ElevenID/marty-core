@@ -21,7 +21,7 @@ impl MinimumDisclosureResolver {
     }
 
     /// Compute minimum disclosure set from available credential claims.
-    /// 
+    ///
     /// Returns the smallest set of claims that satisfies policy requirements,
     /// preferring derived attributes over raw values when configured.
     pub fn resolve(&self, available_claims: &[String]) -> MinimumDisclosureSet {
@@ -182,10 +182,7 @@ mod tests {
 
     #[test]
     fn test_resolve_missing_required() {
-        let policy = make_policy(
-            vec![required("name"), required("ssn")],
-            HashMap::new(),
-        );
+        let policy = make_policy(vec![required("name"), required("ssn")], HashMap::new());
         let resolver = MinimumDisclosureResolver::new(&policy);
         let available = vec!["name".to_string()];
         let result = resolver.resolve(&available);
@@ -201,10 +198,7 @@ mod tests {
         let policy = make_policy(vec![required("birth_date")], derived);
         let resolver = MinimumDisclosureResolver::new(&policy);
 
-        let available = vec![
-            "birth_date".to_string(),
-            "age_over_21".to_string(),
-        ];
+        let available = vec!["birth_date".to_string(), "age_over_21".to_string()];
         let result = resolver.resolve(&available);
         assert!(result.is_complete());
         // Should pick derived over raw
@@ -252,10 +246,7 @@ mod tests {
 
     #[test]
     fn test_preferred_disclosure_include_optional() {
-        let policy = make_policy(
-            vec![required("name")],
-            HashMap::new(),
-        );
+        let policy = make_policy(vec![required("name")], HashMap::new());
         let resolver = MinimumDisclosureResolver::new(&policy);
 
         let available = vec!["name".to_string(), "address".to_string()];
@@ -272,10 +263,7 @@ mod tests {
         let policy = make_policy(vec![required("birth_date")], derived);
         let resolver = MinimumDisclosureResolver::new(&policy);
 
-        let available = vec![
-            "birth_date".to_string(),
-            "age_over_18".to_string(),
-        ];
+        let available = vec!["birth_date".to_string(), "age_over_18".to_string()];
         let result = resolver.get_preferred_disclosure(&available, false);
         assert!(result.contains(&"age_over_18".to_string()));
     }

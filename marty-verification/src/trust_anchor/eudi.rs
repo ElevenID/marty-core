@@ -7,8 +7,8 @@
 //! - Qualified Trust Service Providers (QTSPs)
 //! - 27 EU Member States
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use x509_cert::Certificate;
 
 use super::registry::{BasicTrustRegistry, TrustAnchor, TrustPurpose, TrustRegistry};
@@ -163,15 +163,33 @@ impl EuMemberState {
     /// Get all member states.
     pub fn all() -> Vec<Self> {
         vec![
-            EuMemberState::AT, EuMemberState::BE, EuMemberState::BG,
-            EuMemberState::HR, EuMemberState::CY, EuMemberState::CZ,
-            EuMemberState::DK, EuMemberState::EE, EuMemberState::FI,
-            EuMemberState::FR, EuMemberState::DE, EuMemberState::GR,
-            EuMemberState::HU, EuMemberState::IE, EuMemberState::IT,
-            EuMemberState::LV, EuMemberState::LT, EuMemberState::LU,
-            EuMemberState::MT, EuMemberState::NL, EuMemberState::PL,
-            EuMemberState::PT, EuMemberState::RO, EuMemberState::SK,
-            EuMemberState::SI, EuMemberState::ES, EuMemberState::SE,
+            EuMemberState::AT,
+            EuMemberState::BE,
+            EuMemberState::BG,
+            EuMemberState::HR,
+            EuMemberState::CY,
+            EuMemberState::CZ,
+            EuMemberState::DK,
+            EuMemberState::EE,
+            EuMemberState::FI,
+            EuMemberState::FR,
+            EuMemberState::DE,
+            EuMemberState::GR,
+            EuMemberState::HU,
+            EuMemberState::IE,
+            EuMemberState::IT,
+            EuMemberState::LV,
+            EuMemberState::LT,
+            EuMemberState::LU,
+            EuMemberState::MT,
+            EuMemberState::NL,
+            EuMemberState::PL,
+            EuMemberState::PT,
+            EuMemberState::RO,
+            EuMemberState::SK,
+            EuMemberState::SI,
+            EuMemberState::ES,
+            EuMemberState::SE,
         ]
     }
 }
@@ -248,7 +266,7 @@ impl EudiRegistry {
 
         let index = self.inner.get_anchors().len();
         self.inner.add_anchor(anchor).ok();
-        
+
         self.member_state_index
             .entry(member_state.code().to_string())
             .or_insert_with(Vec::new)
@@ -299,7 +317,10 @@ impl EudiRegistry {
     }
 
     /// Get QTSPs for a specific member state.
-    pub fn get_qtsps_by_member_state(&self, member_state: EuMemberState) -> Vec<&TrustServiceProvider> {
+    pub fn get_qtsps_by_member_state(
+        &self,
+        member_state: EuMemberState,
+    ) -> Vec<&TrustServiceProvider> {
         self.qtsp_cache
             .values()
             .filter(|qtsp| qtsp.member_state == member_state)
@@ -328,11 +349,7 @@ impl TrustRegistry for EudiRegistry {
         self.inner.get_anchors_by_jurisdiction(jurisdiction)
     }
 
-    fn find_issuer(
-        &self,
-        subject: &Certificate,
-        purpose: TrustPurpose,
-    ) -> Option<&TrustAnchor> {
+    fn find_issuer(&self, subject: &Certificate, purpose: TrustPurpose) -> Option<&TrustAnchor> {
         self.inner.find_issuer(subject, purpose)
     }
 

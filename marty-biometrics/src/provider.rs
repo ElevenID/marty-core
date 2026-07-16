@@ -561,9 +561,7 @@ mod tests {
         #[tokio::test]
         async fn test_local_provider_verify_not_supported() {
             let provider = LocalProvider::new().unwrap();
-            let result = provider
-                .verify(FaceVerificationRequest::default())
-                .await;
+            let result = provider.verify(FaceVerificationRequest::default()).await;
             assert!(result.is_err());
         }
 

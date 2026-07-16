@@ -15,15 +15,11 @@ impl IssuerConstraintChecker {
     }
 
     /// Check if an issuer is trusted according to policy constraints.
-    /// 
+    ///
     /// # Arguments
     /// * `issuer_id` - DID, certificate DN, or other issuer identifier
     /// * `trust_profile_verified` - Whether issuer was verified against trust profile
-    pub fn check_issuer(
-        &self,
-        issuer_id: &str,
-        trust_profile_verified: bool,
-    ) -> IssuerCheckResult {
+    pub fn check_issuer(&self, issuer_id: &str, trust_profile_verified: bool) -> IssuerCheckResult {
         // If explicit allowlist exists, issuer must be in it
         if !self.allowed_issuers.is_empty() {
             if !self.allowed_issuers.contains(&issuer_id.to_string()) {

@@ -253,13 +253,25 @@ impl MetadataBuilder {
             credential_endpoint: format!("{}/credential", issuer),
             token_endpoint: format!("{}/token", issuer),
             nonce_endpoint: self.nonce_endpoint.as_ref().map(|e| {
-                if e.starts_with("http") { e.clone() } else { format!("{}{}", issuer, e) }
+                if e.starts_with("http") {
+                    e.clone()
+                } else {
+                    format!("{}{}", issuer, e)
+                }
             }),
             deferred_credential_endpoint: self.deferred_credential_endpoint.as_ref().map(|e| {
-                if e.starts_with("http") { e.clone() } else { format!("{}{}", issuer, e) }
+                if e.starts_with("http") {
+                    e.clone()
+                } else {
+                    format!("{}{}", issuer, e)
+                }
             }),
             notification_endpoint: self.notification_endpoint.as_ref().map(|e| {
-                if e.starts_with("http") { e.clone() } else { format!("{}{}", issuer, e) }
+                if e.starts_with("http") {
+                    e.clone()
+                } else {
+                    format!("{}{}", issuer, e)
+                }
             }),
             authorization_endpoint: self.authorization_endpoint.as_ref().map(|e| {
                 if e.starts_with("http") {
@@ -608,9 +620,24 @@ mod tests {
             vct: None,
             doctype: Some("org.iso.18013.5.1.mDL".into()),
             claims: [
-                ("name".into(), ClaimDefinition { mandatory: false, value_type: Some("string".into()), display: None }),
-                ("email".into(), ClaimDefinition { mandatory: false, value_type: Some("string".into()), display: None }),
-            ].into(),
+                (
+                    "name".into(),
+                    ClaimDefinition {
+                        mandatory: false,
+                        value_type: Some("string".into()),
+                        display: None,
+                    },
+                ),
+                (
+                    "email".into(),
+                    ClaimDefinition {
+                        mandatory: false,
+                        value_type: Some("string".into()),
+                        display: None,
+                    },
+                ),
+            ]
+            .into(),
             display: None,
         };
 
@@ -682,12 +709,8 @@ mod tests {
             display: None,
         }];
 
-        let json_str = generate_issuer_metadata(
-            "https://issuer.example.com",
-            "Acme Corp",
-            &types,
-        )
-        .unwrap();
+        let json_str =
+            generate_issuer_metadata("https://issuer.example.com", "Acme Corp", &types).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["credential_issuer"], "https://issuer.example.com");
@@ -706,9 +729,15 @@ mod tests {
             vc_types: vec![],
             vct: Some("https://example.com/credentials/conformance".into()),
             doctype: None,
-            claims: [
-                ("name".into(), ClaimDefinition { mandatory: true, value_type: Some("string".into()), display: None }),
-            ].into(),
+            claims: [(
+                "name".into(),
+                ClaimDefinition {
+                    mandatory: true,
+                    value_type: Some("string".into()),
+                    display: None,
+                },
+            )]
+            .into(),
             display: None,
         };
 
@@ -724,8 +753,14 @@ mod tests {
             "SD-JWT VC format identifier MUST be 'dc+sd-jwt' per OID4VCI 1.0 Final Appendix A"
         );
         // MUST NOT be the old draft identifier
-        assert_ne!(sd_jwt_config.format, "vc+sd-jwt", "Draft identifier 'vc+sd-jwt' is not allowed in Final");
-        assert_ne!(sd_jwt_config.format, "spruce-vc+sd-jwt", "SpruceID alias must not appear in conformant metadata");
+        assert_ne!(
+            sd_jwt_config.format, "vc+sd-jwt",
+            "Draft identifier 'vc+sd-jwt' is not allowed in Final"
+        );
+        assert_ne!(
+            sd_jwt_config.format, "spruce-vc+sd-jwt",
+            "SpruceID alias must not appear in conformant metadata"
+        );
 
         // vct MUST be preserved
         assert_eq!(
@@ -744,9 +779,10 @@ mod tests {
             .deferred_credential_endpoint("/v1/issuance/deferred-credential")
             .build();
 
-        let deferred = meta.deferred_credential_endpoint.as_deref().expect(
-            "deferred_credential_endpoint MUST be present when configured",
-        );
+        let deferred = meta
+            .deferred_credential_endpoint
+            .as_deref()
+            .expect("deferred_credential_endpoint MUST be present when configured");
         assert_eq!(
             deferred,
             "https://issuer.example.com/v1/issuance/deferred-credential"
@@ -767,9 +803,10 @@ mod tests {
             .notification_endpoint("/v1/issuance/notification")
             .build();
 
-        let notif = meta.notification_endpoint.as_deref().expect(
-            "notification_endpoint MUST be present when configured",
-        );
+        let notif = meta
+            .notification_endpoint
+            .as_deref()
+            .expect("notification_endpoint MUST be present when configured");
         assert_eq!(notif, "https://issuer.example.com/v1/issuance/notification");
 
         let json = serde_json::to_string(&meta).unwrap();

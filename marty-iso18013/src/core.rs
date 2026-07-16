@@ -43,16 +43,16 @@ pub enum EngagementMethod {
 pub struct DeviceEngagement {
     /// Protocol version (currently "1.0")
     pub version: String,
-    
+
     /// Available transport methods and their parameters
     pub transports: Vec<TransportInfo>,
-    
+
     /// Engagement method used
     pub engagement_method: EngagementMethod,
-    
+
     /// Device public key for ECDH (P-256 uncompressed point)
     pub device_key: Vec<u8>,
-    
+
     /// Optional device-specific data
     pub device_data: Option<HashMap<String, Vec<u8>>>,
 }
@@ -62,7 +62,7 @@ pub struct DeviceEngagement {
 pub struct TransportInfo {
     /// Transport method type
     pub method: TransportMethod,
-    
+
     /// Transport-specific parameters (e.g., BLE UUID, IP address)
     pub parameters: HashMap<String, Vec<u8>>,
 }
@@ -71,7 +71,7 @@ impl DeviceEngagement {
     /// Create a new device engagement for QR code presentation
     pub fn new_qr() -> Result<Self> {
         let device_key = Self::generate_device_key()?;
-        
+
         Ok(Self {
             version: "1.0".to_string(),
             transports: Vec::new(),
@@ -85,12 +85,12 @@ impl DeviceEngagement {
     pub fn add_ble_transport(&mut self, service_uuid: &str) -> Result<()> {
         let mut params = HashMap::new();
         params.insert("serviceUuid".to_string(), service_uuid.as_bytes().to_vec());
-        
+
         self.transports.push(TransportInfo {
             method: TransportMethod::BLE,
             parameters: params,
         });
-        
+
         Ok(())
     }
 
@@ -98,19 +98,19 @@ impl DeviceEngagement {
     pub fn add_https_transport(&mut self, url: &str) -> Result<()> {
         let mut params = HashMap::new();
         params.insert("url".to_string(), url.as_bytes().to_vec());
-        
+
         self.transports.push(TransportInfo {
             method: TransportMethod::HTTPS,
             parameters: params,
         });
-        
+
         Ok(())
     }
 
     /// Generate a new ephemeral device key (P-256)
     fn generate_device_key() -> Result<Vec<u8>> {
         use marty_crypto::ecdh::P256KeyPair;
-        
+
         let key_pair = P256KeyPair::generate();
         Ok(key_pair.public_key_uncompressed())
     }
@@ -124,24 +124,26 @@ impl DeviceEngagement {
 
     /// Decode device engagement from CBOR
     pub fn from_cbor(data: &[u8]) -> Result<Self> {
-        ciborium::de::from_reader(data)
-            .map_err(|e| Error::CborDecode(e))
+        ciborium::de::from_reader(data).map_err(|e| Error::CborDecode(e))
     }
 
     /// Generate a QR code containing the device engagement
     pub fn to_qr_code(&self) -> Result<Vec<u8>> {
-        use qrcode::QrCode;
         use image::Luma;
-        
+        use qrcode::QrCode;
+
         let cbor_data = self.to_cbor()?;
-        let code = QrCode::new(cbor_data)
-            .map_err(|e| Error::QrCode(e.to_string()))?;
-        
+        let code = QrCode::new(cbor_data).map_err(|e| Error::QrCode(e.to_string()))?;
+
         let image = code.render::<Luma<u8>>().build();
         let mut buffer = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Png)
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut buffer),
+                image::ImageFormat::Png,
+            )
             .map_err(|e| Error::QrCode(e.to_string()))?;
-        
+
         Ok(buffer)
     }
 }
@@ -187,9 +189,13 @@ mod tests {
     #[test]
     fn test_add_transports() {
         let mut engagement = DeviceEngagement::new_qr().unwrap();
-        engagement.add_ble_transport("0000FFF0-0000-1000-8000-00805F9B34FB").unwrap();
-        engagement.add_https_transport("https://example.com/mdl").unwrap();
-        
+        engagement
+            .add_ble_transport("0000FFF0-0000-1000-8000-00805F9B34FB")
+            .unwrap();
+        engagement
+            .add_https_transport("https://example.com/mdl")
+            .unwrap();
+
         assert_eq!(engagement.transports.len(), 2);
         assert_eq!(engagement.transports[0].method, TransportMethod::BLE);
         assert_eq!(engagement.transports[1].method, TransportMethod::HTTPS);
@@ -200,7 +206,7 @@ mod tests {
         let engagement = DeviceEngagement::new_qr().unwrap();
         let cbor = engagement.to_cbor().unwrap();
         let decoded = DeviceEngagement::from_cbor(&cbor).unwrap();
-        
+
         assert_eq!(engagement.version, decoded.version);
         assert_eq!(engagement.device_key, decoded.device_key);
     }

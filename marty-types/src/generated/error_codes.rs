@@ -50,12 +50,10 @@ impl ErrorCode {
 pub mod codes {
     use super::*;
 
-    
     /// Credential operations
     pub mod cred {
         use super::*;
 
-        
         /// Failed to issue credential
         pub fn issuance_failed() -> ErrorCode {
             ErrorCode {
@@ -66,7 +64,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Credential verification failed
         pub fn verification_failed() -> ErrorCode {
             ErrorCode {
@@ -77,7 +75,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Failed to check revocation status
         pub fn revocation_check_failed() -> ErrorCode {
             ErrorCode {
@@ -88,7 +86,7 @@ pub mod codes {
                 severity: ErrorSeverity::Warning,
             }
         }
-        
+
         /// Invalid credential format
         pub fn invalid_format() -> ErrorCode {
             ErrorCode {
@@ -99,7 +97,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Credential has expired
         pub fn expired() -> ErrorCode {
             ErrorCode {
@@ -110,7 +108,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Credential is not yet valid
         pub fn not_yet_valid() -> ErrorCode {
             ErrorCode {
@@ -121,7 +119,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Failed to parse credential
         pub fn parse_error() -> ErrorCode {
             ErrorCode {
@@ -132,14 +130,12 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
     }
-    
+
     /// Key management operations
     pub mod key {
         use super::*;
 
-        
         /// Key not found
         pub fn not_found() -> ErrorCode {
             ErrorCode {
@@ -150,7 +146,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Failed to generate key
         pub fn generation_failed() -> ErrorCode {
             ErrorCode {
@@ -161,7 +157,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Invalid key format or parameters
         pub fn invalid_key() -> ErrorCode {
             ErrorCode {
@@ -172,7 +168,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Failed to store key
         pub fn storage_failed() -> ErrorCode {
             ErrorCode {
@@ -183,7 +179,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Key access denied
         pub fn access_denied() -> ErrorCode {
             ErrorCode {
@@ -194,14 +190,12 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
     }
-    
+
     /// Cryptographic operations
     pub mod crypto {
         use super::*;
 
-        
         /// Invalid signature
         pub fn signature_invalid() -> ErrorCode {
             ErrorCode {
@@ -212,7 +206,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Encryption failed
         pub fn encryption_failed() -> ErrorCode {
             ErrorCode {
@@ -223,7 +217,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Decryption failed
         pub fn decryption_failed() -> ErrorCode {
             ErrorCode {
@@ -234,7 +228,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Hash computation failed
         pub fn hash_failed() -> ErrorCode {
             ErrorCode {
@@ -245,7 +239,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Unsupported or invalid algorithm
         pub fn invalid_algorithm() -> ErrorCode {
             ErrorCode {
@@ -256,14 +250,12 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
     }
-    
+
     /// ISO 18013-5 session operations
     pub mod session {
         use super::*;
 
-        
         /// Failed to establish secure session
         pub fn establishment_failed() -> ErrorCode {
             ErrorCode {
@@ -274,7 +266,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Invalid session state
         pub fn invalid_state() -> ErrorCode {
             ErrorCode {
@@ -285,7 +277,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Session timeout
         pub fn timeout() -> ErrorCode {
             ErrorCode {
@@ -296,7 +288,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Session terminated
         pub fn terminated() -> ErrorCode {
             ErrorCode {
@@ -307,7 +299,7 @@ pub mod codes {
                 severity: ErrorSeverity::Info,
             }
         }
-        
+
         /// Session encryption error
         pub fn encryption_error() -> ErrorCode {
             ErrorCode {
@@ -318,14 +310,12 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
     }
-    
+
     /// Transport layer operations
     pub mod transport {
         use super::*;
 
-        
         /// Transport connection failed
         pub fn connection_failed() -> ErrorCode {
             ErrorCode {
@@ -336,7 +326,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Transport disconnected
         pub fn disconnected() -> ErrorCode {
             ErrorCode {
@@ -347,7 +337,7 @@ pub mod codes {
                 severity: ErrorSeverity::Warning,
             }
         }
-        
+
         /// Failed to send data
         pub fn send_failed() -> ErrorCode {
             ErrorCode {
@@ -358,7 +348,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Failed to receive data
         pub fn receive_failed() -> ErrorCode {
             ErrorCode {
@@ -369,7 +359,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Transport not supported
         pub fn unsupported() -> ErrorCode {
             ErrorCode {
@@ -380,7 +370,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Bluetooth Low Energy error
         pub fn ble_error() -> ErrorCode {
             ErrorCode {
@@ -391,7 +381,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Near Field Communication error
         pub fn nfc_error() -> ErrorCode {
             ErrorCode {
@@ -402,14 +392,12 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
     }
-    
+
     /// Trust chain validation
     pub mod trust {
         use super::*;
 
-        
         /// Trust chain validation failed
         pub fn chain_invalid() -> ErrorCode {
             ErrorCode {
@@ -420,7 +408,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Trust anchor not found
         pub fn anchor_not_found() -> ErrorCode {
             ErrorCode {
@@ -431,7 +419,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Certificate has expired
         pub fn certificate_expired() -> ErrorCode {
             ErrorCode {
@@ -442,7 +430,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Certificate has been revoked
         pub fn certificate_revoked() -> ErrorCode {
             ErrorCode {
@@ -453,7 +441,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
+
         /// Failed to build certification path
         pub fn path_build_failed() -> ErrorCode {
             ErrorCode {
@@ -464,9 +452,7 @@ pub mod codes {
                 severity: ErrorSeverity::Error,
             }
         }
-        
     }
-    
 }
 
 #[cfg(feature = "python")]

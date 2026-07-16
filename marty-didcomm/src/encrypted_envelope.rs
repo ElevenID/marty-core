@@ -32,7 +32,8 @@ use crate::error::{DidcommError, DidcommResult};
 use crate::types::DidDocument;
 
 /// JWE protected header for DIDComm v2 anoncrypt.
-const PROTECTED_HEADER: &str = r#"{"alg":"ECDH-ES+A256KW","enc":"A256GCM","typ":"application/didcomm-encrypted+json"}"#;
+const PROTECTED_HEADER: &str =
+    r#"{"alg":"ECDH-ES+A256KW","enc":"A256GCM","typ":"application/didcomm-encrypted+json"}"#;
 
 /// Encrypt a DIDComm v2 plaintext message using the recipient's DID Document.
 ///
@@ -46,11 +47,11 @@ pub fn encrypt_for_recipient(
     recipient_did_doc: &DidDocument,
 ) -> DidcommResult<String> {
     // Extract recipient's X25519 public key
-    let recipient_key_bytes = recipient_did_doc
-        .x25519_key_agreement()
-        .ok_or_else(|| DidcommError::NoKeyAgreementKey {
+    let recipient_key_bytes = recipient_did_doc.x25519_key_agreement().ok_or_else(|| {
+        DidcommError::NoKeyAgreementKey {
             did: recipient_did_doc.id.clone(),
-        })?;
+        }
+    })?;
 
     let key_id = recipient_did_doc
         .x25519_key_id()
@@ -96,10 +97,13 @@ pub fn encrypt_for_recipient(
     // AAD = the protected header base64url-encoded
     let protected_b64 = URL_SAFE_NO_PAD.encode(PROTECTED_HEADER.as_bytes());
     let ciphertext_with_tag = cipher
-        .encrypt(nonce, aes_gcm::aead::Payload {
-            msg: plaintext.as_bytes(),
-            aad: protected_b64.as_bytes(),
-        })
+        .encrypt(
+            nonce,
+            aes_gcm::aead::Payload {
+                msg: plaintext.as_bytes(),
+                aad: protected_b64.as_bytes(),
+            },
+        )
         .map_err(|e| DidcommError::Crypto(format!("AES-GCM encrypt failed: {e}")))?;
 
     // AES-GCM appends the 16-byte tag to the ciphertext
@@ -217,10 +221,13 @@ pub fn decrypt_jwe(jwe_json: &str, recipient_private_key: &[u8; 32]) -> DidcommR
     let nonce = Nonce::from_slice(&iv);
 
     let plaintext = cipher
-        .decrypt(nonce, aes_gcm::aead::Payload {
-            msg: &ct_with_tag,
-            aad: protected_b64.as_bytes(),
-        })
+        .decrypt(
+            nonce,
+            aes_gcm::aead::Payload {
+                msg: &ct_with_tag,
+                aad: protected_b64.as_bytes(),
+            },
+        )
         .map_err(|e| DidcommError::Crypto(format!("AES-GCM decrypt failed: {e}")))?;
 
     String::from_utf8(plaintext).map_err(|e| DidcommError::UnpackError(e.to_string()))
@@ -267,11 +274,14 @@ fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> DidcommResult<Vec<u8>> {
 
     let n = plaintext.len() / 8;
     let mut a = 0xA6A6A6A6A6A6A6A6u64;
-    let mut r: Vec<[u8; 8]> = plaintext.chunks(8).map(|c| {
-        let mut block = [0u8; 8];
-        block.copy_from_slice(c);
-        block
-    }).collect();
+    let mut r: Vec<[u8; 8]> = plaintext
+        .chunks(8)
+        .map(|c| {
+            let mut block = [0u8; 8];
+            block.copy_from_slice(c);
+            block
+        })
+        .collect();
 
     let cipher = Aes256::new_from_slice(kek)
         .map_err(|e| DidcommError::Crypto(format!("AES key init: {e}")))?;
@@ -313,11 +323,14 @@ fn aes_key_unwrap(kek: &[u8], ciphertext: &[u8]) -> DidcommResult<Vec<u8>> {
 
     let n = (ciphertext.len() / 8) - 1;
     let mut a = u64::from_be_bytes(ciphertext[..8].try_into().unwrap());
-    let mut r: Vec<[u8; 8]> = ciphertext[8..].chunks(8).map(|c| {
-        let mut block = [0u8; 8];
-        block.copy_from_slice(c);
-        block
-    }).collect();
+    let mut r: Vec<[u8; 8]> = ciphertext[8..]
+        .chunks(8)
+        .map(|c| {
+            let mut block = [0u8; 8];
+            block.copy_from_slice(c);
+            block
+        })
+        .collect();
 
     let cipher = Aes256::new_from_slice(kek)
         .map_err(|e| DidcommError::Crypto(format!("AES key init: {e}")))?;

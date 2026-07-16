@@ -238,7 +238,10 @@ pub fn verify_vds_nc(barcode: &str, issuer_jwk: &Jwk) -> VdsNcVerificationResult
 ///
 /// Convenience wrapper around [`verify_vds_nc`] for callers that hold the JWK
 /// as a serialized string (e.g. Python bindings).
-pub fn verify_vds_nc_jwk_json(barcode: &str, jwk_json: &str) -> VerificationResult<VdsNcVerificationResult> {
+pub fn verify_vds_nc_jwk_json(
+    barcode: &str,
+    jwk_json: &str,
+) -> VerificationResult<VdsNcVerificationResult> {
     let jwk: Jwk = serde_json::from_str(jwk_json).map_err(|e| {
         VerificationError::vds_nc_invalid(format!("failed to parse issuer JWK: {}", e))
     })?;
@@ -279,9 +282,14 @@ fn verify_signing_input(
         }
         "EdDSA" => {
             let key_bytes = jwk_okp_to_raw(jwk)?;
-            Ok(marty_crypto::ed25519::verify_bool(&key_bytes, message, signature))
+            Ok(marty_crypto::ed25519::verify_bool(
+                &key_bytes, message, signature,
+            ))
         }
-        other => Err(format!("unsupported algorithm for VDS-NC verification: {}", other)),
+        other => Err(format!(
+            "unsupported algorithm for VDS-NC verification: {}",
+            other
+        )),
     }
 }
 
@@ -377,7 +385,10 @@ mod tests {
         let tampered = barcode.replacen("TestDoc", "TamperedDoc", 1);
         let result = verify_vds_nc(&tampered, &jwk);
         assert!(!result.verified);
-        assert_eq!(result.signature_status, SignatureVerificationStatus::Invalid);
+        assert_eq!(
+            result.signature_status,
+            SignatureVerificationStatus::Invalid
+        );
     }
 
     #[test]
@@ -390,7 +401,10 @@ mod tests {
 
         let result = verify_vds_nc(&barcode, &other_jwk);
         assert!(!result.verified);
-        assert_eq!(result.signature_status, SignatureVerificationStatus::Invalid);
+        assert_eq!(
+            result.signature_status,
+            SignatureVerificationStatus::Invalid
+        );
     }
 
     #[test]

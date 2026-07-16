@@ -54,8 +54,12 @@ pub fn detect_version(value: &Value) -> OpenBadgesVersion {
     if has_context(value, ob2_context_uri()) {
         return OpenBadgesVersion::V2;
     }
-    if has_context(value, ob3_context_uri()) || has_context(value, "https://w3id.org/openbadges/v3")
-        || has_context(value, "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json")
+    if has_context(value, ob3_context_uri())
+        || has_context(value, "https://w3id.org/openbadges/v3")
+        || has_context(
+            value,
+            "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json",
+        )
     {
         return OpenBadgesVersion::V3;
     }

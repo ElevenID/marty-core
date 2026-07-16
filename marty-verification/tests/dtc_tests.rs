@@ -11,7 +11,6 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELCpUiUlCiLWZRbygCZ42aG90Oq/f
 LX2CB+n6Gt+98LB0h5LXaQ2Zm+33tBNzBXN0761pQoP5zzJUDTFONca+DA==
 -----END PUBLIC KEY-----"#;
 
-
 fn sample_create_request() -> String {
     serde_json::json!({
         "passport_number": "P1234567",
@@ -66,12 +65,15 @@ fn sign_and_verify_round_trip() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let verify_env = serde_json::json!({
@@ -80,12 +82,15 @@ fn sign_and_verify_round_trip() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&signed).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&signed).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -143,10 +148,7 @@ fn verify_respects_trust_chain() {
             "signer_public_key_pem".to_string(),
             signer_public_pem.into(),
         );
-        obj.insert(
-            "trust_anchors_pem".to_string(),
-            serde_json::json!([ca_pem]),
-        );
+        obj.insert("trust_anchors_pem".to_string(), serde_json::json!([ca_pem]));
         obj.insert(
             "certificate_chain_pem".to_string(),
             serde_json::json!([ee_pem, ca_pem]),
@@ -172,12 +174,15 @@ fn verify_rejects_tampered_payload() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut tampered = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
@@ -211,12 +216,15 @@ fn verify_rejects_wrong_public_key() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let wrong_key = KeyPair::generate().expect("failed to generate wrong key");
@@ -224,10 +232,7 @@ fn verify_rejects_wrong_public_key() {
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            wrong_public_pem.into(),
-        );
+        obj.insert("signer_public_key_pem".to_string(), wrong_public_pem.into());
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
@@ -286,10 +291,7 @@ fn verify_rejects_mismatched_cert_chain() {
             "signer_public_key_pem".to_string(),
             signer_public_pem.into(),
         );
-        obj.insert(
-            "trust_anchors_pem".to_string(),
-            serde_json::json!([ca_pem]),
-        );
+        obj.insert("trust_anchors_pem".to_string(), serde_json::json!([ca_pem]));
         obj.insert(
             "certificate_chain_pem".to_string(),
             serde_json::json!([ee_pem, ca_pem]),
@@ -339,28 +341,34 @@ fn verify_rejects_expired_dtc() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert("signer_public_key_pem".to_string(), SIGNER_PUBLIC_PEM.into());
+        obj.insert(
+            "signer_public_key_pem".to_string(),
+            SIGNER_PUBLIC_PEM.into(),
+        );
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    
+
     assert!(
         !v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(true),
         "expired DTC should be invalid: {:?}",
         v
     );
-    
+
     // Check that the error code is E807 (DTC_EXPIRED)
     let error_codes = v.get("error_codes").and_then(|c| c.as_array()).unwrap();
     assert!(
@@ -406,28 +414,34 @@ fn verify_rejects_not_yet_valid_dtc() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert("signer_public_key_pem".to_string(), SIGNER_PUBLIC_PEM.into());
+        obj.insert(
+            "signer_public_key_pem".to_string(),
+            SIGNER_PUBLIC_PEM.into(),
+        );
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    
+
     assert!(
         !v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(true),
         "not-yet-valid DTC should be invalid: {:?}",
         v
     );
-    
+
     // Check that the error code is E808 (DTC_NOT_YET_VALID)
     let error_codes = v.get("error_codes").and_then(|c| c.as_array()).unwrap();
     assert!(
@@ -473,28 +487,34 @@ fn verify_rejects_revoked_dtc() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert("signer_public_key_pem".to_string(), SIGNER_PUBLIC_PEM.into());
+        obj.insert(
+            "signer_public_key_pem".to_string(),
+            SIGNER_PUBLIC_PEM.into(),
+        );
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    
+
     assert!(
         !v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(true),
         "revoked DTC should be invalid: {:?}",
         v
     );
-    
+
     // Check that the error code is E809 (DTC_REVOKED)
     let error_codes = v.get("error_codes").and_then(|c| c.as_array()).unwrap();
     assert!(
@@ -538,22 +558,28 @@ fn verify_type2_profile_validates_required_fields() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert("signer_public_key_pem".to_string(), SIGNER_PUBLIC_PEM.into());
+        obj.insert(
+            "signer_public_key_pem".to_string(),
+            SIGNER_PUBLIC_PEM.into(),
+        );
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    
+
     assert!(
         v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(false),
         "valid Type2 DTC should pass verification: {:?}",
@@ -594,22 +620,28 @@ fn verify_type2_profile_rejects_missing_fields() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert("signer_public_key_pem".to_string(), SIGNER_PUBLIC_PEM.into());
+        obj.insert(
+            "signer_public_key_pem".to_string(),
+            SIGNER_PUBLIC_PEM.into(),
+        );
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    
+
     assert!(
         !v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(true),
         "Type2 DTC with missing fields should be invalid: {:?}",
@@ -652,22 +684,28 @@ fn verify_type3_profile_validates_required_fields() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert("signer_public_key_pem".to_string(), SIGNER_PUBLIC_PEM.into());
+        obj.insert(
+            "signer_public_key_pem".to_string(),
+            SIGNER_PUBLIC_PEM.into(),
+        );
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    
+
     assert!(
         v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(false),
         "valid Type3 DTC should pass verification: {:?}",
@@ -709,22 +747,28 @@ fn verify_type3_profile_rejects_missing_fields() {
     .as_object()
     .unwrap()
     .iter()
-    .fold(serde_json::from_str::<serde_json::Value>(&created).unwrap(), |mut acc, (k, v)| {
-        if let Some(obj) = acc.as_object_mut() {
-            obj.insert(k.clone(), v.clone());
-        }
-        acc
-    });
+    .fold(
+        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
+        |mut acc, (k, v)| {
+            if let Some(obj) = acc.as_object_mut() {
+                obj.insert(k.clone(), v.clone());
+            }
+            acc
+        },
+    );
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert("signer_public_key_pem".to_string(), SIGNER_PUBLIC_PEM.into());
+        obj.insert(
+            "signer_public_key_pem".to_string(),
+            SIGNER_PUBLIC_PEM.into(),
+        );
     }
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    
+
     assert!(
         !v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(true),
         "Type3 DTC with missing fields should be invalid: {:?}",

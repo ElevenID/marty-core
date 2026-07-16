@@ -11,13 +11,13 @@
 //!   `@context`/`type`/`issuer`/`validFrom`/`credentialSubject`.
 //!   SD JSONPath selectors: `$.credentialSubject.claim_name`
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use p256::pkcs8::EncodePrivateKey;
+use rand::RngCore;
 use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
 use sd_jwt_rs::{SDJWTIssuer, SDJWTSerializationFormat};
-use ssi::jwk::{Params, JWK};
-use p256::pkcs8::EncodePrivateKey;
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
-use rand::RngCore;
+use ssi::jwk::{Params, JWK};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::CredentialSigner;
@@ -496,9 +496,10 @@ fn inject_kid_header(
     // Split JWS into header.payload.signature
     let parts: Vec<&str> = jws.splitn(3, '.').collect();
     if parts.len() != 3 {
-        return Err(Oid4vciError::SdJwtError(
-            format!("Malformed SD-JWT JWS (expected 3 parts, got {})", parts.len())
-        ));
+        return Err(Oid4vciError::SdJwtError(format!(
+            "Malformed SD-JWT JWS (expected 3 parts, got {})",
+            parts.len()
+        )));
     }
 
     // Decode the existing payload
@@ -513,9 +514,12 @@ fn inject_kid_header(
         "EdDSA" => jsonwebtoken::Algorithm::EdDSA,
         "ES256" => jsonwebtoken::Algorithm::ES256,
         "ES384" => jsonwebtoken::Algorithm::ES384,
-        other => return Err(Oid4vciError::SdJwtError(
-            format!("Unsupported algorithm for SD-JWT re-sign: {}", other)
-        )),
+        other => {
+            return Err(Oid4vciError::SdJwtError(format!(
+                "Unsupported algorithm for SD-JWT re-sign: {}",
+                other
+            )))
+        }
     };
     let mut header = jsonwebtoken::Header::new(alg);
     header.kid = Some(kid.to_string());
@@ -585,21 +589,17 @@ fn get_sd_jwt_signing_params(
             // We'll serialize the JWK to JSON and use from_jwk
             let _jwk_json = serde_json::to_string(jwk)
                 .map_err(|e| Oid4vciError::KeyError(format!("JWK serialize error: {}", e)))?;
-            
+
             // jsonwebtoken doesn't directly support JWK — build a minimal EC PEM
             // For P-256: use the `p256` crate to convert
             match params.curve.as_deref() {
                 Some("P-256") => {
-                    let secret =
-                        p256::SecretKey::from_slice(&d.0).map_err(|e| {
-                            Oid4vciError::KeyError(format!("Invalid P-256 key: {}", e))
-                        })?;
+                    let secret = p256::SecretKey::from_slice(&d.0)
+                        .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 key: {}", e)))?;
                     let pkcs8_der = secret.to_pkcs8_der().map_err(|e| {
                         Oid4vciError::KeyError(format!("P-256 PKCS#8 encoding failed: {}", e))
                     })?;
-                    Ok(jsonwebtoken::EncodingKey::from_ec_der(
-                        pkcs8_der.as_bytes(),
-                    ))
+                    Ok(jsonwebtoken::EncodingKey::from_ec_der(pkcs8_der.as_bytes()))
                 }
                 Some(curve) => Err(Oid4vciError::KeyError(format!(
                     "SD-JWT signing not supported for curve: {}",
@@ -617,8 +617,6 @@ fn get_sd_jwt_signing_params(
 
     Ok((alg_str, encoding_key))
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -660,7 +658,10 @@ mod tests {
 
         let result = sign_sd_jwt(&key, &claims).unwrap();
         match result {
-            SignedCredential::SdJwt { compact, credential_id } => {
+            SignedCredential::SdJwt {
+                compact,
+                credential_id,
+            } => {
                 // SD-JWT should end with ~ (compact format)
                 assert!(compact.contains('.'), "Should contain JWT dots");
                 assert!(credential_id.starts_with("urn:uuid:"));
@@ -715,7 +716,6 @@ mod tests {
         use serde_json::Value;
 
         let key = test_p256_key();
-        let key_clone = key.clone();
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
             credential_type: "https://example.com/credentials/TestCred".into(),
@@ -736,18 +736,13 @@ mod tests {
             _ => panic!("Expected SdJwt"),
         };
 
-        // Inject kid header (this sets the typ)
-        let public_key_pem = {
-            let jwk: serde_json::Value = serde_json::from_str(&key_clone.jwk_json).unwrap();
-            // Use the DID as a stand-in for the kid
-            key_clone.issuer_id.clone()
-        };
-
         // Decode the JWT header directly from the compact SD-JWT to verify typ.
         // The first part (before '~') is the JWS; split on '.' to get header.
         let jwt_part = compact.split('~').next().unwrap_or(&compact);
         let header_b64 = jwt_part.split('.').next().expect("JWT must have header");
-        let header_bytes = B64.decode(header_b64).expect("header must be valid base64url");
+        let header_bytes = B64
+            .decode(header_b64)
+            .expect("header must be valid base64url");
         let header: Value = serde_json::from_slice(&header_bytes).expect("header must be JSON");
 
         // Before inject_kid_header, sd-jwt-rs does not set typ.
@@ -811,7 +806,10 @@ mod tests {
         let dummy_sig = vec![0u8; 64];
         let result = assemble_sd_jwt(prepared, &dummy_sig);
         match result {
-            SignedCredential::SdJwt { compact, credential_id } => {
+            SignedCredential::SdJwt {
+                compact,
+                credential_id,
+            } => {
                 // Format: header.payload.sig~
                 assert!(compact.contains('.'));
                 assert!(compact.ends_with('~'));

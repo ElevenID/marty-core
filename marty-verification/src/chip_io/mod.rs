@@ -46,7 +46,10 @@ impl ApduCommand {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = vec![self.cla, self.ins, self.p1, self.p2];
         if !self.data.is_empty() {
-            debug_assert!(self.data.len() <= 255, "APDU data exceeds short-form Lc limit");
+            debug_assert!(
+                self.data.len() <= 255,
+                "APDU data exceeds short-form Lc limit"
+            );
             buf.push(self.data.len() as u8);
             buf.extend_from_slice(&self.data);
         }
@@ -281,17 +284,21 @@ impl BacSession {
     /// - An APDU command fails (chip rejected, wrong SW).
     /// - The chip's response MAC is invalid.
     /// - The reflected nonces don't match.
-    pub fn establish(
-        chip: &mut dyn PassportChip,
-        mrz: &MrzKeyInfo,
-    ) -> VerificationResult<Self> {
+    pub fn establish(chip: &mut dyn PassportChip, mrz: &MrzKeyInfo) -> VerificationResult<Self> {
         use rand::RngCore;
 
         let base_keys = derive_bac_base_keys(mrz)?;
 
         // ── Step 1: Select eMRTD AID ─────────────────────────────────────────
         let aid: &[u8] = &[0xA0, 0x00, 0x00, 0x02, 0x47, 0x10, 0x01];
-        let select = ApduCommand { cla: 0x00, ins: 0xA4, p1: 0x04, p2: 0x0C, data: aid.to_vec(), le: None };
+        let select = ApduCommand {
+            cla: 0x00,
+            ins: 0xA4,
+            p1: 0x04,
+            p2: 0x0C,
+            data: aid.to_vec(),
+            le: None,
+        };
         let resp = chip.transceive(&select)?;
         if !resp.is_success() {
             return Err(VerificationError::internal(format!(
@@ -301,7 +308,14 @@ impl BacSession {
         }
 
         // ── Step 2: GET CHALLENGE → Rnd.IC (8 bytes) ─────────────────────────
-        let get_challenge = ApduCommand { cla: 0x00, ins: 0x84, p1: 0x00, p2: 0x00, data: vec![], le: Some(8) };
+        let get_challenge = ApduCommand {
+            cla: 0x00,
+            ins: 0x84,
+            p1: 0x00,
+            p2: 0x00,
+            data: vec![],
+            le: Some(8),
+        };
         let resp = chip.transceive(&get_challenge)?;
         if !resp.is_success() || resp.data.len() != 8 {
             return Err(VerificationError::internal(format!(
@@ -326,12 +340,8 @@ impl BacSession {
         m1[16..].copy_from_slice(&kid_ifd);
 
         let k_enc_24 = extend_to_24_bytes(&base_keys.k_enc);
-        let e_ifd = marty_crypto::des::tdes_cbc_encrypt(
-            &k_enc_24,
-            &[0u8; 8],
-            &m1,
-        )
-        .map_err(|e| VerificationError::internal(format!("BAC encrypt failed: {}", e)))?;
+        let e_ifd = marty_crypto::des::tdes_cbc_encrypt(&k_enc_24, &[0u8; 8], &m1)
+            .map_err(|e| VerificationError::internal(format!("BAC encrypt failed: {}", e)))?;
 
         // ── Step 5: M_IFD = Retail-MAC(K_MAC, E_IFD) ─────────────────────────
         let m_ifd = retail_mac_3des(&base_keys.k_mac, &e_ifd)?;
@@ -375,12 +385,8 @@ impl BacSession {
         }
 
         let k_enc_24 = extend_to_24_bytes(&base_keys.k_enc);
-        let m2 = marty_crypto::des::tdes_cbc_decrypt(
-            &k_enc_24,
-            &[0u8; 8],
-            e_ic,
-        )
-        .map_err(|e| VerificationError::internal(format!("BAC decrypt failed: {}", e)))?;
+        let m2 = marty_crypto::des::tdes_cbc_decrypt(&k_enc_24, &[0u8; 8], e_ic)
+            .map_err(|e| VerificationError::internal(format!("BAC decrypt failed: {}", e)))?;
 
         if m2[0..8] != rnd_ic {
             return Err(VerificationError::internal(
@@ -414,7 +420,11 @@ impl BacSession {
             };
         }
 
-        Ok(Self { k_enc: ks_enc, k_mac: ks_mac, ssc })
+        Ok(Self {
+            k_enc: ks_enc,
+            k_mac: ks_mac,
+            ssc,
+        })
     }
 
     /// Protect a plaintext command APDU with 3DES-CBC + Retail-MAC secure messaging.
@@ -433,8 +443,11 @@ impl BacSession {
             let enc = marty_crypto::des::tdes_cbc_encrypt(&k24, &iv, &padded)
                 .map_err(|e| VerificationError::internal(format!("SM encrypt: {}", e)))?;
             // DO'87 = tag 87, length, 01 (padding indicator), ciphertext
-            let do87_len = u8::try_from(enc.len() + 1)
-                .map_err(|_| VerificationError::internal("DO87 data exceeds short-form TLV limit (254)".to_string()))?;
+            let do87_len = u8::try_from(enc.len() + 1).map_err(|_| {
+                VerificationError::internal(
+                    "DO87 data exceeds short-form TLV limit (254)".to_string(),
+                )
+            })?;
             do87.push(0x87);
             do87.push(do87_len);
             do87.push(0x01); // padding indicator
@@ -449,7 +462,16 @@ impl BacSession {
         };
 
         // MAC input: SSC || header bytes (masked) || DO'87 || DO'97
-        let masked_header = [cmd.cla | 0x0C, cmd.ins, cmd.p1, cmd.p2, 0x80, 0x00, 0x00, 0x00];
+        let masked_header = [
+            cmd.cla | 0x0C,
+            cmd.ins,
+            cmd.p1,
+            cmd.p2,
+            0x80,
+            0x00,
+            0x00,
+            0x00,
+        ];
         let mut mac_input = Vec::new();
         mac_input.extend_from_slice(&self.ssc);
         mac_input.extend_from_slice(&masked_header);
@@ -536,7 +558,11 @@ impl BacSession {
             ));
         }
 
-        Ok(ApduResponse { data: plain_data, sw1: resp.sw1, sw2: resp.sw2 })
+        Ok(ApduResponse {
+            data: plain_data,
+            sw1: resp.sw1,
+            sw2: resp.sw2,
+        })
     }
 }
 
@@ -630,7 +656,11 @@ impl PaceSession {
     pub fn from_shared_secret(shared_secret: &[u8]) -> Self {
         let k_enc = pace_kdf_16(shared_secret, 1);
         let k_mac = pace_kdf_16(shared_secret, 2);
-        Self { k_enc, k_mac, ssc: [0u8; 16] }
+        Self {
+            k_enc,
+            k_mac,
+            ssc: [0u8; 16],
+        }
     }
 
     /// Protect a plaintext command APDU with AES-128-CBC + AES-CMAC secure messaging.
@@ -640,10 +670,14 @@ impl PaceSession {
         let mut do87: Vec<u8> = Vec::new();
         if !cmd.data.is_empty() {
             let padded = iso7816_pad(&cmd.data);
-            let enc = marty_crypto::symmetric::aes_128_cbc_encrypt_nopad(&self.k_enc, &self.ssc, &padded)
-                .map_err(|e| VerificationError::internal(format!("PACE SM encrypt: {}", e)))?;
-            let do87_len = u8::try_from(enc.len() + 1)
-                .map_err(|_| VerificationError::internal("PACE DO87 data exceeds short-form TLV limit (254)".to_string()))?;
+            let enc =
+                marty_crypto::symmetric::aes_128_cbc_encrypt_nopad(&self.k_enc, &self.ssc, &padded)
+                    .map_err(|e| VerificationError::internal(format!("PACE SM encrypt: {}", e)))?;
+            let do87_len = u8::try_from(enc.len() + 1).map_err(|_| {
+                VerificationError::internal(
+                    "PACE DO87 data exceeds short-form TLV limit (254)".to_string(),
+                )
+            })?;
             do87.push(0x87);
             do87.push(do87_len);
             do87.push(0x01);
@@ -656,7 +690,16 @@ impl PaceSession {
             Vec::new()
         };
 
-        let masked_header = [cmd.cla | 0x0C, cmd.ins, cmd.p1, cmd.p2, 0x80, 0x00, 0x00, 0x00];
+        let masked_header = [
+            cmd.cla | 0x0C,
+            cmd.ins,
+            cmd.p1,
+            cmd.p2,
+            0x80,
+            0x00,
+            0x00,
+            0x00,
+        ];
         let mut mac_input = Vec::new();
         mac_input.extend_from_slice(&self.ssc);
         mac_input.extend_from_slice(&masked_header);
@@ -695,9 +738,13 @@ impl PaceSession {
         let mut i = 0;
         while i < data.len() {
             let tag = data[i];
-            if i + 1 >= data.len() { break; }
+            if i + 1 >= data.len() {
+                break;
+            }
             let len = data[i + 1] as usize;
-            if i + 2 + len > data.len() { break; }
+            if i + 2 + len > data.len() {
+                break;
+            }
             let value = &data[i + 2..i + 2 + len];
             match tag {
                 0x87 => {
@@ -740,7 +787,11 @@ impl PaceSession {
             ));
         }
 
-        Ok(ApduResponse { data: plain_data, sw1: resp.sw1, sw2: resp.sw2 })
+        Ok(ApduResponse {
+            data: plain_data,
+            sw1: resp.sw1,
+            sw2: resp.sw2,
+        })
     }
 }
 
@@ -976,8 +1027,8 @@ mod tests {
     #[test]
     fn test_retail_mac_deterministic() {
         let key = [
-            0xAB, 0x94, 0xFD, 0xEC, 0xF2, 0x67, 0x4F, 0xDF,
-            0xB9, 0xB3, 0x91, 0xF8, 0x5D, 0x7F, 0x76, 0xF2,
+            0xAB, 0x94, 0xFD, 0xEC, 0xF2, 0x67, 0x4F, 0xDF, 0xB9, 0xB3, 0x91, 0xF8, 0x5D, 0x7F,
+            0x76, 0xF2,
         ];
         let data = b"Hello World, ICAO 9303";
         let mac1 = retail_mac_3des(&key, data).unwrap();

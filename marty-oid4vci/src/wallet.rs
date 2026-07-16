@@ -31,13 +31,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::issuer::generate_pkce_challenge_s256;
 use crate::types::{
-    AuthorizationDetail, AuthorizationRequest,
-    CodeChallengeMethod, CredentialFormat, CredentialOffer, CredentialRequest, CredentialResponse,
-    GrantType, NonceResponse, ProofsObject, TokenResponse,
+    AuthorizationDetail, AuthorizationRequest, CodeChallengeMethod, CredentialFormat,
+    CredentialOffer, CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject,
+    TokenResponse,
 };
-use crate::verifier::{
-    DescriptorMapEntry, PresentationDefinition, PresentationSubmission,
-};
+use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Issuer metadata (wallet-parsed)
@@ -55,6 +53,8 @@ pub struct IssuerMetadata {
     pub token_endpoint: Option<String>,
     /// Credential endpoint.
     pub credential_endpoint: String,
+    /// Nonce endpoint used to obtain a fresh proof nonce.
+    pub nonce_endpoint: Option<String>,
     /// Authorization endpoint (for auth-code flow).
     pub authorization_endpoint: Option<String>,
     /// Supported grant types.
@@ -203,7 +203,10 @@ impl WalletEngine {
         let y = encoded_point.y().expect("uncompressed P-256 point has y");
         let mut multicodec_key = vec![0x80, 0x24];
         multicodec_key.extend_from_slice(
-            signing_key.verifying_key().to_encoded_point(true).as_bytes(),
+            signing_key
+                .verifying_key()
+                .to_encoded_point(true)
+                .as_bytes(),
         );
         let holder_id = format!("did:key:z{}", base58btc_encode(&multicodec_key));
         let private_jwk = serde_json::json!({
@@ -254,12 +257,9 @@ impl WalletEngine {
 
         if let Some(offer_uri) = params.get("credential_offer_uri") {
             // Redirect pattern — fetch the offer
-            let resp = self
-                .client
-                .get(offer_uri)
-                .send()
-                .await
-                .map_err(|e| Oid4vciError::InvalidRequest(format!("credential_offer_uri fetch failed: {}", e)))?;
+            let resp = self.client.get(offer_uri).send().await.map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("credential_offer_uri fetch failed: {}", e))
+            })?;
 
             let offer: CredentialOffer = resp.json().await.map_err(|e| {
                 Oid4vciError::InvalidRequest(format!(
@@ -286,12 +286,10 @@ impl WalletEngine {
             issuer_url.trim_end_matches('/')
         );
 
-        let resp = self
-            .client
-            .get(&well_known)
-            .send()
-            .await
-            .map_err(|e| Oid4vciError::InvalidRequest(format!("Metadata fetch failed: {}", e)))?;
+        let resp =
+            self.client.get(&well_known).send().await.map_err(|e| {
+                Oid4vciError::InvalidRequest(format!("Metadata fetch failed: {}", e))
+            })?;
 
         if !resp.status().is_success() {
             return Err(Oid4vciError::InvalidRequest(format!(
@@ -358,9 +356,9 @@ impl WalletEngine {
             )));
         }
 
-        resp.json::<NonceResponse>().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Nonce response parse error: {}", e))
-        })
+        resp.json::<NonceResponse>()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Nonce response parse error: {}", e)))
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -555,13 +553,12 @@ impl WalletEngine {
             .map(|claim| (claim.clone(), serde_json::Value::Bool(true)))
             .collect();
         let encoding_key = p256_encoding_key(holder_jwk_json)?;
-        let mut holder = SDJWTHolder::new(
-            credential.to_string(),
-            SDJWTSerializationFormat::Compact,
-        )
-        .map_err(|error| {
-            Oid4vciError::InvalidRequest(format!("Invalid SD-JWT credential: {error:?}"))
-        })?;
+        let mut holder =
+            SDJWTHolder::new(credential.to_string(), SDJWTSerializationFormat::Compact).map_err(
+                |error| {
+                    Oid4vciError::InvalidRequest(format!("Invalid SD-JWT credential: {error:?}"))
+                },
+            )?;
 
         holder
             .create_presentation(
@@ -659,13 +656,16 @@ impl WalletEngine {
 
         if let Some(request_uri) = params.get("request_uri") {
             let fetched = self.fetch_request_object_value(request_uri).await?;
-            return Self::parsed_request_from_value(
-                Self::merge_request_objects(fetched, serde_json::Value::Object(inline_request)),
-            );
+            return Self::parsed_request_from_value(Self::merge_request_objects(
+                fetched,
+                serde_json::Value::Object(inline_request),
+            ));
         }
 
         if let Some(presentation_definition_uri) = params.get("presentation_definition_uri") {
-            let fetched = self.fetch_request_object_value(presentation_definition_uri).await?;
+            let fetched = self
+                .fetch_request_object_value(presentation_definition_uri)
+                .await?;
             let pd_value = fetched
                 .get("presentation_definition")
                 .cloned()
@@ -754,9 +754,7 @@ impl WalletEngine {
     ) -> Oid4vciResult<(String, Option<PresentationSubmission>)> {
         if request.query_type == PresentationRequestQueryType::DcqlQuery {
             let dcql_query = request.dcql_query.as_ref().ok_or_else(|| {
-                Oid4vciError::InvalidRequest(
-                    "DCQL request is missing dcql_query payload".into(),
-                )
+                Oid4vciError::InvalidRequest("DCQL request is missing dcql_query payload".into())
             })?;
             return self.build_dcql_presentation(dcql_query, credentials);
         }
@@ -780,9 +778,7 @@ impl WalletEngine {
             if let Some(credential) = credentials.get(&query.id) {
                 vp_tokens.insert(
                     query.id.clone(),
-                    serde_json::Value::Array(vec![serde_json::Value::String(
-                        credential.clone(),
-                    )]),
+                    serde_json::Value::Array(vec![serde_json::Value::String(credential.clone())]),
                 );
             }
         }
@@ -812,15 +808,21 @@ impl WalletEngine {
         zk_proofs: Vec<ZkProofEntry>,
     ) -> Oid4vciResult<(String, PresentationSubmission)> {
         let vp_id = uuid::Uuid::new_v4().to_string();
-        let zk_proofs_by_id: HashMap<_, _> =
-            zk_proofs.iter().map(|e| (e.descriptor_id.as_str(), e)).collect();
+        let zk_proofs_by_id: HashMap<_, _> = zk_proofs
+            .iter()
+            .map(|e| (e.descriptor_id.as_str(), e))
+            .collect();
 
         let mut descriptor_map = vec![];
         let mut vp_credentials = vec![];
         let mut zk_proof_map: HashMap<String, serde_json::Value> = HashMap::new();
 
         for desc in &definition.input_descriptors {
-            let has_zk = desc.constraints.fields.iter().any(|f| f.zk_predicate.is_some());
+            let has_zk = desc
+                .constraints
+                .fields
+                .iter()
+                .any(|f| f.zk_predicate.is_some());
 
             if has_zk {
                 // ZK path — embed the proof, not the raw credential
@@ -831,8 +833,8 @@ impl WalletEngine {
                     ))
                 })?;
 
-                let proof_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(&entry.proof_bytes);
+                let proof_b64 =
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&entry.proof_bytes);
 
                 zk_proof_map.insert(
                     desc.id.clone(),
@@ -899,13 +901,8 @@ impl WalletEngine {
         vp_token: &str,
         presentation_submission: Option<&PresentationSubmission>,
     ) -> Oid4vciResult<PresentationResponse> {
-        self.submit_presentation_form(
-            response_uri,
-            vp_token,
-            presentation_submission,
-            None,
-        )
-        .await
+        self.submit_presentation_form(response_uri, vp_token, presentation_submission, None)
+            .await
     }
 
     /// Submit a response for a parsed request, including its state value.
@@ -931,7 +928,8 @@ impl WalletEngine {
         presentation_submission: Option<&PresentationSubmission>,
         state: Option<&str>,
     ) -> Oid4vciResult<PresentationResponse> {
-        let mut params: Vec<(String, String)> = vec![("vp_token".to_string(), vp_token.to_string())];
+        let mut params: Vec<(String, String)> =
+            vec![("vp_token".to_string(), vp_token.to_string())];
         if let Some(submission) = presentation_submission {
             let submission_json = serde_json::to_string(submission).map_err(|e| {
                 Oid4vciError::InvalidRequest(format!(
@@ -956,8 +954,10 @@ impl WalletEngine {
             })?;
 
         let status = resp.status();
-        let body: serde_json::Value =
-            resp.json().await.unwrap_or(serde_json::Value::Object(Default::default()));
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .unwrap_or(serde_json::Value::Object(Default::default()));
 
         if status.is_success() {
             Ok(PresentationResponse {
@@ -998,9 +998,9 @@ impl WalletEngine {
                 status, body
             )));
         }
-        resp.json::<TokenResponse>().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e))
-        })
+        resp.json::<TokenResponse>()
+            .await
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e)))
     }
 
     fn request_object_from_params(
@@ -1025,20 +1025,14 @@ impl WalletEngine {
 
         if let Some(pd_json) = params.get("presentation_definition") {
             let pd_value = serde_json::from_str(pd_json).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "Invalid presentation_definition JSON: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("Invalid presentation_definition JSON: {}", e))
             })?;
             request.insert("presentation_definition".into(), pd_value);
         }
 
         if let Some(dcql_json) = params.get("dcql_query") {
             let dcql_value = serde_json::from_str(dcql_json).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "Invalid dcql_query JSON: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("Invalid dcql_query JSON: {}", e))
             })?;
             request.insert("dcql_query".into(), dcql_value);
         }
@@ -1064,18 +1058,10 @@ impl WalletEngine {
         serde_json::Value::Object(merged)
     }
 
-    async fn fetch_request_object_value(
-        &self,
-        uri: &str,
-    ) -> Oid4vciResult<serde_json::Value> {
-        let resp = self
-            .client
-            .get(uri)
-            .send()
-            .await
-            .map_err(|e| {
-                Oid4vciError::InvalidRequest(format!("Request object fetch failed: {}", e))
-            })?;
+    async fn fetch_request_object_value(&self, uri: &str) -> Oid4vciResult<serde_json::Value> {
+        let resp = self.client.get(uri).send().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!("Request object fetch failed: {}", e))
+        })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -1104,7 +1090,9 @@ impl WalletEngine {
         content_type: Option<&str>,
     ) -> Oid4vciResult<serde_json::Value> {
         let trimmed = body.trim();
-        let is_jwt = content_type.map(|value| value.contains("jwt")).unwrap_or(false)
+        let is_jwt = content_type
+            .map(|value| value.contains("jwt"))
+            .unwrap_or(false)
             || Self::looks_like_compact_jwt(trimmed);
 
         if is_jwt {
@@ -1112,10 +1100,7 @@ impl WalletEngine {
         }
 
         serde_json::from_str(trimmed).map_err(|e| {
-            Oid4vciError::InvalidRequest(format!(
-                "Request object response parse error: {}",
-                e
-            ))
+            Oid4vciError::InvalidRequest(format!("Request object response parse error: {}", e))
         })
     }
 
@@ -1143,14 +1128,13 @@ impl WalletEngine {
             })?;
 
         serde_json::from_slice(&payload_bytes).map_err(|e| {
-            Oid4vciError::InvalidRequest(format!(
-                "Request object JWT payload parse error: {}",
-                e
-            ))
+            Oid4vciError::InvalidRequest(format!("Request object JWT payload parse error: {}", e))
         })
     }
 
-    fn parsed_request_from_value(value: serde_json::Value) -> Oid4vciResult<ParsedPresentationRequest> {
+    fn parsed_request_from_value(
+        value: serde_json::Value,
+    ) -> Oid4vciResult<ParsedPresentationRequest> {
         let Some(request) = value.as_object() else {
             return Err(Oid4vciError::InvalidRequest(
                 "Presentation request object must be a JSON object".into(),
@@ -1159,20 +1143,14 @@ impl WalletEngine {
 
         let presentation_definition = match request.get("presentation_definition") {
             Some(pd_value) => Some(serde_json::from_value(pd_value.clone()).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "presentation_definition parse error: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("presentation_definition parse error: {}", e))
             })?),
             None => None,
         };
 
         let dcql_query = match request.get("dcql_query") {
             Some(dcql_value) => Some(serde_json::from_value(dcql_value.clone()).map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "dcql_query parse error: {}",
-                    e
-                ))
+                Oid4vciError::InvalidRequest(format!("dcql_query parse error: {}", e))
             })?),
             None => None,
         };
@@ -1343,7 +1321,10 @@ mod tests {
             encode_query_json(dcql_query),
         );
 
-        let parsed = engine.parse_presentation_request(&request_uri).await.unwrap();
+        let parsed = engine
+            .parse_presentation_request(&request_uri)
+            .await
+            .unwrap();
 
         assert_eq!(parsed.client_id, "https://verifier.example");
         assert_eq!(parsed.nonce, "nonce-123");
@@ -1377,7 +1358,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(verified.holder_id, holder.holder_id);
-        let holder_jwk = verified.holder_jwk.expect("proof must expose the holder public JWK");
+        let holder_jwk = verified
+            .holder_jwk
+            .expect("proof must expose the holder public JWK");
         let holder_jwk_json = serde_json::to_value(holder_jwk).unwrap();
         assert_eq!(holder_jwk_json["kty"], "EC");
         assert_eq!(holder_jwk_json["crv"], "P-256");
@@ -1492,8 +1475,7 @@ mod tests {
             .unwrap();
         let kb_jwt = presentation
             .split('~')
-            .filter(|part| !part.is_empty())
-            .next_back()
+            .rfind(|part| !part.is_empty())
             .unwrap();
         let payload = WalletEngine::decode_jwt_payload(kb_jwt).unwrap();
 

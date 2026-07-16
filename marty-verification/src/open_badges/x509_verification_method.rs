@@ -27,14 +27,14 @@ use crate::error::{VerificationError, VerificationResult};
 pub struct X509VerificationKey2021 {
     /// Unique identifier for this verification method (e.g., "https://issuer.edu/keys/1").
     pub id: IriBuf,
-    
+
     /// Controller DID or URL that owns this verification method.
     pub controller: String,
-    
+
     /// PEM-encoded X.509 certificate.
     #[serde(rename = "publicKeyPem")]
     pub public_key_pem: String,
-    
+
     /// Optional X.509 certificate chain (base64-encoded DER certificates).
     /// First certificate is the end-entity cert, followed by intermediates.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,7 +51,7 @@ impl X509VerificationKey2021 {
             x5c: None,
         }
     }
-    
+
     /// Create with certificate chain.
     pub fn with_chain(
         id: IriBuf,
@@ -66,25 +66,27 @@ impl X509VerificationKey2021 {
             x5c: Some(x5c),
         }
     }
-    
+
     /// Get the certificate as PEM string.
     pub fn certificate_pem(&self) -> &str {
         &self.public_key_pem
     }
-    
+
     /// Parse the PEM certificate to DER bytes for validation.
     pub fn certificate_der(&self) -> VerificationResult<Vec<u8>> {
         // Parse PEM to DER
-        let pem_data = self.public_key_pem
+        let pem_data = self
+            .public_key_pem
             .lines()
             .filter(|line| !line.starts_with("-----"))
             .collect::<String>();
-        
+
         use base64::Engine;
-        base64::engine::general_purpose::STANDARD.decode(&pem_data)
-            .map_err(|e| VerificationError::open_badges(
-                format!("Failed to decode certificate PEM: {}", e)
-            ))
+        base64::engine::general_purpose::STANDARD
+            .decode(&pem_data)
+            .map_err(|e| {
+                VerificationError::open_badges(format!("Failed to decode certificate PEM: {}", e))
+            })
     }
 }
 
@@ -101,7 +103,7 @@ impl VerificationMethod for X509VerificationKey2021 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_x509_verification_method_json() {
         let json = r#"{
@@ -110,13 +112,13 @@ mod tests {
             "controller": "https://issuer.edu",
             "publicKeyPem": "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAKHHCgVZU7c4MAoGCCqGSM49BAMCMA0xCzAJBgNVBAYTAlVTMB4X\nDTI0MDEwMTAwMDAwMFoXDTI1MDEwMTAwMDAwMFowDTELMAkGA1UEBhMCVVMwWTAT\nBgcqhkjOPQIBBggqhkjOPQMBBwNCAARx3Z9Q7Y8sH5K0Wq7xJ3H9O6d5k0P2jO6w\nKqC8n5k0P2jO6wKqC8n5k0P2jO6wKqC8n5k0P2jO6wKqC8n5k0P2MAoGCCqGSM49\nBAMCA0gAMEUCIQDJ0P2jO6wKqC8n5k0P2jO6wKqC8n5k0P2jO6wKqC8n5wIgJ0P2\njO6wKqC8n5k0P2jO6wKqC8n5k0P2jO6wKqC8n5k=\n-----END CERTIFICATE-----"
         }"#;
-        
+
         let method: X509VerificationKey2021 = serde_json::from_str(json).unwrap();
         assert_eq!(method.id.as_str(), "https://issuer.edu/keys/1");
         assert_eq!(method.controller, "https://issuer.edu");
         assert!(method.public_key_pem.contains("BEGIN CERTIFICATE"));
     }
-    
+
     #[test]
     fn test_x509_with_chain() {
         let method = X509VerificationKey2021::with_chain(
@@ -125,7 +127,7 @@ mod tests {
             "-----BEGIN CERTIFICATE-----\nMOCK\n-----END CERTIFICATE-----".to_string(),
             vec!["MIIBkT...".to_string()],
         );
-        
+
         assert!(method.x5c.is_some());
         assert_eq!(method.x5c.unwrap().len(), 1);
     }

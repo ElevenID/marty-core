@@ -1,6 +1,6 @@
 //! Mock transport for testing
 
-use super::{Transport, Result};
+use super::{Result, Transport};
 use async_trait::async_trait;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -49,7 +49,9 @@ impl Transport for MockTransport {
 
     async fn send(&mut self, data: &[u8]) -> Result<()> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
         self.send_queue.lock().await.push_back(data.to_vec());
         Ok(())
@@ -57,10 +59,15 @@ impl Transport for MockTransport {
 
     async fn receive(&mut self) -> Result<Vec<u8>> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
-        
-        self.receive_queue.lock().await.pop_front()
+
+        self.receive_queue
+            .lock()
+            .await
+            .pop_front()
             .ok_or_else(|| crate::error::Error::ReceiveFailed("No data available".to_string()))
     }
 

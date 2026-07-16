@@ -37,7 +37,7 @@
 //! ```
 
 use der::{Decode, Encode};
-use ed25519_dalek::{SigningKey as Ed25519SigningKey};
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p256::pkcs8::EncodePrivateKey;
 use rand::rngs::OsRng;

@@ -5,9 +5,7 @@
 //! result URL as an environment variable.
 
 use crate::error::{DidcommError, DidcommResult};
-use crate::types::{
-    DidDocument, Jwk, ServiceEntry, VerificationMethod,
-};
+use crate::types::{DidDocument, Jwk, ServiceEntry, VerificationMethod};
 
 /// DID Resolver supporting non-ledger DID methods.
 pub struct DidResolver {
@@ -100,12 +98,13 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
         )));
     }
 
-    let decoded = bs58::decode(&multibase[1..]).into_vec().map_err(|e| {
-        DidcommError::ResolutionFailed {
-            did: did.to_string(),
-            reason: format!("base58btc decode: {e}"),
-        }
-    })?;
+    let decoded =
+        bs58::decode(&multibase[1..])
+            .into_vec()
+            .map_err(|e| DidcommError::ResolutionFailed {
+                did: did.to_string(),
+                reason: format!("base58btc decode: {e}"),
+            })?;
 
     if decoded.len() < 2 {
         return Err(DidcommError::InvalidDid(did.to_string()));
@@ -260,12 +259,13 @@ fn resolve_did_jwk(did: &str) -> DidcommResult<DidDocument> {
         .strip_prefix("did:jwk:")
         .ok_or_else(|| DidcommError::InvalidDid(did.to_string()))?;
 
-    let jwk_bytes = URL_SAFE_NO_PAD.decode(encoded).map_err(|e| {
-        DidcommError::ResolutionFailed {
-            did: did.to_string(),
-            reason: format!("base64url decode: {e}"),
-        }
-    })?;
+    let jwk_bytes =
+        URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|e| DidcommError::ResolutionFailed {
+                did: did.to_string(),
+                reason: format!("base64url decode: {e}"),
+            })?;
 
     let jwk: Jwk = serde_json::from_slice(&jwk_bytes)?;
 
@@ -350,7 +350,8 @@ fn resolve_did_peer_2(did: &str, elements: &str) -> DidcommResult<DidDocument> {
                     let temp_did = format!("did:key:{data}");
                     if let Ok(temp_doc) = resolve_did_key(&temp_did) {
                         for vm in temp_doc.verification_method {
-                            let vm_id = format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
+                            let vm_id =
+                                format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
                             auth.push(serde_json::json!(vm_id.clone()));
                             vms.push(VerificationMethod {
                                 id: vm_id,
@@ -367,7 +368,8 @@ fn resolve_did_peer_2(did: &str, elements: &str) -> DidcommResult<DidDocument> {
                     let temp_did = format!("did:key:{data}");
                     if let Ok(temp_doc) = resolve_did_key(&temp_did) {
                         for vm in temp_doc.verification_method {
-                            let vm_id = format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
+                            let vm_id =
+                                format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
                             ka.push(serde_json::json!(vm_id.clone()));
                             vms.push(VerificationMethod {
                                 id: vm_id,
@@ -429,10 +431,7 @@ async fn resolve_did_web(did: &str) -> DidcommResult<DidDocument> {
 }
 
 #[cfg(feature = "did_web")]
-async fn resolve_via_universal_resolver(
-    base_url: &str,
-    did: &str,
-) -> DidcommResult<DidDocument> {
+async fn resolve_via_universal_resolver(base_url: &str, did: &str) -> DidcommResult<DidDocument> {
     let url = format!(
         "{}/{}",
         base_url.trim_end_matches('/'),
@@ -465,12 +464,13 @@ async fn fetch_did_document(url: &str, did: &str) -> DidcommResult<DidDocument> 
         });
     }
 
-    let body = response.text().await.map_err(|e| {
-        DidcommError::ResolutionFailed {
+    let body = response
+        .text()
+        .await
+        .map_err(|e| DidcommError::ResolutionFailed {
             did: did.to_string(),
             reason: format!("failed to read response body: {e}"),
-        }
-    })?;
+        })?;
 
     // Universal Resolver wraps in { didDocument: {...} }, did:web returns raw
     let parsed: serde_json::Value = serde_json::from_str(&body)?;
@@ -520,10 +520,9 @@ mod tests {
     #[test]
     fn test_unsupported_method() {
         let resolver = DidResolver::new();
-        let result =
-            tokio::runtime::Runtime::new()
-                .unwrap()
-                .block_on(resolver.resolve("did:ethr:0x1234"));
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(resolver.resolve("did:ethr:0x1234"));
         assert!(result.is_err());
         if let Err(DidcommError::UnsupportedMethod { method }) = result {
             assert_eq!(method, "ethr");

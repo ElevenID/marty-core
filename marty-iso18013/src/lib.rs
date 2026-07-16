@@ -46,9 +46,9 @@ pub use marty_types as types;
 
 // Core protocol modules
 pub mod core;
-pub mod session;
 pub mod protocol;
 pub mod selective;
+pub mod session;
 
 // Transport layers
 pub mod transport;
@@ -73,19 +73,19 @@ fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DeviceEngagement>()?;
     m.add_class::<core::TransportMethod>()?;
     m.add_class::<core::EngagementMethod>()?;
-    
+
     // Session types
     m.add_class::<SessionConfig>()?;
     m.add_class::<protocol::SessionState>()?;
-    
+
     // Request/Response types
     m.add_class::<MdlRequest>()?;
     m.add_class::<MdlResponse>()?;
     m.add_class::<protocol::ResponseStatus>()?;
-    
+
     // Submodules
     let transport_module = PyModule::new_bound(m.py(), "transport")?;
     m.add_submodule(&transport_module)?;
-    
+
     Ok(())
 }

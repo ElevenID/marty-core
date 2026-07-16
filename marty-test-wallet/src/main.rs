@@ -131,8 +131,8 @@ async fn main() {
         .route("/api/present", post(present_credential))
         .route("/api/reset", post(reset_wallet))
         .with_state(state);
-    let address = std::env::var("MARTY_TEST_WALLET_ADDRESS")
-        .unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let address =
+        std::env::var("MARTY_TEST_WALLET_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let listener = tokio::net::TcpListener::bind(&address)
         .await
         .expect("test wallet listener bind failed");
@@ -152,7 +152,13 @@ async fn ready() -> Json<Value> {
 
 async fn list_credentials(State(state): State<AppState>) -> Json<Vec<CredentialSummary>> {
     let wallet = state.wallet.read().await;
-    Json(wallet.credentials.iter().map(CredentialSummary::from).collect())
+    Json(
+        wallet
+            .credentials
+            .iter()
+            .map(CredentialSummary::from)
+            .collect(),
+    )
 }
 
 async fn reset_wallet(State(state): State<AppState>) -> StatusCode {
@@ -218,10 +224,15 @@ async fn receive_credential(
         )
         .await
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let nonce = token
-        .nonce
+    let nonce_endpoint = metadata
+        .nonce_endpoint
         .as_deref()
-        .ok_or_else(|| AppError::unprocessable("Token response omitted the proof nonce"))?;
+        .ok_or_else(|| AppError::unprocessable("Issuer metadata omitted the nonce endpoint"))?;
+    let nonce_response = state
+        .engine
+        .fetch_nonce(nonce_endpoint)
+        .await
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
     let holder = {
         let wallet = state.wallet.read().await;
         wallet.holder.clone()
@@ -230,7 +241,7 @@ async fn receive_credential(
         .engine
         .create_proof_jwt(
             &format!("{}#{}", holder.holder_id, holder.holder_id),
-            nonce,
+            &nonce_response.c_nonce,
             &offer.credential_issuer,
             &holder.private_jwk,
         )
@@ -254,7 +265,10 @@ async fn receive_credential(
         id: uuid::Uuid::new_v4().to_string(),
         credential_configuration_id: configuration_id,
         format,
-        vct: payload.get("vct").and_then(Value::as_str).map(str::to_string),
+        vct: payload
+            .get("vct")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         claim_names: disclosed_claim_names(&raw),
         raw,
         received_at: chrono::Utc::now().to_rfc3339(),
@@ -333,11 +347,7 @@ async fn present_credential(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let response = state
         .engine
-        .submit_presentation_for_request(
-            &presentation_request,
-            &vp_token,
-            submission.as_ref(),
-        )
+        .submit_presentation_for_request(&presentation_request, &vp_token, submission.as_ref())
         .await
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     if !response.ok {
@@ -379,9 +389,10 @@ fn credential_value(value: &Value) -> Option<String> {
 
 fn decode_sd_jwt(raw: &str) -> Result<Value, AppError> {
     let jwt = raw.split('~').next().unwrap_or_default();
-    let payload = jwt.split('.').nth(1).ok_or_else(|| {
-        AppError::bad_request("Issued SD-JWT does not contain a JWT payload")
-    })?;
+    let payload = jwt
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| AppError::bad_request("Issued SD-JWT does not contain a JWT payload"))?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
         .map_err(|error| AppError::bad_request(format!("Invalid SD-JWT payload: {error}")))?;
@@ -412,9 +423,13 @@ mod tests {
 
     #[test]
     fn credential_value_accepts_canonical_single_and_batch_values() {
-        assert_eq!(credential_value(&Value::String("jwt".into())).as_deref(), Some("jwt"));
         assert_eq!(
-            credential_value(&serde_json::json!({"format": "dc+sd-jwt", "credential": "sd-jwt"})).as_deref(),
+            credential_value(&Value::String("jwt".into())).as_deref(),
+            Some("jwt")
+        );
+        assert_eq!(
+            credential_value(&serde_json::json!({"format": "dc+sd-jwt", "credential": "sd-jwt"}))
+                .as_deref(),
             Some("sd-jwt")
         );
     }

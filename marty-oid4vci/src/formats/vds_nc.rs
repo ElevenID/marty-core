@@ -98,7 +98,10 @@ pub fn prepare_vds_nc(
 pub fn assemble_vds_nc(prepared: PreparedVdsNc, signature: &[u8]) -> SignedCredential {
     let normalized = normalize_signature_bytes(signature);
     let signature_b64 = base64::engine::general_purpose::STANDARD.encode(&normalized);
-    let barcode_data = format!("{}~{}~{}", prepared.header, prepared.payload_json, signature_b64);
+    let barcode_data = format!(
+        "{}~{}~{}",
+        prepared.header, prepared.payload_json, signature_b64
+    );
 
     SignedCredential::VdsNc {
         barcode_data,
@@ -342,9 +345,9 @@ mod tests {
 
         let assembled = assemble_vds_nc(prepared, sig_der.as_bytes());
         let sig_bytes = match assembled {
-            SignedCredential::VdsNc { ref barcode_data, .. } => {
-                barcode_signature_bytes(barcode_data)
-            }
+            SignedCredential::VdsNc {
+                ref barcode_data, ..
+            } => barcode_signature_bytes(barcode_data),
             _ => panic!("expected VdsNc"),
         };
 
@@ -355,8 +358,10 @@ mod tests {
             "P-256 raw signature must be 64 bytes, got {}",
             sig_bytes.len()
         );
-        // Must NOT start with DER SEQUENCE tag 0x30
-        assert_ne!(sig_bytes[0], 0x30, "raw signature must not be DER-encoded");
+        let expected = p256::ecdsa::Signature::from_der(sig_der.as_bytes())
+            .expect("valid P-256 DER signature")
+            .to_bytes();
+        assert_eq!(sig_bytes, expected.as_slice());
     }
 
     /// Mock KMS: returns a raw P-256 signature (already in r || s format).
@@ -372,9 +377,9 @@ mod tests {
 
         let assembled = assemble_vds_nc(prepared, &raw_bytes);
         let sig_bytes = match assembled {
-            SignedCredential::VdsNc { ref barcode_data, .. } => {
-                barcode_signature_bytes(barcode_data)
-            }
+            SignedCredential::VdsNc {
+                ref barcode_data, ..
+            } => barcode_signature_bytes(barcode_data),
             _ => panic!("expected VdsNc"),
         };
 
@@ -394,9 +399,9 @@ mod tests {
 
         let assembled = assemble_vds_nc(prepared, sig_der.as_bytes());
         let sig_bytes = match assembled {
-            SignedCredential::VdsNc { ref barcode_data, .. } => {
-                barcode_signature_bytes(barcode_data)
-            }
+            SignedCredential::VdsNc {
+                ref barcode_data, ..
+            } => barcode_signature_bytes(barcode_data),
             _ => panic!("expected VdsNc"),
         };
 
@@ -407,7 +412,10 @@ mod tests {
             "P-384 raw signature must be 96 bytes, got {}",
             sig_bytes.len()
         );
-        assert_ne!(sig_bytes[0], 0x30, "raw signature must not be DER-encoded");
+        let expected = p384::ecdsa::Signature::from_der(sig_der.as_bytes())
+            .expect("valid P-384 DER signature")
+            .to_bytes();
+        assert_eq!(sig_bytes, expected.as_slice());
     }
 
     /// Ed25519 signatures are 64 bytes and never DER-encoded; pass through unchanged.
@@ -417,9 +425,9 @@ mod tests {
         let prepared = make_prepared("FRA");
         let assembled = assemble_vds_nc(prepared, &raw_ed25519_sig);
         let sig_bytes = match assembled {
-            SignedCredential::VdsNc { ref barcode_data, .. } => {
-                barcode_signature_bytes(barcode_data)
-            }
+            SignedCredential::VdsNc {
+                ref barcode_data, ..
+            } => barcode_signature_bytes(barcode_data),
             _ => panic!("expected VdsNc"),
         };
         assert_eq!(sig_bytes, raw_ed25519_sig);

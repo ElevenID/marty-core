@@ -104,7 +104,10 @@ pub fn save_private_key_pem(private_key_der: &[u8]) -> CryptoResult<String> {
 
     let mut pem = String::from("-----BEGIN PRIVATE KEY-----\n");
     for chunk in b64.as_bytes().chunks(64) {
-        pem.push_str(std::str::from_utf8(chunk).map_err(|_| CryptoError::encoding_error("invalid UTF-8 in base64 output"))?);
+        pem.push_str(
+            std::str::from_utf8(chunk)
+                .map_err(|_| CryptoError::encoding_error("invalid UTF-8 in base64 output"))?,
+        );
         pem.push('\n');
     }
     pem.push_str("-----END PRIVATE KEY-----\n");
@@ -315,7 +318,10 @@ pub fn save_public_key_pem(public_key_der: &[u8]) -> CryptoResult<String> {
 
     let mut pem = String::from("-----BEGIN PUBLIC KEY-----\n");
     for chunk in b64.as_bytes().chunks(64) {
-        pem.push_str(std::str::from_utf8(chunk).map_err(|_| CryptoError::encoding_error("invalid UTF-8 in base64 output"))?);
+        pem.push_str(
+            std::str::from_utf8(chunk)
+                .map_err(|_| CryptoError::encoding_error("invalid UTF-8 in base64 output"))?,
+        );
         pem.push('\n');
     }
     pem.push_str("-----END PUBLIC KEY-----\n");

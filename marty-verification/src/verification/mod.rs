@@ -15,4 +15,6 @@ pub mod vds_nc;
 pub mod emrtd;
 
 pub use chain::{ChainValidationResult, ChainValidator, ChainValidatorConfig, KeyUsage};
-pub use vds_nc::{verify_vds_nc, verify_vds_nc_jwk_json, SignatureVerificationStatus, VdsNcVerificationResult};
+pub use vds_nc::{
+    verify_vds_nc, verify_vds_nc_jwk_json, SignatureVerificationStatus, VdsNcVerificationResult,
+};

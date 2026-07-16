@@ -49,7 +49,9 @@ impl CredentialFormat {
     pub fn from_str_loose(s: &str) -> Option<Self> {
         match s {
             "jwt_vc_json" | "jwt_vc" => Some(Self::JwtVcJson),
-            "dc+sd-jwt" | "spruce-vc+sd-jwt" | "vc+sd-jwt" | "sd_jwt" | "sd-jwt" => Some(Self::SdJwt),
+            "dc+sd-jwt" | "spruce-vc+sd-jwt" | "vc+sd-jwt" | "sd_jwt" | "sd-jwt" => {
+                Some(Self::SdJwt)
+            }
             "mso_mdoc" | "mdoc" => Some(Self::MsoMdoc),
             "zk_mdoc" | "zk-mdoc" | "zkp_mdoc" => Some(Self::ZkMdoc),
             "vds_nc" | "vds-nc" | "VDS-NC" => Some(Self::VdsNc),

@@ -150,7 +150,10 @@ pub async fn verify_ob3_json_async(request_json: &str) -> VerificationResult<Str
 
     if !has_context(&req.credential, ob3_context_uri())
         && !has_context(&req.credential, "https://w3id.org/openbadges/v3")
-        && !has_context(&req.credential, "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json")
+        && !has_context(
+            &req.credential,
+            "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json",
+        )
     {
         push_error(
             &mut errors,

@@ -49,7 +49,10 @@ mod tests {
 
     #[test]
     fn test_aamva_namespace_value() {
-        assert_eq!(namespaces::iso18013::namespace::AAMVA, "org.iso.18013.5.1.aamva");
+        assert_eq!(
+            namespaces::iso18013::namespace::AAMVA,
+            "org.iso.18013.5.1.aamva"
+        );
     }
 
     #[test]

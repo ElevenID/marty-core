@@ -191,19 +191,40 @@ mod tests {
 
     #[test]
     fn test_error_code_display() {
-        assert_eq!(Oid4vciErrorCode::UnsupportedGrantType.to_string(), "unsupported_grant_type");
+        assert_eq!(
+            Oid4vciErrorCode::UnsupportedGrantType.to_string(),
+            "unsupported_grant_type"
+        );
         assert_eq!(Oid4vciErrorCode::InvalidGrant.to_string(), "invalid_grant");
         assert_eq!(Oid4vciErrorCode::InvalidToken.to_string(), "invalid_token");
-        assert_eq!(Oid4vciErrorCode::InvalidCredentialRequest.to_string(), "invalid_credential_request");
-        assert_eq!(Oid4vciErrorCode::UnsupportedCredentialType.to_string(), "unsupported_credential_type");
-        assert_eq!(Oid4vciErrorCode::UnsupportedCredentialFormat.to_string(), "unsupported_credential_format");
+        assert_eq!(
+            Oid4vciErrorCode::InvalidCredentialRequest.to_string(),
+            "invalid_credential_request"
+        );
+        assert_eq!(
+            Oid4vciErrorCode::UnsupportedCredentialType.to_string(),
+            "unsupported_credential_type"
+        );
+        assert_eq!(
+            Oid4vciErrorCode::UnsupportedCredentialFormat.to_string(),
+            "unsupported_credential_format"
+        );
         assert_eq!(Oid4vciErrorCode::InvalidProof.to_string(), "invalid_proof");
-        assert_eq!(Oid4vciErrorCode::CNonceExpired.to_string(), "c_nonce_expired");
+        assert_eq!(
+            Oid4vciErrorCode::CNonceExpired.to_string(),
+            "c_nonce_expired"
+        );
     }
 
     #[test]
     fn test_error_code_equality() {
-        assert_eq!(Oid4vciErrorCode::InvalidGrant, Oid4vciErrorCode::InvalidGrant);
-        assert_ne!(Oid4vciErrorCode::InvalidGrant, Oid4vciErrorCode::InvalidToken);
+        assert_eq!(
+            Oid4vciErrorCode::InvalidGrant,
+            Oid4vciErrorCode::InvalidGrant
+        );
+        assert_ne!(
+            Oid4vciErrorCode::InvalidGrant,
+            Oid4vciErrorCode::InvalidToken
+        );
     }
 }

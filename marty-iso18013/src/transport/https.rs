@@ -1,6 +1,6 @@
 //! HTTPS transport implementation
 
-use super::{Transport, Result};
+use super::{Result, Transport};
 use async_trait::async_trait;
 use reqwest::Client;
 
@@ -32,43 +32,52 @@ impl Transport for HttpsTransport {
 
     async fn send(&mut self, data: &[u8]) -> Result<()> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&self.url)
             .body(data.to_vec())
             .send()
             .await
             .map_err(|e| crate::error::Error::SendFailed(e.to_string()))?;
-        
+
         if !response.status().is_success() {
-            return Err(crate::error::Error::SendFailed(
-                format!("HTTP error: {}", response.status())
-            ));
+            return Err(crate::error::Error::SendFailed(format!(
+                "HTTP error: {}",
+                response.status()
+            )));
         }
-        
+
         Ok(())
     }
 
     async fn receive(&mut self) -> Result<Vec<u8>> {
         if !self.connected {
-            return Err(crate::error::Error::ConnectionFailed("Not connected".to_string()));
+            return Err(crate::error::Error::ConnectionFailed(
+                "Not connected".to_string(),
+            ));
         }
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(&self.url)
             .send()
             .await
             .map_err(|e| crate::error::Error::ReceiveFailed(e.to_string()))?;
-        
+
         if !response.status().is_success() {
-            return Err(crate::error::Error::ReceiveFailed(
-                format!("HTTP error: {}", response.status())
-            ));
+            return Err(crate::error::Error::ReceiveFailed(format!(
+                "HTTP error: {}",
+                response.status()
+            )));
         }
-        
-        response.bytes()
+
+        response
+            .bytes()
             .await
             .map(|b| b.to_vec())
             .map_err(|e| crate::error::Error::ReceiveFailed(e.to_string()))
