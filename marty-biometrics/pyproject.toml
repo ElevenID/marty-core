@@ -49,7 +49,7 @@ Issues = "https://github.com/ElevenID/marty-core/issues"
 # Build the Python module from Cargo.toml
 python-source = "python"
 module-name = "marty_biometrics._marty_biometrics"
-features = ["python"]
+features = ["pyo3/extension-module", "python"]
 
 [tool.ruff]
 line-length = 100

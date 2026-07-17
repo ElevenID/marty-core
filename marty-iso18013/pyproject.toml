@@ -35,7 +35,7 @@ dev = [
 ]
 
 [tool.maturin]
-features = ["python"]
+features = ["pyo3/extension-module", "python"]
 module-name = "marty_iso18013"
 python-source = "python"
 strip = true

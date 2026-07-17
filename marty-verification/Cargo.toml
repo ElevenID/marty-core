@@ -97,4 +97,4 @@ time = "0.3"
 proptest = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
-openssl = "0.10"
+openssl = { version = "0.10", features = ["vendored"] }
