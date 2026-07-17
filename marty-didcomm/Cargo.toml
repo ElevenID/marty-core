@@ -35,7 +35,7 @@ rand = { workspace = true }
 base64 = { workspace = true }
 
 # JOSE — JWE / JWS construction
-jsonwebtoken = "9.3"
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 aes-gcm = { workspace = true }
 aes = { workspace = true }
 
