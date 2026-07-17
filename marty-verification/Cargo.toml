@@ -78,7 +78,7 @@ chrono = { workspace = true }
 tokio = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 moka = { workspace = true, optional = true }
-ldap3 = { version = "0.11", optional = true }
+ldap3 = { version = "0.11", optional = true, default-features = false, features = ["sync", "tls-rustls"] }
 quick-xml = { version = "0.37", features = ["serialize"], optional = true }
 
 # Optional Python bindings
