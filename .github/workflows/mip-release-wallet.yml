@@ -26,7 +26,6 @@ jobs:
         shell: bash
         run: |
           test -f Cargo.lock
-          test -f vendor/core2-0.4.0/Cargo.toml
           test -f marty-test-wallet/Cargo.toml
           cargo metadata --locked --no-deps --format-version 1 >/dev/null
 
