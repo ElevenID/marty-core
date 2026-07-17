@@ -533,33 +533,6 @@ fn inject_kid_header(
     Ok(format!("{}{}", new_jws, disclosures_suffix))
 }
 
-/// Build a PKCS#8 v2 DER-encoded Ed25519 private key for use with `ring`/`jsonwebtoken`.
-///
-/// `ring::signature::Ed25519KeyPair::from_pkcs8` requires PKCS#8 v2 format which
-/// includes both the 32-byte private seed and the 32-byte public key.
-fn ed25519_to_pkcs8_v2_der(private_seed: &[u8], public_key: &[u8]) -> Vec<u8> {
-    // AlgorithmIdentifier: SEQUENCE { OID 1.3.101.112 (id-EdDSA / Ed25519) }
-    let alg_id = b"\x30\x05\x06\x03\x2b\x65\x70";
-    // Private key: OCTET STRING { OCTET STRING { seed } }
-    let mut priv_part = vec![0x04u8, 0x22, 0x04, 0x20];
-    priv_part.extend_from_slice(private_seed);
-    // Public key: [1] EXPLICIT { BIT STRING { 0x00 || pubkey } }
-    let mut pub_part = vec![0xa1u8, 0x23, 0x03, 0x21, 0x00];
-    pub_part.extend_from_slice(public_key);
-    // PKCS#8 v2 version = 1
-    let version = b"\x02\x01\x01";
-
-    let inner_len = version.len() + alg_id.len() + priv_part.len() + pub_part.len();
-    let mut der = Vec::with_capacity(2 + inner_len);
-    der.push(0x30u8);
-    der.push(inner_len as u8);
-    der.extend_from_slice(version);
-    der.extend_from_slice(alg_id);
-    der.extend_from_slice(&priv_part);
-    der.extend_from_slice(&pub_part);
-    der
-}
-
 /// Get the signing algorithm string and the JWK-derived EncodingKey for sd-jwt-rs.
 fn get_sd_jwt_signing_params(
     jwk: &JWK,
@@ -569,14 +542,22 @@ fn get_sd_jwt_signing_params(
 
     let encoding_key = match &jwk.params {
         Params::OKP(params) => {
+            use ed25519_dalek::pkcs8::EncodePrivateKey;
+
             let d = params
                 .private_key
                 .as_ref()
                 .ok_or_else(|| Oid4vciError::KeyError("Missing Ed25519 private key".into()))?;
 
-            // Build PKCS#8 v2 DER — ring needs both private seed and public key
-            let pkcs8_der = ed25519_to_pkcs8_v2_der(&d.0, &params.public_key.0);
-            jsonwebtoken::EncodingKey::from_ed_der(&pkcs8_der)
+            // Serialize the seed with the standards-compliant PKCS#8 encoder.
+            let seed: [u8; 32] = d.0.as_slice().try_into().map_err(|_| {
+                Oid4vciError::KeyError("Ed25519 private key must be a 32-byte seed".into())
+            })?;
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+            let pkcs8_der = signing_key.to_pkcs8_der().map_err(|e| {
+                Oid4vciError::KeyError(format!("Ed25519 PKCS#8 encoding failed: {}", e))
+            })?;
+            jsonwebtoken::EncodingKey::from_ed_der(pkcs8_der.as_bytes())
         }
         Params::EC(params) => {
             let d = params
