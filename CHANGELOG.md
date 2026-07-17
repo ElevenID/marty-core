@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [unreleased] - 2026-07-17
 
+## [unreleased] - 2026-07-17
+
 ### Bug Fixes
 
 - **release**: Install OpenSSL Perl build support ([5375d05](5375d057d08d155f5cdd19749a315b515af28f43))
