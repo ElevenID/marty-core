@@ -63,23 +63,32 @@ fn compile_libzk(lib_dir: &std::path::Path) {
 
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let is_msvc = target_env == "msvc";
 
     let mut build = cc::Build::new();
-    build
-        .cpp(true)
-        .flag("-std=c++17")
-        .flag("-O2")
-        .flag("-DOPENSSL_SUPPRESS_DEPRECATED=1")
-        // Suppress warnings from vendored longfellow-zk library
-        .flag("-Wno-unused-parameter")
-        .flag("-Wno-missing-field-initializers")
-        .flag("-Wno-sign-compare")
-        .include(&lib_src);
+    build.cpp(true).include(&lib_src);
+
+    if is_msvc {
+        build
+            .flag("/std:c++17")
+            .flag("/O2")
+            .flag("/DOPENSSL_SUPPRESS_DEPRECATED=1");
+    } else {
+        build
+            .flag("-std=c++17")
+            .flag("-O2")
+            .flag("-DOPENSSL_SUPPRESS_DEPRECATED=1")
+            // Suppress warnings from vendored longfellow-zk library
+            .flag("-Wno-unused-parameter")
+            .flag("-Wno-missing-field-initializers")
+            .flag("-Wno-sign-compare");
+    }
 
     // Architecture-specific crypto acceleration flags
     if target_arch == "aarch64" {
         build.flag("-march=armv8-a+crypto");
-    } else if target_arch == "x86_64" {
+    } else if target_arch == "x86_64" && !is_msvc {
         build.flag("-mpclmul");
     }
 
@@ -106,7 +115,7 @@ fn compile_libzk(lib_dir: &std::path::Path) {
     if target_os == "macos" {
         println!("cargo:rustc-link-search=/opt/homebrew/lib");
         println!("cargo:rustc-link-lib=c++");
-    } else {
+    } else if target_os != "windows" {
         println!("cargo:rustc-link-lib=stdc++");
     }
 

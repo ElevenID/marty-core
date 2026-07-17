@@ -30,10 +30,7 @@ fn to_pyerr(err: impl std::fmt::Display) -> PyErr {
 #[pyfunction]
 fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
-    Ok((
-        PyBytes::new_bound(py, &secret),
-        PyBytes::new_bound(py, &public),
-    ))
+    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
 /// Generate a P-384 ECDSA key pair for signing credentials.
@@ -44,10 +41,7 @@ fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bou
 #[pyfunction]
 fn generate_p384_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
-    Ok((
-        PyBytes::new_bound(py, &secret),
-        PyBytes::new_bound(py, &public),
-    ))
+    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
 /// Generate an Ed25519 key pair for signing credentials.
@@ -60,10 +54,7 @@ fn generate_ed25519_key<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ed25519::generate_keypair();
-    Ok((
-        PyBytes::new_bound(py, &secret),
-        PyBytes::new_bound(py, &public),
-    ))
+    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
 // ============================================================================
@@ -89,7 +80,7 @@ fn sign_p256<'py>(
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
     let signature = marty_crypto::ecdsa::sign_p256_sha256(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new_bound(py, &signature))
+    Ok(PyBytes::new(py, &signature))
 }
 
 /// Sign a message with ECDSA P-384 SHA-384 (ES384).
@@ -107,7 +98,7 @@ fn sign_p384<'py>(
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
     let signature = marty_crypto::ecdsa::sign_p384_sha384(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new_bound(py, &signature))
+    Ok(PyBytes::new(py, &signature))
 }
 
 /// Sign a message with Ed25519.
@@ -125,7 +116,7 @@ fn sign_ed25519<'py>(
     message: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
     let signature = marty_crypto::ed25519::sign(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new_bound(py, &signature))
+    Ok(PyBytes::new(py, &signature))
 }
 
 // ============================================================================
@@ -941,7 +932,7 @@ fn aes_256_cbc_encrypt<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     let ct = marty_crypto::symmetric::aes_256_cbc_encrypt(key, iv, plaintext)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-    Ok(PyBytes::new_bound(py, &ct))
+    Ok(PyBytes::new(py, &ct))
 }
 
 /// AES-256-CBC decrypt with PKCS7 padding.
@@ -954,7 +945,7 @@ fn aes_256_cbc_decrypt<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     let pt = marty_crypto::symmetric::aes_256_cbc_decrypt(key, iv, ciphertext)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-    Ok(PyBytes::new_bound(py, &pt))
+    Ok(PyBytes::new(py, &pt))
 }
 
 /// HMAC-SHA256.
@@ -962,14 +953,14 @@ fn aes_256_cbc_decrypt<'py>(
 fn hmac_sha256<'py>(py: Python<'py>, key: &[u8], data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let mac = marty_crypto::symmetric::hmac_sha256(key, data)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-    Ok(PyBytes::new_bound(py, &mac))
+    Ok(PyBytes::new(py, &mac))
 }
 
 /// SHA-256 hash.
 #[pyfunction]
 fn sha256<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let digest = marty_crypto::hashing::hash_sha256(data);
-    Ok(PyBytes::new_bound(py, &digest))
+    Ok(PyBytes::new(py, &digest))
 }
 
 // ============================================================================
@@ -1127,8 +1118,8 @@ fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyRes
 /// Raises:
 ///     ``RuntimeError`` if the JWK JSON cannot be parsed.
 #[pyfunction]
-fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<pyo3::PyObject> {
-    pyo3::Python::with_gil(|py| {
+fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
+    pyo3::Python::attach(|py| {
         let result = marty_verification::verify_vds_nc_jwk_json(barcode, issuer_jwk_json)
             .map_err(to_pyerr)?;
 
@@ -1138,7 +1129,7 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<pyo3::PyObjec
             marty_verification::SignatureVerificationStatus::Unknown => "Unknown",
         };
 
-        let dict = pyo3::types::PyDict::new_bound(py);
+        let dict = pyo3::types::PyDict::new(py);
         dict.set_item("verified", result.verified)?;
         dict.set_item("country", result.country)?;
         dict.set_item("header", result.header)?;
