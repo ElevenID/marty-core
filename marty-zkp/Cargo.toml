@@ -1,13 +1,13 @@
 [package]
 name = "marty-zkp"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Bridge to Google Longfellow ZK (LibZK) for privacy-preserving proofs"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ElevenID/marty-core"
 
 [dependencies]
-marty-types = { version = "0.1.1", path = "../marty-types" }
+marty-types = { version = "0.1.2", path = "../marty-types" }
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 libc = "0.2"
