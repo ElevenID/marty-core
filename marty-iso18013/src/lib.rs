@@ -84,7 +84,7 @@ fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<protocol::ResponseStatus>()?;
 
     // Submodules
-    let transport_module = PyModule::new_bound(m.py(), "transport")?;
+    let transport_module = PyModule::new(m.py(), "transport")?;
     m.add_submodule(&transport_module)?;
 
     Ok(())
