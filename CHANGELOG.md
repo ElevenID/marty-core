@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- Restore LTI claim tests for core release ([c224db6](c224db6f7ccc574aa5ca63edae57c311f7a2ac70))
+
+## [unreleased] - 2026-07-17
+
+### Bug Fixes
+
 - Auto-format code to pass CI checks ([bb7179a](bb7179a8fd5ae80e049db41121e706c015e3ecf9))
 - Resolve clippy warnings and compilation errors ([3ac1390](3ac1390fd872f9ee0ef3bddff4219042ac4ff78f))
 - Gate chip_io module behind csca feature ([4e0ebae](4e0ebae179a59a70536302650b5b79c986457cf6))
