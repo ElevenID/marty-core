@@ -3,7 +3,7 @@ members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-st
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
@@ -105,10 +105,10 @@ zeroize = "1.7"
 pyo3 = { version = "0.22.6", features = ["abi3-py311"] }
 
 # Internal crates
-marty-crypto = { version = "0.1.0", path = "marty-crypto" }
-marty-verification = { version = "0.1.0", path = "marty-verification" }
-marty-secure-storage = { version = "0.1.0", path = "marty-secure-storage" }
-marty-biometrics = { version = "0.1.0", path = "marty-biometrics" }
+marty-crypto = { version = "0.1.1", path = "marty-crypto" }
+marty-verification = { version = "0.1.1", path = "marty-verification" }
+marty-secure-storage = { version = "0.1.1", path = "marty-secure-storage" }
+marty-biometrics = { version = "0.1.1", path = "marty-biometrics" }
 
 # Test/dev dependencies
 rcgen = "0.13"

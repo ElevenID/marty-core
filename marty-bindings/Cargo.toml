@@ -14,11 +14,11 @@ name = "_marty_rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-marty-crypto = { version = "0.1.0", path = "../marty-crypto" }
-marty-oid4vci = { version = "0.1.0", path = "../marty-oid4vci", features = ["lti"] }
-marty-didcomm = { version = "0.1.0", path = "../marty-didcomm" }
-marty-verification = { version = "0.1.0", path = "../marty-verification" }
-marty-types = { version = "0.1.0", path = "../marty-types" }
+marty-crypto = { version = "0.1.1", path = "../marty-crypto" }
+marty-oid4vci = { version = "0.1.1", path = "../marty-oid4vci", features = ["lti"] }
+marty-didcomm = { version = "0.1.1", path = "../marty-didcomm" }
+marty-verification = { version = "0.1.1", path = "../marty-verification" }
+marty-types = { version = "0.1.1", path = "../marty-types" }
 
 # PyO3 for Python bindings (use workspace version)
 pyo3 = { workspace = true, features = ["abi3-py311"] }

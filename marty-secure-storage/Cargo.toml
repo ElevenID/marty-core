@@ -1,6 +1,6 @@
 [package]
 name = "marty-secure-storage"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -50,7 +50,7 @@ uuid = { workspace = true }
 # Encoding
 hex = "0.4"
 # Internal crates
-marty-types = { version = "0.1.0", path = "../marty-types" }
+marty-types = { version = "0.1.1", path = "../marty-types" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

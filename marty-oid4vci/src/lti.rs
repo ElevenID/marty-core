@@ -538,6 +538,16 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use serde_json::json;
 
+    const LTI_DEPLOYMENT_ID_CLAIM: &str =
+        "https://purl.imsglobal.org/spec/lti/claim/deployment_id";
+    const LTI_CONTEXT_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/context";
+    const LTI_ROLES_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/roles";
+    const LTI_TARGET_LINK_URI_CLAIM: &str =
+        "https://purl.imsglobal.org/spec/lti/claim/target_link_uri";
+    const LTI_MESSAGE_TYPE_CLAIM: &str =
+        "https://purl.imsglobal.org/spec/lti/claim/message_type";
+    const LTI_VERSION_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/version";
+
     fn make_test_jwk(kid: &str, verifying_key: &VerifyingKey) -> Value {
         json!({
             "kty": "OKP",
