@@ -30,10 +30,7 @@ fn to_pyerr(err: impl std::fmt::Display) -> PyErr {
 #[pyfunction]
 fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
-    Ok((
-        PyBytes::new(py, &secret),
-        PyBytes::new(py, &public),
-    ))
+    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
 /// Generate a P-384 ECDSA key pair for signing credentials.
@@ -44,10 +41,7 @@ fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bou
 #[pyfunction]
 fn generate_p384_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
-    Ok((
-        PyBytes::new(py, &secret),
-        PyBytes::new(py, &public),
-    ))
+    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
 /// Generate an Ed25519 key pair for signing credentials.
@@ -60,10 +54,7 @@ fn generate_ed25519_key<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ed25519::generate_keypair();
-    Ok((
-        PyBytes::new(py, &secret),
-        PyBytes::new(py, &public),
-    ))
+    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
 // ============================================================================
