@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- **release**: Install OpenSSL for Linux wheels ([322bd19](322bd1937481fb2e6ef106ad9033692e49c46245))
+
+### Miscellaneous Tasks
+
+- Update CHANGELOG.md ([9087969](9087969fc4436e791a3ffcedf2757de281cccd5e))
+
+## [unreleased] - 2026-07-17
+
+### Bug Fixes
+
 - Restore LTI claim tests for core release ([c224db6](c224db6f7ccc574aa5ca63edae57c311f7a2ac70))
 
 ### Miscellaneous Tasks
