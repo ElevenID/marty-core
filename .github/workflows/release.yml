@@ -135,7 +135,7 @@ jobs:
           command: build
           args: --release --out dist --find-interpreter
           manylinux: auto
-          before-script-linux: yum install -y openssl-devel
+          before-script-linux: yum install -y openssl-devel perl-IPC-Cmd
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}
