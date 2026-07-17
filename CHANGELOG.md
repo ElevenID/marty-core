@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Restore LTI claim tests for core release ([c224db6](c224db6f7ccc574aa5ca63edae57c311f7a2ac70))
 
+### Miscellaneous Tasks
+
+- Update CHANGELOG.md ([cbc7de5](cbc7de5f43ff8b085dda44aab9bbbf09b3b7f8f5))
+
+### Ci
+
+- Use license-free publication secret scan ([fc67dac](fc67dacbf3ed093148f672b013ebe5c0d2cae452))
+
+## [unreleased] - 2026-07-17
+
+### Bug Fixes
+
+- Restore LTI claim tests for core release ([c224db6](c224db6f7ccc574aa5ca63edae57c311f7a2ac70))
+
 ## [unreleased] - 2026-07-17
 
 ### Bug Fixes
