@@ -128,4 +128,4 @@ debug = true
 # Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
 ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "a65d3c79a971be0481f0990041e29140e3f8c408" }
 # Temporary security fork pending https://github.com/spruceid/isomdl/pull/134.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "05615b1dfbca2da8a0d76c8619317f3cb4d5b52f" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "069576a64580fc9923b65dcbdad0c2253c44296d" }

@@ -2784,7 +2784,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 [[package]]
 name = "isomdl"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=05615b1dfbca2da8a0d76c8619317f3cb4d5b52f#05615b1dfbca2da8a0d76c8619317f3cb4d5b52f"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=069576a64580fc9923b65dcbdad0c2253c44296d#069576a64580fc9923b65dcbdad0c2253c44296d"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2829,7 +2829,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=05615b1dfbca2da8a0d76c8619317f3cb4d5b52f#05615b1dfbca2da8a0d76c8619317f3cb4d5b52f"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=069576a64580fc9923b65dcbdad0c2253c44296d#069576a64580fc9923b65dcbdad0c2253c44296d"
 dependencies = [
  "proc-macro2",
  "quote",
