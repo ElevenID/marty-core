@@ -19,7 +19,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
@@ -41,7 +41,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
@@ -79,7 +79,7 @@ jobs:
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
@@ -128,7 +128,7 @@ jobs:
         package: [marty-bindings, marty-verification, marty-biometrics, marty-iso18013]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
         with:
           working-directory: ${{ matrix.package }}
@@ -150,7 +150,7 @@ jobs:
         package: [marty-bindings, marty-verification, marty-biometrics, marty-iso18013]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
       - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
         with:
           working-directory: ${{ matrix.package }}
@@ -171,12 +171,12 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           pattern: "wheels-*"
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           pattern: "sdist-*"
           path: dist
@@ -193,10 +193,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           path: release-assets
           merge-multiple: true
@@ -209,7 +209,7 @@ jobs:
             cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"
           done
           (cd release-assets && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-path: release-assets/**
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
