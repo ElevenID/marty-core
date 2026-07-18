@@ -13,7 +13,7 @@ jobs:
   policy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: ElevenID/.github/.github/actions/open-source-audit@8e3c9bac4b2aa7b1c49494cbf950c53b4ff55f3a
 
   dependency-review:
