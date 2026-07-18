@@ -35,7 +35,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Async runtime (needed for DIDComm DID resolution)
 tokio = { version = "1.35", features = ["rt", "macros"] }
