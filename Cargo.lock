@@ -2304,10 +2304,6 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash 0.8.12",
- "allocator-api2",
-]
 
 [[package]]
 name = "hashbrown"
@@ -2323,6 +2319,11 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash",
+]
 
 [[package]]
 name = "hashlink"
@@ -4298,9 +4299,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "4.6.0"
+version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
+checksum = "b7d950ca161dc355eaf28f82b11345ed76c6e1f6eb1f4f4479e0323b9e2fbd0e"
 dependencies = [
  "num-traits",
  "rand 0.8.7",
@@ -6445,14 +6446,14 @@ dependencies = [
 [[package]]
 name = "ssi-jwt"
 version = "0.6.0"
-source = "git+https://github.com/ElevenID/ssi-jwt-elevenid?rev=a65d3c79a971be0481f0990041e29140e3f8c408#a65d3c79a971be0481f0990041e29140e3f8c408"
+source = "git+https://github.com/ElevenID/ssi-jwt-elevenid?rev=957c8b0fbf3e4b967fe73c858a22b38e907b3023#957c8b0fbf3e4b967fe73c858a22b38e907b3023"
 dependencies = [
  "async-trait",
  "chrono",
- "hashbrown 0.14.5",
+ "hashbrown 0.17.1",
  "iref",
  "json-syntax",
- "ordered-float 4.6.0",
+ "ordered-float 5.3.0",
  "serde",
  "serde_json",
  "slab",
@@ -6461,7 +6462,7 @@ dependencies = [
  "ssi-crypto",
  "ssi-jwk",
  "ssi-jws",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
