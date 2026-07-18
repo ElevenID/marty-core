@@ -141,7 +141,9 @@ All commits should follow [Conventional Commits](https://www.conventionalcommits
 - `chore:` - Maintenance tasks
 - `BREAKING:` - Breaking changes
 
-Changelogs are automatically generated from commit messages.
+GitHub release notes are automatically generated from commit messages. The
+versioned `CHANGELOG.md` is regenerated with the pinned git-cliff tool during
+release preparation and reviewed in the release pull request.
 
 ### Creating a Release
 
@@ -168,7 +170,7 @@ git push origin v0.2.0-rc.1
 # This triggers:
 # - Build all artifacts (Rust crates, Python wheels, WASM)
 # - Upload to GitHub pre-release
-# - Generate changelog from commits
+# - Generate GitHub release notes from commits
 ```
 
 **3. Test RC Release**
@@ -208,7 +210,7 @@ Each release produces:
 - **Python wheels** for marty-biometrics (Linux, macOS, Windows × x86_64, aarch64)
 - **WASM packages** for marty-biometrics (web, nodejs, bundler targets)
 - **SHA256 checksums** for all artifacts
-- **Auto-generated changelog** from commits
+- **Auto-generated GitHub release notes** from commits
 
 All artifacts are published to **GitHub Releases only** (not crates.io or PyPI).
 

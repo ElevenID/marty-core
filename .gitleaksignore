@@ -1,5 +1,6 @@
-﻿# Exact reviewed false positives from the pre-publication full-history audit.
-# Each entry binds one finding to its commit, path, rule, and line; new findings still fail.
+# Exact synthetic fixtures reviewed by ElevenID Security; expires 2027-07-17.
+# Each entry binds one historical finding to its commit, path, rule, and line.
+# New findings, changed lines, and changed values still fail.
 
 025cefb5fc69d03b68e589231c66be1c6cd3c213:marty-oid4vci/tests/oid4vp_conformance.rs:generic-api-key:49
 1d65c9c981bab956ff1bf73a3a40f83454d78be8:marty-didcomm/src/did_resolver.rs:generic-api-key:495
