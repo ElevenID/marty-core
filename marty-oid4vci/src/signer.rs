@@ -7,8 +7,8 @@
 //! `IssuerKey` implements `CredentialSigner` directly, preserving full backward
 //! compatibility — existing call-sites that pass `&IssuerKey` work unchanged.
 
-use ssi::crypto::AlgorithmInstance;
-use ssi::jwk::{Params, JWK};
+use ssi_crypto::AlgorithmInstance;
+use ssi_jwk::{Params, JWK};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::types::{IssuerKey, SigningAlgorithm};
@@ -83,14 +83,14 @@ pub(crate) fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>>
         .map_err(|e| Oid4vciError::SigningError(format!("Signing failed: {:?}", e)))
 }
 
-/// Extract a [`SecretKey`](ssi::crypto::SecretKey) from a JWK for signing.
-pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::SecretKey> {
+/// Extract a [`SecretKey`](ssi_crypto::SecretKey) from a JWK for signing.
+pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::SecretKey> {
     match &jwk.params {
         Params::OKP(params) => {
             let d = params.private_key.as_ref().ok_or_else(|| {
                 Oid4vciError::KeyError("Missing private key (d) in OKP JWK".into())
             })?;
-            ssi::crypto::SecretKey::new_ed25519(&d.0)
+            ssi_crypto::SecretKey::new_ed25519(&d.0)
                 .map_err(|e| Oid4vciError::KeyError(format!("Invalid Ed25519 key: {:?}", e)))
         }
         Params::EC(params) => {
@@ -98,9 +98,9 @@ pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::Secret
                 Oid4vciError::KeyError("Missing private key (d) in EC JWK".into())
             })?;
             match params.curve.as_deref() {
-                Some("P-256") => ssi::crypto::SecretKey::new_p256(&d.0)
+                Some("P-256") => ssi_crypto::SecretKey::new_p256(&d.0)
                     .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 key: {:?}", e))),
-                Some("secp256k1") => ssi::crypto::SecretKey::new_secp256k1(&d.0)
+                Some("secp256k1") => ssi_crypto::SecretKey::new_secp256k1(&d.0)
                     .map_err(|e| Oid4vciError::KeyError(format!("Invalid secp256k1 key: {:?}", e))),
                 curve => Err(Oid4vciError::KeyError(format!(
                     "Unsupported EC curve: {:?}",

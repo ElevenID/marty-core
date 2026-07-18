@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ssi::json_ld::ContextLoader;
+use ssi_json_ld::ContextLoader;
 
 use crate::error::{VerificationError, VerificationResult};
 

@@ -21,7 +21,8 @@ use marty_verification::{
         verify_ob3_json,
     },
 };
-use ssi::{dids::DIDJWK, JWK};
+use ssi_dids::DIDJWK;
+use ssi_jwk::JWK;
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 

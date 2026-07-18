@@ -17,7 +17,7 @@ use rand::RngCore;
 use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
 use sd_jwt_rs::{SDJWTIssuer, SDJWTSerializationFormat};
 use sha2::{Digest, Sha256};
-use ssi::jwk::{Params, JWK};
+use ssi_jwk::{Params, JWK};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::CredentialSigner;

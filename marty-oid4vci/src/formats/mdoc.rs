@@ -33,7 +33,7 @@ pub fn sign_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
-    let jwk: ssi::jwk::JWK = serde_json::from_str(&issuer_key.jwk_json)
+    let jwk: ssi_jwk::JWK = serde_json::from_str(&issuer_key.jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
 
     let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
@@ -383,12 +383,12 @@ fn build_mobile_security_object(
 /// Returns the serialized COSE_Sign1 bytes.
 fn sign_cose_sign1(
     payload: &[u8],
-    jwk: &ssi::jwk::JWK,
+    jwk: &ssi_jwk::JWK,
     issuer_key: &IssuerKey,
     x5chain_der: &[Vec<u8>],
 ) -> Oid4vciResult<Vec<u8>> {
-    use ssi::crypto::{AlgorithmInstance, SecretKey};
-    use ssi::jwk::Params;
+    use ssi_crypto::{AlgorithmInstance, SecretKey};
+    use ssi_jwk::Params;
 
     let alg = match issuer_key.algorithm {
         crate::types::SigningAlgorithm::ES256 => iana::Algorithm::ES256,
@@ -590,7 +590,7 @@ mod tests {
     use crate::types::SigningAlgorithm;
 
     fn test_p256_key() -> IssuerKey {
-        let jwk = ssi::jwk::JWK::generate_p256();
+        let jwk = ssi_jwk::JWK::generate_p256();
         let jwk_json = serde_json::to_string(&jwk).unwrap();
         IssuerKey {
             issuer_id: "did:example:issuer".into(),

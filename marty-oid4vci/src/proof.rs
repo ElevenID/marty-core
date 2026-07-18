@@ -12,8 +12,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::rngs::OsRng;
 use serde::Deserialize;
-use ssi::crypto::AlgorithmInstance;
-use ssi::jwk::{Params, JWK};
+use ssi_crypto::AlgorithmInstance;
+use ssi_jwk::{Params, JWK};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 
@@ -386,9 +386,9 @@ fn verify_signature(
 }
 
 /// Extract a public key from a JWK for verification.
-fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::PublicKey> {
+fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::PublicKey> {
     match &jwk.params {
-        Params::OKP(params) => ssi::crypto::PublicKey::new_ed25519(&params.public_key.0)
+        Params::OKP(params) => ssi_crypto::PublicKey::new_ed25519(&params.public_key.0)
             .map_err(|e| Oid4vciError::KeyError(format!("Invalid Ed25519 public key: {:?}", e))),
         Params::EC(params) => {
             // For EC keys, we need both x and y coordinates
@@ -402,11 +402,11 @@ fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi::crypto::PublicKey> {
                 .ok_or_else(|| Oid4vciError::KeyError("Missing EC y coordinate".into()))?;
 
             match params.curve.as_deref() {
-                Some("P-256") => ssi::crypto::PublicKey::new_p256(&x.0, &y.0).map_err(|e| {
+                Some("P-256") => ssi_crypto::PublicKey::new_p256(&x.0, &y.0).map_err(|e| {
                     Oid4vciError::KeyError(format!("Invalid P-256 public key: {:?}", e))
                 }),
                 Some("secp256k1") => {
-                    ssi::crypto::PublicKey::new_secp256k1(&x.0, &y.0).map_err(|e| {
+                    ssi_crypto::PublicKey::new_secp256k1(&x.0, &y.0).map_err(|e| {
                         Oid4vciError::KeyError(format!("Invalid secp256k1 public key: {:?}", e))
                     })
                 }

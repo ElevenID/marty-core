@@ -22,12 +22,9 @@ unmaintained = "workspace"
 yanked = "warn"
 # A list of advisory IDs to ignore (useful for false positives)
 ignore = [
-    # owning_ref — transitive via ssi → json-ld; no fix available, ssi needs replacement
-    { id = "RUSTSEC-2022-0040", reason = "transitive dep via ssi crate, no safe upgrade" },
-    # pyo3 0.22.x → 0.24.x is a breaking change requiring PyO3 migration
-    { id = "RUSTSEC-2025-0020", reason = "PyO3 0.22→0.24 breaking change; tracked for next major upgrade" },
-    # rsa Marvin attack — both 0.6.1 (ssi-jwk) and 0.9.9 (cms); no patched version
-    { id = "RUSTSEC-2023-0071", reason = "no safe upgrade available; transitive via ssi and cms crates" },
+    # RSA is required by supported passport, certificate, and legacy badge profiles.
+    # Marty exposes it through marty-crypto; RustCrypto has not published a fixed release.
+    { id = "RUSTSEC-2023-0071", reason = "required behind marty-crypto adapter; no patched RustCrypto release" },
 ]
 
 [licenses]

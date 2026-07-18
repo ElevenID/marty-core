@@ -1,0 +1,50 @@
+version: 1
+dependencies:
+  - package: ssi subcrates
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/spruceid/ssi
+    current: ssi-claims-0.7/ssi-jwk-0.4
+    target: upstream-release-without-serde-with-2
+    status: temporary-exception
+    decision: replace
+    advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2022-0040, RUSTSEC-2021-0127]
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/26
+    review-after: 2026-08-17
+    rationale: The umbrella crate was removed; ssi-jwt is temporarily patched by exact revision pending spruceid/ssi#706.
+  - package: isomdl
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/spruceid/isomdl
+    current: "0.2.0"
+    target: upstream-release-with-ssi-jwk-0.4
+    status: temporary-exception
+    decision: fork
+    advisories: [GHSA-9c48-w39g-hm26, GHSA-4grx-2x9w-596c, GHSA-c38w-74pg-36hr, RUSTSEC-2023-0071]
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/26
+    review-after: 2026-08-17
+    rationale: A minimal exact-revision fork removes ssi-jwk 0.2.1 and rsa 0.6.1 pending spruceid/isomdl#134.
+  - package: pyo3
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/PyO3/pyo3
+    current: "0.29.0"
+    target: "0.29.x"
+    status: maintained
+    decision: retain
+    advisories: []
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/26
+    review-after: 2026-10-18
+    rationale: The binding migration is complete and the obsolete cargo-deny exception has been removed.
+  - package: rsa
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/RustCrypto/RSA
+    current: "0.9.10"
+    target: patched-upstream-release
+    status: temporary-exception
+    decision: retain
+    advisories: [RUSTSEC-2023-0071]
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/26
+    review-after: 2026-10-18
+    rationale: RSA remains required for passport, certificate, and legacy badge profiles and is isolated behind marty-crypto; no patched RustCrypto release exists.

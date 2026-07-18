@@ -4,7 +4,7 @@
 //! for X.509 certificate-based signatures while maintaining compatibility with
 //! standard Data Integrity proofs.
 
-use ssi::claims::data_integrity::AnySuite;
+use ssi_claims::data_integrity::AnySuite;
 
 use crate::error::VerificationResult;
 
@@ -78,7 +78,7 @@ impl OpenBadgeVerificationSuite for OpenBadgeSuite {
     ) -> VerificationResult<bool> {
         match self {
             OpenBadgeSuite::Ssi(_ssi_suite) => {
-                // SSI verification is usually async and handled by ssi::DataIntegrity.
+                // SSI verification is usually async and handled by ssi_claims::data_integrity::DataIntegrity.
                 // For this wrapper, we could delegate or provide a bridge.
                 // For now, return unsupported as this is a consolidated interface placeholder.
                 Err(crate::error::VerificationError::open_badges_unsupported(

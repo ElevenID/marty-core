@@ -3,19 +3,19 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use iref::{IriBuf, UriBuf};
-use ssi::claims::data_integrity::{AnySuite, DataIntegrity, ProofOptions};
-use ssi::claims::vc::syntax::AnyJsonCredential;
-use ssi::claims::SignatureEnvironment;
-use ssi::claims::VerificationParameters;
-use ssi::json_ld::syntax::{Context, ContextEntry};
-use ssi::jwk::Params as JwkParams;
-use ssi::prelude::CryptographicSuite;
-use ssi::verification_methods::VerificationMethod;
-use ssi::verification_methods::{
+use ssi_claims::data_integrity::CryptographicSuite;
+use ssi_claims::data_integrity::{AnySuite, DataIntegrity, ProofOptions};
+use ssi_claims::vc::syntax::AnyJsonCredential;
+use ssi_claims::SignatureEnvironment;
+use ssi_claims::VerificationParameters;
+use ssi_json_ld::syntax::{Context, ContextEntry};
+use ssi_jwk::Params as JwkParams;
+use ssi_jwk::JWK;
+use ssi_verification_methods::VerificationMethod;
+use ssi_verification_methods::{
     AnyMethod, Ed25519VerificationKey2018, Ed25519VerificationKey2020, GenericVerificationMethod,
     JsonWebKey2020, ProofPurpose, ReferenceOrOwned, SingleSecretSigner,
 };
-use ssi::JWK;
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 
