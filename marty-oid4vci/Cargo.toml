@@ -63,7 +63,7 @@ regex = { version = "1", default-features = false, features = ["std"] }
 marty-zkp = { version = "0.1.2", path = "../marty-zkp", optional = true }
 
 # HTTP client (optional, behind wallet feature)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["form", "json", "rustls"], optional = true }
 
 # Async runtime (optional, pulled in by wallet feature)
 tokio = { workspace = true, optional = true }
