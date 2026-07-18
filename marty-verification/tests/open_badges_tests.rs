@@ -137,8 +137,8 @@ mod ob3_tests {
     use marty_verification::open_badges::{issue_ob3_json, ob3_context_uri, verify_ob3_json};
     use ssi_dids::DIDJWK;
     use ssi_jwk::Params as JwkParams;
-    use ssi_verification_methods::Ed25519VerificationKey2020;
     use ssi_jwk::JWK;
+    use ssi_verification_methods::Ed25519VerificationKey2020;
 
     fn ob3_credential(issuer: &str) -> Value {
         json!({

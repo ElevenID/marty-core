@@ -3,19 +3,19 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 use iref::{IriBuf, UriBuf};
+use ssi_claims::data_integrity::CryptographicSuite;
 use ssi_claims::data_integrity::{AnySuite, DataIntegrity, ProofOptions};
 use ssi_claims::vc::syntax::AnyJsonCredential;
 use ssi_claims::SignatureEnvironment;
 use ssi_claims::VerificationParameters;
 use ssi_json_ld::syntax::{Context, ContextEntry};
 use ssi_jwk::Params as JwkParams;
-use ssi_claims::data_integrity::CryptographicSuite;
+use ssi_jwk::JWK;
 use ssi_verification_methods::VerificationMethod;
 use ssi_verification_methods::{
     AnyMethod, Ed25519VerificationKey2018, Ed25519VerificationKey2020, GenericVerificationMethod,
     JsonWebKey2020, ProofPurpose, ReferenceOrOwned, SingleSecretSigner,
 };
-use ssi_jwk::JWK;
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 
