@@ -11,7 +11,7 @@
 
 use coset::{
     cbor::Value, iana, CborSerializable, CoseMac0, CoseMac0Builder, CoseSign1, CoseSign1Builder,
-    Header, HeaderBuilder, Label, RegisteredLabel, TaggedCborSerializable,
+    HeaderBuilder, Label,
 };
 
 // ── COSE_Sign1 tests ─────────────────────────────────────────────────────────

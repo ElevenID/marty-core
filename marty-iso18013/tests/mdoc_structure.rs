@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use marty_iso18013::{
     core::{DeviceEngagement, EngagementMethod, TransportInfo, TransportMethod},
     error::Error,
-    protocol::{MdlRequest, MdlResponse, ResponseStatus, Session, SessionConfig, SessionState},
+    protocol::{MdlRequest, MdlResponse, ResponseStatus, SessionConfig, SessionState},
     selective::SelectiveDisclosure,
 };
 

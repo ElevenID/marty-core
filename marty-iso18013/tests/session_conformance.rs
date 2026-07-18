@@ -6,7 +6,7 @@
 //!   - §9.1.3  Counter management: send/receive counters increment correctly
 //!   - §9.1.3  Ciphertext integrity: modified ciphertext must not decrypt
 //!   - §9.1.3  AES-256-GCM nonce uniqueness: two encryptions of the same
-//!             plaintext produce different ciphertexts (counter-derived nonce)
+//!     plaintext produce different ciphertexts (counter-derived nonce)
 
 use marty_iso18013::session::{SessionEncryption, SessionKeyAgreement};
 

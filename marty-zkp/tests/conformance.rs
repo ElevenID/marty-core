@@ -661,9 +661,9 @@ fn verify_rejects_empty_proof() {
     let input = test_input();
 
     let result = Verifier::verify(&circuit, &input, &[]);
-    match result {
-        Ok(true) => panic!("empty proof must not verify as valid"),
-        Ok(false) | Err(_) => {} // both are acceptable
+    // Both `Ok(false)` and an error are acceptable rejection outcomes.
+    if let Ok(true) = result {
+        panic!("empty proof must not verify as valid");
     }
 }
 
@@ -680,9 +680,8 @@ fn verify_rejects_tampered_proof() {
     tampered[0] ^= 0xFF;
 
     let result = Verifier::verify(&circuit, &input, &tampered);
-    match result {
-        Ok(true) => panic!("tampered proof must not verify as valid"),
-        Ok(false) | Err(_) => {}
+    if let Ok(true) = result {
+        panic!("tampered proof must not verify as valid");
     }
 }
 
@@ -701,9 +700,8 @@ fn verify_rejects_wrong_transcript() {
     wrong_input.transcript = bad_transcript;
 
     let result = Verifier::verify(&circuit, &wrong_input, &proof);
-    match result {
-        Ok(true) => panic!("proof with wrong transcript must not verify"),
-        Ok(false) | Err(_) => {}
+    if let Ok(true) = result {
+        panic!("proof with wrong transcript must not verify");
     }
 }
 
