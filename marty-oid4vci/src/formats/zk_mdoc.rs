@@ -138,7 +138,7 @@ pub fn sign_zk_mdoc_with_signer(
 mod tests {
     use super::*;
     use crate::types::SigningAlgorithm;
-    use ssi::jwk::JWK;
+    use ssi_jwk::JWK;
 
     fn test_p256_key() -> IssuerKey {
         let jwk = JWK::generate_p256();

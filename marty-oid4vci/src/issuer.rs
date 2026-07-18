@@ -625,7 +625,7 @@ mod tests {
     use super::*;
 
     fn test_engine() -> IssuanceEngine {
-        let jwk = ssi::jwk::JWK::generate_p256();
+        let jwk = ssi_jwk::JWK::generate_p256();
         let jwk_json = serde_json::to_string(&jwk).unwrap();
 
         let config = IssuerConfig {
@@ -788,14 +788,14 @@ mod tests {
 
     #[test]
     fn test_detect_algorithm() {
-        let p256 = ssi::jwk::JWK::generate_p256();
+        let p256 = ssi_jwk::JWK::generate_p256();
         let p256_json = serde_json::to_string(&p256).unwrap();
         assert_eq!(
             detect_algorithm(&p256_json).unwrap(),
             SigningAlgorithm::ES256
         );
 
-        let ed25519 = ssi::jwk::JWK::generate_ed25519().unwrap();
+        let ed25519 = ssi_jwk::JWK::generate_ed25519().unwrap();
         let ed_json = serde_json::to_string(&ed25519).unwrap();
         assert_eq!(detect_algorithm(&ed_json).unwrap(), SigningAlgorithm::EdDSA);
     }

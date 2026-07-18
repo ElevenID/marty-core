@@ -123,3 +123,9 @@ codegen-units = 1
 [profile.dev]
 opt-level = 0
 debug = true
+
+[patch.crates-io]
+# Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
+ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "e9babef8918f815cd83e9f2ace109faac2851b2c" }
+# Temporary security fork pending https://github.com/spruceid/isomdl/pull/134.
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "05615b1dfbca2da8a0d76c8619317f3cb4d5b52f" }

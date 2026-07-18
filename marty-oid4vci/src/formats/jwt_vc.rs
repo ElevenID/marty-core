@@ -8,7 +8,7 @@
 //! VCDM v2  — `https://www.w3.org/ns/credentials/v2`,  `validFrom`,    `validUntil`
 
 use base64::Engine;
-use ssi::jwk::JWK;
+use ssi_jwk::JWK;
 use std::collections::HashMap;
 
 use crate::error::{Oid4vciError, Oid4vciResult};

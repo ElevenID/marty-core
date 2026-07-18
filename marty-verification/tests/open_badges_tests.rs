@@ -135,10 +135,10 @@ fn ob2_verify_rejects_missing_document_store() {
 mod ob3_tests {
     use super::*;
     use marty_verification::open_badges::{issue_ob3_json, ob3_context_uri, verify_ob3_json};
-    use ssi::dids::DIDJWK;
-    use ssi::jwk::Params as JwkParams;
-    use ssi::verification_methods::Ed25519VerificationKey2020;
-    use ssi::JWK;
+    use ssi_dids::DIDJWK;
+    use ssi_jwk::Params as JwkParams;
+    use ssi_verification_methods::Ed25519VerificationKey2020;
+    use ssi_jwk::JWK;
 
     fn ob3_credential(issuer: &str) -> Value {
         json!({

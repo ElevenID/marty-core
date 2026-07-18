@@ -31,7 +31,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Crypto and signing
-ssi = { version = "0.16.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1", "rsa"] }
+ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
+ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "9244ec551ac56bb4fa7d3a87e50f59b2f36d1925" }
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 
@@ -49,7 +50,6 @@ p384 = { workspace = true }
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
-rsa = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }

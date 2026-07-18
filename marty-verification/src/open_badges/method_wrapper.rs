@@ -6,7 +6,7 @@
 
 use iref::IriBuf;
 use serde_json::Value;
-use ssi::verification_methods::{AnyMethod, GenericVerificationMethod, VerificationMethod};
+use ssi_verification_methods::{AnyMethod, GenericVerificationMethod, VerificationMethod};
 
 use crate::error::{VerificationError, VerificationResult};
 
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn test_parse_jwk_method() {
         // Generate a real Ed25519 keypair so parsing passes curve-point validation
-        let jwk = ssi::JWK::generate_ed25519().expect("generate ed25519");
+        let jwk = ssi_jwk::JWK::generate_ed25519().expect("generate ed25519");
         let pub_jwk = jwk.to_public();
         let json = serde_json::json!({
             "id": "did:example:issuer#key-1",

@@ -5,7 +5,7 @@
 
 use iref::IriBuf;
 use serde::{Deserialize, Serialize};
-use ssi::verification_methods::VerificationMethod;
+use ssi_verification_methods::VerificationMethod;
 
 use crate::error::{VerificationError, VerificationResult};
 
