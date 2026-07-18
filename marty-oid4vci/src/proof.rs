@@ -231,7 +231,7 @@ fn base58btc_decode(input: &str) -> Oid4vciResult<Vec<u8>> {
             carry >>= 8;
         }
     }
-    result.extend(std::iter::repeat(0).take(n_leading));
+    result.extend(std::iter::repeat_n(0, n_leading));
     result.reverse();
     Ok(result)
 }
@@ -476,7 +476,7 @@ fn base58btc_encode(data: &[u8]) -> String {
             carry /= 58;
         }
     }
-    digits.extend(std::iter::repeat(0u8).take(n_leading));
+    digits.extend(std::iter::repeat_n(0u8, n_leading));
     digits.reverse();
     digits.iter().map(|&d| ALPHA[d as usize] as char).collect()
 }

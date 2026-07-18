@@ -552,8 +552,9 @@ mod cert_generation {
 
         let ee_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
             .expect("Failed to generate EE key");
+        let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params
-            .signed_by(&ee_key, &ca_cert, &ca_key)
+            .signed_by(&ee_key, &ca_issuer)
             .expect("Failed to sign EE cert");
 
         // Verify the chain with OpenSSL

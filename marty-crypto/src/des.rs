@@ -156,7 +156,7 @@ pub fn tdes_cbc_decrypt_padded(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Cryp
             "3DES-CBC requires 8-byte IV".to_string(),
         ));
     }
-    if ciphertext.is_empty() || ciphertext.len() % 8 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(8) {
         return Err(CryptoError::internal(
             "3DES-CBC ciphertext must be a non-empty multiple of 8 bytes".to_string(),
         ));
@@ -208,7 +208,7 @@ pub fn retail_mac(key: &[u8], data: &[u8]) -> CryptoResult<Vec<u8>> {
     // Pad data to 8-byte boundary (ISO/IEC 7816-4 padding: 0x80 then zeros)
     let mut padded = data.to_vec();
     padded.push(0x80);
-    while padded.len() % 8 != 0 {
+    while !padded.len().is_multiple_of(8) {
         padded.push(0x00);
     }
 
@@ -263,7 +263,7 @@ fn validate_tdes_params(key: &[u8], iv: &[u8], data: &[u8]) -> CryptoResult<()> 
             "3DES-CBC requires 8-byte IV".to_string(),
         ));
     }
-    if data.is_empty() || data.len() % 8 != 0 {
+    if data.is_empty() || !data.len().is_multiple_of(8) {
         return Err(CryptoError::internal(
             "3DES-CBC data must be a non-empty multiple of 8 bytes".to_string(),
         ));

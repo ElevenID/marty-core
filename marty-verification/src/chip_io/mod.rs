@@ -869,7 +869,7 @@ fn extend_to_24_bytes(key16: &[u8; 16]) -> [u8; 24] {
 fn iso7816_pad(data: &[u8]) -> Vec<u8> {
     let mut padded = data.to_vec();
     padded.push(0x80);
-    while padded.len() % 8 != 0 {
+    while !padded.len().is_multiple_of(8) {
         padded.push(0x00);
     }
     padded

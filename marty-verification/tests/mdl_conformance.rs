@@ -60,16 +60,15 @@ fn x5chain_from_two_pem_certs() {
         p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         p
     };
-    let ca_cert = ca_cert_params.self_signed(&ca_key).expect("re-gen CA");
-
     let mut ee_params = CertificateParams::default();
     ee_params
         .distinguished_name
         .push(DnType::CommonName, "mDL Document Signer");
     ee_params.is_ca = rcgen::IsCa::NoCa;
     let ee_key = KeyPair::generate().expect("EE key");
+    let ca_issuer = rcgen::Issuer::from_params(&ca_cert_params, &ca_key);
     let ee_pem = ee_params
-        .signed_by(&ee_key, &ca_cert, &ca_key)
+        .signed_by(&ee_key, &ca_issuer)
         .expect("sign EE")
         .pem();
 

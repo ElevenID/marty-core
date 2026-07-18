@@ -59,7 +59,8 @@ fn test_two_level_chain_validation() {
     ee_params.is_ca = rcgen::IsCa::NoCa;
 
     let ee_key = KeyPair::generate().unwrap();
-    let ee_cert = ee_params.signed_by(&ee_key, &ca_cert, &ca_key).unwrap();
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+    let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
     let ee_pem = ee_cert.pem();
 
     // Validate chain
@@ -99,9 +100,8 @@ fn test_three_level_chain_validation() {
     int_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
 
     let int_key = KeyPair::generate().unwrap();
-    let int_cert = int_params
-        .signed_by(&int_key, &root_cert, &root_key)
-        .unwrap();
+    let root_issuer = rcgen::Issuer::from_params(&root_params, &root_key);
+    let int_cert = int_params.signed_by(&int_key, &root_issuer).unwrap();
     let int_pem = int_cert.pem();
 
     // Generate End Entity
@@ -112,7 +112,8 @@ fn test_three_level_chain_validation() {
     ee_params.is_ca = rcgen::IsCa::NoCa;
 
     let ee_key = KeyPair::generate().unwrap();
-    let ee_cert = ee_params.signed_by(&ee_key, &int_cert, &int_key).unwrap();
+    let int_issuer = rcgen::Issuer::from_params(&int_params, &int_key);
+    let ee_cert = ee_params.signed_by(&ee_key, &int_issuer).unwrap();
     let ee_pem = ee_cert.pem();
 
     // Validate chain
@@ -156,7 +157,8 @@ fn test_expired_certificate_detection() {
     ee_params.not_after = time::OffsetDateTime::now_utc() - time::Duration::days(1);
 
     let ee_key = KeyPair::generate().unwrap();
-    let ee_cert = ee_params.signed_by(&ee_key, &ca_cert, &ca_key).unwrap();
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+    let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
     let ee_pem = ee_cert.pem();
 
     // Validate - should fail
@@ -202,7 +204,8 @@ fn test_untrusted_chain_detection() {
     ee_params.is_ca = rcgen::IsCa::NoCa;
 
     let ee_key = KeyPair::generate().unwrap();
-    let ee_cert = ee_params.signed_by(&ee_key, &ca1_cert, &ca1_key).unwrap();
+    let ca1_issuer = rcgen::Issuer::from_params(&ca1_params, &ca1_key);
+    let ee_cert = ee_params.signed_by(&ee_key, &ca1_issuer).unwrap();
     let ee_pem = ee_cert.pem();
 
     // Validate with CA2 as trust anchor - should fail
@@ -238,7 +241,8 @@ fn test_validation_with_custom_config() {
     ee_params.is_ca = rcgen::IsCa::NoCa;
 
     let ee_key = KeyPair::generate().unwrap();
-    let ee_cert = ee_params.signed_by(&ee_key, &ca_cert, &ca_key).unwrap();
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+    let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
     let ee_pem = ee_cert.pem();
 
     // Create validator with custom config
@@ -290,7 +294,8 @@ fn test_point_in_time_validation() {
     ee_params.not_after = time::OffsetDateTime::now_utc() - time::Duration::days(30);
 
     let ee_key = KeyPair::generate().unwrap();
-    let ee_cert = ee_params.signed_by(&ee_key, &ca_cert, &ca_key).unwrap();
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+    let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
     let ee_pem = ee_cert.pem();
 
     // Validate at current time - should fail

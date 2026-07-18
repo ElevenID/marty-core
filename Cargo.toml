@@ -67,7 +67,7 @@ p12 = "0.6"
 
 # Random number generation
 rand = "0.8"
-rand_core = "0.6"
+rand_core = "0.10"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -90,7 +90,7 @@ tracing-error = "0.2"
 axum = "0.8"
 
 # Database (for marty-secure-storage)
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring = "3.6"
 directories = "6.0"
 blake3 = "1.5"
@@ -111,7 +111,7 @@ marty-secure-storage = { version = "0.1.2", path = "marty-secure-storage" }
 marty-biometrics = { version = "0.1.2", path = "marty-biometrics" }
 
 # Test/dev dependencies
-rcgen = "0.13"
+rcgen = "0.14"
 tempfile = "3.14"
 proptest = "1.5"
 

@@ -264,7 +264,7 @@ pub fn aes_128_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoRe
             "AES-CBC requires 16-byte IV".to_string(),
         ));
     }
-    if ciphertext.len() % 16 != 0 {
+    if !ciphertext.len().is_multiple_of(16) {
         return Err(CryptoError::internal(
             "AES-CBC ciphertext must be multiple of 16 bytes".to_string(),
         ));
@@ -297,7 +297,7 @@ pub fn aes_128_cbc_encrypt_nopad(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Cry
             "AES-CBC requires 16-byte IV".to_string(),
         ));
     }
-    if plaintext.len() % 16 != 0 {
+    if !plaintext.len().is_multiple_of(16) {
         return Err(CryptoError::internal(
             "Plaintext must be multiple of 16 bytes for no-padding mode".to_string(),
         ));
@@ -330,7 +330,7 @@ pub fn aes_128_cbc_decrypt_nopad(
             "AES-CBC requires 16-byte IV".to_string(),
         ));
     }
-    if ciphertext.len() % 16 != 0 {
+    if !ciphertext.len().is_multiple_of(16) {
         return Err(CryptoError::internal(
             "Ciphertext must be multiple of 16 bytes".to_string(),
         ));
@@ -393,7 +393,7 @@ pub fn aes_256_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoRe
             "AES-CBC requires 16-byte IV".to_string(),
         ));
     }
-    if ciphertext.len() % 16 != 0 {
+    if !ciphertext.len().is_multiple_of(16) {
         return Err(CryptoError::internal(
             "AES-CBC ciphertext must be multiple of 16 bytes".to_string(),
         ));

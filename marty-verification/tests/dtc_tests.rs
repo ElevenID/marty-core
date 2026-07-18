@@ -136,8 +136,9 @@ fn verify_respects_trust_chain() {
         .distinguished_name
         .push(DnType::CommonName, "DTC Test Leaf");
     ee_params.is_ca = IsCa::NoCa;
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
     let ee_cert = ee_params
-        .signed_by(&signer_key, &ca_cert, &ca_key)
+        .signed_by(&signer_key, &ca_issuer)
         .expect("failed to generate EE cert");
     let ee_pem = ee_cert.pem();
 
@@ -280,8 +281,9 @@ fn verify_rejects_mismatched_cert_chain() {
         .push(DnType::CommonName, "DTC Mismatch Leaf");
     ee_params.is_ca = IsCa::NoCa;
     let other_key = KeyPair::generate().expect("failed to generate mismatched key");
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
     let ee_cert = ee_params
-        .signed_by(&other_key, &ca_cert, &ca_key)
+        .signed_by(&other_key, &ca_issuer)
         .expect("failed to generate EE cert");
     let ee_pem = ee_cert.pem();
 

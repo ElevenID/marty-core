@@ -1250,7 +1250,7 @@ fn base58btc_encode(data: &[u8]) -> String {
             carry /= 58;
         }
     }
-    digits.extend(std::iter::repeat(0).take(leading_zeroes));
+    digits.extend(std::iter::repeat_n(0, leading_zeroes));
     digits.reverse();
     digits
         .iter()

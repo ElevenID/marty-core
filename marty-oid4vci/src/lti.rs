@@ -401,7 +401,7 @@ pub async fn probe_canvas_lti_platform(
     if jwks_json
         .get("keys")
         .and_then(Value::as_array)
-        .map_or(true, |keys| keys.is_empty())
+        .is_none_or(|keys| keys.is_empty())
     {
         return Err(invalid_request("Canvas JWKS does not include any keys"));
     }
