@@ -5,13 +5,13 @@ dependencies:
     owner: ElevenID
     upstream: https://github.com/spruceid/ssi
     current: ssi-claims-0.7/ssi-jwk-0.4
-    target: upstream-release-without-serde-with-2
+    target: upstream-ssi-jwt-release-without-serde-with-2
     status: temporary-exception
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2022-0040, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-08-17
-    rationale: The umbrella crate was removed; ssi-jwt is temporarily patched by exact revision pending spruceid/ssi#706.
+    rationale: The umbrella crate was removed. Narrow SSI crates remain required for DID, VC, SD-JWT, and Open Badges verification; ssi-jwt is temporarily patched by exact revision pending spruceid/ssi#706.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID
@@ -42,9 +42,9 @@ dependencies:
     upstream: https://github.com/RustCrypto/RSA
     current: "0.9.10"
     target: patched-upstream-release
-    status: temporary-exception
+    status: watch
     decision: retain
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-10-18
-    rationale: RSA remains required for passport, certificate, and legacy badge profiles and is isolated behind marty-crypto; no patched RustCrypto release exists.
+    rationale: RSA is retained compatibility functionality for passport, certificate, CMS/CRL, RSA-JWT, and legacy badge profiles. It is isolated behind marty-crypto; no patched RustCrypto release exists.
