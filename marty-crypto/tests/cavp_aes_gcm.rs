@@ -174,8 +174,7 @@ fn cavp_aes256_gcm_mdl_counter_iv() {
 
     let test_messages: &[&[u8]] = &[b"Hello, mDL!", b"Response data"];
 
-    let mut send_counter: u32 = 0;
-    for &msg in test_messages {
+    for (send_counter, &msg) in (0_u32..).zip(test_messages.iter()) {
         // IV = 12 bytes, last 4 filled with counter (big-endian), first 8 = 0
         let mut iv = [0u8; 12];
         iv[8..].copy_from_slice(&send_counter.to_be_bytes());
@@ -183,8 +182,6 @@ fn cavp_aes256_gcm_mdl_counter_iv() {
         let ct = aes_256_gcm_encrypt(&key, &iv, msg, b"").expect("mDL encrypt");
         let pt = aes_256_gcm_decrypt(&key, &iv, &ct, b"").expect("mDL decrypt");
         assert_eq!(&pt, msg, "Round-trip failed for counter={send_counter}");
-
-        send_counter += 1;
     }
 }
 

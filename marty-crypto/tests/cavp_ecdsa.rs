@@ -72,7 +72,7 @@ fn cavp_ecdsa_p256_tampered_signature_rejected() {
 
     let result = verify_p256_sha256(&pub_key, msg, &sig);
     assert!(
-        result.is_err() || result.unwrap() == false,
+        !result.unwrap_or(false),
         "Tampered P-256 signature must be rejected"
     );
 }

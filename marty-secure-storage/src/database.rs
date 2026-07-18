@@ -124,7 +124,8 @@ impl SecureStorage {
             "#,
         )?;
 
-        let rows = stmt.query_map([limit], |row| {
+        let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map([sql_limit], |row| {
             Ok(VerificationHistoryEntry {
                 id: row.get(0)?,
                 credential_type: row.get(1)?,
@@ -170,7 +171,11 @@ impl SecureStorage {
         let conn = self.conn.lock().await;
 
         let pending_events: usize =
-            conn.query_row("SELECT COUNT(*) FROM offline_queue", [], |row| row.get(0))?;
+            conn.query_row("SELECT COUNT(*) FROM offline_queue", [], |row| {
+                let value = row.get::<_, i64>(0)?;
+                usize::try_from(value)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
+            })?;
 
         let oldest_event: Option<String> = conn
             .query_row("SELECT MIN(created_at) FROM offline_queue", [], |row| {
@@ -182,7 +187,11 @@ impl SecureStorage {
         let data_size_bytes: usize = conn.query_row(
             "SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM offline_queue",
             [],
-            |row| row.get(0),
+            |row| {
+                let value = row.get::<_, i64>(0)?;
+                usize::try_from(value)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
+            },
         )?;
 
         // Get last sync times from sync_state
@@ -377,8 +386,10 @@ impl SecureStorage {
     /// Count trusted Open Badge verification methods
     pub async fn count_open_badge_keys(&self) -> Result<usize, StorageError> {
         let conn = self.conn.lock().await;
-        let count: usize =
-            conn.query_row("SELECT COUNT(*) FROM open_badge_keys", [], |row| row.get(0))?;
+        let count: usize = conn.query_row("SELECT COUNT(*) FROM open_badge_keys", [], |row| {
+            let value = row.get::<_, i64>(0)?;
+            usize::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
+        })?;
         Ok(count)
     }
 
@@ -452,7 +463,11 @@ impl SecureStorage {
         let count: usize = conn.query_row(
             "SELECT COUNT(*) FROM trust_anchors WHERE anchor_type = ?",
             [anchor_type.to_string()],
-            |row| row.get(0),
+            |row| {
+                let value = row.get::<_, i64>(0)?;
+                usize::try_from(value)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
+            },
         )?;
         Ok(count)
     }
@@ -630,7 +645,8 @@ impl SecureStorage {
             "#,
         )?;
 
-        let rows = stmt.query_map([limit], |row| {
+        let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map([sql_limit], |row| {
             let payload_str: String = row.get(2)?;
             Ok(OfflineQueueEntry {
                 id: row.get(0)?,

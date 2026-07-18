@@ -153,6 +153,8 @@ mod tests {
     }
 
     #[test]
+    // SHA-1 remains covered only to preserve compatibility verification for legacy documents.
+    #[allow(deprecated)]
     fn test_hash_dispatch() {
         let data = b"test";
 

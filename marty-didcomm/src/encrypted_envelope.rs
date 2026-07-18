@@ -266,7 +266,7 @@ fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> DidcommResult<Vec<u8>> {
     use aes::cipher::KeyInit as AesKeyInit;
     use aes::Aes256;
 
-    if plaintext.len() % 8 != 0 || plaintext.is_empty() {
+    if !plaintext.len().is_multiple_of(8) || plaintext.is_empty() {
         return Err(DidcommError::Crypto(
             "AES Key Wrap: plaintext must be a non-empty multiple of 8 bytes".into(),
         ));
@@ -315,7 +315,7 @@ fn aes_key_unwrap(kek: &[u8], ciphertext: &[u8]) -> DidcommResult<Vec<u8>> {
     use aes::cipher::KeyInit as AesKeyInit;
     use aes::Aes256;
 
-    if ciphertext.len() % 8 != 0 || ciphertext.len() < 24 {
+    if !ciphertext.len().is_multiple_of(8) || ciphertext.len() < 24 {
         return Err(DidcommError::Crypto(
             "AES Key Unwrap: ciphertext must be >= 24 bytes and a multiple of 8".into(),
         ));

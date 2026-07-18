@@ -720,13 +720,13 @@ impl CrlBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cert_builder::{create_ca_certificate, CertProfile, CertificateBuilderConfig};
+    use crate::cert_builder::create_ca_certificate;
     use crate::keygen::KeyType;
 
     #[test]
     fn test_crl_builder() {
         // Create a CA certificate first
-        let (ca_cert_der, ca_key_pem) =
+        let (_ca_cert_der, ca_key_pem) =
             create_ca_certificate("Test CA", Some("US"), 365, KeyType::EcdsaP256)
                 .expect("Failed to create CA");
 
