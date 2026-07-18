@@ -6445,7 +6445,7 @@ dependencies = [
 [[package]]
 name = "ssi-jwt"
 version = "0.6.0"
-source = "git+https://github.com/ElevenID/ssi-jwt-elevenid?rev=e9babef8918f815cd83e9f2ace109faac2851b2c#e9babef8918f815cd83e9f2ace109faac2851b2c"
+source = "git+https://github.com/ElevenID/ssi-jwt-elevenid?rev=a65d3c79a971be0481f0990041e29140e3f8c408#a65d3c79a971be0481f0990041e29140e3f8c408"
 dependencies = [
  "async-trait",
  "chrono",
