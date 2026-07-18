@@ -11,10 +11,9 @@
 //!  §6  Jurisdiction code model (AAMVA ISO 3166-2 codes)
 
 use marty_verification::{
-    trust_anchor::{IacaRegistry, Jurisdiction, TrustAnchor, TrustPurpose, TrustRegistry},
+    trust_anchor::{IacaRegistry, Jurisdiction},
     verification::mdl::{
         build_x5chain_from_pem, AuthStatus, MdlVerificationResult, ValidationRuleset,
-        X5ChainBuilder,
     },
 };
 use rcgen::{CertificateParams, DnType, KeyPair};
@@ -32,28 +31,6 @@ fn gen_ca(common_name: &str) -> (String, KeyPair) {
 
     let key = KeyPair::generate().expect("CA key generation");
     let cert = params.self_signed(&key).expect("CA self-sign");
-    (cert.pem(), key)
-}
-
-/// Generate an end-entity certificate signed by a given CA.
-fn gen_ee_signed_by(
-    common_name: &str,
-    state: &str,
-    ca_cert: &rcgen::Certificate,
-    ca_key: &KeyPair,
-) -> (String, KeyPair) {
-    let mut params = CertificateParams::default();
-    params
-        .distinguished_name
-        .push(DnType::CommonName, common_name);
-    params.distinguished_name.push(DnType::CountryName, "US");
-    params
-        .distinguished_name
-        .push(DnType::StateOrProvinceName, state);
-    params.is_ca = rcgen::IsCa::NoCa;
-
-    let key = KeyPair::generate().expect("EE key");
-    let cert = params.signed_by(&key, ca_cert, ca_key).expect("EE sign");
     (cert.pem(), key)
 }
 

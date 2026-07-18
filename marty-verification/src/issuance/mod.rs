@@ -410,7 +410,7 @@ mod tests {
         use der::Decode;
         use x509_cert::Certificate;
 
-        use crate::trust_anchor::{CscaRegistry, TrustAnchor, TrustPurpose};
+        use crate::trust_anchor::CscaRegistry;
         use crate::verification::emrtd::{verify_emrtd, SecurityObject};
 
         // 1. Build CSCA → DSC → PersonalizedPassport
@@ -466,7 +466,7 @@ mod tests {
         use der::Decode;
         use x509_cert::Certificate;
 
-        use crate::trust_anchor::{CscaRegistry, TrustAnchor, TrustPurpose};
+        use crate::trust_anchor::CscaRegistry;
         use crate::verification::emrtd::{verify_emrtd, HashStatus, SecurityObject};
 
         let csca = CscaAuthority::new("TST", "Tamper Test Country", 365).unwrap();
