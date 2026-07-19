@@ -538,6 +538,44 @@ fn verify_sd_jwt_round_trip_no_disclosures() {
     );
 }
 
+/// RFC 9449 §8 / OID4VP: once a verifier supplies an audience or nonce, an
+/// issuer-signed credential without a Key Binding JWT is not a presentation
+/// and must be rejected. This prevents future wrapper changes from silently
+/// falling back to issuer-signature-only verification.
+#[test]
+fn verifier_context_requires_key_binding_jwt() {
+    let issuer_key = test_issuer_key();
+    let public_jwk = test_issuer_public_jwk();
+    let claims = CredentialClaims {
+        subject_id: Some("did:example:holder".to_string()),
+        credential_type: "IdentityCredential".to_string(),
+        claims: base_claims(),
+        expiration_seconds: Some(3600),
+        selective_disclosure_claims: Vec::new(),
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: Vec::new(),
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: Vec::new(),
+        w3c_types: Vec::new(),
+    };
+    let compact = match sign_sd_jwt(&issuer_key, &claims).expect("issue credential") {
+        SignedCredential::SdJwt { compact, .. } => compact,
+        _ => panic!("expected SD-JWT credential"),
+    };
+
+    assert!(
+        verify_sd_jwt(
+            &compact,
+            &public_jwk,
+            Some("https://verifier.example/response".to_string()),
+            Some("nonce-1".to_string()),
+        )
+        .is_err(),
+        "an OID4VP verifier must not accept an SD-JWT without key binding"
+    );
+}
+
 /// RFC 9449 §7.2: selectively-disclosed claims MUST appear in `verified_claims`
 /// after the verifier reconstructs the payload from the provided disclosures.
 #[test]
