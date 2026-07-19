@@ -841,6 +841,118 @@ fn oid4vci_assemble_credential(
     }
 }
 
+/// Opaque mDoc preparation state retained inside the native extension between
+/// a remote KMS signing call and final COSE assembly.  The protected header,
+/// MSO and issuer-signed items must never be reconstructed from a lossy
+/// Python representation after the KMS signs the exact TBS bytes.
+#[pyclass]
+struct PreparedMdocForRemoteSigning {
+    inner: Option<marty_oid4vci::formats::mdoc::PreparedMdoc>,
+}
+
+#[pymethods]
+impl PreparedMdocForRemoteSigning {
+    #[getter]
+    fn tbs_data(&self) -> PyResult<Vec<u8>> {
+        self.inner
+            .as_ref()
+            .map(|prepared| prepared.tbs_data.clone())
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "mDoc preparation has already been assembled",
+            ))
+    }
+
+    #[getter]
+    fn credential_id(&self) -> PyResult<String> {
+        self.inner
+            .as_ref()
+            .map(|prepared| prepared.credential_id.clone())
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "mDoc preparation has already been assembled",
+            ))
+    }
+}
+
+/// Prepare an ISO 18013-5 mDoc for remote KMS signing.
+///
+/// This keeps the complete prepared state in Rust and returns only the COSE
+/// Sig_structure bytes that a document-signing key must sign. The caller must
+/// pass the raw IEEE P1363 ECDSA signature to ``oid4vci_assemble_mdoc``.
+#[pyfunction]
+#[pyo3(signature = (issuer_id, algorithm, credential_type, namespace, claims_json, expiration_seconds=None))]
+fn oid4vci_prepare_mdoc(
+    issuer_id: &str,
+    algorithm: &str,
+    credential_type: &str,
+    namespace: &str,
+    claims_json: &str,
+    expiration_seconds: Option<i64>,
+) -> PyResult<PreparedMdocForRemoteSigning> {
+    use marty_oid4vci::signer::CredentialSigner;
+    use marty_oid4vci::types::{CredentialClaims, SigningAlgorithm};
+
+    let claims = serde_json::from_str(claims_json).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid claims JSON: {e}"))
+    })?;
+    let algorithm = match algorithm {
+        "ES256" => SigningAlgorithm::ES256,
+        "ES384" => SigningAlgorithm::ES384,
+        _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "mDoc remote signing supports ES256 and ES384 only",
+        )),
+    };
+
+    #[derive(Debug)]
+    struct MetadataSigner {
+        issuer_id: String,
+        algorithm: SigningAlgorithm,
+    }
+    impl CredentialSigner for MetadataSigner {
+        fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
+            unreachable!("remote mDoc preparation must not invoke the metadata signer")
+        }
+        fn algorithm(&self) -> SigningAlgorithm { self.algorithm }
+        fn issuer_id(&self) -> &str { &self.issuer_id }
+        fn kid_url(&self) -> String { self.issuer_id.clone() }
+    }
+
+    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc(
+        &MetadataSigner { issuer_id: issuer_id.to_owned(), algorithm },
+        &CredentialClaims {
+            subject_id: None,
+            credential_type: credential_type.to_owned(),
+            claims,
+            expiration_seconds,
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some(namespace.to_owned()),
+            mdoc_doctype: Some(credential_type.to_owned()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        },
+    ).map_err(to_pyerr)?;
+    Ok(PreparedMdocForRemoteSigning { inner: Some(prepared) })
+}
+
+/// Assemble one mDoc credential after its KMS signature is available.
+#[pyfunction]
+fn oid4vci_assemble_mdoc(
+    prepared: &mut PreparedMdocForRemoteSigning,
+    signature: Vec<u8>,
+) -> PyResult<(String, String)> {
+    use marty_oid4vci::types::SignedCredential;
+    let prepared = prepared.inner.take().ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "mDoc preparation may only be assembled once",
+        )
+    })?;
+    match marty_oid4vci::formats::mdoc::assemble_mdoc(prepared, &signature).map_err(to_pyerr)? {
+        SignedCredential::MsoMdoc { issuer_signed_b64, credential_id } => Ok((issuer_signed_b64, credential_id)),
+        _ => unreachable!("mDoc assembler returned a different credential format"),
+    }
+}
+
 /// Normalize legacy Python input (`List[str]`) into typed ZK predicate bindings.
 fn normalize_zk_predicate_claims(
     claims: &std::collections::HashMap<String, serde_json::Value>,
@@ -1233,6 +1345,9 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
+    m.add_class::<PreparedMdocForRemoteSigning>()?;
+    m.add_function(wrap_pyfunction!(oid4vci_prepare_mdoc, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_assemble_mdoc, m)?)?;
 
     // OID4VP Protocol
     m.add_function(wrap_pyfunction!(oid4vp_verify_vp_token, m)?)?;
