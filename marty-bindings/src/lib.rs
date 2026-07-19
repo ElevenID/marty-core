@@ -857,9 +857,11 @@ impl PreparedMdocForRemoteSigning {
         self.inner
             .as_ref()
             .map(|prepared| prepared.tbs_data.clone())
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "mDoc preparation has already been assembled",
-            ))
+            .ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "mDoc preparation has already been assembled",
+                )
+            })
     }
 
     #[getter]
@@ -867,9 +869,11 @@ impl PreparedMdocForRemoteSigning {
         self.inner
             .as_ref()
             .map(|prepared| prepared.credential_id.clone())
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "mDoc preparation has already been assembled",
-            ))
+            .ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "mDoc preparation has already been assembled",
+                )
+            })
     }
 }
 
@@ -897,9 +901,11 @@ fn oid4vci_prepare_mdoc(
     let algorithm = match algorithm {
         "ES256" => SigningAlgorithm::ES256,
         "ES384" => SigningAlgorithm::ES384,
-        _ => return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "mDoc remote signing supports ES256 and ES384 only",
-        )),
+        _ => {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "mDoc remote signing supports ES256 and ES384 only",
+            ))
+        }
     };
 
     #[derive(Debug)]
@@ -911,13 +917,22 @@ fn oid4vci_prepare_mdoc(
         fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
             unreachable!("remote mDoc preparation must not invoke the metadata signer")
         }
-        fn algorithm(&self) -> SigningAlgorithm { self.algorithm }
-        fn issuer_id(&self) -> &str { &self.issuer_id }
-        fn kid_url(&self) -> String { self.issuer_id.clone() }
+        fn algorithm(&self) -> SigningAlgorithm {
+            self.algorithm
+        }
+        fn issuer_id(&self) -> &str {
+            &self.issuer_id
+        }
+        fn kid_url(&self) -> String {
+            self.issuer_id.clone()
+        }
     }
 
     let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc(
-        &MetadataSigner { issuer_id: issuer_id.to_owned(), algorithm },
+        &MetadataSigner {
+            issuer_id: issuer_id.to_owned(),
+            algorithm,
+        },
         &CredentialClaims {
             subject_id: None,
             credential_type: credential_type.to_owned(),
@@ -931,8 +946,11 @@ fn oid4vci_prepare_mdoc(
             w3c_context: vec![],
             w3c_types: vec![],
         },
-    ).map_err(to_pyerr)?;
-    Ok(PreparedMdocForRemoteSigning { inner: Some(prepared) })
+    )
+    .map_err(to_pyerr)?;
+    Ok(PreparedMdocForRemoteSigning {
+        inner: Some(prepared),
+    })
 }
 
 /// Assemble one mDoc credential after its KMS signature is available.
@@ -948,7 +966,10 @@ fn oid4vci_assemble_mdoc(
         )
     })?;
     match marty_oid4vci::formats::mdoc::assemble_mdoc(prepared, &signature).map_err(to_pyerr)? {
-        SignedCredential::MsoMdoc { issuer_signed_b64, credential_id } => Ok((issuer_signed_b64, credential_id)),
+        SignedCredential::MsoMdoc {
+            issuer_signed_b64,
+            credential_id,
+        } => Ok((issuer_signed_b64, credential_id)),
         _ => unreachable!("mDoc assembler returned a different credential format"),
     }
 }
