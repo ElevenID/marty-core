@@ -222,6 +222,29 @@ class TestOID4VCI:
         with pytest.raises(RuntimeError, match="[Nn]once"):
             _marty_rs.oid4vci_verify_proof_jwt(jwt, "nonce-b", None)
 
+    def test_remote_mdoc_prepare_sign_assemble_is_single_use(self):
+        """Remote KMS issuance retains COSE state inside the Rust extension."""
+        prepared = _marty_rs.oid4vci_prepare_mdoc(
+            "did:web:issuer.example",
+            "ES256",
+            "org.iso.18013.5.1.mDL",
+            "org.iso.18013.5.1",
+            json.dumps({"given_name": "Erika"}),
+            3600,
+        )
+        assert prepared.credential_id
+        assert prepared.tbs_data
+
+        private_key, _ = _marty_rs.generate_p256_key()
+        raw_signature = _marty_rs.sign_p256(private_key, prepared.tbs_data)
+        credential, credential_id = _marty_rs.oid4vci_assemble_mdoc(
+            prepared, raw_signature
+        )
+        assert credential
+        assert credential_id
+        with pytest.raises(RuntimeError, match="only be assembled once"):
+            _marty_rs.oid4vci_assemble_mdoc(prepared, raw_signature)
+
 
 # =========================================================================
 # OID4VP Verification
