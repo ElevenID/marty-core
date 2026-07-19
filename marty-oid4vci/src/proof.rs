@@ -594,4 +594,23 @@ mod tests {
 
         assert!(extract_holder_key(&header).is_err());
     }
+
+    #[test]
+    fn test_tampered_proof_signature_is_rejected() {
+        let proof = create_proof_jwt("https://issuer.example", "nonce-1").unwrap();
+        let (head, payload, signature) = proof
+            .split_once('.')
+            .and_then(|(head, rest)| {
+                rest.split_once('.')
+                    .map(|(payload, signature)| (head, payload, signature))
+            })
+            .unwrap();
+        let replacement = if signature.starts_with('A') { 'B' } else { 'A' };
+        let tampered = format!("{head}.{payload}{replacement}{}", &signature[1..]);
+
+        assert!(
+            verify_jwt_proof(&tampered, "https://issuer.example", Some("nonce-1"), 300).is_err(),
+            "a modified JWT signature must never verify"
+        );
+    }
 }
