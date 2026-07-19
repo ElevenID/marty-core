@@ -463,13 +463,143 @@ pub fn verify_sd_jwt(
     let verifier = sd_jwt_rs::SDJWTVerifier::new(
         sd_jwt_compact.to_string(),
         Box::new(move |_issuer: &str, _header: &jsonwebtoken::Header| decoding_key.clone()),
-        expected_aud,
-        expected_nonce,
+        expected_aud.clone(),
+        expected_nonce.clone(),
         SDJWTSerializationFormat::Compact,
     )
     .map_err(|e| Oid4vciError::SdJwtError(format!("SD-JWT verification failed: {:?}", e)))?;
 
+    // `sd-jwt-rs` validates the issuer-signed SD-JWT and disclosed claims.
+    // Key binding is verifier-context dependent, however, and older releases
+    // did not reliably enforce all of the supplied context.  Enforce it at
+    // Marty’s protocol boundary whenever the caller supplied an OID4VP
+    // audience or nonce.  This keeps a presentation from being accepted based
+    // solely on an otherwise valid issuer credential.
+    if expected_aud.is_some() || expected_nonce.is_some() {
+        validate_key_binding_jwt(
+            sd_jwt_compact,
+            expected_aud.as_deref(),
+            expected_nonce.as_deref(),
+        )?;
+    }
+
     Ok(verifier.verified_claims)
+}
+
+/// Validate the SD-JWT Key Binding JWT (RFC 9449 §8).
+///
+/// The holder key is bound by the issuer-signed credential's `cnf.jwk`.  We
+/// deliberately validate the protected algorithm, signature, `sd_hash`,
+/// audience, nonce, and a short issue-time window here rather than trusting a
+/// transitive verifier implementation to apply verifier-specific context.
+fn validate_key_binding_jwt(
+    sd_jwt_compact: &str,
+    expected_aud: Option<&str>,
+    expected_nonce: Option<&str>,
+) -> Oid4vciResult<()> {
+    use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+
+    let mut parts: Vec<&str> = sd_jwt_compact.split('~').collect();
+    while matches!(parts.last(), Some(segment) if segment.is_empty()) {
+        parts.pop();
+    }
+    if parts.len() < 2 {
+        return Err(Oid4vciError::SdJwtError(
+            "Key Binding JWT is required when verifier context is supplied".into(),
+        ));
+    }
+
+    let kb_jwt = parts.pop().expect("non-empty after length check");
+    if kb_jwt.split('.').count() != 3 {
+        return Err(Oid4vciError::SdJwtError(
+            "Key Binding JWT is not compact JWS".into(),
+        ));
+    }
+    let issuer_jwt = parts.first().copied().ok_or_else(|| {
+        Oid4vciError::SdJwtError("SD-JWT is missing its issuer-signed JWT".into())
+    })?;
+
+    let issuer_payload_segment = issuer_jwt
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| Oid4vciError::SdJwtError("Issuer-signed JWT is not compact JWS".into()))?;
+    let issuer_payload: serde_json::Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(issuer_payload_segment)
+            .map_err(|e| {
+                Oid4vciError::SdJwtError(format!("Issuer JWT payload decode failed: {e}"))
+            })?,
+    )
+    .map_err(|e| Oid4vciError::SdJwtError(format!("Issuer JWT payload is not JSON: {e}")))?;
+    let holder_jwk: jsonwebtoken::jwk::Jwk = issuer_payload
+        .get("cnf")
+        .and_then(|cnf| cnf.get("jwk"))
+        .cloned()
+        .ok_or_else(|| Oid4vciError::SdJwtError("SD-JWT has no cnf.jwk for key binding".into()))
+        .and_then(|value| {
+            serde_json::from_value(value)
+                .map_err(|e| Oid4vciError::SdJwtError(format!("Invalid cnf.jwk: {e}")))
+        })?;
+
+    let header = decode_header(kb_jwt).map_err(|e| {
+        Oid4vciError::SdJwtError(format!("Key Binding JWT header parse failed: {e}"))
+    })?;
+    let decoding_key = DecodingKey::from_jwk(&holder_jwk)
+        .map_err(|e| Oid4vciError::SdJwtError(format!("Key Binding JWK is unusable: {e}")))?;
+    let mut validation = Validation::new(header.alg);
+    validation.validate_aud = false;
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
+    validation.required_spec_claims.clear();
+    let claims = decode::<serde_json::Value>(kb_jwt, &decoding_key, &validation)
+        .map_err(|e| {
+            Oid4vciError::SdJwtError(format!("Key Binding JWT signature validation failed: {e}"))
+        })?
+        .claims;
+
+    let sd_jwt_without_kb = format!("{}~", parts.join("~"));
+    let actual_sd_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(sd_jwt_without_kb.as_bytes()));
+    if claims.get("sd_hash").and_then(|value| value.as_str()) != Some(actual_sd_hash.as_str()) {
+        return Err(Oid4vciError::SdJwtError(
+            "Key Binding JWT sd_hash does not bind this SD-JWT".into(),
+        ));
+    }
+    if let Some(expected) = expected_aud {
+        let matches = match claims.get("aud") {
+            Some(serde_json::Value::String(actual)) => actual == expected,
+            Some(serde_json::Value::Array(values)) => {
+                values.iter().any(|value| value.as_str() == Some(expected))
+            }
+            _ => false,
+        };
+        if !matches {
+            return Err(Oid4vciError::SdJwtError(
+                "Key Binding JWT audience does not match the verifier".into(),
+            ));
+        }
+    }
+    if let Some(expected) = expected_nonce {
+        if claims.get("nonce").and_then(|value| value.as_str()) != Some(expected) {
+            return Err(Oid4vciError::SdJwtError(
+                "Key Binding JWT nonce does not match the request".into(),
+            ));
+        }
+    }
+    let issued_at = claims
+        .get("iat")
+        .and_then(|value| value.as_i64())
+        .ok_or_else(|| {
+            Oid4vciError::SdJwtError("Key Binding JWT is missing a numeric iat claim".into())
+        })?;
+    // OID4VP requires a verifier to limit presentation freshness. Five minutes
+    // is deliberately conservative while allowing normal device clock skew.
+    if (chrono::Utc::now().timestamp() - issued_at).abs() > 300 {
+        return Err(Oid4vciError::SdJwtError(
+            "Key Binding JWT iat is outside the five-minute freshness window".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Re-sign the SD-JWT's JWS part with a new header that includes `kid`.
