@@ -376,11 +376,21 @@ fn verify_signature(
     let public_key = extract_public_key(jwk)?;
 
     // Verify using SSI's crypto
-    public_key
+    let verified = public_key
         .verify(alg_instance, message.as_bytes(), signature)
         .map_err(|e| {
             Oid4vciError::ProofVerificationFailed(format!("Signature verification failed: {:?}", e))
         })?;
+
+    // `ssi_crypto::AlgorithmInstance::verify` communicates an invalid
+    // cryptographic signature as `Ok(false)`, not an error.  Treat both forms
+    // of failure identically: accepting `false` would issue a credential for
+    // a tampered proof.
+    if !verified {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Signature verification failed: invalid signature".into(),
+        ));
+    }
 
     Ok(())
 }
@@ -598,6 +608,10 @@ mod tests {
     #[test]
     fn test_tampered_proof_signature_is_rejected() {
         let proof = create_proof_jwt("https://issuer.example", "nonce-1").unwrap();
+        assert!(
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300).is_ok(),
+            "the unmodified proof is the positive control for this test"
+        );
         let (head, payload, signature) = proof
             .split_once('.')
             .and_then(|(head, rest)| {
@@ -605,8 +619,13 @@ mod tests {
                     .map(|(payload, signature)| (head, payload, signature))
             })
             .unwrap();
-        let replacement = if signature.starts_with('A') { 'B' } else { 'A' };
-        let tampered = format!("{head}.{payload}{replacement}{}", &signature[1..]);
+        // Match the OpenID Foundation conformance module: mutate every raw
+        // signature byte, then serialize it back as unpadded base64url.
+        let mut tampered_signature = B64.decode(signature).unwrap();
+        for byte in &mut tampered_signature {
+            *byte ^= 0x5A;
+        }
+        let tampered = format!("{head}.{payload}.{}", B64.encode(tampered_signature));
 
         assert!(
             verify_jwt_proof(&tampered, "https://issuer.example", Some("nonce-1"), 300).is_err(),
