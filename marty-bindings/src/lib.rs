@@ -527,6 +527,38 @@ fn oid4vci_verify_proof_jwt(
     Ok((verified.holder_id, verified.nonce, holder_jwk_json))
 }
 
+/// Verify an SD-JWT VC presentation using Marty Core's RFC 9449 engine.
+///
+/// The issuer JWK must contain public material only. When both expected
+/// bindings are supplied, the Key Binding JWT is required to match the
+/// supplied audience and nonce. The returned JSON is the verified credential
+/// payload with disclosed claims reconstructed.
+///
+/// This is intentionally a direct binding to ``marty-oid4vci`` rather than a
+/// Python-side verifier: public services must use the same Rust verification
+/// implementation as the protocol conformance tests.
+#[pyfunction]
+#[pyo3(signature = (sd_jwt_compact, issuer_jwk_json, expected_aud=None, expected_nonce=None))]
+fn verify_sd_jwt(
+    sd_jwt_compact: &str,
+    issuer_jwk_json: &str,
+    expected_aud: Option<String>,
+    expected_nonce: Option<String>,
+) -> PyResult<String> {
+    let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt(
+        sd_jwt_compact,
+        issuer_jwk_json,
+        expected_aud,
+        expected_nonce,
+    )
+    .map_err(|error| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "SD-JWT verification failed: {error}"
+        ))
+    })?;
+    serde_json::to_string(&verified).map_err(to_pyerr)
+}
+
 /// Create an OID4VCI format-aware verifiable credential via the Rust signing engine.
 ///
 /// Supports all credential formats: jwt_vc_json, vc+sd-jwt, mso_mdoc, zk_mdoc, vds_nc.
@@ -1197,6 +1229,7 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
@@ -1374,6 +1407,56 @@ mod tests {
 
         let result = marty_oid4vci::proof::verify_jwt_proof(&jwt, "", Some("nonce-b"), 300);
         assert!(result.is_err(), "wrong nonce must fail verification");
+    }
+
+    #[test]
+    fn test_sd_jwt_binding_verifies_and_returns_reconstructed_claims() {
+        use marty_oid4vci::formats::sd_jwt::sign_sd_jwt;
+        use marty_oid4vci::types::{
+            CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential,
+            SigningAlgorithm,
+        };
+
+        let issuer_jwk = r#"{
+            "kty":"OKP",
+            "crv":"Ed25519",
+            "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+        }"#;
+        let issuer_public_jwk = r#"{
+            "kty":"OKP",
+            "crv":"Ed25519",
+            "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+        }"#;
+        let issuer = IssuerKey {
+            issuer_id: "https://issuer.example.test".to_string(),
+            jwk_json: issuer_jwk.to_string(),
+            algorithm: SigningAlgorithm::EdDSA,
+        };
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".to_string()),
+            credential_type: "IdentityCredential".to_string(),
+            claims: [("given_name".to_string(), serde_json::json!("Alice"))]
+                .into_iter()
+                .collect(),
+            expiration_seconds: Some(3600),
+            selective_disclosure_claims: vec!["given_name".to_string()],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: Vec::new(),
+            credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+            w3c_context: Vec::new(),
+            w3c_types: Vec::new(),
+        };
+        let compact = match sign_sd_jwt(&issuer, &claims).expect("SD-JWT issuance") {
+            SignedCredential::SdJwt { compact, .. } => compact,
+            _ => panic!("expected SD-JWT credential"),
+        };
+
+        let verified = verify_sd_jwt(&compact, issuer_public_jwk, None, None)
+            .expect("binding must verify a valid SD-JWT");
+        let payload: serde_json::Value = serde_json::from_str(&verified).expect("verified JSON");
+        assert_eq!(payload["given_name"], "Alice");
     }
 
     // ====================================================================

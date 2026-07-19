@@ -180,8 +180,18 @@ jobs:
       - name: Test no default features
         run: cargo test --locked -p ${{ matrix.crate }} --no-default-features
 
-      - name: Test default features
-        run: cargo test --locked -p ${{ matrix.crate }}
+      - name: Exercise default features
+        shell: bash
+        run: |
+          # PyO3's extension-module feature intentionally omits libpython
+          # linkage, so it must be compiled rather than linked into a Rust
+          # test executable. Binding tests run separately with that feature
+          # disabled, and Python-package jobs test the actual extension.
+          if [ "${{ matrix.crate }}" = "marty-bindings" ]; then
+            cargo check --locked -p marty-bindings
+          else
+            cargo test --locked -p "${{ matrix.crate }}"
+          fi
 
   feature-matrix-verification:
     name: Feature Matrix (marty-verification)
