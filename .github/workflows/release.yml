@@ -33,7 +33,12 @@ jobs:
       - name: Test workspace
         env:
           USE_ZK_MOCK: "1"
-        run: cargo test --workspace --locked
+        run: |
+          # extension-module intentionally omits libpython linkage. Test the
+          # binding crate without it here; package jobs exercise the compiled
+          # Python extension on each release platform.
+          cargo test --workspace --locked --exclude marty-bindings
+          cargo test --locked -p marty-bindings --no-default-features
 
   build-crates:
     needs: test
