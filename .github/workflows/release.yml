@@ -136,6 +136,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
         with:
+          # Keep release builds independent of GitHub's latest-release API.
+          maturin-version: v1.14.1
           working-directory: ${{ matrix.package }}
           command: build
           args: --release --out dist --find-interpreter
@@ -158,6 +160,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
         with:
+          # Keep release builds independent of GitHub's latest-release API.
+          maturin-version: v1.14.1
           working-directory: ${{ matrix.package }}
           command: sdist
           args: --out dist
