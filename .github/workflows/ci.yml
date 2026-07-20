@@ -15,6 +15,20 @@ env:
   RUSTUP_TOOLCHAIN: 1.97.1
 
 jobs:
+  release-contract:
+    name: Release Contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Verify Python versions and release-asset retention
+        run: python scripts/check_release_contract.py
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}
