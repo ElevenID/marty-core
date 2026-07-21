@@ -19,6 +19,8 @@ use crate::types::{CredentialClaims, IssuerKey, SignedCredential};
 // ── CBOR tag number for `encoded-cbor` (tag 24, RFC 8949 §3.4.5.1) ──
 // Used for tagged CBOR byte strings inside IssuerSignedItem and issuerAuth.
 const CBOR_TAG_ENCODED_CBOR: u64 = 24;
+// RFC 8943 full-date (YYYY-MM-DD), used by ISO 18013-5 date elements.
+const CBOR_TAG_FULL_DATE: u64 = 1004;
 const COSE_HEADER_X5CHAIN_LABEL: i64 = 33;
 const MDOC_X5C_CLAIM_KEY: &str = "_mdoc_x5c";
 
@@ -544,8 +546,14 @@ fn json_to_cbor(value: &serde_json::Value) -> Oid4vciResult<CborValue> {
             }
         }
         serde_json::Value::String(s) => {
-            // Check if this looks like a date (YYYY-MM-DD) and wrap as CBOR tag 0
-            if is_date_string(s) {
+            // CBOR tag 0 is an RFC 3339 date-time, not an ISO full-date.
+            // mDL elements such as birth_date use RFC 8943 tag 1004 instead.
+            if is_full_date_string(s) {
+                Ok(CborValue::Tag(
+                    CBOR_TAG_FULL_DATE,
+                    Box::new(CborValue::Text(s.clone())),
+                ))
+            } else if chrono::DateTime::parse_from_rfc3339(s).is_ok() {
                 Ok(CborValue::Tag(0, Box::new(CborValue::Text(s.clone()))))
             } else {
                 Ok(CborValue::Text(s.clone()))
@@ -565,13 +573,9 @@ fn json_to_cbor(value: &serde_json::Value) -> Oid4vciResult<CborValue> {
     }
 }
 
-/// Crude check for ISO 8601 date strings (used for mDL date elements).
-fn is_date_string(s: &str) -> bool {
-    // Matches YYYY-MM-DD or full ISO 8601 datetime
-    s.len() >= 10
-        && s.as_bytes()[4] == b'-'
-        && s.as_bytes()[7] == b'-'
-        && s[0..4].parse::<u16>().is_ok()
+/// Return true only for a valid RFC 3339 full-date (`YYYY-MM-DD`).
+fn is_full_date_string(s: &str) -> bool {
+    s.len() == 10 && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
 }
 
 /// Convert a chrono DateTime to a CBOR tagged date-time string (tag 0).
@@ -611,7 +615,16 @@ mod tests {
         assert!(matches!(text, CborValue::Text(_)));
 
         let date = json_to_cbor(&serde_json::json!("1990-01-15")).unwrap();
-        assert!(matches!(date, CborValue::Tag(0, _)));
+        assert!(matches!(date, CborValue::Tag(CBOR_TAG_FULL_DATE, _)));
+
+        let date_time = json_to_cbor(&serde_json::json!("2026-07-21T12:00:00Z")).unwrap();
+        assert!(matches!(date_time, CborValue::Tag(0, _)));
+
+        let invalid_date = json_to_cbor(&serde_json::json!("2026-02-30")).unwrap();
+        assert!(matches!(invalid_date, CborValue::Text(_)));
+
+        let unicode_text = json_to_cbor(&serde_json::json!("\u{1F5D3} 2026-07-21")).unwrap();
+        assert!(matches!(unicode_text, CborValue::Text(_)));
     }
 
     #[test]

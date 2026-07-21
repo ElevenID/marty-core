@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "marty-verification-py"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python bindings for marty-verification - cryptographic verification and Open Badges support"
 readme = "README.md"
 license = {text = "MIT OR Apache-2.0"}
