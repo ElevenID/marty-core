@@ -57,6 +57,7 @@ ssi-claims = { version = "0.7.0", features = ["w3c", "ed25519", "secp256r1"] }
 ssi-dids = { version = "0.5.0", default-features = false, features = ["secp256r1"] }
 ssi-json-ld = "0.3.3"
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1"] }
+ssi-jws = { version = "0.5.0", default-features = false, features = ["ed25519", "secp256r1"] }
 ssi-verification-methods = { version = "0.3.0", default-features = false, features = ["ed25519", "secp256r1"] }
 bs58 = "0.4.0"
 iref = "3.2.2"

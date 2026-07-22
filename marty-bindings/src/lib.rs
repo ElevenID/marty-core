@@ -177,6 +177,16 @@ fn verify_vcdm_data_integrity(request_json: &str) -> String {
     marty_verification::vcdm::verify_vcdm_data_integrity_json(request_json)
 }
 
+/// Verify a compact W3C VCDM v2 VC-JWT with public issuer-profile DID material.
+///
+/// The JSON request accepts `token` and an optional `issuer_public_jwk`. The
+/// JWK must be public; signing and private-key custody remain behind the issuer
+/// profile rather than crossing the Python/Rust verification boundary.
+#[pyfunction]
+fn verify_vcdm_jwt(request_json: &str) -> String {
+    marty_verification::vcdm::verify_vcdm_jwt_json(request_json)
+}
+
 // ============================================================================
 // Verifiable Credentials (Simplified)
 // ============================================================================
@@ -1355,6 +1365,7 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_p384, m)?)?;
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_data_integrity, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
 
     // Verifiable Credentials

@@ -3801,6 +3801,7 @@ dependencies = [
  "ssi-dids",
  "ssi-json-ld",
  "ssi-jwk",
+ "ssi-jws",
  "ssi-verification-methods",
  "tempfile",
  "thiserror 2.0.18",
