@@ -38,6 +38,7 @@ pub mod mrz;
 pub mod open_badges;
 pub mod policy;
 pub mod trust_anchor;
+pub mod vcdm;
 pub mod verification;
 
 #[cfg(any(feature = "aamva-client", feature = "icao-client"))]

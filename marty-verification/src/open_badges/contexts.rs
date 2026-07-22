@@ -11,6 +11,7 @@ const CONTEXT_OPENBADGES_V3_303: &str =
 const CONTEXT_OPENBADGES_V3_ALIAS: &str = "https://w3id.org/openbadges/v3";
 const CONTEXT_VC_V1: &str = "https://www.w3.org/2018/credentials/v1";
 const CONTEXT_VC_V2: &str = "https://www.w3.org/ns/credentials/v2";
+const CONTEXT_VC_EXAMPLES_V2: &str = "https://www.w3.org/ns/credentials/examples/v2";
 const CONTEXT_DATA_INTEGRITY_V2: &str = "https://w3id.org/security/data-integrity/v2";
 const CONTEXT_SECURITY_V1: &str = "https://w3id.org/security/v1";
 const CONTEXT_SECURITY_V2: &str = "https://w3id.org/security/v2";
@@ -21,6 +22,8 @@ const CONTEXT_FILE_OPENBADGES_V2: &str = include_str!("contexts/openbadges-v2.js
 const CONTEXT_FILE_OPENBADGES_V3: &str = include_str!("contexts/openbadges-v3.jsonld");
 const CONTEXT_FILE_VC_V1: &str = include_str!("contexts/credentials-v1.jsonld");
 const CONTEXT_FILE_VC_V2: &str = include_str!("contexts/credentials-v2.jsonld");
+const CONTEXT_FILE_VC_EXAMPLES_V2: &str =
+    r#"{"@context":{"@vocab":"https://www.w3.org/ns/credentials/examples#"}}"#;
 const CONTEXT_FILE_DATA_INTEGRITY_V2: &str =
     include_str!("contexts/security-data-integrity-v2.jsonld");
 const CONTEXT_FILE_SECURITY_V1: &str = include_str!("contexts/security-v1.jsonld");
@@ -50,6 +53,10 @@ pub fn open_badges_context_loader() -> VerificationResult<ContextLoader> {
     );
     context_map.insert(CONTEXT_VC_V1.to_string(), CONTEXT_FILE_VC_V1.to_string());
     context_map.insert(CONTEXT_VC_V2.to_string(), CONTEXT_FILE_VC_V2.to_string());
+    context_map.insert(
+        CONTEXT_VC_EXAMPLES_V2.to_string(),
+        CONTEXT_FILE_VC_EXAMPLES_V2.to_string(),
+    );
     context_map.insert(
         CONTEXT_DATA_INTEGRITY_V2.to_string(),
         CONTEXT_FILE_DATA_INTEGRITY_V2.to_string(),
