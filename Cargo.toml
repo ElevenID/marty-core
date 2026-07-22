@@ -16,7 +16,7 @@ x509-cert = { version = "0.2", features = ["pem", "builder"] }
 der = { version = "0.7", features = ["pem", "derive"] }
 const-oid = "0.9"
 sha1 = { version = "0.10", features = ["oid"] }
-sha2 = "0.10"
+sha2 = "0.11"
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "ecdh"] }
 p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "ecdh"] }
 p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "arithmetic"] }
