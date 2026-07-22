@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-07-21
+
+### Features
+
+- Verify W3C VCDM v2 `eddsa-rdfc-2022` credentials and presentations through the released Python binding.
+- Resolve `did:key` verification methods offline, bind presentation challenge and domain, and independently verify embedded credentials.
+
+### Security
+
+- Reject unsupported proof suites, proof purposes, malformed multibase proof values, signature tampering, and challenge or domain mismatches.
+
 ## [0.1.10] - 2026-07-21
 
 ### Bug Fixes

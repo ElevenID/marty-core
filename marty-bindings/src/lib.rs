@@ -167,6 +167,16 @@ fn verify_ed25519(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResu
     ))
 }
 
+/// Verify a W3C VCDM v2 JSON-LD Data Integrity credential or presentation.
+///
+/// The request and response are JSON strings so the cryptographic boundary is
+/// stable across Rust and Python releases. Verification uses Marty's embedded
+/// contexts and offline did:key resolution.
+#[pyfunction]
+fn verify_vcdm_data_integrity(request_json: &str) -> String {
+    marty_verification::vcdm::verify_vcdm_data_integrity_json(request_json)
+}
+
 // ============================================================================
 // Verifiable Credentials (Simplified)
 // ============================================================================
@@ -1344,6 +1354,7 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_p256, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p384, m)?)?;
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_vcdm_data_integrity, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
 
     // Verifiable Credentials
