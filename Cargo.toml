@@ -45,7 +45,7 @@ des = "0.8"
 
 # Key derivation
 hkdf = "0.12"
-pbkdf2 = { version = "0.12", features = ["hmac"] }
+pbkdf2 = { version = "0.13", features = ["hmac"] }
 
 # Additional crypto
 hmac = "0.12"
