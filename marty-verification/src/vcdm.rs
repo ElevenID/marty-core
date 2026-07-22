@@ -736,14 +736,22 @@ mod tests {
 
     #[test]
     fn rejects_tampered_vc_jwt_and_private_profile_material() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
         let mut key = JWK::generate_p256();
         let issuer = "did:web:issuer.example";
         key.key_id = Some(format!("{issuer}#key-1"));
         let token = encode_sign(Algorithm::ES256, &jwt_claims(issuer).to_string(), &key).unwrap();
-        let mut tampered = token.clone().into_bytes();
-        let last = tampered.last_mut().unwrap();
-        *last = if *last == b'A' { b'B' } else { b'A' };
-        let tampered = String::from_utf8(tampered).unwrap();
+        let segments: Vec<&str> = token.split('.').collect();
+        assert_eq!(segments.len(), 3);
+        let mut signature = URL_SAFE_NO_PAD.decode(segments[2]).unwrap();
+        signature[0] ^= 1;
+        let tampered = format!(
+            "{}.{}.{}",
+            segments[0],
+            segments[1],
+            URL_SAFE_NO_PAD.encode(signature)
+        );
         let public_jwk = serde_json::to_value(key.to_public()).unwrap();
 
         let invalid: Value = serde_json::from_str(&verify_vcdm_jwt_json(

@@ -3,7 +3,7 @@ members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-st
 resolver = "2"
 
 [workspace.package]
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
