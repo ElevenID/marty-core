@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-07-22
+
+### Features
+
+- Verify standalone W3C VCDM v2 JWT credentials with EdDSA or ES256 through the released Python binding.
+- Resolve `did:key` verification methods or consume only public issuer-profile JWK material.
+
+### Security
+
+- Reject private JWK members, unsupported algorithms, issuer/controller mismatches, tampering, and invalid temporal or registered-claim mappings.
+
 ## [0.1.11] - 2026-07-21
 
 ### Features
