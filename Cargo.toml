@@ -23,7 +23,7 @@ p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "arithmetic"] }
 ecdsa = "0.16"
 elliptic-curve = "0.13"
 pem-rfc7468 = "0.7"
-signature = "2.0"
+signature = "3.0"
 
 # RSA support
 rsa = { version = "0.9", features = ["sha2", "pem"] }
