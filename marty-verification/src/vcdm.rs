@@ -440,9 +440,6 @@ async fn verify_presentation(request: VerifyRequest) -> String {
         request.expected_domain.as_deref(),
         holder,
     );
-    if holder.is_none() {
-        errors.push("Presentation holder must be an absolute identifier".to_string());
-    }
     if request
         .expected_challenge
         .as_deref()
@@ -645,6 +642,21 @@ mod tests {
     const OFFICIAL_SUITE_PRESENTATION: &str =
         include_str!("../tests/fixtures/w3c_vcdm_v2_official_suite_presentation.json");
 
+    const OFFICIAL_SUITE_PRESENTATION_WITHOUT_HOLDER: &str = r#"{
+      "@context": ["https://www.w3.org/ns/credentials/v2"],
+      "type": ["VerifiablePresentation"],
+      "proof": {
+        "type": "DataIntegrityProof",
+        "created": "2026-07-22T09:59:37Z",
+        "verificationMethod": "did:key:z6MkpJySvETLnxhQG9DzEdmKJtysBDjuuTeDfUj1uNNCUqcj#z6MkpJySvETLnxhQG9DzEdmKJtysBDjuuTeDfUj1uNNCUqcj",
+        "cryptosuite": "eddsa-rdfc-2022",
+        "proofPurpose": "authentication",
+        "challenge": "challenge-123",
+        "domain": "verifier.example",
+        "proofValue": "z21YwBZrwiRK3mGfxEBNWxnbJrD4oYDpVSJeSdQyECW4NsL4YMuuZ6yugdiuWyf5ZD9nXkyKixD6C5691eLwwf7Sv"
+      }
+    }"#;
+
     #[test]
     fn verifies_official_suite_eddsa_rdfc_presentation_and_nested_credential() {
         let request = json!({
@@ -657,6 +669,23 @@ mod tests {
         assert_eq!(result["valid"], true, "{result}");
         assert_eq!(result["verified_proofs"], 1);
         assert_eq!(result["verified_credentials"], 1);
+    }
+
+    #[test]
+    fn verifies_official_suite_presentation_without_optional_holder() {
+        let request = json!({
+            "document": serde_json::from_str::<Value>(
+                OFFICIAL_SUITE_PRESENTATION_WITHOUT_HOLDER
+            )
+            .unwrap(),
+            "expected_challenge": "challenge-123",
+            "expected_domain": "verifier.example"
+        });
+        let result: Value =
+            serde_json::from_str(&verify_vcdm_data_integrity_json(&request.to_string())).unwrap();
+        assert_eq!(result["valid"], true, "{result}");
+        assert_eq!(result["verified_proofs"], 1);
+        assert_eq!(result["verified_credentials"], 0);
     }
 
     #[test]
