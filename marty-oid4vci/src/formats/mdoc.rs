@@ -165,7 +165,33 @@ pub fn prepare_mdoc(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<PreparedMdoc> {
-    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
+    prepare_mdoc_with_credential_id(signer, claims, None)
+}
+
+/// Prepare an mDoc while preserving an issuer-reserved credential identifier.
+///
+/// Issuance services reserve a deterministic identifier before remote signing
+/// so retries cannot mint a second credential. The identifier is deliberately
+/// not supplied by a wallet-facing request.
+pub fn prepare_mdoc_with_credential_id(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    reserved_credential_id: Option<&str>,
+) -> Oid4vciResult<PreparedMdoc> {
+    let credential_id = match reserved_credential_id {
+        Some(value) => {
+            let uuid_value = value.strip_prefix("urn:uuid:").ok_or_else(|| {
+                Oid4vciError::MdocError(
+                    "reserved credential ID must use the urn:uuid scheme".into(),
+                )
+            })?;
+            uuid::Uuid::parse_str(uuid_value).map_err(|_| {
+                Oid4vciError::MdocError("reserved credential ID contains an invalid UUID".into())
+            })?;
+            value.to_owned()
+        }
+        None => format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+    };
     let now = chrono::Utc::now();
 
     let doc_type = claims
@@ -701,6 +727,29 @@ mod tests {
             }
             _ => panic!("Expected MsoMdoc"),
         }
+    }
+
+    #[test]
+    fn test_prepare_mdoc_preserves_reserved_credential_id() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: [("family_name".into(), serde_json::json!("Smith"))].into(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let reserved = "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c";
+
+        let prepared = prepare_mdoc_with_credential_id(&key, &claims, Some(reserved)).unwrap();
+
+        assert_eq!(prepared.credential_id, reserved);
     }
 
     #[test]

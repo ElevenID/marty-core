@@ -862,9 +862,9 @@ fn oid4vci_assemble_credential(
 }
 
 /// Opaque mDoc preparation state retained inside the native extension between
-/// a remote KMS signing call and final COSE assembly.  The protected header,
+/// issuer-profile signing and final COSE assembly. The protected header,
 /// MSO and issuer-signed items must never be reconstructed from a lossy
-/// Python representation after the KMS signs the exact TBS bytes.
+/// Python representation after the profile signs the exact TBS bytes as its DID.
 #[pyclass]
 struct PreparedMdocForRemoteSigning {
     inner: Option<marty_oid4vci::formats::mdoc::PreparedMdoc>,
@@ -897,13 +897,22 @@ impl PreparedMdocForRemoteSigning {
     }
 }
 
-/// Prepare an ISO 18013-5 mDoc for remote KMS signing.
+/// Prepare an ISO 18013-5 mDoc for issuer-profile signing.
 ///
 /// This keeps the complete prepared state in Rust and returns only the COSE
-/// Sig_structure bytes that a document-signing key must sign. The caller must
-/// pass the raw IEEE P1363 ECDSA signature to ``oid4vci_assemble_mdoc``.
+/// Sig_structure bytes that the issuer profile must sign as its DID. The caller
+/// must pass the raw IEEE P1363 ECDSA signature to
+/// ``oid4vci_assemble_mdoc``.
 #[pyfunction]
-#[pyo3(signature = (issuer_id, algorithm, credential_type, namespace, claims_json, expiration_seconds=None))]
+#[pyo3(signature = (
+    issuer_id,
+    algorithm,
+    credential_type,
+    namespace,
+    claims_json,
+    expiration_seconds=None,
+    credential_id=None
+))]
 fn oid4vci_prepare_mdoc(
     issuer_id: &str,
     algorithm: &str,
@@ -911,6 +920,7 @@ fn oid4vci_prepare_mdoc(
     namespace: &str,
     claims_json: &str,
     expiration_seconds: Option<i64>,
+    credential_id: Option<&str>,
 ) -> PyResult<PreparedMdocForRemoteSigning> {
     use marty_oid4vci::signer::CredentialSigner;
     use marty_oid4vci::types::{CredentialClaims, SigningAlgorithm};
@@ -948,7 +958,7 @@ fn oid4vci_prepare_mdoc(
         }
     }
 
-    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc(
+    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc_with_credential_id(
         &MetadataSigner {
             issuer_id: issuer_id.to_owned(),
             algorithm,
@@ -966,6 +976,7 @@ fn oid4vci_prepare_mdoc(
             w3c_context: vec![],
             w3c_types: vec![],
         },
+        credential_id,
     )
     .map_err(to_pyerr)?;
     Ok(PreparedMdocForRemoteSigning {
@@ -973,7 +984,7 @@ fn oid4vci_prepare_mdoc(
     })
 }
 
-/// Assemble one mDoc credential after its KMS signature is available.
+/// Assemble one mDoc credential after its issuer-profile signature is available.
 #[pyfunction]
 fn oid4vci_assemble_mdoc(
     prepared: &mut PreparedMdocForRemoteSigning,
