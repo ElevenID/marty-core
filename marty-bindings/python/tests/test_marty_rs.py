@@ -134,6 +134,26 @@ class TestErrorHandling:
             _marty_rs.create_verifiable_credential("not json", secret, "key-1")
 
 
+class TestMdocPresentationVerification:
+    """The production wheel exposes fail-closed ISO presentation bindings."""
+
+    def test_mdoc_verifier_surface_is_packaged(self):
+        assert hasattr(_marty_rs, "parse_device_response")
+        assert hasattr(_marty_rs, "verify_mdoc_cbor")
+        assert hasattr(_marty_rs, "verify_mdoc_presentation")
+
+    def test_malformed_mdoc_presentation_fails_closed(self):
+        result = _marty_rs.verify_mdoc_presentation(
+            b"\xff",
+            bytes([0x83, 0xF6, 0xF6, 0x82, 0x71]),
+            [],
+        )
+        assert result.issuer_signature_valid is False
+        assert result.issuer_trusted is False
+        assert result.device_authentication_valid is False
+        assert result.error
+
+
 # =========================================================================
 # Verifiable Credentials
 # =========================================================================

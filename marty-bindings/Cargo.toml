@@ -26,6 +26,9 @@ pyo3 = { workspace = true, features = ["abi3-py311"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+ciborium = { workspace = true }
+coset = "0.3.8"
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "069576a64580fc9923b65dcbdad0c2253c44296d" }
 
 # Base64 encoding
 base64 = { workspace = true }
