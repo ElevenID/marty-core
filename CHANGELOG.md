@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.20] - 2026-07-26
+
+### Bug Fixes
+
+- Bind the public key from the wallet's cryptographically verified OID4VCI
+  proof into `MobileSecurityObject.deviceKeyInfo.deviceKey`, enabling
+  standards-compliant mdoc holder `DeviceAuthentication`.
+- Encode only the public EC coordinates in the canonical COSE_Key and reject
+  incomplete or unsupported holder keys.
+- Keep issuer authentication signing behind the selected issuer profile and
+  its DID verification method; no caller-facing KMS identifier or holder
+  private key is introduced.
+
 ## [0.1.19] - 2026-07-26
 
 ### Bug Fixes
