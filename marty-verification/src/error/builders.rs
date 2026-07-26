@@ -168,6 +168,17 @@ impl VerificationError {
         })
     }
 
+    /// Create a device authentication failure.
+    pub fn device_auth_failed(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::DeviceAuthFailed {
+            reason: reason.into(),
+            code: codes::AUTH_DEVICE_FAILED,
+            context: ErrorContext::default(),
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
     /// Create a DER error.
     pub fn der_error(reason: impl Into<String>) -> Box<Self> {
         Box::new(Self::DerError {
