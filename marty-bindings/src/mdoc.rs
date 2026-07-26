@@ -10,6 +10,7 @@ use isomdl::definitions::x509::x5chain::{X5Chain, X5CHAIN_COSE_HEADER_LABEL};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
+use std::collections::HashMap;
 
 /// Parse a DeviceResponse and fail if its envelope is not ISO-compatible.
 ///
@@ -30,20 +31,65 @@ pub(crate) fn parse_device_response(cbor_bytes: Vec<u8>) -> PyResult<bool> {
     Ok(true)
 }
 
-/// Extract disclosed mDL claims after the caller has authenticated the
+/// Extract disclosed mdoc claims after the caller has authenticated the
 /// presentation.
+///
+/// Unique element identifiers remain available as flat keys for compatibility.
+/// The `_mdoc.documents` value always preserves the document type, namespace,
+/// and element identifier. Ambiguous flat keys are omitted rather than
+/// silently selecting one namespace.
 #[pyfunction]
 pub(crate) fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python<'_>) -> PyResult<Py<PyAny>> {
     let response = marty_verification::mdoc::parse_device_response(&cbor_bytes)
         .map_err(|error| value_error(format!("Failed to parse mdoc claims: {error}")))?;
-    let fields = response
-        .get_mdl_fields()
-        .map_err(|error| value_error(format!("Failed to extract mdoc claims: {error}")))?;
-    let result = PyDict::new(py);
-    for (key, value) in fields {
-        result.set_item(key, json_to_python(py, &value)?)?;
+    json_to_python(py, &disclosed_claims(&response))
+}
+
+fn disclosed_claims(response: &marty_verification::mdoc::DeviceResponse) -> serde_json::Value {
+    let fields = response.get_disclosed_fields();
+    let mut element_counts: HashMap<&str, usize> = HashMap::new();
+    for field in &fields {
+        *element_counts
+            .entry(field.element_identifier.as_str())
+            .or_default() += 1;
     }
-    Ok(result.into())
+
+    let mut claims = serde_json::Map::new();
+    for field in &fields {
+        if element_counts.get(field.element_identifier.as_str()) == Some(&1) {
+            claims.insert(
+                field.element_identifier.clone(),
+                field.element_value.clone(),
+            );
+        }
+    }
+
+    let documents = response
+        .documents
+        .iter()
+        .map(|document| {
+            let namespaces = document
+                .namespaces
+                .iter()
+                .map(|(namespace, items)| {
+                    let elements = items
+                        .iter()
+                        .map(|item| (item.element_identifier.clone(), item.element_value.clone()))
+                        .collect::<serde_json::Map<_, _>>();
+                    (namespace.clone(), serde_json::Value::Object(elements))
+                })
+                .collect::<serde_json::Map<_, _>>();
+            serde_json::json!({
+                "doc_type": document.doc_type,
+                "namespaces": namespaces,
+            })
+        })
+        .collect::<Vec<_>>();
+    claims.insert(
+        "_mdoc".to_string(),
+        serde_json::json!({"documents": documents}),
+    );
+    serde_json::Value::Object(claims)
 }
 
 /// Result of complete OpenID4VP mdoc presentation authentication.
@@ -314,6 +360,7 @@ fn value_error(error: impl Into<String>) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marty_verification::mdoc::{DeviceResponse, Document, IssuerSignedItem};
 
     #[test]
     fn certificate_chain_accepts_single_or_multiple_der_certificates() {
@@ -346,5 +393,78 @@ mod tests {
         assert!(!result.issuer_trusted);
         assert!(!result.device_authentication_valid);
         assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn disclosed_claims_include_dtc_fields_and_structured_paths() {
+        let response = DeviceResponse {
+            version: "1.0".to_string(),
+            documents: vec![Document {
+                doc_type: "com.icao.dtc".to_string(),
+                namespaces: HashMap::from([(
+                    "com.icao.dtc".to_string(),
+                    vec![IssuerSignedItem {
+                        digest_id: 7,
+                        random: vec![1],
+                        element_identifier: "document_number".to_string(),
+                        element_value: serde_json::json!("PMB09A5929"),
+                    }],
+                )]),
+                mso: None,
+                issuer_cert_chain: Vec::new(),
+            }],
+            status: 0,
+        };
+
+        assert_eq!(
+            disclosed_claims(&response),
+            serde_json::json!({
+                "document_number": "PMB09A5929",
+                "_mdoc": {
+                    "documents": [{
+                        "doc_type": "com.icao.dtc",
+                        "namespaces": {
+                            "com.icao.dtc": {
+                                "document_number": "PMB09A5929"
+                            }
+                        }
+                    }]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn disclosed_claims_omit_ambiguous_flat_keys() {
+        let item = |value| IssuerSignedItem {
+            digest_id: 0,
+            random: Vec::new(),
+            element_identifier: "document_number".to_string(),
+            element_value: serde_json::json!(value),
+        };
+        let response = DeviceResponse {
+            version: "1.0".to_string(),
+            documents: vec![Document {
+                doc_type: "example.document".to_string(),
+                namespaces: HashMap::from([
+                    ("example.one".to_string(), vec![item("one")]),
+                    ("example.two".to_string(), vec![item("two")]),
+                ]),
+                mso: None,
+                issuer_cert_chain: Vec::new(),
+            }],
+            status: 0,
+        };
+
+        let claims = disclosed_claims(&response);
+        assert!(claims.get("document_number").is_none());
+        assert_eq!(
+            claims["_mdoc"]["documents"][0]["namespaces"]["example.one"]["document_number"],
+            "one"
+        );
+        assert_eq!(
+            claims["_mdoc"]["documents"][0]["namespaces"]["example.two"]["document_number"],
+            "two"
+        );
     }
 }
