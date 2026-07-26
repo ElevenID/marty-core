@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-07-25
+
+### Features
+
+- Verify holder `DeviceAuthentication` signatures for every ISO 18013-5
+  document against a verifier-supplied session transcript.
+
+### Maintenance
+
+- Adopt PyO3 0.29's explicit `from_py_object` behavior for existing Python
+  classes without changing their conversion semantics.
+
 ## [0.1.15] - 2026-07-24
 
 ### Bug Fixes

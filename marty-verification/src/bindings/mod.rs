@@ -73,7 +73,7 @@ fn to_pyerr<E: IntoPyErr>(e: E) -> PyErr {
 }
 
 /// Python wrapper for MdlVerificationResult.
-#[pyclass(name = "MdlVerificationResult")]
+#[pyclass(name = "MdlVerificationResult", from_py_object)]
 #[derive(Clone)]
 pub struct PyMdlVerificationResult {
     #[pyo3(get)]
@@ -320,7 +320,7 @@ fn verify_mdl_x5chain_cbor(
 // ============================================================================
 
 /// Python wrapper for EU Member State.
-#[pyclass(name = "EuMemberState")]
+#[pyclass(name = "EuMemberState", from_py_object)]
 #[derive(Clone)]
 pub struct PyEuMemberState {
     #[pyo3(get)]
@@ -363,7 +363,7 @@ impl PyEuMemberState {
 }
 
 /// Python wrapper for Trust Service Provider.
-#[pyclass(name = "TrustServiceProvider")]
+#[pyclass(name = "TrustServiceProvider", from_py_object)]
 #[derive(Clone)]
 pub struct PyTrustServiceProvider {
     #[pyo3(get)]
@@ -627,7 +627,7 @@ impl PyCscaRegistry {
 // ============================================================================
 
 /// Python wrapper for parsed MRZ data.
-#[pyclass(name = "MrzData")]
+#[pyclass(name = "MrzData", from_py_object)]
 #[derive(Clone)]
 pub struct PyMrzData {
     #[pyo3(get)]
@@ -773,7 +773,7 @@ fn validate_check_digit(data: &str, check_digit: &str) -> bool {
 // ============================================================================
 
 /// Python wrapper for CRL information.
-#[pyclass(name = "CrlInfo")]
+#[pyclass(name = "CrlInfo", from_py_object)]
 #[derive(Clone)]
 pub struct PyCrlInfo {
     #[pyo3(get)]
@@ -815,7 +815,7 @@ impl PyCrlInfo {
 }
 
 /// Python wrapper for a revoked certificate entry.
-#[pyclass(name = "RevokedCertificate")]
+#[pyclass(name = "RevokedCertificate", from_py_object)]
 #[derive(Clone)]
 pub struct PyRevokedCertificate {
     #[pyo3(get)]
@@ -967,7 +967,7 @@ fn verify_signature(
 // ============================================================================
 
 /// Python wrapper for parsed DeviceResponse.
-#[pyclass(name = "DeviceResponse")]
+#[pyclass(name = "DeviceResponse", from_py_object)]
 #[derive(Clone)]
 pub struct PyDeviceResponse {
     #[pyo3(get)]
@@ -1080,7 +1080,7 @@ fn parse_device_response(cbor_bytes: &[u8]) -> PyResult<PyDeviceResponse> {
 /// Python wrapper for validation configuration.
 ///
 /// Allows Python code to pass policy parameters to the Rust chain validator.
-#[pyclass(name = "ValidationConfig")]
+#[pyclass(name = "ValidationConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyValidationConfig {
     /// Whether to check CRL revocation.
@@ -1266,7 +1266,7 @@ impl PyValidationConfig {
 }
 
 /// Python wrapper for chain validation result.
-#[pyclass(name = "ChainValidationResult")]
+#[pyclass(name = "ChainValidationResult", from_py_object)]
 #[derive(Clone)]
 pub struct PyChainValidationResult {
     #[pyo3(get)]
@@ -2106,7 +2106,7 @@ fn generate_key<'py>(
 // ============================================================================
 
 /// Python wrapper for JWK.
-#[pyclass(name = "Jwk")]
+#[pyclass(name = "Jwk", from_py_object)]
 #[derive(Clone)]
 pub struct PyJwk {
     inner: crate::jwk::Jwk,
@@ -2318,7 +2318,7 @@ fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult
 // ============================================================================
 
 /// Parsed PKCS#12 data.
-#[pyclass(name = "Pkcs12Data")]
+#[pyclass(name = "Pkcs12Data", from_py_object)]
 #[derive(Clone)]
 pub struct PyPkcs12Data {
     #[pyo3(get)]
@@ -2601,7 +2601,7 @@ fn parse_ocsp_response(py: Python<'_>, response_der: &[u8]) -> PyResult<Py<PyDic
 
 /// Python-friendly certificate profile enum.
 #[cfg(feature = "cert-builder")]
-#[pyclass(name = "CertProfile")]
+#[pyclass(name = "CertProfile", from_py_object)]
 #[derive(Clone)]
 pub struct PyCertProfile {
     inner: marty_crypto::cert_builder::CertProfile,
@@ -2671,7 +2671,7 @@ impl PyCertProfile {
 
 /// Python-friendly certificate builder configuration.
 #[cfg(feature = "cert-builder")]
-#[pyclass(name = "CertificateBuilderConfig")]
+#[pyclass(name = "CertificateBuilderConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyCertificateBuilderConfig {
     subject_cn: Option<String>,
