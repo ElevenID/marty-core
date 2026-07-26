@@ -7,7 +7,7 @@
 
 use ciborium::Value as CborValue;
 use coset::{
-    cbor::value::Value as CosetValue, iana, CoseSign1Builder, HeaderBuilder, TaggedCborSerializable,
+    cbor::value::Value as CosetValue, iana, CborSerializable, CoseSign1Builder, HeaderBuilder,
 };
 use rand::Rng;
 use sha2::{Digest, Sha256};
@@ -280,7 +280,7 @@ pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<
         .build();
 
     let issuer_auth = cose_sign1
-        .to_tagged_vec()
+        .to_vec()
         .map_err(|e| Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e)))?;
 
     // Deserialize COSE_Sign1 bytes back to a CborValue so issuerAuth is
@@ -497,9 +497,10 @@ fn sign_cose_sign1(
         .signature(signature)
         .build();
 
-    // Serialize the COSE_Sign1 to tagged CBOR bytes
+    // IssuerAuth is embedded as the COSE_Sign1 array. An optional outer COSE
+    // tag 18 is not used because ISO mdoc consumers parse the array directly.
     cose_sign1
-        .to_tagged_vec()
+        .to_vec()
         .map_err(|e| Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e)))
 }
 
@@ -660,11 +661,10 @@ mod tests {
             _ => panic!("IssuerSigned must be a CBOR map"),
         };
         let cose_parts = match issuer_auth {
-            CborValue::Tag(18, value) => match *value {
-                CborValue::Array(parts) => parts,
-                _ => panic!("tagged issuerAuth must contain a COSE_Sign1 array"),
-            },
             CborValue::Array(parts) => parts,
+            CborValue::Tag(18, _) => {
+                panic!("issuerAuth must not use optional outer COSE tag 18")
+            }
             _ => panic!("issuerAuth must be a COSE_Sign1 array"),
         };
         let payload = match cose_parts.get(2) {
