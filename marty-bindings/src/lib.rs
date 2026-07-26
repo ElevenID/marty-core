@@ -7,6 +7,8 @@
 // Rust 1.97 flags even though they are outside the handwritten function bodies.
 #![allow(clippy::useless_conversion)]
 
+mod mdoc;
+
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -1378,6 +1380,10 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_vcdm_data_integrity, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
+    m.add_class::<mdoc::MdocPresentationVerificationResult>()?;
+    m.add_function(wrap_pyfunction!(mdoc::parse_device_response, m)?)?;
+    m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_cbor, m)?)?;
+    m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_presentation, m)?)?;
 
     // Verifiable Credentials
     m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
