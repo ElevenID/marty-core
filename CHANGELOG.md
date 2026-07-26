@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-07-26
+
+### Bug Fixes
+
+- Expose complete ISO 18013-5 issuer, trust-chain, and holder
+  `DeviceAuthentication` verification through the released `marty_rs` Python
+  binding used by production presentation-policy services.
+- Retain the existing VCDM, SD-JWT, OID4VCI, OID4VP, and DIDComm binding
+  surface while adding mdoc parsing and disclosed-claim extraction.
+- Keep signing behind issuer profiles and DID verification methods; verifier
+  bindings accept no KMS service or key coordinate.
+
 ## [0.1.18] - 2026-07-26
 
 ### Bug Fixes
