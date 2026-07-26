@@ -464,10 +464,10 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
         ));
     }
 
-    let (curve_id, algorithm_id, coordinate_len) =
+    let (curve_id, coordinate_len) =
         match object.get("crv").and_then(serde_json::Value::as_str) {
-            Some("P-256") => (1i64, -7i64, 32usize),
-            Some("P-384") => (2i64, -35i64, 48usize),
+            Some("P-256") => (1i64, 32usize),
+            Some("P-384") => (2i64, 48usize),
             Some(curve) => {
                 return Err(Oid4vciError::MdocError(format!(
                     "unsupported mDoc holder JWK curve: {curve}"
@@ -504,10 +504,6 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
     let y = decode_coordinate("y")?;
     Ok(CborValue::Map(vec![
         (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
-        (
-            CborValue::Integer(3.into()),
-            CborValue::Integer(algorithm_id.into()),
-        ),
         (
             CborValue::Integer((-1i64).into()),
             CborValue::Integer(curve_id.into()),
@@ -1015,10 +1011,6 @@ mod tests {
             device_key,
             CborValue::Map(vec![
                 (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
-                (
-                    CborValue::Integer(3.into()),
-                    CborValue::Integer((-7i64).into()),
-                ),
                 (
                     CborValue::Integer((-1i64).into()),
                     CborValue::Integer(1.into()),
