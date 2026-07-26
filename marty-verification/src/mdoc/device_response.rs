@@ -72,6 +72,32 @@ impl DeviceResponse {
         Ok(fields)
     }
 
+    /// Get every disclosed issuer-signed field without assuming an mDL
+    /// document type or namespace.
+    ///
+    /// ISO mdoc is also used for PID, DTC, and application-specific document
+    /// types. Keeping the document type and namespace beside each element lets
+    /// callers apply an authoritative credential-template mapping without
+    /// treating an unqualified, potentially colliding element name as trusted.
+    pub fn get_disclosed_fields(&self) -> Vec<DisclosedMdocField> {
+        let mut fields = Vec::new();
+
+        for document in &self.documents {
+            for (namespace, items) in &document.namespaces {
+                for item in items {
+                    fields.push(DisclosedMdocField {
+                        doc_type: document.doc_type.clone(),
+                        namespace: namespace.clone(),
+                        element_identifier: item.element_identifier.clone(),
+                        element_value: item.element_value.clone(),
+                    });
+                }
+            }
+        }
+
+        fields
+    }
+
     /// Get a specific element from the mDL namespace.
     pub fn get_mdl_element(&self, element_id: &str) -> Option<serde_json::Value> {
         for doc in &self.documents {
@@ -105,6 +131,19 @@ impl DeviceResponse {
         self.get_mdl_element("given_name")
             .and_then(|v| v.as_str().map(String::from))
     }
+}
+
+/// A disclosed issuer-signed mdoc element with its collision-resistant path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisclosedMdocField {
+    /// Document type containing the disclosed element.
+    pub doc_type: String,
+    /// Namespace containing the disclosed element.
+    pub namespace: String,
+    /// Element identifier within the namespace.
+    pub element_identifier: String,
+    /// Element value converted from CBOR to JSON.
+    pub element_value: serde_json::Value,
 }
 
 /// A document within a DeviceResponse.
@@ -322,6 +361,39 @@ mod tests {
             status: 0,
         };
         assert!(response.get_mdl_fields().unwrap().is_empty());
+        assert!(response.get_disclosed_fields().is_empty());
         assert!(response.get_mdl_element("family_name").is_none());
+    }
+
+    #[test]
+    fn test_disclosed_fields_preserve_non_mdl_paths() {
+        let response = DeviceResponse {
+            version: "1.0".to_string(),
+            documents: vec![Document {
+                doc_type: "com.icao.dtc".to_string(),
+                namespaces: HashMap::from([(
+                    "com.icao.dtc".to_string(),
+                    vec![IssuerSignedItem {
+                        digest_id: 0,
+                        random: vec![1, 2, 3],
+                        element_identifier: "document_number".to_string(),
+                        element_value: serde_json::Value::String("PMB09A5929".to_string()),
+                    }],
+                )]),
+                mso: None,
+                issuer_cert_chain: Vec::new(),
+            }],
+            status: 0,
+        };
+
+        assert_eq!(
+            response.get_disclosed_fields(),
+            vec![DisclosedMdocField {
+                doc_type: "com.icao.dtc".to_string(),
+                namespace: "com.icao.dtc".to_string(),
+                element_identifier: "document_number".to_string(),
+                element_value: serde_json::Value::String("PMB09A5929".to_string()),
+            }]
+        );
     }
 }
