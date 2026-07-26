@@ -86,8 +86,14 @@ pub fn sign_mdoc(
     let validity_days = claims.expiration_seconds.map(|s| s / 86400).unwrap_or(365);
     let valid_until = now + chrono::Duration::days(validity_days);
 
-    let mso =
-        build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
+    let mso = build_mobile_security_object(
+        doc_type,
+        namespace,
+        &value_digests,
+        &now,
+        &valid_until,
+        None,
+    )?;
 
     let mobile_security_object_bytes = encode_mobile_security_object_bytes(&mso)?;
 
@@ -183,6 +189,20 @@ pub fn prepare_mdoc_with_credential_id(
     claims: &CredentialClaims,
     reserved_credential_id: Option<&str>,
 ) -> Oid4vciResult<PreparedMdoc> {
+    prepare_mdoc_with_credential_id_and_device_key(signer, claims, reserved_credential_id, None)
+}
+
+/// Prepare an mDoc bound to the holder public key proven during OID4VCI.
+///
+/// The public JWK is encoded as the MSO `deviceKeyInfo.deviceKey` COSE_Key.
+/// It is used later to verify holder DeviceAuthentication; it is not an
+/// issuer signing key and no holder private key is accepted or retained.
+pub fn prepare_mdoc_with_credential_id_and_device_key(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    reserved_credential_id: Option<&str>,
+    holder_public_jwk: Option<&serde_json::Value>,
+) -> Oid4vciResult<PreparedMdoc> {
     let credential_id = match reserved_credential_id {
         Some(value) => {
             let uuid_value = value.strip_prefix("urn:uuid:").ok_or_else(|| {
@@ -235,8 +255,15 @@ pub fn prepare_mdoc_with_credential_id(
     // Build MSO
     let validity_days = claims.expiration_seconds.map(|s| s / 86400).unwrap_or(365);
     let valid_until = now + chrono::Duration::days(validity_days);
-    let mso =
-        build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
+    let device_key = holder_public_jwk.map(jwk_to_cose_device_key).transpose()?;
+    let mso = build_mobile_security_object(
+        doc_type,
+        namespace,
+        &value_digests,
+        &now,
+        &valid_until,
+        device_key,
+    )?;
     let mobile_security_object_bytes = encode_mobile_security_object_bytes(&mso)?;
 
     // Build COSE_Sign1 protected header
@@ -364,6 +391,7 @@ fn build_mobile_security_object(
     value_digests: &[(u64, Vec<u8>)],
     signed_at: &chrono::DateTime<chrono::Utc>,
     valid_until: &chrono::DateTime<chrono::Utc>,
+    device_key: Option<CborValue>,
 ) -> Oid4vciResult<CborValue> {
     // Build the per-namespace digest map: { digestID => digest_bytes }
     let ns_digests = CborValue::Map(
@@ -393,7 +421,7 @@ fn build_mobile_security_object(
         ),
     ]);
 
-    Ok(CborValue::Map(vec![
+    let mut entries = vec![
         (
             CborValue::Text("version".into()),
             CborValue::Text("1.0".into()),
@@ -408,6 +436,84 @@ fn build_mobile_security_object(
             CborValue::Text(doc_type.into()),
         ),
         (CborValue::Text("validityInfo".into()), validity_info),
+    ];
+    if let Some(device_key) = device_key {
+        entries.push((
+            CborValue::Text("deviceKeyInfo".into()),
+            CborValue::Map(vec![(CborValue::Text("deviceKey".into()), device_key)]),
+        ));
+    }
+
+    Ok(CborValue::Map(entries))
+}
+
+/// Convert a holder EC public JWK to the COSE_Key embedded in DeviceKeyInfo.
+///
+/// ISO 18013-5 DeviceAuthentication currently uses EC2 keys in the supported
+/// Marty profiles. Only public coordinates are encoded, even if a caller
+/// accidentally supplies other JWK members.
+fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
+    use base64::Engine;
+
+    let object = jwk
+        .as_object()
+        .ok_or_else(|| Oid4vciError::MdocError("holder public JWK must be a JSON object".into()))?;
+    if object.get("kty").and_then(serde_json::Value::as_str) != Some("EC") {
+        return Err(Oid4vciError::MdocError(
+            "mDoc holder public JWK must use EC key type".into(),
+        ));
+    }
+
+    let (curve_id, algorithm_id, coordinate_len) =
+        match object.get("crv").and_then(serde_json::Value::as_str) {
+            Some("P-256") => (1i64, -7i64, 32usize),
+            Some("P-384") => (2i64, -35i64, 48usize),
+            Some(curve) => {
+                return Err(Oid4vciError::MdocError(format!(
+                    "unsupported mDoc holder JWK curve: {curve}"
+                )))
+            }
+            None => {
+                return Err(Oid4vciError::MdocError(
+                    "mDoc holder public JWK is missing crv".into(),
+                ))
+            }
+        };
+
+    let decode_coordinate = |name: &str| -> Oid4vciResult<Vec<u8>> {
+        let encoded = object
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                Oid4vciError::MdocError(format!("mDoc holder public JWK is missing {name}"))
+            })?;
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| {
+                Oid4vciError::MdocError(format!("mDoc holder public JWK has invalid {name}"))
+            })?;
+        if decoded.len() != coordinate_len {
+            return Err(Oid4vciError::MdocError(format!(
+                "mDoc holder public JWK {name} must contain {coordinate_len} bytes"
+            )));
+        }
+        Ok(decoded)
+    };
+
+    let x = decode_coordinate("x")?;
+    let y = decode_coordinate("y")?;
+    Ok(CborValue::Map(vec![
+        (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
+        (
+            CborValue::Integer(3.into()),
+            CborValue::Integer(algorithm_id.into()),
+        ),
+        (
+            CborValue::Integer((-1i64).into()),
+            CborValue::Integer(curve_id.into()),
+        ),
+        (CborValue::Integer((-2i64).into()), CborValue::Bytes(x)),
+        (CborValue::Integer((-3i64).into()), CborValue::Bytes(y)),
     ]))
 }
 
@@ -835,6 +941,122 @@ mod tests {
         let prepared = prepare_mdoc_with_credential_id(&key, &claims, Some(reserved)).unwrap();
 
         assert_eq!(prepared.credential_id, reserved);
+    }
+
+    #[test]
+    fn test_prepare_mdoc_binds_holder_public_jwk_as_device_key() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: [("family_name".into(), serde_json::json!("Smith"))].into(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let x = vec![0x11; 32];
+        let y = vec![0x22; 32];
+        let holder_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "x": base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                &x,
+            ),
+            "y": base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                &y,
+            ),
+            "d": base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                [0x33; 32],
+            ),
+        });
+
+        let prepared =
+            prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&holder_jwk))
+                .unwrap();
+        let wrapped: CborValue =
+            ciborium::from_reader(&prepared.mobile_security_object_bytes[..]).unwrap();
+        let encoded_mso = match wrapped {
+            CborValue::Tag(CBOR_TAG_ENCODED_CBOR, value) => match *value {
+                CborValue::Bytes(bytes) => bytes,
+                _ => panic!("MobileSecurityObjectBytes must wrap bytes"),
+            },
+            _ => panic!("MobileSecurityObjectBytes must use tag 24"),
+        };
+        let mso: CborValue = ciborium::from_reader(&encoded_mso[..]).unwrap();
+        let device_key_info = match mso {
+            CborValue::Map(entries) => entries
+                .into_iter()
+                .find_map(|(name, value)| {
+                    (name == CborValue::Text("deviceKeyInfo".into())).then_some(value)
+                })
+                .expect("deviceKeyInfo present"),
+            _ => panic!("MSO must be a map"),
+        };
+        let device_key = match device_key_info {
+            CborValue::Map(entries) => entries
+                .into_iter()
+                .find_map(|(name, value)| {
+                    (name == CborValue::Text("deviceKey".into())).then_some(value)
+                })
+                .expect("deviceKey present"),
+            _ => panic!("deviceKeyInfo must be a map"),
+        };
+
+        assert_eq!(
+            device_key,
+            CborValue::Map(vec![
+                (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
+                (
+                    CborValue::Integer(3.into()),
+                    CborValue::Integer((-7i64).into()),
+                ),
+                (
+                    CborValue::Integer((-1i64).into()),
+                    CborValue::Integer(1.into()),
+                ),
+                (CborValue::Integer((-2i64).into()), CborValue::Bytes(x)),
+                (CborValue::Integer((-3i64).into()), CborValue::Bytes(y)),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_prepare_mdoc_rejects_incomplete_holder_public_jwk() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: None,
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: Default::default(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let incomplete = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "ERERERERERERERERERERERERERERERERERERERERERE"
+        });
+
+        let error =
+            prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&incomplete))
+                .err()
+                .expect("missing y must fail");
+
+        assert!(error.to_string().contains("missing y"));
     }
 
     #[test]

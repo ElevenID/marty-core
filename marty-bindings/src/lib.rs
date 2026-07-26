@@ -906,6 +906,9 @@ impl PreparedMdocForRemoteSigning {
 /// must pass the raw IEEE P1363 ECDSA signature to
 /// ``oid4vci_assemble_mdoc``.
 #[pyfunction]
+// Python keeps these protocol fields explicit so an issuer cannot smuggle
+// holder key binding or issuer identity through an opaque options object.
+#[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     issuer_id,
     algorithm,
@@ -913,7 +916,8 @@ impl PreparedMdocForRemoteSigning {
     namespace,
     claims_json,
     expiration_seconds=None,
-    credential_id=None
+    credential_id=None,
+    holder_jwk_json=None
 ))]
 fn oid4vci_prepare_mdoc(
     issuer_id: &str,
@@ -923,6 +927,7 @@ fn oid4vci_prepare_mdoc(
     claims_json: &str,
     expiration_seconds: Option<i64>,
     credential_id: Option<&str>,
+    holder_jwk_json: Option<&str>,
 ) -> PyResult<PreparedMdocForRemoteSigning> {
     use marty_oid4vci::signer::CredentialSigner;
     use marty_oid4vci::types::{CredentialClaims, SigningAlgorithm};
@@ -960,7 +965,15 @@ fn oid4vci_prepare_mdoc(
         }
     }
 
-    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc_with_credential_id(
+    let holder_public_jwk = holder_jwk_json
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid holder public JWK JSON: {e}"
+            ))
+        })?;
+    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc_with_credential_id_and_device_key(
         &MetadataSigner {
             issuer_id: issuer_id.to_owned(),
             algorithm,
@@ -979,6 +992,7 @@ fn oid4vci_prepare_mdoc(
             w3c_types: vec![],
         },
         credential_id,
+        holder_public_jwk.as_ref(),
     )
     .map_err(to_pyerr)?;
     Ok(PreparedMdocForRemoteSigning {
