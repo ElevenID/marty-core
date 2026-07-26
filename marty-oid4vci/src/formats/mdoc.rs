@@ -89,10 +89,15 @@ pub fn sign_mdoc(
     let mso =
         build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
 
-    let mso_bytes = cbor_encode(&mso)?;
+    let mobile_security_object_bytes = encode_mobile_security_object_bytes(&mso)?;
 
-    // 3. Sign the MSO with COSE_Sign1
-    let issuer_auth = sign_cose_sign1(&mso_bytes, &jwk, issuer_key, &x5chain_der)?;
+    // 3. Sign MobileSecurityObjectBytes with COSE_Sign1.
+    let issuer_auth = sign_cose_sign1(
+        &mobile_security_object_bytes,
+        &jwk,
+        issuer_key,
+        &x5chain_der,
+    )?;
 
     // 4. Assemble IssuerSigned = { nameSpaces, issuerAuth }
     // issuerAuth must be the COSE_Sign1 CBOR structure (array), NOT a byte
@@ -149,8 +154,8 @@ pub struct PreparedMdoc {
     pub credential_id: String,
     /// Serialized COSE protected header.
     protected_header: coset::Header,
-    /// MSO payload bytes (for assembly).
-    mso_bytes: Vec<u8>,
+    /// Tag 24-wrapped MobileSecurityObjectBytes payload (for assembly).
+    mobile_security_object_bytes: Vec<u8>,
     /// Namespace and IssuerSignedItems for assembly.
     namespace: String,
     /// The tagged CBOR IssuerSignedItem entries.
@@ -232,7 +237,7 @@ pub fn prepare_mdoc_with_credential_id(
     let valid_until = now + chrono::Duration::days(validity_days);
     let mso =
         build_mobile_security_object(doc_type, namespace, &value_digests, &now, &valid_until)?;
-    let mso_bytes = cbor_encode(&mso)?;
+    let mobile_security_object_bytes = encode_mobile_security_object_bytes(&mso)?;
 
     // Build COSE_Sign1 protected header
     let alg = match signer.algorithm() {
@@ -252,7 +257,7 @@ pub fn prepare_mdoc_with_credential_id(
     // Compute TBS data
     let cose_for_tbs = CoseSign1Builder::new()
         .protected(protected.clone())
-        .payload(mso_bytes.clone())
+        .payload(mobile_security_object_bytes.clone())
         .build();
     let tbs = cose_for_tbs.tbs_data(&[]);
 
@@ -260,7 +265,7 @@ pub fn prepare_mdoc_with_credential_id(
         tbs_data: tbs,
         credential_id,
         protected_header: protected,
-        mso_bytes,
+        mobile_security_object_bytes,
         namespace: namespace.to_string(),
         issuer_signed_items,
     })
@@ -270,7 +275,7 @@ pub fn prepare_mdoc_with_credential_id(
 pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<SignedCredential> {
     let cose_sign1 = CoseSign1Builder::new()
         .protected(prepared.protected_header)
-        .payload(prepared.mso_bytes)
+        .payload(prepared.mobile_security_object_bytes)
         .signature(signature.to_vec())
         .build();
 
@@ -554,6 +559,15 @@ fn cbor_encode(value: &CborValue) -> Oid4vciResult<Vec<u8>> {
     Ok(buf)
 }
 
+/// Encode `MobileSecurityObjectBytes = #6.24(bstr .cbor MobileSecurityObject)`.
+fn encode_mobile_security_object_bytes(mso: &CborValue) -> Oid4vciResult<Vec<u8>> {
+    let encoded_mso = cbor_encode(mso)?;
+    cbor_encode(&CborValue::Tag(
+        CBOR_TAG_ENCODED_CBOR,
+        Box::new(CborValue::Bytes(encoded_mso)),
+    ))
+}
+
 /// Convert a serde_json::Value into a ciborium CborValue.
 fn json_to_cbor(value: &serde_json::Value) -> Oid4vciResult<CborValue> {
     match value {
@@ -629,6 +643,46 @@ mod tests {
         }
     }
 
+    fn assert_mobile_security_object_bytes(issuer_signed_b64: &str) {
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            issuer_signed_b64,
+        )
+        .unwrap();
+        let issuer_signed: CborValue = ciborium::from_reader(&bytes[..]).unwrap();
+        let issuer_auth = match issuer_signed {
+            CborValue::Map(entries) => entries
+                .into_iter()
+                .find_map(|(key, value)| {
+                    (key == CborValue::Text("issuerAuth".into())).then_some(value)
+                })
+                .expect("issuerAuth present"),
+            _ => panic!("IssuerSigned must be a CBOR map"),
+        };
+        let cose_parts = match issuer_auth {
+            CborValue::Tag(18, value) => match *value {
+                CborValue::Array(parts) => parts,
+                _ => panic!("tagged issuerAuth must contain a COSE_Sign1 array"),
+            },
+            CborValue::Array(parts) => parts,
+            _ => panic!("issuerAuth must be a COSE_Sign1 array"),
+        };
+        let payload = match cose_parts.get(2) {
+            Some(CborValue::Bytes(payload)) => payload,
+            _ => panic!("issuerAuth payload must contain MobileSecurityObjectBytes"),
+        };
+        let mobile_security_object_bytes: CborValue = ciborium::from_reader(&payload[..]).unwrap();
+        let encoded_mso = match mobile_security_object_bytes {
+            CborValue::Tag(CBOR_TAG_ENCODED_CBOR, value) => match *value {
+                CborValue::Bytes(encoded_mso) => encoded_mso,
+                _ => panic!("MobileSecurityObjectBytes tag must contain a byte string"),
+            },
+            _ => panic!("issuerAuth payload must be tag 24 MobileSecurityObjectBytes"),
+        };
+        let mso: CborValue = ciborium::from_reader(&encoded_mso[..]).unwrap();
+        assert!(matches!(mso, CborValue::Map(_)));
+    }
+
     #[test]
     fn test_json_to_cbor_primitives() {
         let null = json_to_cbor(&serde_json::json!(null)).unwrap();
@@ -700,6 +754,7 @@ mod tests {
                     "Should produce non-empty output"
                 );
                 assert!(credential_id.starts_with("urn:uuid:"));
+                assert_mobile_security_object_bytes(&issuer_signed_b64);
 
                 // Decode and verify it's valid CBOR
                 let bytes = base64::Engine::decode(
@@ -727,6 +782,36 @@ mod tests {
             }
             _ => panic!("Expected MsoMdoc"),
         }
+    }
+
+    #[test]
+    fn test_split_mdoc_signing_uses_mobile_security_object_bytes() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "mDL".into(),
+            claims: [("family_name".into(), serde_json::json!("Smith"))].into(),
+            expiration_seconds: Some(365 * 86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+
+        let prepared = prepare_mdoc(&key, &claims).unwrap();
+        let signature = key.sign(&prepared.tbs_data).unwrap();
+        let result = assemble_mdoc(prepared, &signature).unwrap();
+        let SignedCredential::MsoMdoc {
+            issuer_signed_b64, ..
+        } = result
+        else {
+            panic!("Expected MsoMdoc");
+        };
+
+        assert_mobile_security_object_bytes(&issuer_signed_b64);
     }
 
     #[test]
