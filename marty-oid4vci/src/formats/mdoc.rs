@@ -464,21 +464,20 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
         ));
     }
 
-    let (curve_id, coordinate_len) =
-        match object.get("crv").and_then(serde_json::Value::as_str) {
-            Some("P-256") => (1i64, 32usize),
-            Some("P-384") => (2i64, 48usize),
-            Some(curve) => {
-                return Err(Oid4vciError::MdocError(format!(
-                    "unsupported mDoc holder JWK curve: {curve}"
-                )))
-            }
-            None => {
-                return Err(Oid4vciError::MdocError(
-                    "mDoc holder public JWK is missing crv".into(),
-                ))
-            }
-        };
+    let (curve_id, coordinate_len) = match object.get("crv").and_then(serde_json::Value::as_str) {
+        Some("P-256") => (1i64, 32usize),
+        Some("P-384") => (2i64, 48usize),
+        Some(curve) => {
+            return Err(Oid4vciError::MdocError(format!(
+                "unsupported mDoc holder JWK curve: {curve}"
+            )))
+        }
+        None => {
+            return Err(Oid4vciError::MdocError(
+                "mDoc holder public JWK is missing crv".into(),
+            ))
+        }
+    };
 
     let decode_coordinate = |name: &str| -> Oid4vciResult<Vec<u8>> {
         let encoded = object
