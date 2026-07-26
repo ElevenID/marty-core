@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-07-26
+
+### Bug Fixes
+
+- Extract authenticated claims from every disclosed mdoc document type and
+  namespace, including ICAO Digital Travel Credentials.
+- Preserve unique element identifiers as flat compatibility keys and expose
+  the complete document/namespace structure under `_mdoc`; omit ambiguous flat
+  names rather than overwriting claims.
+- Keep verification independent of KMS coordinates. Issuer signing remains
+  selected through the issuer profile and its DID verification method.
+
 ## [0.1.20] - 2026-07-26
 
 ### Bug Fixes
