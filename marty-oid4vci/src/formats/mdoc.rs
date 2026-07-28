@@ -160,6 +160,9 @@ pub struct PreparedMdoc {
     pub credential_id: String,
     /// Serialized COSE protected header.
     protected_header: coset::Header,
+    /// Serialized COSE unprotected header. ISO 18013-5 requires the issuer
+    /// certificate chain here while keeping the signing algorithm protected.
+    unprotected_header: coset::Header,
     /// Tag 24-wrapped MobileSecurityObjectBytes payload (for assembly).
     mobile_security_object_bytes: Vec<u8>,
     /// Namespace and IssuerSignedItems for assembly.
@@ -279,11 +282,13 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
         crate::types::SigningAlgorithm::RS256 => iana::Algorithm::PS256,
     };
 
-    let protected = build_protected_header(alg, &x5chain_der);
+    let protected = build_protected_header(alg);
+    let unprotected = build_unprotected_header(&x5chain_der);
 
     // Compute TBS data
     let cose_for_tbs = CoseSign1Builder::new()
         .protected(protected.clone())
+        .unprotected(unprotected.clone())
         .payload(mobile_security_object_bytes.clone())
         .build();
     let tbs = cose_for_tbs.tbs_data(&[]);
@@ -292,6 +297,7 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
         tbs_data: tbs,
         credential_id,
         protected_header: protected,
+        unprotected_header: unprotected,
         mobile_security_object_bytes,
         namespace: namespace.to_string(),
         issuer_signed_items,
@@ -302,6 +308,7 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
 pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<SignedCredential> {
     let cose_sign1 = CoseSign1Builder::new()
         .protected(prepared.protected_header)
+        .unprotected(prepared.unprotected_header)
         .payload(prepared.mobile_security_object_bytes)
         .signature(signature.to_vec())
         .build();
@@ -536,12 +543,15 @@ fn sign_cose_sign1(
         crate::types::SigningAlgorithm::RS256 => iana::Algorithm::PS256,
     };
 
-    // Build protected header
-    let protected = build_protected_header(alg, x5chain_der);
+    // ISO 18013-5 section 9.1.2.4 puts alg in the protected header and
+    // x5chain in the unprotected header.
+    let protected = build_protected_header(alg);
+    let unprotected = build_unprotected_header(x5chain_der);
 
     // Build the COSE_Sign1 without signature to get the TBS data
     let cose_for_tbs = CoseSign1Builder::new()
         .protected(protected.clone())
+        .unprotected(unprotected.clone())
         .payload(payload.to_vec())
         .build();
     let tbs = cose_for_tbs.tbs_data(&[]);
@@ -594,6 +604,7 @@ fn sign_cose_sign1(
     // Build final COSE_Sign1 with signature
     let cose_sign1 = CoseSign1Builder::new()
         .protected(protected)
+        .unprotected(unprotected)
         .payload(payload.to_vec())
         .signature(signature)
         .build();
@@ -605,14 +616,24 @@ fn sign_cose_sign1(
         .map_err(|e| Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e)))
 }
 
-fn build_protected_header(alg: iana::Algorithm, x5chain_der: &[Vec<u8>]) -> coset::Header {
-    let mut builder = HeaderBuilder::new().algorithm(alg);
+fn build_protected_header(alg: iana::Algorithm) -> coset::Header {
+    HeaderBuilder::new().algorithm(alg).build()
+}
+
+fn build_unprotected_header(x5chain_der: &[Vec<u8>]) -> coset::Header {
+    let mut builder = HeaderBuilder::new();
     if !x5chain_der.is_empty() {
-        let chain = x5chain_der
-            .iter()
-            .map(|cert| CosetValue::Bytes(cert.clone()))
-            .collect();
-        builder = builder.value(COSE_HEADER_X5CHAIN_LABEL, CosetValue::Array(chain));
+        let chain = if x5chain_der.len() == 1 {
+            CosetValue::Bytes(x5chain_der[0].clone())
+        } else {
+            CosetValue::Array(
+                x5chain_der
+                    .iter()
+                    .map(|cert| CosetValue::Bytes(cert.clone()))
+                    .collect(),
+            )
+        };
+        builder = builder.value(COSE_HEADER_X5CHAIN_LABEL, chain);
     }
     builder.build()
 }
@@ -1105,39 +1126,47 @@ mod tests {
             _ => panic!("Expected top-level map"),
         };
 
-        let protected_bstr = match issuer_auth {
-            CborValue::Array(parts) => match parts.first() {
-                Some(CborValue::Bytes(b)) => b.clone(),
-                _ => panic!("COSE protected header bytes missing"),
-            },
+        let parts = match issuer_auth {
+            CborValue::Array(parts) => parts,
             CborValue::Tag(_, boxed) => match *boxed {
-                CborValue::Array(parts) => match parts.first() {
-                    Some(CborValue::Bytes(b)) => b.clone(),
-                    _ => panic!("COSE protected header bytes missing"),
-                },
+                CborValue::Array(parts) => parts,
                 _ => panic!("issuerAuth tagged value should wrap a COSE array"),
             },
             _ => panic!("issuerAuth should be a COSE array"),
         };
+        let protected_bstr = match parts.first() {
+            Some(CborValue::Bytes(b)) => b,
+            _ => panic!("COSE protected header bytes missing"),
+        };
+        let unprotected = match parts.get(1) {
+            Some(CborValue::Map(headers)) => headers,
+            _ => panic!("COSE unprotected header map missing"),
+        };
 
         let protected: CborValue = ciborium::from_reader(&protected_bstr[..]).unwrap();
-        let mut found_x5chain = false;
+        let mut protected_has_alg = false;
         if let CborValue::Map(headers) = protected {
             for (k, v) in headers {
+                if k == CborValue::Integer(1.into()) {
+                    protected_has_alg = true;
+                    assert_eq!(v, CborValue::Integer((-7).into()));
+                }
                 if k == CborValue::Integer(COSE_HEADER_X5CHAIN_LABEL.into()) {
-                    found_x5chain = true;
-                    if let CborValue::Array(chain) = v {
-                        assert_eq!(chain.len(), 2);
-                    } else {
-                        panic!("x5chain header should be an array of byte strings");
-                    }
+                    panic!("ISO 18013-5 x5chain must not be in the protected header");
                 }
             }
         }
+        assert!(protected_has_alg, "Expected alg in protected COSE header");
 
-        assert!(
-            found_x5chain,
-            "Expected x5chain header in protected COSE header"
+        let x5chain = unprotected
+            .iter()
+            .find_map(|(key, value)| {
+                (key == &CborValue::Integer(COSE_HEADER_X5CHAIN_LABEL.into())).then_some(value)
+            })
+            .expect("Expected x5chain in unprotected COSE header");
+        assert_eq!(
+            x5chain,
+            &CborValue::Array(vec![CborValue::Bytes(cert_a), CborValue::Bytes(cert_b),])
         );
     }
 }
