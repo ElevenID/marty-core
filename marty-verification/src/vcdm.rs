@@ -14,7 +14,8 @@ use ssi_claims::data_integrity::{
 };
 use ssi_claims::vc::syntax::{AnyJsonCredential, AnyJsonPresentation};
 use ssi_claims::{
-    MessageSignatureError, SignatureEnvironment, SignatureError, VerificationParameters,
+    MessageSignatureError, SignatureEnvironment, SignatureError, ValidateProof, VerifiableClaims,
+    VerificationParameters,
 };
 use ssi_dids::{DIDKey, DIDResolver, VerificationMethodDIDResolver};
 use ssi_jwk::Params as JwkParams;
@@ -177,6 +178,7 @@ pub async fn prepare_vcdm_data_integrity_credential_json_async(
         &request.issuer_did,
         &request.verification_method_id,
     )?;
+    validate_data_integrity_issuance_dates(&request.credential)?;
     if request.credential.get("proof").is_some() {
         return Err("Credential already contains a proof".to_string());
     }
@@ -259,6 +261,7 @@ pub async fn complete_vcdm_data_integrity_credential_json_async(
         &prepared.issuer_did,
         &prepared.verification_method_id,
     )?;
+    validate_data_integrity_issuance_dates(&prepared.credential)?;
     if prepared.algorithm != "EdDSA" {
         return Err(format!(
             "Unsupported Data Integrity signing algorithm: {}",
@@ -310,14 +313,23 @@ pub async fn complete_vcdm_data_integrity_credential_json_async(
     resolver.insert(method_id, AnyMethod::Multikey(method));
     let parameters = VerificationParameters::from_resolver(resolver)
         .with_json_ld_loader(open_badges_context_loader().map_err(|error| error.to_string())?);
-    match credential.verify(parameters).await {
+    // Completion verifies the exact proof produced by the remote custody
+    // service, but it must not impose a "valid right now" policy on issuance.
+    // VCDM v2 explicitly permits validFrom in the future and validUntil in the
+    // past. The public verifier still uses `VerifiableClaims::verify`, which
+    // validates current-time claims as well as the proof.
+    match credential
+        .proof()
+        .validate_proof(&parameters, credential.claims())
+        .await
+    {
         Ok(Ok(())) => serde_json::to_string(&prepared.credential)
             .map_err(|error| format!("Failed to serialize completed credential: {error}")),
         Ok(Err(invalid)) => Err(format!(
-            "Completed Data Integrity credential is invalid: {invalid}"
+            "Completed Data Integrity credential proof is invalid: {invalid}"
         )),
         Err(error) => Err(format!(
-            "Completed Data Integrity credential verification failed: {error}"
+            "Completed Data Integrity credential proof verification failed: {error}"
         )),
     }
 }
@@ -359,6 +371,28 @@ fn validate_data_integrity_identity(
         })
     {
         return Err("Credential must use the W3C VCDM v2 context".to_string());
+    }
+    Ok(())
+}
+
+fn validate_data_integrity_issuance_dates(credential: &Value) -> Result<(), String> {
+    let parse = |name: &str| -> Result<Option<chrono::DateTime<chrono::FixedOffset>>, String> {
+        let Some(value) = credential.get(name) else {
+            return Ok(None);
+        };
+        let value = value
+            .as_str()
+            .ok_or_else(|| format!("Credential `{name}` must be an RFC 3339 date-time"))?;
+        chrono::DateTime::parse_from_rfc3339(value)
+            .map(Some)
+            .map_err(|_| format!("Credential `{name}` must be an RFC 3339 date-time"))
+    };
+    let valid_from = parse("validFrom")?;
+    let valid_until = parse("validUntil")?;
+    if let (Some(valid_from), Some(valid_until)) = (valid_from, valid_until) {
+        if valid_until < valid_from {
+            return Err("Credential validUntil must not precede validFrom".to_string());
+        }
     }
     Ok(())
 }
@@ -1069,6 +1103,61 @@ mod tests {
     }
 
     #[test]
+    fn remote_data_integrity_signing_accepts_noncurrent_validity_but_verification_denies_it() {
+        let cases = [
+            ("2023-02-26T01:19:19Z", "2023-02-26T01:19:20Z", "expired"),
+            ("2099-02-26T01:19:19Z", "2100-02-26T01:19:20Z", "premature"),
+        ];
+
+        for (valid_from, valid_until, expected_error) in cases {
+            let key = JWK::generate_ed25519().unwrap();
+            let mut request = remote_data_integrity_prepare_request(&key);
+            request["credential"]["validFrom"] = json!(valid_from);
+            request["credential"]["validUntil"] = json!(valid_until);
+
+            let prepared_json =
+                prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
+            let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+            let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+            let credential: Value = serde_json::from_str(&completed).unwrap();
+
+            let verification: Value = serde_json::from_str(&verify_vcdm_data_integrity_json(
+                &json!({"document": credential}).to_string(),
+            ))
+            .unwrap();
+            assert_eq!(verification["valid"], false, "{verification}");
+            assert!(
+                verification["errors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|error| error.contains(expected_error)),
+                "{verification}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_data_integrity_signing_rejects_invalid_or_reversed_validity() {
+        let key = JWK::generate_ed25519().unwrap();
+        let mut malformed = remote_data_integrity_prepare_request(&key);
+        malformed["credential"]["validUntil"] = json!("not-a-date");
+        let error =
+            prepare_vcdm_data_integrity_credential_json(&malformed.to_string()).unwrap_err();
+        assert!(
+            error.contains("validUntil") && error.contains("RFC 3339"),
+            "{error}"
+        );
+
+        let mut reversed = remote_data_integrity_prepare_request(&key);
+        reversed["credential"]["validFrom"] = json!("2099-02-26T01:19:20Z");
+        reversed["credential"]["validUntil"] = json!("2023-02-26T01:19:19Z");
+        let error = prepare_vcdm_data_integrity_credential_json(&reversed.to_string()).unwrap_err();
+        assert!(error.contains("must not precede validFrom"), "{error}");
+    }
+
+    #[test]
     fn remote_data_integrity_rejects_private_jwk_at_prepare_boundary() {
         let key = JWK::generate_ed25519().unwrap();
         let mut request = remote_data_integrity_prepare_request(&key);
@@ -1093,8 +1182,8 @@ mod tests {
 
         let error = remotely_sign_prepared_credential(&key, &prepared).unwrap_err();
         assert!(
-            error.contains("credential is invalid")
-                || error.contains("credential verification failed"),
+            error.contains("credential proof is invalid")
+                || error.contains("credential proof verification failed"),
             "{error}"
         );
     }
@@ -1115,7 +1204,7 @@ mod tests {
             .to_string(),
         )
         .unwrap_err();
-        assert!(error.contains("credential is invalid"), "{error}");
+        assert!(error.contains("credential proof is invalid"), "{error}");
     }
 
     #[test]
