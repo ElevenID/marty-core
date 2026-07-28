@@ -3802,6 +3802,7 @@ dependencies = [
  "signature",
  "spki",
  "ssi-claims",
+ "ssi-crypto",
  "ssi-dids",
  "ssi-json-ld",
  "ssi-jwk",
