@@ -387,6 +387,40 @@ mod tests {
     use std::collections::BTreeMap;
     use time::{Duration, OffsetDateTime};
 
+    fn map_value_mut<'a>(
+        entries: &'a mut [(ciborium::Value, ciborium::Value)],
+        key: &str,
+    ) -> &'a mut ciborium::Value {
+        entries
+            .iter_mut()
+            .find_map(|(candidate, value)| {
+                (candidate == &ciborium::Value::Text(key.to_string())).then_some(value)
+            })
+            .unwrap_or_else(|| panic!("fixture is missing CBOR key {key}"))
+    }
+
+    fn encode_empty_issuer_namespaces(response_cbor: &[u8]) -> Vec<u8> {
+        let mut response: ciborium::Value =
+            isomdl::cbor::from_slice(response_cbor).expect("DeviceResponse fixture must decode");
+        let ciborium::Value::Map(response_fields) = &mut response else {
+            panic!("DeviceResponse fixture must be a CBOR map");
+        };
+        let ciborium::Value::Array(documents) = map_value_mut(response_fields, "documents") else {
+            panic!("DeviceResponse documents must be a CBOR array");
+        };
+        let ciborium::Value::Map(document) = &mut documents[0] else {
+            panic!("DeviceResponse document must be a CBOR map");
+        };
+        let ciborium::Value::Map(issuer_signed) = map_value_mut(document, "issuerSigned") else {
+            panic!("issuerSigned must be a CBOR map");
+        };
+        issuer_signed.push((
+            ciborium::Value::Text("nameSpaces".to_string()),
+            ciborium::Value::Map(Vec::new()),
+        ));
+        isomdl::cbor::to_vec(&response).expect("DeviceResponse fixture must encode")
+    }
+
     fn device_response_fixture(
         session_transcript: &ExternalSessionTranscript,
     ) -> (Vec<u8>, Vec<u8>) {
@@ -580,6 +614,31 @@ mod tests {
         assert!(result.verified);
         assert_eq!(
             result.document_types,
+            vec!["org.iso.18013.5.1.mDL".to_string()]
+        );
+    }
+
+    #[test]
+    fn verifies_holder_signature_with_empty_issuer_disclosure_map() {
+        let transcript = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        let (response, transcript_cbor) = device_response_fixture(&transcript);
+        let response = encode_empty_issuer_namespaces(&response);
+
+        let parsed = crate::mdoc::parse_device_response(&response).unwrap();
+        let authenticated = verify_device_authentication(&response, &transcript_cbor).unwrap();
+
+        assert_eq!(parsed.documents.len(), 1);
+        assert!(parsed.documents[0].namespaces.is_empty());
+        assert!(authenticated.verified);
+        assert_eq!(
+            authenticated.document_types,
             vec!["org.iso.18013.5.1.mDL".to_string()]
         );
     }

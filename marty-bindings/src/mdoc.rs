@@ -128,15 +128,26 @@ impl MdocPresentationVerificationResult {
 /// Authenticate issuer and holder proofs in an OpenID4VP mdoc presentation.
 ///
 /// `session_transcript_cbor` must be constructed from verifier-owned request
-/// state. It is not accepted from the wallet. The issuer trust anchors are
-/// public certificates provisioned through the trust profile.
-#[pyfunction]
+/// state. It is not accepted from the wallet. Root anchors and directly pinned
+/// issuer certificates are public certificates provisioned through distinct
+/// trust-profile source types.
+#[pyfunction(signature = (
+    mdoc_bytes,
+    session_transcript_cbor,
+    trusted_root_certs_pem,
+    pinned_issuer_certs_pem = None
+))]
 pub(crate) fn verify_mdoc_presentation(
     mdoc_bytes: Vec<u8>,
     session_transcript_cbor: Vec<u8>,
-    trusted_issuer_certs_pem: Vec<String>,
+    trusted_root_certs_pem: Vec<String>,
+    pinned_issuer_certs_pem: Option<Vec<String>>,
 ) -> PyResult<MdocPresentationVerificationResult> {
-    let issuer = verify_issuer_authentication(&mdoc_bytes, &trusted_issuer_certs_pem);
+    let issuer = verify_issuer_authentication(
+        &mdoc_bytes,
+        &trusted_root_certs_pem,
+        pinned_issuer_certs_pem.as_deref().unwrap_or_default(),
+    );
     let mut errors = issuer.error.into_iter().collect::<Vec<_>>();
     let (device_authentication_valid, device_document_types) =
         match marty_verification::verify_device_authentication(
@@ -173,7 +184,8 @@ struct IssuerAuthenticationResult {
 
 fn verify_issuer_authentication(
     mdoc_bytes: &[u8],
-    trusted_issuer_certs_pem: &[String],
+    trusted_root_certs_pem: &[String],
+    pinned_issuer_certs_pem: &[String],
 ) -> IssuerAuthenticationResult {
     let response: DeviceResponse = match isomdl::cbor::from_slice(mdoc_bytes) {
         Ok(response) => response,
@@ -192,16 +204,27 @@ fn verify_issuer_authentication(
         .map(|document| document.doc_type.clone())
         .collect::<Vec<_>>();
 
-    let mut chain_validator = marty_verification::verification::ChainValidator::new();
-    let mut trust_configuration_valid = !trusted_issuer_certs_pem.is_empty();
+    let mut root_validator = marty_verification::verification::ChainValidator::new();
+    let mut trust_configuration_valid =
+        !trusted_root_certs_pem.is_empty() || !pinned_issuer_certs_pem.is_empty();
     let mut errors = Vec::new();
-    if trusted_issuer_certs_pem.is_empty() {
+    if !trust_configuration_valid {
         errors.push("No trusted issuer certificates were configured".to_string());
     }
-    for trusted_cert in trusted_issuer_certs_pem {
-        if let Err(error) = chain_validator.add_trust_anchor_pem(trusted_cert) {
+    for trusted_cert in trusted_root_certs_pem {
+        if let Err(error) = root_validator.add_trust_anchor_pem(trusted_cert) {
             trust_configuration_valid = false;
-            errors.push(format!("Invalid trusted issuer certificate: {error}"));
+            errors.push(format!("Invalid mdoc root certificate: {error}"));
+        }
+    }
+    let mut pinned_issuer_certs_der = Vec::with_capacity(pinned_issuer_certs_pem.len());
+    for pinned_cert in pinned_issuer_certs_pem {
+        match certificate_der_from_pem(pinned_cert) {
+            Ok(certificate) => pinned_issuer_certs_der.push(certificate),
+            Err(error) => {
+                trust_configuration_valid = false;
+                errors.push(format!("Invalid pinned mdoc issuer certificate: {error}"));
+            }
         }
     }
 
@@ -264,23 +287,16 @@ fn verify_issuer_authentication(
             continue;
         }
         if trust_configuration_valid {
-            match chain_validator.validate_chain_der(&certificate_chain) {
-                Ok(validation) if validation.valid => {}
-                Ok(validation) => {
-                    issuer_trusted = false;
-                    errors.push(format!(
-                        "Issuer certificate chain validation failed for {}: {}",
-                        document.doc_type,
-                        validation.errors.join("; ")
-                    ));
-                }
-                Err(error) => {
-                    issuer_trusted = false;
-                    errors.push(format!(
-                        "Issuer certificate chain validation failed for {}: {error}",
-                        document.doc_type
-                    ));
-                }
+            if let Err(error) = verify_issuer_trust(
+                &certificate_chain,
+                &root_validator,
+                &pinned_issuer_certs_der,
+            ) {
+                issuer_trusted = false;
+                errors.push(format!(
+                    "Issuer certificate trust validation failed for {}: {error}",
+                    document.doc_type
+                ));
             }
         } else {
             issuer_trusted = false;
@@ -292,6 +308,64 @@ fn verify_issuer_authentication(
         issuer_trusted,
         document_types,
         error: (!errors.is_empty()).then(|| errors.join("; ")),
+    }
+}
+
+fn certificate_der_from_pem(pem: &str) -> Result<Vec<u8>, String> {
+    let (label, der) = pem_rfc7468::decode_vec(pem.as_bytes())
+        .map_err(|error| format!("invalid PEM encoding: {error}"))?;
+    if label != "CERTIFICATE" {
+        return Err(format!("expected CERTIFICATE PEM label, found {label}"));
+    }
+    if der.is_empty() {
+        return Err("certificate DER is empty".to_string());
+    }
+    Ok(der)
+}
+
+fn verify_issuer_trust(
+    certificate_chain: &[Vec<u8>],
+    root_validator: &marty_verification::verification::ChainValidator,
+    pinned_issuer_certs_der: &[Vec<u8>],
+) -> Result<(), String> {
+    let Some(leaf_certificate) = certificate_chain.first() else {
+        return Err("issuer certificate chain is empty".to_string());
+    };
+
+    if pinned_issuer_certs_der
+        .iter()
+        .any(|pinned| pinned == leaf_certificate)
+    {
+        // Direct pinning establishes trust in this exact leaf certificate, not
+        // in its subject name or issuing CA. Still enforce certificate validity
+        // and every embedded chain signature. KeyUsage remains enforced for
+        // normal ROOT_CA validation; a direct pin deliberately authorizes this
+        // exact public key for issuerAuth after its COSE signature is verified.
+        let direct_pin_validator = marty_verification::verification::ChainValidator::with_config(
+            marty_verification::verification::ChainValidatorConfig {
+                required_key_usage: Vec::new(),
+                ..Default::default()
+            },
+        );
+        return match direct_pin_validator.validate_chain_der(certificate_chain) {
+            Ok(validation) if validation.valid => Ok(()),
+            Ok(validation) => Err(format!(
+                "directly pinned issuer certificate is invalid: {}",
+                validation.errors.join("; ")
+            )),
+            Err(error) => Err(format!(
+                "directly pinned issuer certificate validation failed: {error}"
+            )),
+        };
+    }
+
+    match root_validator.validate_chain_der(certificate_chain) {
+        Ok(validation) if validation.valid => Ok(()),
+        Ok(validation) => Err(format!(
+            "certificate chain does not validate to a configured root: {}",
+            validation.errors.join("; ")
+        )),
+        Err(error) => Err(format!("certificate chain validation failed: {error}")),
     }
 }
 
@@ -386,13 +460,61 @@ mod tests {
 
     #[test]
     fn malformed_presentation_fails_closed_without_panicking() {
-        let result =
-            verify_mdoc_presentation(vec![0xff], vec![0x83, 0xf6, 0xf6, 0x82, 0x71], Vec::new())
-                .unwrap();
+        let result = verify_mdoc_presentation(
+            vec![0xff],
+            vec![0x83, 0xf6, 0xf6, 0x82, 0x71],
+            Vec::new(),
+            None,
+        )
+        .unwrap();
         assert!(!result.issuer_signature_valid);
         assert!(!result.issuer_trusted);
         assert!(!result.device_authentication_valid);
         assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn direct_pin_accepts_exact_leaf_without_weakening_root_validation() {
+        use rcgen::{CertificateParams, DnType, KeyPair, KeyUsagePurpose};
+
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::default();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "Pinned mdoc document signer");
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        let certificate = params.self_signed(&key).unwrap();
+        let certificate_der = certificate.der().to_vec();
+        let certificate_pem = certificate.pem();
+
+        let mut strict_root_validator = marty_verification::verification::ChainValidator::new();
+        strict_root_validator
+            .add_trust_anchor_pem(&certificate_pem)
+            .unwrap();
+        let strict = verify_issuer_trust(
+            std::slice::from_ref(&certificate_der),
+            &strict_root_validator,
+            &[],
+        );
+        assert!(strict
+            .unwrap_err()
+            .contains("Certificate missing required key usage: DigitalSignature"));
+
+        let direct_pin = certificate_der_from_pem(&certificate_pem).unwrap();
+        assert!(verify_issuer_trust(
+            std::slice::from_ref(&certificate_der),
+            &strict_root_validator,
+            &[direct_pin],
+        )
+        .is_ok());
+
+        assert!(verify_issuer_trust(
+            std::slice::from_ref(&certificate_der),
+            &marty_verification::verification::ChainValidator::new(),
+            &[vec![1, 2, 3]],
+        )
+        .is_err());
     }
 
     #[test]

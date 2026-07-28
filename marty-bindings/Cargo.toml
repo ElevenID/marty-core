@@ -28,7 +28,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ciborium = { workspace = true }
 coset = "0.3.8"
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "069576a64580fc9923b65dcbdad0c2253c44296d" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "a082c3f8f66345440ef6a9714cec11614a3ea399" }
+pem-rfc7468 = { workspace = true }
 
 # Base64 encoding
 base64 = { workspace = true }
@@ -44,6 +45,7 @@ thiserror = "2.0"
 tokio = { version = "1.35", features = ["rt", "macros"] }
 
 [dev-dependencies]
+rcgen = { workspace = true }
 serde_json = "1.0"
 
 [features]
