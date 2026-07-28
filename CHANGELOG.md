@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.23] - 2026-07-28
+
+### Fixed
+
+- Allow W3C VC Data Model v2 credentials with syntactically valid past or
+  future validity periods to complete remote Data Integrity signing.
+- Keep current-time expiration and premature-credential policy in the normal
+  public verifier instead of applying it to issuance.
+
+### Security
+
+- Validate RFC 3339 validity fields and reject reversed validity periods
+  before signing.
+- Continue verifying the exact remotely returned Data Integrity proof and
+  reject invalid signatures, tampered credentials, and signing substitutions.
+
 ## [0.1.22] - 2026-07-28
 
 ### Added
