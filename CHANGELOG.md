@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-07-28
+
+### Added
+
+- Prepare and complete native W3C VC Data Model v2
+  `eddsa-rdfc-2022` Data Integrity proofs around externally managed signing.
+- Expose the canonical signing bytes to issuer-profile-mediated custody and
+  return only public verification material with the completed credential.
+
+### Security
+
+- Reject private JWK parameters at the binding boundary.
+- Bind completion to the DID, verification method, algorithm, cryptosuite,
+  proof purpose, and unsigned credential established during preparation.
+- Verify the completed proof before returning it so invalid or substituted
+  signatures fail closed.
+
 ## [0.1.21] - 2026-07-26
 
 ### Bug Fixes
