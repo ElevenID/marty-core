@@ -21,8 +21,9 @@ use ssi_dids::{DIDKey, DIDResolver, VerificationMethodDIDResolver};
 use ssi_jwk::Params as JwkParams;
 use ssi_jwk::{Algorithm, JWKResolver, JWK};
 use ssi_verification_methods::{
-    AnyMethod, MessageSigner, Multikey, ProofPurpose, ReferenceOrOwned, SignatureProtocol, Signer,
-    VerificationMethod,
+    AnyMethod, MessageSigner, Multikey, ProofPurpose, ReferenceOrOwned, ReferenceOrOwnedRef,
+    ResolutionOptions, SignatureProtocol, Signer, VerificationMethod,
+    VerificationMethodResolutionError, VerificationMethodResolver,
 };
 use std::{
     borrow::Cow,
@@ -42,6 +43,20 @@ struct VerifyRequest {
     expected_challenge: Option<String>,
     #[serde(default)]
     expected_domain: Option<String>,
+    /// Public verification methods obtained from the product DID resolver.
+    ///
+    /// This is an internal verifier input, not a caller-selectable key or KMS
+    /// coordinate. Private JWK parameters and controller mismatches are
+    /// rejected before the methods can enter the resolver.
+    #[serde(default)]
+    resolved_verification_methods: Vec<ResolvedVerificationMethod>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolvedVerificationMethod {
+    id: String,
+    controller: String,
+    public_jwk: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,6 +125,31 @@ struct CaptureSigner {
 #[derive(Clone)]
 struct CaptureMessageSigner {
     captured: Arc<Mutex<Option<CapturedSigningInput>>>,
+}
+
+struct ResolvedDidResolver {
+    methods: HashMap<IriBuf, AnyMethod>,
+    did_key: VerificationMethodDIDResolver<DIDKey, AnyMethod>,
+}
+
+impl VerificationMethodResolver for ResolvedDidResolver {
+    type Method = AnyMethod;
+
+    async fn resolve_verification_method_with(
+        &'_ self,
+        issuer: Option<&iref::Iri>,
+        method: Option<ReferenceOrOwnedRef<'_, Self::Method>>,
+        options: ResolutionOptions,
+    ) -> Result<Cow<'_, Self::Method>, VerificationMethodResolutionError> {
+        if let Some(ReferenceOrOwnedRef::Reference(id)) = method {
+            if let Some(resolved) = self.methods.get(id) {
+                return Ok(Cow::Borrowed(resolved));
+            }
+        }
+        self.did_key
+            .resolve_verification_method_with(issuer, method, options)
+            .await
+    }
 }
 
 impl Signer<AnyMethod> for CaptureSigner {
@@ -462,7 +502,7 @@ pub async fn verify_vcdm_data_integrity_json_async(request_json: &str) -> String
     if is_presentation {
         verify_presentation(request).await
     } else {
-        verify_credential_document(&request.document).await
+        verify_credential_document(&request.document, &request.resolved_verification_methods).await
     }
 }
 
@@ -824,7 +864,7 @@ async fn verify_presentation(request: VerifyRequest) -> String {
 
     let mut verified_proofs = 0;
     match serde_json::from_value::<AnyPresentation>(request.document.clone()) {
-        Ok(presentation) => match verification_parameters() {
+        Ok(presentation) => match verification_parameters(&request.resolved_verification_methods) {
             Ok(parameters) => match presentation.verify(parameters).await {
                 Ok(Ok(())) => verified_proofs += 1,
                 Ok(Err(invalid)) => {
@@ -856,7 +896,7 @@ async fn verify_presentation(request: VerifyRequest) -> String {
                     .into_iter()
                     .map(|error| format!("Credential {index}: {error}")),
             );
-            match verify_credential(credential).await {
+            match verify_credential(credential, &request.resolved_verification_methods).await {
                 Ok(()) => verified_credentials += 1,
                 Err(error) => errors.push(format!("Credential {index}: {error}")),
             }
@@ -872,14 +912,17 @@ async fn verify_presentation(request: VerifyRequest) -> String {
     })
 }
 
-async fn verify_credential_document(document: &Value) -> String {
+async fn verify_credential_document(
+    document: &Value,
+    resolved_methods: &[ResolvedVerificationMethod],
+) -> String {
     let issuer = identifier(document, "issuer");
     let mut errors = validate_proofs(document, "assertionMethod", None, None, issuer);
     if issuer.is_none() {
         errors.push("Credential issuer must be an absolute identifier".to_string());
     }
     let mut verified_proofs = 0;
-    match verify_credential(document).await {
+    match verify_credential(document, resolved_methods).await {
         Ok(()) => verified_proofs = 1,
         Err(error) => errors.push(error),
     }
@@ -892,10 +935,13 @@ async fn verify_credential_document(document: &Value) -> String {
     })
 }
 
-async fn verify_credential(document: &Value) -> Result<(), String> {
+async fn verify_credential(
+    document: &Value,
+    resolved_methods: &[ResolvedVerificationMethod],
+) -> Result<(), String> {
     let credential: AnyCredential = serde_json::from_value(document.clone())
         .map_err(|error| format!("Invalid VCDM credential: {error}"))?;
-    let parameters = verification_parameters()?;
+    let parameters = verification_parameters(resolved_methods)?;
     match credential.verify(parameters).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(invalid)) => Err(format!("Credential proof is invalid: {invalid}")),
@@ -903,15 +949,37 @@ async fn verify_credential(document: &Value) -> Result<(), String> {
     }
 }
 
-fn verification_parameters() -> Result<
-    VerificationParameters<
-        VerificationMethodDIDResolver<DIDKey, AnyMethod>,
-        ssi_json_ld::ContextLoader,
-    >,
-    String,
-> {
+fn verification_parameters(
+    resolved_methods: &[ResolvedVerificationMethod],
+) -> Result<VerificationParameters<ResolvedDidResolver, ssi_json_ld::ContextLoader>, String> {
     let loader = open_badges_context_loader().map_err(|error| error.to_string())?;
-    let resolver = DIDKey.into_vm_resolver::<AnyMethod>();
+    let mut methods = HashMap::new();
+    for resolved in resolved_methods {
+        if !resolved.controller.starts_with("did:") {
+            return Err("Resolved verification method controller must be a DID".to_string());
+        }
+        let Some((controller, fragment)) = resolved.id.split_once('#') else {
+            return Err("Resolved verification method id must be a DID URL".to_string());
+        };
+        if fragment.is_empty() || controller != resolved.controller {
+            return Err(
+                "Resolved verification method controller must exactly match its DID URL"
+                    .to_string(),
+            );
+        }
+        let public_jwk = parse_public_jwk(resolved.public_jwk.clone())?;
+        let method = ed25519_multikey(&public_jwk, &resolved.controller, &resolved.id)?;
+        if methods
+            .insert(method.id.clone(), AnyMethod::Multikey(method))
+            .is_some()
+        {
+            return Err("Resolved verification method ids must be unique".to_string());
+        }
+    }
+    let resolver = ResolvedDidResolver {
+        methods,
+        did_key: DIDKey.into_vm_resolver::<AnyMethod>(),
+    };
     Ok(VerificationParameters::from_resolver(resolver).with_json_ld_loader(loader))
 }
 
@@ -962,10 +1030,13 @@ fn validate_proofs(
             errors.push(format!("Proof purpose must be {expected_purpose}"));
         }
         let verification_method = proof.get("verificationMethod").and_then(Value::as_str);
-        if !verification_method
-            .is_some_and(|value| value.starts_with("did:key:") && value.contains('#'))
-        {
-            errors.push("Verification method must be a did:key URL".to_string());
+        if !verification_method.is_some_and(|value| {
+            value.starts_with("did:")
+                && value
+                    .split_once('#')
+                    .is_some_and(|(did, fragment)| !did.is_empty() && !fragment.is_empty())
+        }) {
+            errors.push("Verification method must be an absolute DID URL".to_string());
         }
         if let (Some(method), Some(controller)) = (verification_method, expected_controller) {
             if method.split_once('#').map(|(did, _)| did) != Some(controller) {
@@ -1052,6 +1123,26 @@ mod tests {
         })
     }
 
+    fn remote_data_integrity_prepare_request_for_did_web(key: &JWK) -> Value {
+        let issuer_did = "did:web:issuer.example";
+        let verification_method_id = format!("{issuer_did}#key-1");
+        json!({
+            "credential": {
+                "@context": ["https://www.w3.org/ns/credentials/v2"],
+                "id": "urn:uuid:2f2e1a96-3f33-4be7-90d9-fca583d23a8b",
+                "type": ["VerifiableCredential"],
+                "issuer": issuer_did,
+                "validFrom": "2026-07-28T00:00:00Z",
+                "credentialSubject": {
+                    "id": "did:example:holder"
+                }
+            },
+            "issuer_did": issuer_did,
+            "verification_method_id": verification_method_id,
+            "public_jwk": serde_json::to_value(key.to_public()).unwrap()
+        })
+    }
+
     fn remotely_sign_prepared_credential(
         private_key: &JWK,
         prepared: &Value,
@@ -1100,6 +1191,84 @@ mod tests {
         .unwrap();
         assert_eq!(verification["valid"], true, "{verification}");
         assert_eq!(verification["verified_credentials"], 1);
+    }
+
+    #[test]
+    fn verifies_did_web_credential_with_resolver_owned_public_method() {
+        let key = JWK::generate_ed25519().unwrap();
+        let request = remote_data_integrity_prepare_request_for_did_web(&key);
+        let prepared_json =
+            prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
+        let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+        let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+        let credential: Value = serde_json::from_str(&completed).unwrap();
+        let issuer_did = request["issuer_did"].as_str().unwrap();
+        let method_id = request["verification_method_id"].as_str().unwrap();
+
+        let without_resolved_method: Value = serde_json::from_str(
+            &verify_vcdm_data_integrity_json(&json!({"document": credential}).to_string()),
+        )
+        .unwrap();
+        assert_eq!(without_resolved_method["valid"], false);
+
+        let verification: Value = serde_json::from_str(&verify_vcdm_data_integrity_json(
+            &json!({
+                "document": credential,
+                "resolved_verification_methods": [{
+                    "id": method_id,
+                    "controller": issuer_did,
+                    "public_jwk": serde_json::to_value(key.to_public()).unwrap()
+                }]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        assert_eq!(verification["valid"], true, "{verification}");
+        assert_eq!(verification["verified_credentials"], 1);
+    }
+
+    #[test]
+    fn resolved_did_method_fails_closed_on_controller_private_key_and_wrong_key() {
+        let key = JWK::generate_ed25519().unwrap();
+        let wrong_key = JWK::generate_ed25519().unwrap();
+        let request = remote_data_integrity_prepare_request_for_did_web(&key);
+        let prepared_json =
+            prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
+        let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+        let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+        let credential: Value = serde_json::from_str(&completed).unwrap();
+        let issuer_did = request["issuer_did"].as_str().unwrap();
+        let method_id = request["verification_method_id"].as_str().unwrap();
+
+        let cases = [
+            json!({
+                "id": method_id,
+                "controller": "did:web:other.example",
+                "public_jwk": serde_json::to_value(key.to_public()).unwrap()
+            }),
+            json!({
+                "id": method_id,
+                "controller": issuer_did,
+                "public_jwk": serde_json::to_value(key.clone()).unwrap()
+            }),
+            json!({
+                "id": method_id,
+                "controller": issuer_did,
+                "public_jwk": serde_json::to_value(wrong_key.to_public()).unwrap()
+            }),
+        ];
+
+        for resolved_method in cases {
+            let verification: Value = serde_json::from_str(&verify_vcdm_data_integrity_json(
+                &json!({
+                    "document": credential,
+                    "resolved_verification_methods": [resolved_method]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+            assert_eq!(verification["valid"], false, "{verification}");
+        }
     }
 
     #[test]
