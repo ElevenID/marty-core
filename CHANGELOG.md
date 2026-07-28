@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.24] - 2026-07-28
+
+### Added
+
+- Allow the internal verification boundary to consume resolver-owned public
+  verification methods for tenant-scoped DID documents while retaining
+  offline `did:key` resolution.
+
+### Security
+
+- Require exact verification-method IDs and controllers, reject duplicate or
+  conflicting methods and private JWK parameters, and fail verification for
+  wrong keys, invalid signatures, and tampered credentials.
+- Keep DID resolution and tenant authorization outside the cryptographic
+  verifier so no public profile, key, KMS, provider, or custody selector is
+  introduced.
+
 ## [0.1.23] - 2026-07-28
 
 ### Fixed
