@@ -5,14 +5,29 @@
 //! presentation proofs, binds their challenge and domain, and independently
 //! verifies every embedded credential rather than trusting a valid outer proof.
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use iref::IriBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ssi_claims::data_integrity::{AnySuite, DataIntegrity};
+use ssi_claims::data_integrity::{
+    AnyProtocol, AnySignatureAlgorithm, AnySuite, CryptographicSuite, DataIntegrity, ProofOptions,
+};
 use ssi_claims::vc::syntax::{AnyJsonCredential, AnyJsonPresentation};
-use ssi_claims::VerificationParameters;
+use ssi_claims::{
+    MessageSignatureError, SignatureEnvironment, SignatureError, VerificationParameters,
+};
 use ssi_dids::{DIDKey, DIDResolver, VerificationMethodDIDResolver};
+use ssi_jwk::Params as JwkParams;
 use ssi_jwk::{Algorithm, JWKResolver, JWK};
-use ssi_verification_methods::AnyMethod;
+use ssi_verification_methods::{
+    AnyMethod, MessageSigner, Multikey, ProofPurpose, ReferenceOrOwned, SignatureProtocol, Signer,
+    VerificationMethod,
+};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use crate::open_badges::open_badges_context_loader;
 
@@ -53,6 +68,328 @@ struct VerifyJwtResult {
     issuer: Option<String>,
     claims: Option<Value>,
     errors: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrepareDataIntegrityCredentialRequest {
+    credential: Value,
+    issuer_did: String,
+    verification_method_id: String,
+    public_jwk: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PreparedDataIntegrityCredential {
+    credential: Value,
+    issuer_did: String,
+    verification_method_id: String,
+    public_jwk: Value,
+    algorithm: String,
+    signing_input_b64: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompleteDataIntegrityCredentialRequest {
+    prepared: PreparedDataIntegrityCredential,
+    signature_b64: String,
+}
+
+#[derive(Debug, Clone)]
+struct CapturedSigningInput {
+    algorithm: String,
+    message: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct CaptureSigner {
+    expected_method: IriBuf,
+    captured: Arc<Mutex<Option<CapturedSigningInput>>>,
+}
+
+#[derive(Clone)]
+struct CaptureMessageSigner {
+    captured: Arc<Mutex<Option<CapturedSigningInput>>>,
+}
+
+impl Signer<AnyMethod> for CaptureSigner {
+    type MessageSigner = CaptureMessageSigner;
+
+    async fn for_method(
+        &self,
+        method: Cow<'_, AnyMethod>,
+    ) -> Result<Option<Self::MessageSigner>, SignatureError> {
+        if method.id() != self.expected_method.as_iri() {
+            return Ok(None);
+        }
+        Ok(Some(CaptureMessageSigner {
+            captured: Arc::clone(&self.captured),
+        }))
+    }
+}
+
+impl MessageSigner<AnySignatureAlgorithm> for CaptureMessageSigner {
+    async fn sign(
+        self,
+        ssi_verification_methods::protocol::WithProtocol(algorithm, protocol):
+            <AnySignatureAlgorithm as ssi_crypto::algorithm::SignatureAlgorithmType>::Instance,
+        message: &[u8],
+    ) -> Result<Vec<u8>, MessageSignatureError> {
+        let prepared_message = protocol.prepare_message(message).into_owned();
+        let algorithm_name = algorithm.algorithm().to_string();
+        if algorithm_name != "EdDSA" || protocol != AnyProtocol::None {
+            return Err(MessageSignatureError::UnsupportedAlgorithm(format!(
+                "{algorithm_name} with protocol {protocol:?}"
+            )));
+        }
+
+        let mut captured = self
+            .captured
+            .lock()
+            .map_err(|_| MessageSignatureError::InvalidResponse)?;
+        if captured.is_some() {
+            return Err(MessageSignatureError::InvalidResponse);
+        }
+        *captured = Some(CapturedSigningInput {
+            algorithm: algorithm_name,
+            message: prepared_message,
+        });
+
+        // The SSI library must build the exact proof configuration before a
+        // remote signer can receive the canonical bytes. A fixed-size
+        // placeholder lets it serialize that proof without handling private
+        // key material. Completion always replaces it and verifies the final
+        // proof against the issuer profile's public key.
+        Ok(vec![0_u8; 64])
+    }
+}
+
+/// Prepare a W3C VCDM v2 `eddsa-rdfc-2022` credential for remote signing.
+///
+/// The returned signing input is the exact byte sequence produced by the SSI
+/// canonicalization implementation. Private JWK parameters are rejected.
+pub async fn prepare_vcdm_data_integrity_credential_json_async(
+    request_json: &str,
+) -> Result<String, String> {
+    let request: PrepareDataIntegrityCredentialRequest = serde_json::from_str(request_json)
+        .map_err(|error| format!("Invalid Data Integrity prepare request: {error}"))?;
+    validate_data_integrity_identity(
+        &request.credential,
+        &request.issuer_did,
+        &request.verification_method_id,
+    )?;
+    if request.credential.get("proof").is_some() {
+        return Err("Credential already contains a proof".to_string());
+    }
+
+    let public_jwk = parse_public_jwk(request.public_jwk.clone())?;
+    let method = ed25519_multikey(
+        &public_jwk,
+        &request.issuer_did,
+        &request.verification_method_id,
+    )?;
+    let method_id = method.id.clone();
+    let mut resolver = HashMap::new();
+    resolver.insert(method_id.clone(), AnyMethod::Multikey(method));
+
+    let credential: AnyJsonCredential = serde_json::from_value(request.credential)
+        .map_err(|error| format!("Invalid VCDM v2 credential: {error}"))?;
+    let suite = AnySuite::EdDsaRdfc2022;
+    let mut proof_options =
+        ProofOptions::from_method(ReferenceOrOwned::Reference(method_id.clone()));
+    proof_options.proof_purpose = ProofPurpose::Assertion;
+
+    let captured = Arc::new(Mutex::new(None));
+    let signer = CaptureSigner {
+        expected_method: method_id,
+        captured: Arc::clone(&captured),
+    };
+    let environment = SignatureEnvironment {
+        json_ld_loader: open_badges_context_loader().map_err(|error| error.to_string())?,
+        eip712_loader: (),
+    };
+    let prepared_credential = suite
+        .sign_with(
+            environment,
+            credential,
+            &resolver,
+            &signer,
+            proof_options,
+            Default::default(),
+        )
+        .await
+        .map_err(|error| format!("Data Integrity preparation failed: {error}"))?;
+    let captured = captured
+        .lock()
+        .map_err(|_| "Data Integrity signing input lock was poisoned".to_string())?
+        .take()
+        .ok_or_else(|| "Data Integrity suite produced no signing input".to_string())?;
+
+    serde_json::to_string(&PreparedDataIntegrityCredential {
+        credential: serde_json::to_value(prepared_credential)
+            .map_err(|error| format!("Failed to serialize prepared credential: {error}"))?,
+        issuer_did: request.issuer_did,
+        verification_method_id: request.verification_method_id,
+        public_jwk: serde_json::to_value(public_jwk)
+            .map_err(|error| format!("Failed to serialize public JWK: {error}"))?,
+        algorithm: captured.algorithm,
+        signing_input_b64: URL_SAFE_NO_PAD.encode(captured.message),
+    })
+    .map_err(|error| format!("Failed to serialize Data Integrity signing request: {error}"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn prepare_vcdm_data_integrity_credential_json(request_json: &str) -> Result<String, String> {
+    futures::executor::block_on(prepare_vcdm_data_integrity_credential_json_async(
+        request_json,
+    ))
+}
+
+/// Complete and verify a remotely signed W3C VCDM v2 credential.
+///
+/// Completion fails if the credential, DID, verification method, public key,
+/// or signature changed incompatibly after preparation.
+pub async fn complete_vcdm_data_integrity_credential_json_async(
+    request_json: &str,
+) -> Result<String, String> {
+    let request: CompleteDataIntegrityCredentialRequest = serde_json::from_str(request_json)
+        .map_err(|error| format!("Invalid Data Integrity completion request: {error}"))?;
+    let mut prepared = request.prepared;
+    validate_data_integrity_identity(
+        &prepared.credential,
+        &prepared.issuer_did,
+        &prepared.verification_method_id,
+    )?;
+    if prepared.algorithm != "EdDSA" {
+        return Err(format!(
+            "Unsupported Data Integrity signing algorithm: {}",
+            prepared.algorithm
+        ));
+    }
+    URL_SAFE_NO_PAD
+        .decode(&prepared.signing_input_b64)
+        .map_err(|error| format!("Invalid prepared signing input: {error}"))?;
+
+    let public_jwk = parse_public_jwk(prepared.public_jwk.clone())?;
+    let method = ed25519_multikey(
+        &public_jwk,
+        &prepared.issuer_did,
+        &prepared.verification_method_id,
+    )?;
+    let method_id = method.id.clone();
+    let signature = URL_SAFE_NO_PAD
+        .decode(&request.signature_b64)
+        .map_err(|error| format!("Invalid Data Integrity signature encoding: {error}"))?;
+    if signature.len() != 64 {
+        return Err(format!(
+            "EdDSA Data Integrity signature must be 64 bytes, got {}",
+            signature.len()
+        ));
+    }
+
+    let proof = prepared
+        .credential
+        .get_mut("proof")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "Prepared credential must contain one proof object".to_string())?;
+    if proof.get("type").and_then(Value::as_str) != Some("DataIntegrityProof")
+        || proof.get("cryptosuite").and_then(Value::as_str) != Some("eddsa-rdfc-2022")
+        || proof.get("proofPurpose").and_then(Value::as_str) != Some("assertionMethod")
+        || proof.get("verificationMethod").and_then(Value::as_str)
+            != Some(prepared.verification_method_id.as_str())
+    {
+        return Err("Prepared credential proof configuration changed".to_string());
+    }
+    proof.insert(
+        "proofValue".to_string(),
+        Value::String(format!("z{}", bs58::encode(signature).into_string())),
+    );
+
+    let credential: AnyCredential = serde_json::from_value(prepared.credential.clone())
+        .map_err(|error| format!("Invalid completed VCDM credential: {error}"))?;
+    let mut resolver = HashMap::new();
+    resolver.insert(method_id, AnyMethod::Multikey(method));
+    let parameters = VerificationParameters::from_resolver(resolver)
+        .with_json_ld_loader(open_badges_context_loader().map_err(|error| error.to_string())?);
+    match credential.verify(parameters).await {
+        Ok(Ok(())) => serde_json::to_string(&prepared.credential)
+            .map_err(|error| format!("Failed to serialize completed credential: {error}")),
+        Ok(Err(invalid)) => Err(format!(
+            "Completed Data Integrity credential is invalid: {invalid}"
+        )),
+        Err(error) => Err(format!(
+            "Completed Data Integrity credential verification failed: {error}"
+        )),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn complete_vcdm_data_integrity_credential_json(request_json: &str) -> Result<String, String> {
+    futures::executor::block_on(complete_vcdm_data_integrity_credential_json_async(
+        request_json,
+    ))
+}
+
+fn validate_data_integrity_identity(
+    credential: &Value,
+    issuer_did: &str,
+    verification_method_id: &str,
+) -> Result<(), String> {
+    if !issuer_did.starts_with("did:") {
+        return Err("issuer_did must be a DID".to_string());
+    }
+    if identifier(credential, "issuer") != Some(issuer_did) {
+        return Err("Credential issuer must exactly match issuer_did".to_string());
+    }
+    if verification_method_id.split_once('#').map(|(did, _)| did) != Some(issuer_did) {
+        return Err("Verification method controller must exactly match issuer_did".to_string());
+    }
+    if !has_type(credential, "VerifiableCredential") {
+        return Err("Document must be a VerifiableCredential".to_string());
+    }
+    if !matches!(
+        credential.get("@context"),
+        Some(Value::String(context)) if context == "https://www.w3.org/ns/credentials/v2"
+    ) && !credential
+        .get("@context")
+        .and_then(Value::as_array)
+        .is_some_and(|contexts| {
+            contexts
+                .iter()
+                .any(|context| context.as_str() == Some("https://www.w3.org/ns/credentials/v2"))
+        })
+    {
+        return Err("Credential must use the W3C VCDM v2 context".to_string());
+    }
+    Ok(())
+}
+
+fn ed25519_multikey(
+    public_jwk: &JWK,
+    issuer_did: &str,
+    verification_method_id: &str,
+) -> Result<Multikey, String> {
+    let public_key = match &public_jwk.params {
+        JwkParams::OKP(parameters) if parameters.curve == "Ed25519" => {
+            parameters.public_key.0.as_slice()
+        }
+        _ => {
+            return Err(
+                "eddsa-rdfc-2022 requires an Ed25519 public JWK from the issuer profile"
+                    .to_string(),
+            )
+        }
+    };
+    let verifying_key = ed25519_dalek::VerifyingKey::try_from(public_key)
+        .map_err(|error| format!("Invalid Ed25519 public JWK: {error}"))?;
+    let method_id = IriBuf::new(verification_method_id.to_string())
+        .map_err(|error| format!("Invalid verification method IRI: {error}"))?;
+    let controller = iref::UriBuf::new(issuer_did.as_bytes().to_vec())
+        .map_err(|error| format!("Invalid issuer DID URI: {error:?}"))?;
+    Ok(Multikey::from_public_key(
+        method_id,
+        controller,
+        &verifying_key,
+    ))
 }
 
 /// Verify a VCDM v2 credential or presentation and return a JSON result.
@@ -656,6 +993,130 @@ mod tests {
         "proofValue": "z21YwBZrwiRK3mGfxEBNWxnbJrD4oYDpVSJeSdQyECW4NsL4YMuuZ6yugdiuWyf5ZD9nXkyKixD6C5691eLwwf7Sv"
       }
     }"#;
+
+    fn remote_data_integrity_prepare_request(key: &JWK) -> Value {
+        let verification_method_id = DIDKey::generate_url(key).unwrap().to_string();
+        let issuer_did = verification_method_id
+            .split_once('#')
+            .map(|(did, _)| did)
+            .unwrap()
+            .to_string();
+        json!({
+            "credential": {
+                "@context": ["https://www.w3.org/ns/credentials/v2"],
+                "id": "urn:uuid:2f2e1a96-3f33-4be7-90d9-fca583d23a8b",
+                "type": ["VerifiableCredential"],
+                "issuer": issuer_did,
+                "validFrom": "2026-07-28T00:00:00Z",
+                "credentialSubject": {
+                    "id": "did:example:holder"
+                }
+            },
+            "issuer_did": issuer_did,
+            "verification_method_id": verification_method_id,
+            "public_jwk": serde_json::to_value(key.to_public()).unwrap()
+        })
+    }
+
+    fn remotely_sign_prepared_credential(
+        private_key: &JWK,
+        prepared: &Value,
+    ) -> Result<String, String> {
+        let signing_input = URL_SAFE_NO_PAD
+            .decode(prepared["signing_input_b64"].as_str().unwrap())
+            .unwrap();
+        let signature = ssi_jws::sign_bytes(Algorithm::EdDSA, &signing_input, private_key).unwrap();
+        complete_vcdm_data_integrity_credential_json(
+            &json!({
+                "prepared": prepared,
+                "signature_b64": URL_SAFE_NO_PAD.encode(signature)
+            })
+            .to_string(),
+        )
+    }
+
+    #[test]
+    fn prepares_completes_and_verifies_remote_eddsa_rdfc_credential() {
+        let key = JWK::generate_ed25519().unwrap();
+        let prepared_json = prepare_vcdm_data_integrity_credential_json(
+            &remote_data_integrity_prepare_request(&key).to_string(),
+        )
+        .unwrap();
+        let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+
+        assert_eq!(prepared["algorithm"], "EdDSA");
+        assert_eq!(
+            prepared["credential"]["proof"]["cryptosuite"],
+            "eddsa-rdfc-2022"
+        );
+        assert_eq!(
+            prepared["credential"]["proof"]["verificationMethod"],
+            prepared["verification_method_id"]
+        );
+
+        let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+        let credential: Value = serde_json::from_str(&completed).unwrap();
+        assert!(credential["proof"]["proofValue"]
+            .as_str()
+            .is_some_and(|value| value.starts_with('z')));
+
+        let verification: Value = serde_json::from_str(&verify_vcdm_data_integrity_json(
+            &json!({"document": credential}).to_string(),
+        ))
+        .unwrap();
+        assert_eq!(verification["valid"], true, "{verification}");
+        assert_eq!(verification["verified_credentials"], 1);
+    }
+
+    #[test]
+    fn remote_data_integrity_rejects_private_jwk_at_prepare_boundary() {
+        let key = JWK::generate_ed25519().unwrap();
+        let mut request = remote_data_integrity_prepare_request(&key);
+        request["public_jwk"] = serde_json::to_value(key).unwrap();
+
+        let error = prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap_err();
+        assert!(
+            error.contains("prohibited private key parameter"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn remote_data_integrity_completion_rejects_tampered_credential() {
+        let key = JWK::generate_ed25519().unwrap();
+        let prepared_json = prepare_vcdm_data_integrity_credential_json(
+            &remote_data_integrity_prepare_request(&key).to_string(),
+        )
+        .unwrap();
+        let mut prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+        prepared["credential"]["credentialSubject"]["id"] = json!("did:example:attacker");
+
+        let error = remotely_sign_prepared_credential(&key, &prepared).unwrap_err();
+        assert!(
+            error.contains("credential is invalid")
+                || error.contains("credential verification failed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn remote_data_integrity_completion_rejects_invalid_signature() {
+        let key = JWK::generate_ed25519().unwrap();
+        let prepared_json = prepare_vcdm_data_integrity_credential_json(
+            &remote_data_integrity_prepare_request(&key).to_string(),
+        )
+        .unwrap();
+        let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+        let error = complete_vcdm_data_integrity_credential_json(
+            &json!({
+                "prepared": prepared,
+                "signature_b64": URL_SAFE_NO_PAD.encode([0x5a_u8; 64])
+            })
+            .to_string(),
+        )
+        .unwrap_err();
+        assert!(error.contains("credential is invalid"), "{error}");
+    }
 
     #[test]
     fn verifies_official_suite_eddsa_rdfc_presentation_and_nested_credential() {

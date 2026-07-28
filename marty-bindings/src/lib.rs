@@ -189,6 +189,22 @@ fn verify_vcdm_jwt(request_json: &str) -> String {
     marty_verification::vcdm::verify_vcdm_jwt_json(request_json)
 }
 
+/// Prepare the exact canonical bytes for an issuer-profile-backed
+/// `eddsa-rdfc-2022` credential signature.
+#[pyfunction]
+fn prepare_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+    marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Insert a remote issuer-profile signature and verify the completed
+/// `eddsa-rdfc-2022` credential before returning it.
+#[pyfunction]
+fn complete_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+    marty_verification::vcdm::complete_vcdm_data_integrity_credential_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 // ============================================================================
 // Verifiable Credentials (Simplified)
 // ============================================================================
@@ -1393,6 +1409,11 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_data_integrity, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        complete_vcdm_data_integrity_credential,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
     m.add_class::<mdoc::MdocPresentationVerificationResult>()?;
     m.add_function(wrap_pyfunction!(mdoc::parse_device_response, m)?)?;
