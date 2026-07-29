@@ -1194,6 +1194,29 @@ mod tests {
     }
 
     #[test]
+    fn prepares_vcdm_v2_credential_with_standard_related_resource() {
+        let key = JWK::generate_ed25519().unwrap();
+        let mut request = remote_data_integrity_prepare_request(&key);
+        request["credential"]["relatedResource"] = json!({
+            "id": "https://www.w3.org/ns/credentials/v2",
+            "digestSRI": "sha384-l/HrjlBCNWyAX91hr6LFV2Y3heB5Tcr6IeE4/Tje8YyzYBM8IhqjHWiWpr8+ZbYU"
+        });
+
+        let prepared_json =
+            prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
+        let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+
+        assert_eq!(
+            prepared["credential"]["relatedResource"]["id"],
+            "https://www.w3.org/ns/credentials/v2"
+        );
+        assert_eq!(
+            prepared["credential"]["relatedResource"]["digestSRI"],
+            "sha384-l/HrjlBCNWyAX91hr6LFV2Y3heB5Tcr6IeE4/Tje8YyzYBM8IhqjHWiWpr8+ZbYU"
+        );
+    }
+
+    #[test]
     fn verifies_did_web_credential_with_resolver_owned_public_method() {
         let key = JWK::generate_ed25519().unwrap();
         let request = remote_data_integrity_prepare_request_for_did_web(&key);
