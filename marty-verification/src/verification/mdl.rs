@@ -19,10 +19,12 @@ pub use isomdl::definitions::x509::x5chain::{Builder as X5ChainBuilder, X5Chain}
 /// verifier constructs it from its own request state (client identifier,
 /// nonce, response URI, and response-encryption key), then this type preserves
 /// its exact CBOR shape for ISO device authentication.
+#[cfg(test)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 struct ExternalSessionTranscript(ciborium::Value);
 
+#[cfg(test)]
 impl isomdl::definitions::session::SessionTranscript for ExternalSessionTranscript {}
 
 /// Successful holder device-authentication result for a DeviceResponse.
@@ -47,7 +49,7 @@ pub fn verify_device_authentication(
     session_transcript_cbor: &[u8],
 ) -> VerificationResult<MdlDeviceAuthenticationResult> {
     use isomdl::definitions::device_response::{DeviceResponse, Status};
-    use isomdl::presentation::authentication::mdoc::device_authentication;
+    use isomdl::presentation::authentication::mdoc::device_authentication_with_raw_session_transcript;
 
     let response: DeviceResponse = isomdl::cbor::from_slice(device_response_cbor).map_err(|e| {
         VerificationError::cbor_error(format!("Unable to parse mdoc DeviceResponse: {e}"))
@@ -66,19 +68,15 @@ pub fn verify_device_authentication(
     let documents = response.documents.as_ref().ok_or_else(|| {
         VerificationError::device_auth_failed("DeviceResponse contains no documents")
     })?;
-    let session_transcript: ExternalSessionTranscript =
-        isomdl::cbor::from_slice(session_transcript_cbor).map_err(|e| {
-            VerificationError::cbor_error(format!("Unable to parse session transcript: {e}"))
-        })?;
-
     let mut document_types = Vec::with_capacity(documents.len());
     for document in documents.iter() {
-        device_authentication(document, session_transcript.clone()).map_err(|e| {
-            VerificationError::device_auth_failed(format!(
-                "Holder authentication failed for document type {}: {e}",
-                document.doc_type
-            ))
-        })?;
+        device_authentication_with_raw_session_transcript(document, session_transcript_cbor)
+            .map_err(|e| {
+                VerificationError::device_auth_failed(format!(
+                    "Holder authentication failed for document type {}: {e}",
+                    document.doc_type
+                ))
+            })?;
         document_types.push(document.doc_type.clone());
     }
 
@@ -424,6 +422,13 @@ mod tests {
     fn device_response_fixture(
         session_transcript: &ExternalSessionTranscript,
     ) -> (Vec<u8>, Vec<u8>) {
+        device_response_fixture_with_encoding(session_transcript, None)
+    }
+
+    fn device_response_fixture_with_encoding(
+        session_transcript: &ExternalSessionTranscript,
+        raw_session_transcript_cbor: Option<&[u8]>,
+    ) -> (Vec<u8>, Vec<u8>) {
         let signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
         let point = signing_key.verifying_key().to_encoded_point(false);
         let device_key = isomdl::definitions::device_key::CoseKey::EC2 {
@@ -460,15 +465,22 @@ mod tests {
         .unwrap()
         .finalize(vec![0_u8; 64]);
         let namespaces = Tag24::new(BTreeMap::new()).unwrap();
-        let device_authentication = Tag24::new(
-            isomdl::definitions::device_signed::DeviceAuthentication::new(
-                session_transcript.clone(),
-                "org.iso.18013.5.1.mDL".to_string(),
-                namespaces.clone(),
-            ),
-        )
-        .unwrap();
-        let detached_payload = isomdl::cbor::to_vec(&device_authentication).unwrap();
+        let detached_payload = match raw_session_transcript_cbor {
+            Some(raw) => {
+                raw_device_authentication_fixture(raw, "org.iso.18013.5.1.mDL", &namespaces)
+            }
+            None => {
+                let device_authentication = Tag24::new(
+                    isomdl::definitions::device_signed::DeviceAuthentication::new(
+                        session_transcript.clone(),
+                        "org.iso.18013.5.1.mDL".to_string(),
+                        namespaces.clone(),
+                    ),
+                )
+                .unwrap();
+                isomdl::cbor::to_vec(&device_authentication).unwrap()
+            }
+        };
         let prepared_device_signature = PreparedCoseSign1::new(
             coset::CoseSign1Builder::new().protected(
                 coset::HeaderBuilder::new()
@@ -501,10 +513,35 @@ mod tests {
             document_errors: None,
             status: Status::OK,
         };
-        (
-            isomdl::cbor::to_vec(&response).unwrap(),
-            isomdl::cbor::to_vec(session_transcript).unwrap(),
-        )
+        let transcript_cbor = raw_session_transcript_cbor
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| isomdl::cbor::to_vec(session_transcript).unwrap());
+        (isomdl::cbor::to_vec(&response).unwrap(), transcript_cbor)
+    }
+
+    fn raw_device_authentication_fixture(
+        session_transcript_cbor: &[u8],
+        doc_type: &str,
+        namespaces: &isomdl::definitions::device_signed::DeviceNamespacesBytes,
+    ) -> Vec<u8> {
+        let mut inner = vec![0x84];
+        inner.extend(isomdl::cbor::to_vec(&"DeviceAuthentication").unwrap());
+        inner.extend_from_slice(session_transcript_cbor);
+        inner.extend(isomdl::cbor::to_vec(&doc_type).unwrap());
+        inner.extend(isomdl::cbor::to_vec(namespaces).unwrap());
+
+        let mut tagged = vec![0xd8, 0x18];
+        match inner.len() {
+            0..=23 => tagged.push(0x40 | inner.len() as u8),
+            24..=0xff => tagged.extend([0x58, inner.len() as u8]),
+            0x100..=0xffff => {
+                tagged.push(0x59);
+                tagged.extend((inner.len() as u16).to_be_bytes());
+            }
+            _ => panic!("test fixture unexpectedly exceeds 65535 bytes"),
+        }
+        tagged.extend(inner);
+        tagged
     }
 
     #[test]
@@ -616,6 +653,35 @@ mod tests {
             result.document_types,
             vec!["org.iso.18013.5.1.mDL".to_string()]
         );
+    }
+
+    #[test]
+    fn preserves_exact_transcript_cbor_for_holder_signature() {
+        let transcript = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        let canonical = isomdl::cbor::to_vec(&transcript).unwrap();
+        let null_offset = canonical
+            .iter()
+            .position(|byte| *byte == 0xf6)
+            .expect("fixture must contain null");
+        let mut non_preferred = canonical.clone();
+        non_preferred.splice(null_offset..=null_offset, [0xf8, 0x16]);
+        let decoded: ExternalSessionTranscript = isomdl::cbor::from_slice(&non_preferred).unwrap();
+        assert_eq!(decoded.0, transcript.0);
+        assert_ne!(non_preferred, canonical);
+
+        let (response, transcript_cbor) =
+            device_response_fixture_with_encoding(&transcript, Some(&non_preferred));
+
+        let result = verify_device_authentication(&response, &transcript_cbor).unwrap();
+        assert!(result.verified);
+        assert!(verify_device_authentication(&response, &canonical).is_err());
     }
 
     #[test]
