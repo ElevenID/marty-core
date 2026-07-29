@@ -97,3 +97,20 @@ pub fn ob3_context_uri() -> &'static str {
 pub fn security_v2_context_uri() -> &'static str {
     CONTEXT_SECURITY_V2
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn vendored_vcdm_v2_context_preserves_protected_term_boundaries() {
+        let context: Value = serde_json::from_str(CONTEXT_FILE_VC_V2).unwrap();
+
+        assert_eq!(context["@context"]["@protected"], true);
+        assert_eq!(
+            context["@context"]["VerifiableCredential"]["@context"]["@protected"],
+            true
+        );
+    }
+}
