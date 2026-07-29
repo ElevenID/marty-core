@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.26] - 2026-07-28
+
+### Fixed
+
+- Accept standards-compliant mdoc presentations whose optional disclosed
+  namespaces are empty while preserving issuer and device authentication.
+- Separate exact document-signer certificate pinning from root-CA trust:
+  pinned issuer certificates require an exact DER match, while root-CA trust
+  continues to enforce the full PKIX chain and signing key-usage policy.
+- Expose pinned document-signer certificates through the stable Python
+  verification binding without changing existing call behavior.
+
+### Security
+
+- Continue failing closed for wrong pins, expired certificates, invalid
+  embedded certificate chains, invalid issuer signatures, and invalid holder
+  device-authentication signatures.
+- Pin the maintained ElevenID `isomdl` compatibility fork by immutable commit
+  while its monthly upstream synchronization remains review-only.
+
 ## [0.1.25] - 2026-07-28
 
 ### Fixed
