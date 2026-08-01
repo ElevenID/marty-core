@@ -46,6 +46,19 @@ struct ProofHeader {
     /// Type (must be "openid4vci-proof+jwt").
     #[serde(default)]
     typ: Option<String>,
+    /// A key attestation JWT validated by the issuer's tenant-bound policy.
+    #[serde(default)]
+    key_attestation: Option<String>,
+}
+
+enum ProofKeySource<'a> {
+    Header,
+    ValidatedKeyAttestation { jwt: &'a str },
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyAttestationPayload {
+    attested_keys: Vec<JWK>,
 }
 
 /// JWT proof payload fields.
@@ -88,6 +101,53 @@ pub fn verify_jwt_proof(
     expected_c_nonce: Option<&str>,
     max_age_seconds: i64,
 ) -> Oid4vciResult<VerifiedProof> {
+    verify_jwt_proof_with_key_source(
+        proof_jwt,
+        expected_issuer_url,
+        expected_c_nonce,
+        max_age_seconds,
+        ProofKeySource::Header,
+    )
+}
+
+/// Verify a key-attestation-bound OID4VCI JWT proof.
+///
+/// The caller is responsible for validating `validated_key_attestation_jwt`
+/// against the organization and issuer profile's trust policy, including its
+/// certificate chain, signature, time, nonce, status, and assurance claims.
+/// This function enforces the cryptographic boundary after that policy check:
+/// the proof must carry that exact attestation JWT, its `kid` must select one
+/// of the `attested_keys` embedded in that JWT, and its signature must verify
+/// with the selected key.
+///
+/// Keeping the complete validated attestation token in this interface prevents
+/// a caller from accidentally validating one token and accepting public keys
+/// for a different token.
+pub fn verify_key_attestation_bound_jwt_proof(
+    proof_jwt: &str,
+    expected_issuer_url: &str,
+    expected_c_nonce: Option<&str>,
+    max_age_seconds: i64,
+    validated_key_attestation_jwt: &str,
+) -> Oid4vciResult<VerifiedProof> {
+    verify_jwt_proof_with_key_source(
+        proof_jwt,
+        expected_issuer_url,
+        expected_c_nonce,
+        max_age_seconds,
+        ProofKeySource::ValidatedKeyAttestation {
+            jwt: validated_key_attestation_jwt,
+        },
+    )
+}
+
+fn verify_jwt_proof_with_key_source(
+    proof_jwt: &str,
+    expected_issuer_url: &str,
+    expected_c_nonce: Option<&str>,
+    max_age_seconds: i64,
+    key_source: ProofKeySource<'_>,
+) -> Oid4vciResult<VerifiedProof> {
     // Step 1: Split and decode
     let parts: Vec<&str> = proof_jwt.split('.').collect();
     if parts.len() != 3 {
@@ -129,8 +189,22 @@ pub fn verify_jwt_proof(
         }
     }
 
-    // Step 3: Extract public key from kid or jwk
-    let (derived_holder_id, holder_jwk) = extract_holder_key(&header)?;
+    // Step 3: Resolve the proof key through exactly one trusted path. A key
+    // attestation header must never be ignored by the ordinary verifier.
+    let (derived_holder_id, holder_jwk) = match key_source {
+        ProofKeySource::Header => {
+            if header.key_attestation.is_some() {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Proof carries key_attestation but no validated issuer policy context was provided"
+                        .into(),
+                ));
+            }
+            extract_holder_key(&header)?
+        }
+        ProofKeySource::ValidatedKeyAttestation { jwt } => {
+            extract_key_attestation_holder_key(&header, jwt)?
+        }
+    };
 
     // Step 4: Cryptographic signature verification.  `extract_holder_key`
     // resolves every accepted header to public key material.  Keep this
@@ -221,6 +295,98 @@ pub fn verify_jwt_proof(
         audience: payload.aud,
         iat: Some(issued_at),
     })
+}
+
+fn public_jwk_holder_id(jwk: &JWK) -> Oid4vciResult<String> {
+    let jwk_json = serde_json::to_string(jwk).map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Failed to serialize attested public JWK: {error}"
+        ))
+    })?;
+    Ok(format!("did:jwk:{}", B64.encode(jwk_json.as_bytes())))
+}
+
+fn jwk_has_private_material(jwk: &JWK) -> bool {
+    match &jwk.params {
+        Params::OKP(params) => params.private_key.is_some(),
+        Params::EC(params) => params.ecc_private_key.is_some(),
+        Params::RSA(params) => {
+            params.private_exponent.is_some()
+                || params.first_prime_factor.is_some()
+                || params.second_prime_factor.is_some()
+                || params.first_prime_factor_crt_exponent.is_some()
+                || params.second_prime_factor_crt_exponent.is_some()
+                || params.first_crt_coefficient.is_some()
+                || params.other_primes_info.is_some()
+        }
+        Params::Symmetric(_) => true,
+    }
+}
+
+fn extract_key_attestation_holder_key(
+    header: &ProofHeader,
+    validated_key_attestation_jwt: &str,
+) -> Oid4vciResult<(String, Option<JWK>)> {
+    if header.jwk.is_some() {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Key-attestation-bound proof must select an attested key with kid, not embed jwk"
+                .into(),
+        ));
+    }
+    let header_attestation = header.key_attestation.as_deref().ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Key-attestation-bound proof is missing key_attestation header".into(),
+        )
+    })?;
+    if header_attestation != validated_key_attestation_jwt {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Proof key_attestation does not match the issuer-validated attestation".into(),
+        ));
+    }
+    let attestation_parts: Vec<&str> = validated_key_attestation_jwt.split('.').collect();
+    if attestation_parts.len() != 3 {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation JWT must have exactly 3 parts".into(),
+        ));
+    }
+    let attestation_payload = B64.decode(attestation_parts[1]).map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Validated key attestation payload is not base64url: {error}"
+        ))
+    })?;
+    let attestation: KeyAttestationPayload =
+        serde_json::from_slice(&attestation_payload).map_err(|error| {
+            Oid4vciError::ProofVerificationFailed(format!(
+                "Validated key attestation payload is invalid: {error}"
+            ))
+        })?;
+    if attestation.attested_keys.is_empty() {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation has no attested public keys".into(),
+        ));
+    }
+    let kid = header.kid.as_deref().ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Key-attestation-bound proof is missing attested key index in kid".into(),
+        )
+    })?;
+    let key_index = kid.parse::<usize>().map_err(|_| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Key-attestation-bound proof kid must be a non-negative attested key index, got '{kid}'"
+        ))
+    })?;
+    let jwk = attestation.attested_keys.get(key_index).ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Attested key index {key_index} is out of range for {} keys",
+            attestation.attested_keys.len()
+        ))
+    })?;
+    if jwk_has_private_material(jwk) {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation must contain public keys only".into(),
+        ));
+    }
+    Ok((public_jwk_holder_id(jwk)?, Some(jwk.clone())))
 }
 
 /// Decode a base58btc string to raw bytes (Bitcoin alphabet, no padding).
@@ -612,6 +778,26 @@ mod tests {
         format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
     }
 
+    fn validated_key_attestation_jwt(attested_keys: Vec<serde_json::Value>) -> String {
+        let header = B64.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "alg": "ES256",
+                "typ": "key-attestation+jwt",
+            }))
+            .unwrap(),
+        );
+        let payload = B64.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "attested_keys": attested_keys,
+            }))
+            .unwrap(),
+        );
+        // Signature validation belongs to the tenant-bound issuer policy.
+        // This protocol-layer fixture needs only the exact already-validated
+        // compact token so it can prove key selection is bound to its payload.
+        format!("{header}.{payload}.{}", B64.encode(b"validated-signature"))
+    }
+
     #[test]
     fn test_extract_proof_jwts_v1_format() {
         let request = crate::types::CredentialRequest {
@@ -654,6 +840,7 @@ mod tests {
             kid: Some("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into()),
             jwk: None,
             typ: Some("openid4vci-proof+jwt".into()),
+            key_attestation: None,
         };
 
         let (holder_id, jwk) = extract_holder_key(&header).unwrap();
@@ -673,6 +860,7 @@ mod tests {
             kid: None,
             jwk: None,
             typ: Some("openid4vci-proof+jwt".into()),
+            key_attestation: None,
         };
 
         assert!(extract_holder_key(&header).is_err());
@@ -869,5 +1057,213 @@ mod tests {
             verify_jwt_proof(&tampered, "https://issuer.example", Some("nonce-1"), 300).is_err(),
             "a modified JWT signature must never verify"
         );
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_selects_and_verifies_attested_key() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![embedded_ed25519_jwk(&signing_key)]);
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        let verified = verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .unwrap();
+
+        assert!(verified.holder_id.starts_with("did:jwk:"));
+        assert!(verified.holder_jwk.is_some());
+    }
+
+    #[test]
+    fn ordinary_verifier_never_ignores_key_attestation_header() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": "unvalidated.attestation.jwt",
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        let error =
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no validated issuer policy context"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn key_attestation_binding_rejects_token_index_key_and_private_material_mismatch() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let other_key = SigningKey::generate(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![embedded_ed25519_jwk(&signing_key)]);
+        let payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &attestation,
+            }),
+            payload.clone(),
+        );
+
+        let mismatch = verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            "different.key.attestation",
+        )
+        .unwrap_err();
+        assert!(mismatch.to_string().contains("does not match"));
+
+        let wrong_attestation =
+            validated_key_attestation_jwt(vec![embedded_ed25519_jwk(&other_key)]);
+        let wrong_key_proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &wrong_attestation,
+            }),
+            payload.clone(),
+        );
+        let wrong_key = verify_key_attestation_bound_jwt_proof(
+            &wrong_key_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &wrong_attestation,
+        )
+        .unwrap_err();
+        assert!(wrong_key.to_string().contains("invalid signature"));
+
+        let out_of_range = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "1",
+                "key_attestation": &attestation,
+            }),
+            payload,
+        );
+        let index_error = verify_key_attestation_bound_jwt_proof(
+            &out_of_range,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .unwrap_err();
+        assert!(index_error.to_string().contains("out of range"));
+
+        let private_jwk = serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": B64.encode(signing_key.verifying_key().to_bytes()),
+            "d": B64.encode(signing_key.to_bytes()),
+        });
+        let private_attestation = validated_key_attestation_jwt(vec![private_jwk]);
+        let private_proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &private_attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+        let private_error = verify_key_attestation_bound_jwt_proof(
+            &private_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &private_attestation,
+        )
+        .unwrap_err();
+        assert!(private_error.to_string().contains("public keys only"));
+    }
+
+    #[test]
+    fn key_attestation_binding_rejects_malformed_or_empty_attestation_payloads() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let proof_for = |attestation: &str| {
+            sign_test_proof(
+                &signing_key,
+                serde_json::json!({
+                    "alg": "EdDSA",
+                    "typ": "openid4vci-proof+jwt",
+                    "kid": "0",
+                    "key_attestation": attestation,
+                }),
+                serde_json::json!({
+                    "aud": "https://issuer.example",
+                    "iat": chrono::Utc::now().timestamp(),
+                    "nonce": "nonce-1",
+                }),
+            )
+        };
+
+        let malformed = "not.*.signature";
+        let malformed_error = verify_key_attestation_bound_jwt_proof(
+            &proof_for(malformed),
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            malformed,
+        )
+        .unwrap_err();
+        assert!(malformed_error.to_string().contains("not base64url"));
+
+        let empty = validated_key_attestation_jwt(Vec::new());
+        let empty_error = verify_key_attestation_bound_jwt_proof(
+            &proof_for(&empty),
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &empty,
+        )
+        .unwrap_err();
+        assert!(empty_error.to_string().contains("no attested public keys"));
     }
 }
