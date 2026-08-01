@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.31] - 2026-08-01
+
+### Fixed
+
+- Align key-attestation-bound OID4VCI proofs with the Final specification by
+  accepting an embedded public `jwk` only when its RFC 7638 thumbprint matches
+  a key in the issuer-policy-validated attestation.
+- Resolve a proof `kid` only when it uniquely identifies an attested JWK or a
+  self-certifying `did:key` whose public key is present in the attestation.
+- Remove Marty's pre-1.0, non-standard numeric `kid`-as-array-index convention.
+
+### Security
+
+- Continue requiring the exact issuer-profile-validated attestation token and
+  verify the proof signature with the public key bound to that token.
+- Reject private, unattested, ambiguous, or mutually conflicting proof keys.
+- Keep imported official compliance suites, fixtures, assertions, expected
+  results, selections, and exclusions unchanged; the interoperability fix is
+  entirely in ElevenID product code.
+
 ## [0.1.30] - 2026-08-01
 
 ### Added
