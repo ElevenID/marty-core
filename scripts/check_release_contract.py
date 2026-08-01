@@ -109,8 +109,31 @@ def check_release_asset_policy() -> list[str]:
     return errors
 
 
+def check_native_build_cache_scope() -> list[str]:
+    workflow = ROOT / ".github" / "workflows" / "ci.yml"
+    contents = workflow.read_text(encoding="utf-8")
+    target_key = next(
+        (line.strip() for line in contents.splitlines() if "cargo-build-target" in line),
+        "",
+    )
+    required_contexts = ("runner.os", "runner.arch", "env.RUSTUP_TOOLCHAIN")
+    missing = [context for context in required_contexts if context not in target_key]
+    if not target_key:
+        return [".github/workflows/ci.yml: missing Cargo target cache key"]
+    if missing:
+        return [
+            ".github/workflows/ci.yml: Cargo target cache must be scoped by OS, "
+            f"architecture, and Rust toolchain; missing {', '.join(missing)}"
+        ]
+    return []
+
+
 def main() -> int:
-    errors = [*check_python_versions(), *check_release_asset_policy()]
+    errors = [
+        *check_python_versions(),
+        *check_release_asset_policy(),
+        *check_native_build_cache_scope(),
+    ]
     if errors:
         for error in errors:
             print(f"release-contract: {error}", file=sys.stderr)
@@ -121,6 +144,7 @@ def main() -> int:
     )
     print(f"release-contract: Cargo-derived Python versions verified ({resolved})")
     print("release-contract: workflows contain no release-asset deletion operations")
+    print("release-contract: Cargo target caches are platform and toolchain scoped")
     return 0
 
 
