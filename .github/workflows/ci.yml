@@ -61,7 +61,7 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Require reproducible release sources
         shell: bash
