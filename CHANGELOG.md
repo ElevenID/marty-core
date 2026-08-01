@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.29] - 2026-08-01
+
+### Fixed
+
+- Require an explicitly typed OID4VCI holder proof with audience and issued-at
+  claims, and verify every accepted proof signature against resolved public
+  key material.
+- Preserve a self-certifying `did:key` client identifier only when it resolves
+  to the exact key that verified the proof; arbitrary OAuth client IDs no
+  longer become holder identities.
+- Scope Cargo target caches by operating system, architecture, and Rust
+  toolchain so native build artifacts are never restored across incompatible
+  runners.
+
+### Security
+
+- Remove the fail-open path that accepted an unresolved, non-`did:key` `kid`
+  without cryptographic verification.
+- Reject missing or invalid `typ`, `aud`, and `iat` claims, conflicting `kid`
+  and `jwk` headers, tampered signatures, and mismatched self-certifying DIDs.
+- Keep imported official compliance suites, fixtures, assertions, and
+  expected results unchanged; remediation is entirely in product code.
+
+## [0.1.28] - 2026-07-29
+
+### Fixed
+
+- Verify mdoc issuer and device signatures against the exact session transcript
+  bytes supplied by the verifier instead of reconstructing a substitute.
+
+## [0.1.27] - 2026-07-29
+
+### Fixed
+
+- Enforce W3C Verifiable Credentials Data Model v2 protected-context
+  boundaries.
+- Record and pin the maintained ElevenID `isomdl` compatibility fork while its
+  upstream synchronization remains review-only.
+
 ## [0.1.26] - 2026-07-28
 
 ### Fixed
