@@ -116,9 +116,11 @@ pub fn verify_jwt_proof(
 /// against the organization and issuer profile's trust policy, including its
 /// certificate chain, signature, time, nonce, status, and assurance claims.
 /// This function enforces the cryptographic boundary after that policy check:
-/// the proof must carry that exact attestation JWT, its `kid` must select one
-/// of the `attested_keys` embedded in that JWT, and its signature must verify
-/// with the selected key.
+/// the proof must carry that exact attestation JWT, the key identified in its
+/// JOSE header must be one of the `attested_keys` embedded in that JWT, and its
+/// signature must verify with that key. OID4VCI wallets can identify the proof
+/// key with an embedded `jwk` or a standards-defined `kid`; Marty does not add
+/// a private key-index convention to either form.
 ///
 /// Keeping the complete validated attestation token in this interface prevents
 /// a caller from accidentally validating one token and accepting public keys
@@ -327,10 +329,9 @@ fn extract_key_attestation_holder_key(
     header: &ProofHeader,
     validated_key_attestation_jwt: &str,
 ) -> Oid4vciResult<(String, Option<JWK>)> {
-    if header.jwk.is_some() {
+    if header.kid.is_some() && header.jwk.is_some() {
         return Err(Oid4vciError::ProofVerificationFailed(
-            "Key-attestation-bound proof must select an attested key with kid, not embed jwk"
-                .into(),
+            "Key-attestation-bound proof must not contain both 'kid' and 'jwk'".into(),
         ));
     }
     let header_attestation = header.key_attestation.as_deref().ok_or_else(|| {
@@ -365,28 +366,95 @@ fn extract_key_attestation_holder_key(
             "Validated key attestation has no attested public keys".into(),
         ));
     }
-    let kid = header.kid.as_deref().ok_or_else(|| {
-        Oid4vciError::ProofVerificationFailed(
-            "Key-attestation-bound proof is missing attested key index in kid".into(),
-        )
-    })?;
-    let key_index = kid.parse::<usize>().map_err(|_| {
-        Oid4vciError::ProofVerificationFailed(format!(
-            "Key-attestation-bound proof kid must be a non-negative attested key index, got '{kid}'"
-        ))
-    })?;
-    let jwk = attestation.attested_keys.get(key_index).ok_or_else(|| {
-        Oid4vciError::ProofVerificationFailed(format!(
-            "Attested key index {key_index} is out of range for {} keys",
-            attestation.attested_keys.len()
-        ))
-    })?;
-    if jwk_has_private_material(jwk) {
+    if attestation
+        .attested_keys
+        .iter()
+        .any(jwk_has_private_material)
+    {
         return Err(Oid4vciError::ProofVerificationFailed(
             "Validated key attestation must contain public keys only".into(),
         ));
     }
-    Ok((public_jwk_holder_id(jwk)?, Some(jwk.clone())))
+
+    let jwk = match (&header.kid, &header.jwk) {
+        (None, Some(jwk_value)) => {
+            let proof_jwk: JWK = serde_json::from_value(jwk_value.clone()).map_err(|error| {
+                Oid4vciError::ProofVerificationFailed(format!(
+                    "Invalid JWK in key-attestation-bound proof header: {error}"
+                ))
+            })?;
+            if jwk_has_private_material(&proof_jwk) {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Key-attestation-bound proof header must contain a public JWK only".into(),
+                ));
+            }
+            let proof_thumbprint = proof_jwk.thumbprint().map_err(|error| {
+                Oid4vciError::ProofVerificationFailed(format!(
+                    "Could not fingerprint key-attestation-bound proof JWK: {error}"
+                ))
+            })?;
+            let matches_attestation = attestation.attested_keys.iter().any(|attested_jwk| {
+                attested_jwk
+                    .thumbprint()
+                    .is_ok_and(|thumbprint| thumbprint == proof_thumbprint)
+            });
+            if !matches_attestation {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Key-attestation-bound proof JWK is not contained in attested_keys".into(),
+                ));
+            }
+            proof_jwk
+        }
+        (Some(kid), None) => select_attested_key_by_kid(kid, &attestation.attested_keys)?,
+        (None, None) => {
+            return Err(Oid4vciError::ProofVerificationFailed(
+                "Key-attestation-bound proof must contain either 'kid' or 'jwk'".into(),
+            ));
+        }
+        (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
+    };
+    Ok((public_jwk_holder_id(&jwk)?, Some(jwk)))
+}
+
+fn select_attested_key_by_kid(kid: &str, attested_keys: &[JWK]) -> Oid4vciResult<JWK> {
+    let matching_keys: Vec<&JWK> = attested_keys
+        .iter()
+        .filter(|jwk| jwk.key_id.as_deref() == Some(kid))
+        .collect();
+    match matching_keys.as_slice() {
+        [jwk] => return Ok((*jwk).clone()),
+        [_, _, ..] => {
+            return Err(Oid4vciError::ProofVerificationFailed(format!(
+                "Key-attestation-bound proof kid '{kid}' is not unique in attested_keys"
+            )));
+        }
+        [] => {}
+    }
+
+    if kid.starts_with("did:key:z") {
+        let (_, resolved_jwk) = resolve_did_key_to_jwk(kid)?;
+        let resolved_jwk = resolved_jwk.ok_or_else(|| {
+            Oid4vciError::ProofVerificationFailed(
+                "Key-attestation-bound proof did:key did not resolve to public key material".into(),
+            )
+        })?;
+        let resolved_thumbprint = resolved_jwk.thumbprint().map_err(|error| {
+            Oid4vciError::ProofVerificationFailed(format!(
+                "Could not fingerprint key-attestation-bound proof kid: {error}"
+            ))
+        })?;
+        if attested_keys.iter().any(|attested_jwk| {
+            attested_jwk
+                .thumbprint()
+                .is_ok_and(|thumbprint| thumbprint == resolved_thumbprint)
+        }) {
+            return Ok(resolved_jwk);
+        }
+    }
+
+    Err(Oid4vciError::ProofVerificationFailed(format!(
+        "Key-attestation-bound proof kid '{kid}' does not identify a key in attested_keys"
+    )))
 }
 
 /// Decode a base58btc string to raw bytes (Bitcoin alphabet, no padding).
@@ -757,6 +825,7 @@ pub fn create_proof_jwt(aud: &str, c_nonce: &str) -> Oid4vciResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 
     fn embedded_ed25519_jwk(signing_key: &SigningKey) -> serde_json::Value {
         serde_json::json!({
@@ -775,6 +844,29 @@ mod tests {
         let payload_b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
         let signing_input = format!("{header_b64}.{payload_b64}");
         let signature = signing_key.sign(signing_input.as_bytes());
+        format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
+    }
+
+    fn embedded_p256_jwk(signing_key: &P256SigningKey) -> serde_json::Value {
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": B64.encode(point.x().expect("P-256 x coordinate")),
+            "y": B64.encode(point.y().expect("P-256 y coordinate")),
+            "kid": "wallet-proof-key",
+        })
+    }
+
+    fn sign_test_p256_proof(
+        signing_key: &P256SigningKey,
+        header: serde_json::Value,
+        payload: serde_json::Value,
+    ) -> String {
+        let header_b64 = B64.encode(serde_json::to_vec(&header).unwrap());
+        let payload_b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
+        let signing_input = format!("{header_b64}.{payload_b64}");
+        let signature: P256Signature = signing_key.sign(signing_input.as_bytes());
         format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
     }
 
@@ -1060,15 +1152,16 @@ mod tests {
     }
 
     #[test]
-    fn key_attestation_bound_proof_selects_and_verifies_attested_key() {
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let attestation = validated_key_attestation_jwt(vec![embedded_ed25519_jwk(&signing_key)]);
-        let proof = sign_test_proof(
+    fn key_attestation_bound_proof_accepts_oidf_jwk_binding() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let proof_jwk = embedded_p256_jwk(&signing_key);
+        let attestation = validated_key_attestation_jwt(vec![proof_jwk.clone()]);
+        let proof = sign_test_p256_proof(
             &signing_key,
             serde_json::json!({
-                "alg": "EdDSA",
+                "alg": "ES256",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "0",
+                "jwk": proof_jwk,
                 "key_attestation": &attestation,
             }),
             serde_json::json!({
@@ -1089,6 +1182,67 @@ mod tests {
 
         assert!(verified.holder_id.starts_with("did:jwk:"));
         assert!(verified.holder_jwk.is_some());
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_rejects_jwk_not_in_attestation() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let other_key = P256SigningKey::random(&mut OsRng);
+        let proof_jwk = embedded_p256_jwk(&signing_key);
+        let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&other_key)]);
+        let proof = sign_test_p256_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": proof_jwk,
+                "key_attestation": &attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        let error = verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not contained in attested_keys"));
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_accepts_kid_identifying_attested_jwk() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&signing_key)]);
+        let proof = sign_test_p256_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "wallet-proof-key",
+                "key_attestation": &attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        assert!(verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1120,10 +1274,11 @@ mod tests {
     }
 
     #[test]
-    fn key_attestation_binding_rejects_token_index_key_and_private_material_mismatch() {
+    fn key_attestation_binding_rejects_token_key_and_private_material_mismatch() {
         let signing_key = SigningKey::generate(&mut OsRng);
         let other_key = SigningKey::generate(&mut OsRng);
-        let attestation = validated_key_attestation_jwt(vec![embedded_ed25519_jwk(&signing_key)]);
+        let proof_jwk = embedded_ed25519_jwk(&signing_key);
+        let attestation = validated_key_attestation_jwt(vec![proof_jwk.clone()]);
         let payload = serde_json::json!({
             "aud": "https://issuer.example",
             "iat": chrono::Utc::now().timestamp(),
@@ -1134,7 +1289,7 @@ mod tests {
             serde_json::json!({
                 "alg": "EdDSA",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "0",
+                "jwk": proof_jwk.clone(),
                 "key_attestation": &attestation,
             }),
             payload.clone(),
@@ -1157,7 +1312,7 @@ mod tests {
             serde_json::json!({
                 "alg": "EdDSA",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "0",
+                "jwk": proof_jwk,
                 "key_attestation": &wrong_attestation,
             }),
             payload.clone(),
@@ -1170,27 +1325,31 @@ mod tests {
             &wrong_attestation,
         )
         .unwrap_err();
-        assert!(wrong_key.to_string().contains("invalid signature"));
+        assert!(wrong_key
+            .to_string()
+            .contains("not contained in attested_keys"));
 
-        let out_of_range = sign_test_proof(
+        let nonstandard_numeric_kid = sign_test_proof(
             &signing_key,
             serde_json::json!({
                 "alg": "EdDSA",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "1",
+                "kid": "0",
                 "key_attestation": &attestation,
             }),
             payload,
         );
-        let index_error = verify_key_attestation_bound_jwt_proof(
-            &out_of_range,
+        let kid_error = verify_key_attestation_bound_jwt_proof(
+            &nonstandard_numeric_kid,
             "https://issuer.example",
             Some("nonce-1"),
             300,
             &attestation,
         )
         .unwrap_err();
-        assert!(index_error.to_string().contains("out of range"));
+        assert!(kid_error
+            .to_string()
+            .contains("does not identify a key in attested_keys"));
 
         let private_jwk = serde_json::json!({
             "kty": "OKP",
@@ -1204,7 +1363,7 @@ mod tests {
             serde_json::json!({
                 "alg": "EdDSA",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "0",
+                "jwk": embedded_ed25519_jwk(&signing_key),
                 "key_attestation": &private_attestation,
             }),
             serde_json::json!({

@@ -570,10 +570,10 @@ fn oid4vci_verify_proof_jwt(
 /// `validated_key_attestation_jwt` must be the exact compact JWT that the
 /// tenant-bound issuer policy already validated. The Rust protocol layer then
 /// requires the proof's `key_attestation` header to match that token
-/// byte-for-byte, extracts the token's `attested_keys`, resolves the proof's
-/// numeric `kid` as an index, and verifies the proof signature with the
-/// selected key. No separately supplied key list can drift from the validated
-/// token.
+/// byte-for-byte, confirms the proof header's `jwk` or standards-defined `kid`
+/// identifies a key in the token's `attested_keys`, and verifies the proof
+/// signature with that key. No separately supplied key list can drift from the
+/// validated token.
 ///
 /// Certificate-chain, status, assurance, and organization/profile policy
 /// checks intentionally remain at the product boundary that owns those
