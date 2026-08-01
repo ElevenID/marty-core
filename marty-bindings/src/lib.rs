@@ -565,6 +565,58 @@ fn oid4vci_verify_proof_jwt(
     Ok((verified.holder_id, verified.nonce, holder_jwk_json))
 }
 
+/// Verify an OID4VCI proof bound to an issuer-validated key attestation.
+///
+/// `validated_key_attestation_jwt` must be the exact compact JWT that the
+/// tenant-bound issuer policy already validated. The Rust protocol layer then
+/// requires the proof's `key_attestation` header to match that token
+/// byte-for-byte, extracts the token's `attested_keys`, resolves the proof's
+/// numeric `kid` as an index, and verifies the proof signature with the
+/// selected key. No separately supplied key list can drift from the validated
+/// token.
+///
+/// Certificate-chain, status, assurance, and organization/profile policy
+/// checks intentionally remain at the product boundary that owns those
+/// tenant-scoped records. This binding does not accept trust decisions or
+/// private custody selectors.
+#[pyfunction]
+#[pyo3(signature = (
+    proof_jwt,
+    validated_key_attestation_jwt,
+    expected_c_nonce=None,
+    issuer_url=None,
+))]
+fn oid4vci_verify_key_attestation_bound_proof_jwt(
+    proof_jwt: &str,
+    validated_key_attestation_jwt: &str,
+    expected_c_nonce: Option<&str>,
+    issuer_url: Option<&str>,
+) -> PyResult<(String, Option<String>, String)> {
+    let verified = marty_oid4vci::proof::verify_key_attestation_bound_jwt_proof(
+        proof_jwt,
+        issuer_url.unwrap_or(""),
+        expected_c_nonce,
+        300,
+        validated_key_attestation_jwt,
+    )
+    .map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Key-attestation-bound proof JWT verification failed: {e}"
+        ))
+    })?;
+    let holder_jwk = verified.holder_jwk.ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Verified key-attestation-bound proof did not return its selected public key",
+        )
+    })?;
+    let holder_jwk_json = serde_json::to_string(&holder_jwk).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Holder JWK serialization failed: {e}"
+        ))
+    })?;
+    Ok((verified.holder_id, verified.nonce, holder_jwk_json))
+}
+
 /// Verify an SD-JWT VC presentation using Marty Core's RFC 9449 engine.
 ///
 /// The issuer JWK must contain public material only. When both expected
@@ -1436,6 +1488,10 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        oid4vci_verify_key_attestation_bound_proof_jwt,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(verify_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
