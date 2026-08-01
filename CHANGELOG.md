@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.30] - 2026-08-01
+
+### Added
+
+- Verify OID4VCI proofs whose numeric `kid` selects a public key from the
+  `attested_keys` claim in an issuer-policy-validated key-attestation JWT.
+- Expose the same fail-closed key-attestation proof boundary through the
+  production Python binding used by credential services.
+
+### Security
+
+- Require the proof header to carry the exact validated attestation token and
+  derive its verification key directly from that token; callers cannot supply
+  a separate key list that could drift from the issuer's trust decision.
+- Reject unvalidated key-attestation headers, mismatched or malformed tokens,
+  empty key sets, nonnumeric or out-of-range key indices, private/symmetric
+  keys, and signatures made by a key other than the selected attested key.
+- Keep imported official compliance suites, fixtures, assertions, expected
+  results, selections, and exclusions unchanged; remediation remains entirely
+  in ElevenID product code.
+
 ## [0.1.29] - 2026-08-01
 
 ### Fixed
