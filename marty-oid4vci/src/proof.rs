@@ -131,9 +131,6 @@ pub fn verify_jwt_proof(
 
     // Step 3: Extract public key from kid or jwk
     let (derived_holder_id, holder_jwk) = extract_holder_key(&header)?;
-    // `iss`, when present, is the OAuth client_id.  Credential binding is to
-    // the key identified by the JOSE header, never to this unverified label.
-    let holder_id = derived_holder_id;
 
     // Step 4: Cryptographic signature verification.  `extract_holder_key`
     // resolves every accepted header to public key material.  Keep this
@@ -151,6 +148,12 @@ pub fn verify_jwt_proof(
         parts[1],
         &signature_bytes,
     )?;
+
+    // `iss`, when present, is the OAuth client_id.  It is not generally a
+    // holder identity.  Preserve a self-certifying DID client identifier only
+    // when it resolves to the exact key that just verified the proof.
+    let holder_id =
+        verified_holder_id(&derived_holder_id, verification_jwk, payload.iss.as_deref())?;
 
     // Step 5: The audience is required even when the caller has already
     // validated its value at a routing boundary.
@@ -356,6 +359,42 @@ fn extract_holder_key(header: &ProofHeader) -> Oid4vciResult<(String, Option<JWK
             "Proof JWT header must contain either 'kid' or 'jwk'".into(),
         )),
     }
+}
+
+fn verified_holder_id(
+    derived_holder_id: &str,
+    verification_jwk: &JWK,
+    client_id: Option<&str>,
+) -> Oid4vciResult<String> {
+    let Some(client_id) = client_id else {
+        return Ok(derived_holder_id.to_string());
+    };
+    if !client_id.starts_with("did:key:z") {
+        return Ok(derived_holder_id.to_string());
+    }
+
+    let (client_did, client_jwk) = resolve_did_key_to_jwk(client_id)?;
+    let client_jwk = client_jwk.ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Self-certifying proof client_id did not resolve to key material".into(),
+        )
+    })?;
+    let client_thumbprint = client_jwk.thumbprint().map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Could not fingerprint proof client_id key: {error}"
+        ))
+    })?;
+    let verification_thumbprint = verification_jwk.thumbprint().map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Could not fingerprint verified proof key: {error}"
+        ))
+    })?;
+    if client_thumbprint != verification_thumbprint {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Self-certifying proof client_id does not identify the verified proof key".into(),
+        ));
+    }
+    Ok(client_did)
 }
 
 /// Cryptographically verify the JWT signature using the provided JWK.
@@ -772,6 +811,36 @@ mod tests {
         assert_ne!(verified.holder_id, "wallet-oauth-client");
         assert!(verified.holder_id.starts_with("did:jwk:"));
         assert!(verified.holder_jwk.is_some());
+    }
+
+    #[test]
+    fn test_mismatched_self_certifying_client_id_is_rejected() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let other_key = SigningKey::generate(&mut OsRng);
+        let mut prefixed = vec![0xed_u8, 0x01];
+        prefixed.extend_from_slice(&other_key.verifying_key().to_bytes());
+        let other_did = format!("did:key:z{}", base58btc_encode(&prefixed));
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": embedded_ed25519_jwk(&signing_key),
+            }),
+            serde_json::json!({
+                "iss": other_did,
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        assert!(
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300,)
+                .unwrap_err()
+                .to_string()
+                .contains("does not identify the verified proof key")
+        );
     }
 
     #[test]
