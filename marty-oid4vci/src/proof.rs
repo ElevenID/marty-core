@@ -405,7 +405,7 @@ fn extract_key_attestation_holder_key(
             }
             proof_jwk
         }
-        (Some(kid), None) => select_attested_key_by_kid(kid, &attestation.attested_keys)?,
+        (Some(kid), None) => select_etsi_attested_key(kid, &attestation.attested_keys)?,
         (None, None) => {
             return Err(Oid4vciError::ProofVerificationFailed(
                 "Key-attestation-bound proof must contain either 'kid' or 'jwk'".into(),
@@ -416,45 +416,22 @@ fn extract_key_attestation_holder_key(
     Ok((public_jwk_holder_id(&jwk)?, Some(jwk)))
 }
 
-fn select_attested_key_by_kid(kid: &str, attested_keys: &[JWK]) -> Oid4vciResult<JWK> {
-    let matching_keys: Vec<&JWK> = attested_keys
-        .iter()
-        .filter(|jwk| jwk.key_id.as_deref() == Some(kid))
-        .collect();
-    match matching_keys.as_slice() {
-        [jwk] => return Ok((*jwk).clone()),
-        [_, _, ..] => {
-            return Err(Oid4vciError::ProofVerificationFailed(format!(
-                "Key-attestation-bound proof kid '{kid}' is not unique in attested_keys"
-            )));
-        }
-        [] => {}
+fn select_etsi_attested_key(kid: &str, attested_keys: &[JWK]) -> Oid4vciResult<JWK> {
+    // ETSI TS 119 472-3 binds this proof to the first public key in the
+    // validated attestation. The current EUDI wallet reference implementation
+    // represents that position as the canonical JOSE `kid` value "0".
+    // This is deliberately not a general numeric-index or key-id fallback.
+    if kid != "0" {
+        return Err(Oid4vciError::ProofVerificationFailed(format!(
+            "ETSI key-attestation-bound proof kid must be the canonical first-key selector '0', got '{kid}'"
+        )));
     }
 
-    if kid.starts_with("did:key:z") {
-        let (_, resolved_jwk) = resolve_did_key_to_jwk(kid)?;
-        let resolved_jwk = resolved_jwk.ok_or_else(|| {
-            Oid4vciError::ProofVerificationFailed(
-                "Key-attestation-bound proof did:key did not resolve to public key material".into(),
-            )
-        })?;
-        let resolved_thumbprint = resolved_jwk.thumbprint().map_err(|error| {
-            Oid4vciError::ProofVerificationFailed(format!(
-                "Could not fingerprint key-attestation-bound proof kid: {error}"
-            ))
-        })?;
-        if attested_keys.iter().any(|attested_jwk| {
-            attested_jwk
-                .thumbprint()
-                .is_ok_and(|thumbprint| thumbprint == resolved_thumbprint)
-        }) {
-            return Ok(resolved_jwk);
-        }
-    }
-
-    Err(Oid4vciError::ProofVerificationFailed(format!(
-        "Key-attestation-bound proof kid '{kid}' does not identify a key in attested_keys"
-    )))
+    attested_keys.first().cloned().ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation has no first public key".into(),
+        )
+    })
 }
 
 /// Decode a base58btc string to raw bytes (Bitcoin alphabet, no padding).
@@ -1217,7 +1194,7 @@ mod tests {
     }
 
     #[test]
-    fn key_attestation_bound_proof_accepts_kid_identifying_attested_jwk() {
+    fn key_attestation_bound_proof_accepts_current_etsi_first_key_selector() {
         let signing_key = P256SigningKey::random(&mut OsRng);
         let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&signing_key)]);
         let proof = sign_test_p256_proof(
@@ -1225,7 +1202,7 @@ mod tests {
             serde_json::json!({
                 "alg": "ES256",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "wallet-proof-key",
+                "kid": "0",
                 "key_attestation": &attestation,
             }),
             serde_json::json!({
@@ -1243,6 +1220,96 @@ mod tests {
             &attestation,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_rejects_noncanonical_etsi_key_selectors() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&signing_key)]);
+        let payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+
+        for kid in ["1", "-1", "00", "wallet-proof-key"] {
+            let proof = sign_test_p256_proof(
+                &signing_key,
+                serde_json::json!({
+                    "alg": "ES256",
+                    "typ": "openid4vci-proof+jwt",
+                    "kid": kid,
+                    "key_attestation": &attestation,
+                }),
+                payload.clone(),
+            );
+            let error = verify_key_attestation_bound_jwt_proof(
+                &proof,
+                "https://issuer.example",
+                Some("nonce-1"),
+                300,
+                &attestation,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("canonical first-key selector '0'"),
+                "unexpected error for kid {kid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_uses_only_first_attested_key() {
+        let first_key = P256SigningKey::random(&mut OsRng);
+        let second_key = P256SigningKey::random(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![
+            embedded_p256_jwk(&first_key),
+            embedded_p256_jwk(&second_key),
+        ]);
+        let payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+        let first_key_proof = sign_test_p256_proof(
+            &first_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &attestation,
+            }),
+            payload.clone(),
+        );
+        assert!(verify_key_attestation_bound_jwt_proof(
+            &first_key_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .is_ok());
+
+        let second_key_proof = sign_test_p256_proof(
+            &second_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &attestation,
+            }),
+            payload,
+        );
+        assert!(verify_key_attestation_bound_jwt_proof(
+            &second_key_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .is_err());
     }
 
     #[test]
@@ -1329,18 +1396,18 @@ mod tests {
             .to_string()
             .contains("not contained in attested_keys"));
 
-        let nonstandard_numeric_kid = sign_test_proof(
+        let noncanonical_numeric_kid = sign_test_proof(
             &signing_key,
             serde_json::json!({
                 "alg": "EdDSA",
                 "typ": "openid4vci-proof+jwt",
-                "kid": "0",
+                "kid": "1",
                 "key_attestation": &attestation,
             }),
             payload,
         );
         let kid_error = verify_key_attestation_bound_jwt_proof(
-            &nonstandard_numeric_kid,
+            &noncanonical_numeric_kid,
             "https://issuer.example",
             Some("nonce-1"),
             300,
@@ -1349,7 +1416,7 @@ mod tests {
         .unwrap_err();
         assert!(kid_error
             .to_string()
-            .contains("does not identify a key in attested_keys"));
+            .contains("canonical first-key selector '0'"));
 
         let private_jwk = serde_json::json!({
             "kty": "OKP",
