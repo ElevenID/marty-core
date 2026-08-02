@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.32] - 2026-08-02
+
+### Fixed
+
+- Implement the current ETSI TS 119 472-3 key-attestation proof rule used by
+  the official EUDI wallet: the canonical `kid` value `"0"` selects only the
+  first public key in the issuer-policy-validated `attested_keys` array.
+- Correct the 0.1.31 interpretation that rejected the current ETSI first-key
+  selector as a non-standard compatibility convention.
+
+### Security
+
+- Accept `"0"` only for a proof carrying the exact issuer-validated key
+  attestation; reject every other numeric value, alternate spelling, named key
+  identifier, missing key, private key, and signature made by a later array
+  element.
+- Keep imported official compliance-suite sources byte-for-byte unchanged.
+
 ## [0.1.31] - 2026-08-01
 
 ### Fixed
