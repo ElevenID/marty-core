@@ -1,0 +1,40 @@
+{
+  "schema": "elevenid.capability-lifecycle/v1",
+  "capabilities": [
+    {
+      "id": "open-badges-2",
+      "standard": "IMS Open Badges 2.0",
+      "status": "temporary",
+      "default": false,
+      "successor": "open-badges-3",
+      "review_on": "2026-09-01",
+      "target_removal": "2026-10-01",
+      "tracking_issue": "https://github.com/ElevenID/marty-core/issues/96",
+      "public_interfaces": [
+        "marty_verification_py.open_badge_ob2_issue",
+        "marty_verification_py.open_badge_ob2_verify",
+        "marty_verification::open_badges::issue_ob2_json",
+        "marty_verification::open_badges::verify_ob2_json"
+      ],
+      "constraints": [
+        "Open Badges 3 remains the default profile",
+        "no new OB2-only capabilities or algorithm support",
+        "no new dependency exception may be justified only by OB2",
+        "issuance and verification remain covered by positive and negative tests until removal"
+      ],
+      "rationale": "Short migration window explicitly approved while the stack remains pre-1.0; this is not a general backward-compatibility commitment."
+    },
+    {
+      "id": "open-badges-3",
+      "standard": "1EdTech Open Badges 3.0",
+      "status": "current",
+      "default": true,
+      "public_interfaces": [
+        "marty_verification_py.open_badge_ob3_issue",
+        "marty_verification_py.open_badge_ob3_verify",
+        "marty_verification::open_badges::issue_ob3_json_async",
+        "marty_verification::open_badges::verify_ob3_json_async"
+      ]
+    }
+  ]
+}

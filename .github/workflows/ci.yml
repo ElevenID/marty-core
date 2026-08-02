@@ -27,7 +27,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify Python versions and release-asset retention
-        run: python scripts/check_release_contract.py
+        run: |
+          python scripts/check_release_contract.py
+          python -m unittest discover -s scripts -p "test_*.py"
 
   test:
     name: Test

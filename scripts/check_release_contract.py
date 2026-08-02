@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import tomllib
+from datetime import date
 from pathlib import Path
 
 
@@ -28,6 +30,7 @@ RELEASE_DELETION_PATTERNS = (
     ),
     re.compile(r"\bDELETE\s+/repos/[^\r\n]+/releases(?:/|\b)", re.IGNORECASE),
 )
+CAPABILITY_LIFECYCLE = ROOT / "capability-lifecycle.json"
 
 
 def load_toml(path: Path) -> dict[str, object]:
@@ -128,11 +131,106 @@ def check_native_build_cache_scope() -> list[str]:
     return []
 
 
+def check_capability_lifecycle(as_of: date | None = None) -> list[str]:
+    errors: list[str] = []
+    today = as_of or date.today()
+    try:
+        document = json.loads(CAPABILITY_LIFECYCLE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return [f"capability-lifecycle.json: cannot load lifecycle policy: {error}"]
+
+    if document.get("schema") != "elevenid.capability-lifecycle/v1":
+        errors.append("capability-lifecycle.json: unsupported or missing schema")
+    capabilities = document.get("capabilities")
+    if not isinstance(capabilities, list) or not capabilities:
+        return [*errors, "capability-lifecycle.json: capabilities must be a non-empty list"]
+
+    identifiers: set[str] = set()
+    by_id: dict[str, dict[str, object]] = {}
+    for index, capability in enumerate(capabilities):
+        prefix = f"capability-lifecycle.json: capabilities[{index}]"
+        if not isinstance(capability, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        identifier = capability.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            errors.append(f"{prefix}.id must be a non-empty string")
+            continue
+        if identifier in identifiers:
+            errors.append(f"{prefix}.id duplicates {identifier!r}")
+        identifiers.add(identifier)
+        by_id[identifier] = capability
+
+        status = capability.get("status")
+        if status not in {"current", "temporary", "retired"}:
+            errors.append(f"{prefix}.status must be current, temporary, or retired")
+        if not isinstance(capability.get("default"), bool):
+            errors.append(f"{prefix}.default must be a boolean")
+        interfaces = capability.get("public_interfaces")
+        if not isinstance(interfaces, list) or not interfaces or not all(
+            isinstance(value, str) and value for value in interfaces
+        ):
+            errors.append(f"{prefix}.public_interfaces must contain non-empty strings")
+
+        if status != "temporary":
+            continue
+        if capability.get("default") is not False:
+            errors.append(f"{prefix}: a temporary capability cannot be the default")
+        if not isinstance(capability.get("successor"), str) or not capability.get("successor"):
+            errors.append(f"{prefix}.successor is required for a temporary capability")
+        tracking_issue = capability.get("tracking_issue")
+        if not isinstance(tracking_issue, str) or not re.fullmatch(
+            r"https://github\.com/ElevenID/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*",
+            tracking_issue,
+        ):
+            errors.append(f"{prefix}.tracking_issue must be an ElevenID GitHub issue URL")
+
+        dates: dict[str, date] = {}
+        for field in ("review_on", "target_removal"):
+            value = capability.get(field)
+            if not isinstance(value, str):
+                errors.append(f"{prefix}.{field} must be an ISO calendar date")
+                continue
+            try:
+                dates[field] = date.fromisoformat(value)
+            except ValueError:
+                errors.append(f"{prefix}.{field} must be an ISO calendar date")
+        if len(dates) == 2:
+            if dates["review_on"] > dates["target_removal"]:
+                errors.append(f"{prefix}: review_on must not follow target_removal")
+            if today > dates["target_removal"]:
+                errors.append(
+                    f"{prefix}: temporary support expired on {dates['target_removal'].isoformat()}"
+                )
+
+    for identifier, capability in by_id.items():
+        if capability.get("status") != "temporary":
+            continue
+        successor = capability.get("successor")
+        if isinstance(successor, str) and successor not in by_id:
+            errors.append(
+                f"capability-lifecycle.json: {identifier} names unknown successor {successor!r}"
+            )
+
+    ob2 = by_id.get("open-badges-2")
+    if not ob2 or ob2.get("status") != "temporary" or ob2.get("default") is not False:
+        errors.append(
+            "capability-lifecycle.json: Open Badges 2 must remain an explicit non-default temporary capability"
+        )
+    ob3 = by_id.get("open-badges-3")
+    if not ob3 or ob3.get("status") != "current" or ob3.get("default") is not True:
+        errors.append(
+            "capability-lifecycle.json: Open Badges 3 must remain the current default capability"
+        )
+    return errors
+
+
 def main() -> int:
     errors = [
         *check_python_versions(),
         *check_release_asset_policy(),
         *check_native_build_cache_scope(),
+        *check_capability_lifecycle(),
     ]
     if errors:
         for error in errors:
@@ -145,6 +243,7 @@ def main() -> int:
     print(f"release-contract: Cargo-derived Python versions verified ({resolved})")
     print("release-contract: workflows contain no release-asset deletion operations")
     print("release-contract: Cargo target caches are platform and toolchain scoped")
+    print("release-contract: temporary capability lifecycle policy is current")
     return 0
 
 

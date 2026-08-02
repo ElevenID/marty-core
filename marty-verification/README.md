@@ -4,7 +4,8 @@ Python bindings for the `marty-verification` Rust library, providing cryptograph
 
 ## Features
 
-- **Open Badges**: Issue and verify Open Badges v2 and v3 credentials
+- **Open Badges 3**: Current/default issuance and verification profile
+- **Open Badges 2**: Temporary migration-only issuance and verification support
 - **mDoc/mDL Verification**: Verify mobile driver's licenses (ISO 18013-5)
 - **eMRTD Verification**: Verify electronic machine-readable travel documents
 - **MRZ Parsing**: Parse and validate machine-readable zone data
@@ -21,10 +22,20 @@ pip install marty-verification-py
 
 ### Open Badges
 
+Open Badges 3 is the current/default profile. Open Badges 2 remains available
+only for a short migration window: review on 2026-09-01 and target removal on
+2026-10-01, tracked in
+[marty-core#96](https://github.com/ElevenID/marty-core/issues/96). Do not build
+new integrations against the OB2 entry points.
+
+Current integrations should use `open_badge_ob3_issue` and
+`open_badge_ob3_verify`. The OB2 example below documents the temporary
+migration interface only.
+
 ```python
 from marty_verification_py import open_badge_ob2_issue, open_badge_ob2_verify
 
-# Issue an Open Badge v2 credential
+# Temporarily issue an Open Badge v2 credential during migration
 request = {
     "assertion": {
         "@context": "https://w3id.org/openbadges/v2",
