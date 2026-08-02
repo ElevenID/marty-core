@@ -1,7 +1,12 @@
 //! Open Badges verification and issuance helpers.
 //!
-//! This module provides helpers for issuing and verifying Open Badges v2 (OB2) and v3 (OB3)
-//! credentials using JWS signatures (OB2) and Data Integrity proofs (OB3).
+//! Open Badges 3 (OB3) is the current/default profile. Open Badges 2 (OB2)
+//! issuance and verification remain available only for a short migration
+//! window, reviewed on 2026-09-01 with target removal on 2026-10-01. New
+//! integrations must use OB3. The temporary exception is tracked in
+//! <https://github.com/ElevenID/marty-core/issues/96>.
+//!
+//! OB2 uses JWS signatures; OB3 uses Data Integrity proofs.
 //!
 //! # WASM Compatibility Note
 //!

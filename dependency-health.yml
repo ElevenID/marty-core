@@ -47,4 +47,4 @@ dependencies:
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-10-18
-    rationale: RSA is retained compatibility functionality for passport, certificate, CMS/CRL, RSA-JWT, and legacy badge profiles. It is isolated behind marty-crypto; no patched RustCrypto release exists.
+    rationale: RSA 0.9 is retained only for currently supported passport, certificate, CMS/CRL, and JOSE operations. Open Badges 2 is a separately governed temporary exception through 2026-10-01; it does not justify retaining RSA or any other dependency after its current-standard consumers are removed. RSA remains isolated behind marty-crypto; no patched RustCrypto release exists.
