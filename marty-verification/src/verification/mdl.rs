@@ -3,7 +3,10 @@
 //! This module provides trust chain verification for mobile driving licenses,
 //! adapted from the isomdl crate with extensions for Marty integration.
 
+use const_oid::AssociatedOid;
+use der::Decode;
 use serde::{Deserialize, Serialize};
+use x509_cert::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
 use x509_cert::Certificate;
 
 use crate::error::{VerificationError, VerificationResult};
@@ -12,6 +15,103 @@ use crate::trust_anchor::IacaRegistry;
 // Re-export isomdl types for convenience
 pub use isomdl::definitions::x509::validation::{ValidationOutcome, ValidationRuleset};
 pub use isomdl::definitions::x509::x5chain::{Builder as X5ChainBuilder, X5Chain};
+
+/// Validate the ISO 18013-5 document-signer constraints Marty requires before
+/// accepting an mdoc issuer certificate as trusted.
+///
+/// This check is deliberately independent of how trust is established. An
+/// exact certificate pin authorizes a trust anchor, but it must never turn a
+/// CA certificate or a certificate-signing key into a document signer.
+pub fn validate_document_signer_certificate_profile(
+    certificate: &Certificate,
+) -> VerificationResult<()> {
+    let subject = certificate.tbs_certificate.subject.to_string();
+    let extensions = certificate
+        .tbs_certificate
+        .extensions
+        .as_deref()
+        .unwrap_or_default();
+
+    let basic_constraints = extensions
+        .iter()
+        .filter(|extension| extension.extn_id == BasicConstraints::OID)
+        .collect::<Vec<_>>();
+    if basic_constraints.len() > 1 {
+        return Err(VerificationError::invalid_extension(
+            BasicConstraints::OID.to_string(),
+            &subject,
+            "duplicate BasicConstraints extensions",
+        ));
+    }
+    if let Some(extension) = basic_constraints.first() {
+        let constraints =
+            BasicConstraints::from_der(extension.extn_value.as_bytes()).map_err(|error| {
+                VerificationError::invalid_extension(
+                    BasicConstraints::OID.to_string(),
+                    &subject,
+                    format!("unable to decode BasicConstraints: {error}"),
+                )
+            })?;
+        if constraints.ca {
+            return Err(VerificationError::invalid_extension(
+                BasicConstraints::OID.to_string(),
+                &subject,
+                "an mdoc document-signer certificate must not be a CA",
+            ));
+        }
+    }
+
+    let key_usage_extensions = extensions
+        .iter()
+        .filter(|extension| extension.extn_id == KeyUsage::OID)
+        .collect::<Vec<_>>();
+    let key_usage_extension = match key_usage_extensions.as_slice() {
+        [] => {
+            return Err(VerificationError::missing_extension(
+                KeyUsage::OID.to_string(),
+                &subject,
+            ));
+        }
+        [extension] => *extension,
+        _ => {
+            return Err(VerificationError::invalid_extension(
+                KeyUsage::OID.to_string(),
+                &subject,
+                "duplicate KeyUsage extensions",
+            ));
+        }
+    };
+    let key_usage =
+        KeyUsage::from_der(key_usage_extension.extn_value.as_bytes()).map_err(|error| {
+            VerificationError::invalid_extension(
+                KeyUsage::OID.to_string(),
+                &subject,
+                format!("unable to decode KeyUsage: {error}"),
+            )
+        })?;
+    let expected: der::flagset::FlagSet<KeyUsages> = KeyUsages::DigitalSignature.into();
+    if key_usage.0 != expected {
+        let found = format!("{:?}", key_usage.0.into_iter().collect::<Vec<KeyUsages>>());
+        return Err(VerificationError::key_usage_mismatch(
+            subject,
+            "DigitalSignature only",
+            found,
+        ));
+    }
+
+    Ok(())
+}
+
+/// Parse and validate a DER-encoded mdoc document-signer certificate.
+pub fn validate_document_signer_certificate_der(certificate_der: &[u8]) -> VerificationResult<()> {
+    let certificate = Certificate::from_der(certificate_der).map_err(|error| {
+        VerificationError::x5chain_parse_with_source(
+            "unable to parse mdoc document-signer certificate",
+            error,
+        )
+    })?;
+    validate_document_signer_certificate_profile(&certificate)
+}
 
 /// A verifier-supplied ISO 18013-5 session transcript.
 ///
@@ -163,6 +263,12 @@ pub fn verify_x5chain(
 ) -> MdlVerificationResult {
     let isomdl_registry = registry.to_isomdl_registry();
     let outcome = ruleset.validate(x5chain, &isomdl_registry);
+    let mut errors = outcome.errors.clone();
+    if let Err(error) =
+        validate_document_signer_certificate_profile(x5chain.end_entity_certificate())
+    {
+        errors.push(error.to_string());
+    }
 
     let common_name = Some(x5chain.end_entity_common_name().to_string());
 
@@ -170,10 +276,10 @@ pub fn verify_x5chain(
     let jurisdiction = detect_jurisdiction_from_certificate(x5chain.end_entity_certificate());
 
     MdlVerificationResult {
-        verified: outcome.errors.is_empty(),
+        verified: errors.is_empty(),
         common_name,
         jurisdiction,
-        errors: outcome.errors.clone(),
+        errors,
         issuer_auth_status: AuthStatus::Unknown,
         device_auth_status: AuthStatus::Unknown,
     }
@@ -384,6 +490,62 @@ mod tests {
     use signature::Signer;
     use std::collections::BTreeMap;
     use time::{Duration, OffsetDateTime};
+
+    fn document_signer_certificate(
+        is_ca: rcgen::IsCa,
+        key_usages: Vec<rcgen::KeyUsagePurpose>,
+    ) -> Vec<u8> {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::default();
+        params.distinguished_name.push(
+            rcgen::DnType::CommonName,
+            "Marty mdoc document signer regression fixture",
+        );
+        params.is_ca = is_ca;
+        params.key_usages = key_usages;
+        params.self_signed(&key).unwrap().der().to_vec()
+    }
+
+    #[test]
+    fn document_signer_profile_requires_non_ca_digital_signature_leaf() {
+        use crate::error::codes;
+        use rcgen::{BasicConstraints, IsCa, KeyUsagePurpose};
+
+        let valid = document_signer_certificate(
+            IsCa::ExplicitNoCa,
+            vec![KeyUsagePurpose::DigitalSignature],
+        );
+        assert!(validate_document_signer_certificate_der(&valid).is_ok());
+
+        let ca = document_signer_certificate(
+            IsCa::Ca(BasicConstraints::Unconstrained),
+            vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign],
+        );
+        let error = validate_document_signer_certificate_der(&ca).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_INVALID_EXTENSION);
+        assert!(error.to_string().contains("must not be a CA"));
+
+        let issuer_usage = document_signer_certificate(
+            IsCa::ExplicitNoCa,
+            vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign],
+        );
+        let error = validate_document_signer_certificate_der(&issuer_usage).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_KEY_USAGE_MISMATCH);
+
+        let missing_usage = document_signer_certificate(IsCa::ExplicitNoCa, Vec::new());
+        let error = validate_document_signer_certificate_der(&missing_usage).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_MISSING_EXTENSION);
+
+        let mixed_usage = document_signer_certificate(
+            IsCa::ExplicitNoCa,
+            vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyEncipherment,
+            ],
+        );
+        let error = validate_document_signer_certificate_der(&mixed_usage).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_KEY_USAGE_MISMATCH);
+    }
 
     fn map_value_mut<'a>(
         entries: &'a mut [(ciborium::Value, ciborium::Value)],
