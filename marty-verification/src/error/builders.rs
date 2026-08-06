@@ -141,6 +141,52 @@ impl VerificationError {
         })
     }
 
+    /// Create a missing certificate extension error.
+    pub fn missing_extension(oid: impl Into<String>, subject: impl Into<String>) -> Box<Self> {
+        Box::new(Self::MissingExtension {
+            oid: oid.into(),
+            subject: subject.into(),
+            code: codes::CERT_MISSING_EXTENSION,
+            context: ErrorContext::default(),
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create an invalid certificate extension error.
+    pub fn invalid_extension(
+        oid: impl Into<String>,
+        subject: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Box<Self> {
+        Box::new(Self::InvalidExtension {
+            oid: oid.into(),
+            subject: subject.into(),
+            reason: reason.into(),
+            code: codes::CERT_INVALID_EXTENSION,
+            context: ErrorContext::default(),
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create a certificate key-usage mismatch error.
+    pub fn key_usage_mismatch(
+        subject: impl Into<String>,
+        expected: impl Into<String>,
+        found: impl Into<String>,
+    ) -> Box<Self> {
+        Box::new(Self::KeyUsageMismatch {
+            subject: subject.into(),
+            expected: expected.into(),
+            found: found.into(),
+            code: codes::CERT_KEY_USAGE_MISMATCH,
+            context: ErrorContext::default(),
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
     /// Create an issuer auth failed error.
     pub fn issuer_auth_failed(reason: impl Into<String>) -> Box<Self> {
         Box::new(Self::IssuerAuthFailed {

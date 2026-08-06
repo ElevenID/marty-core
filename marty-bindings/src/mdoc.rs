@@ -332,15 +332,20 @@ fn verify_issuer_trust(
         return Err("issuer certificate chain is empty".to_string());
     };
 
+    marty_verification::verification::mdl::validate_document_signer_certificate_der(
+        leaf_certificate,
+    )
+    .map_err(|error| format!("invalid mdoc document-signer certificate profile: {error}"))?;
+
     if pinned_issuer_certs_der
         .iter()
         .any(|pinned| pinned == leaf_certificate)
     {
         // Direct pinning establishes trust in this exact leaf certificate, not
-        // in its subject name or issuing CA. Still enforce certificate validity
-        // and every embedded chain signature. KeyUsage remains enforced for
-        // normal ROOT_CA validation; a direct pin deliberately authorizes this
-        // exact public key for issuerAuth after its COSE signature is verified.
+        // in its subject name or issuing CA. The mdoc-specific profile check
+        // above is intentionally mandatory for both pin and root trust modes.
+        // This validator additionally enforces validity and embedded chain
+        // signatures without imposing generic X.509 usages on other profiles.
         let direct_pin_validator = marty_verification::verification::ChainValidator::with_config(
             marty_verification::verification::ChainValidatorConfig {
                 required_key_usage: Vec::new(),
@@ -474,44 +479,101 @@ mod tests {
     }
 
     #[test]
-    fn direct_pin_accepts_exact_leaf_without_weakening_root_validation() {
+    fn direct_pin_requires_a_valid_mdoc_document_signer_profile() {
         use rcgen::{CertificateParams, DnType, KeyPair, KeyUsagePurpose};
 
-        let key = KeyPair::generate().unwrap();
-        let mut params = CertificateParams::default();
-        params
-            .distinguished_name
-            .push(DnType::CommonName, "Pinned mdoc document signer");
-        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-        let certificate = params.self_signed(&key).unwrap();
-        let certificate_der = certificate.der().to_vec();
-        let certificate_pem = certificate.pem();
+        fn certificate(
+            name: &str,
+            is_ca: rcgen::IsCa,
+            key_usages: Vec<KeyUsagePurpose>,
+        ) -> (Vec<u8>, String) {
+            let key = KeyPair::generate().unwrap();
+            let mut params = CertificateParams::default();
+            params.distinguished_name.push(DnType::CommonName, name);
+            params.is_ca = is_ca;
+            params.key_usages = key_usages;
+            let certificate = params.self_signed(&key).unwrap();
+            (certificate.der().to_vec(), certificate.pem())
+        }
 
-        let mut strict_root_validator = marty_verification::verification::ChainValidator::new();
-        strict_root_validator
-            .add_trust_anchor_pem(&certificate_pem)
-            .unwrap();
-        let strict = verify_issuer_trust(
-            std::slice::from_ref(&certificate_der),
-            &strict_root_validator,
-            &[],
+        let (_, unrelated_root_pem) = certificate(
+            "Unrelated mdoc root",
+            rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained),
+            vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign],
         );
-        assert!(strict
-            .unwrap_err()
-            .contains("Certificate missing required key usage: DigitalSignature"));
+        let mut validator = marty_verification::verification::ChainValidator::new();
+        validator.add_trust_anchor_pem(&unrelated_root_pem).unwrap();
+        let (valid_der, valid_pem) = certificate(
+            "Pinned mdoc document signer",
+            rcgen::IsCa::ExplicitNoCa,
+            vec![KeyUsagePurpose::DigitalSignature],
+        );
+        let direct_pin = certificate_der_from_pem(&valid_pem).unwrap();
+        let valid =
+            verify_issuer_trust(std::slice::from_ref(&valid_der), &validator, &[direct_pin]);
+        assert!(
+            valid.is_ok(),
+            "valid document signer was rejected: {valid:?}"
+        );
 
-        let direct_pin = certificate_der_from_pem(&certificate_pem).unwrap();
-        assert!(verify_issuer_trust(
-            std::slice::from_ref(&certificate_der),
-            &strict_root_validator,
-            &[direct_pin],
+        let (ca_der, _) = certificate(
+            "Pinned CA is not a document signer",
+            rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained),
+            vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign],
+        );
+        let error = verify_issuer_trust(
+            std::slice::from_ref(&ca_der),
+            &validator,
+            std::slice::from_ref(&ca_der),
         )
-        .is_ok());
+        .unwrap_err();
+        assert!(error.contains("must not be a CA"));
+
+        let (issuer_usage_der, _) = certificate(
+            "Pinned IACA usage is not a document signer",
+            rcgen::IsCa::ExplicitNoCa,
+            vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign],
+        );
+        let error = verify_issuer_trust(
+            std::slice::from_ref(&issuer_usage_der),
+            &validator,
+            std::slice::from_ref(&issuer_usage_der),
+        )
+        .unwrap_err();
+        assert!(error.contains("DigitalSignature only"));
+
+        let (missing_usage_der, _) = certificate(
+            "Pinned certificate without key usage",
+            rcgen::IsCa::ExplicitNoCa,
+            Vec::new(),
+        );
+        let error = verify_issuer_trust(
+            std::slice::from_ref(&missing_usage_der),
+            &validator,
+            std::slice::from_ref(&missing_usage_der),
+        )
+        .unwrap_err();
+        assert!(error.contains("Required extension 2.5.29.15 missing"));
+
+        let (incompatible_usage_der, _) = certificate(
+            "Pinned certificate with mixed key usage",
+            rcgen::IsCa::ExplicitNoCa,
+            vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyEncipherment,
+            ],
+        );
+        let error = verify_issuer_trust(
+            std::slice::from_ref(&incompatible_usage_der),
+            &validator,
+            std::slice::from_ref(&incompatible_usage_der),
+        )
+        .unwrap_err();
+        assert!(error.contains("DigitalSignature only"));
 
         assert!(verify_issuer_trust(
-            std::slice::from_ref(&certificate_der),
-            &marty_verification::verification::ChainValidator::new(),
+            std::slice::from_ref(&valid_der),
+            &validator,
             &[vec![1, 2, 3]],
         )
         .is_err());
