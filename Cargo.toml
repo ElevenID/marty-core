@@ -50,7 +50,7 @@ pbkdf2 = { version = "0.12", features = ["hmac"] }
 # Additional crypto
 hmac = "0.12"
 cmac = "0.7"
-cipher = { version = "0.4", features = ["block-padding"] }
+cipher = { version = "0.5", features = ["block-padding"] }
 
 # Ed25519 and X25519
 ed25519-dalek = { version = "2.1", features = ["rand_core", "pem"] }
