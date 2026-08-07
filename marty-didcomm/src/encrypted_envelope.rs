@@ -1,454 +1,161 @@
-//! DIDComm v2 encrypted envelope (anoncrypt) using ECDH-ES+A256KW + A256GCM.
+//! DIDComm v2.1 encrypted-envelope support.
 //!
-//! Implements **anonymous encryption** (anoncrypt): the sender is anonymous to
-//! the recipient. The recipient's X25519 public key (from their DID Document's
-//! `keyAgreement`) is used for key agreement.
+//! Marty deliberately delegates JOSE envelope construction to the maintained
+//! `affinidi-messaging-didcomm` implementation.  Keeping a second, partial
+//! implementation here previously allowed Marty-produced messages to decrypt
+//! with Marty while omitting DIDComm's protected `epk` and `apv` headers.
 //!
-//! ## JWE Structure
-//!
-//! Following DIDComm v2 §4.1 and RFC 7516:
-//!
-//! ```text
-//! {
-//!   "protected": base64url({"alg":"ECDH-ES+A256KW","enc":"A256GCM","typ":"application/didcomm-encrypted+json"}),
-//!   "recipients": [{"header": {"kid": "<key-id>"}, "encrypted_key": "<base64url>"}],
-//!   "iv": "<base64url>",
-//!   "ciphertext": "<base64url>",
-//!   "tag": "<base64url>"
-//! }
-//! ```
+//! The public Marty API remains intentionally narrow: credential delivery uses
+//! anonymous encryption for one resolved holder DID. The dependency supplies
+//! the envelope primitives Marty uses and provides an upgrade path for
+//! authcrypt. Signed envelopes, mediator routing, and broader curve/algorithm
+//! support remain explicit product capabilities to implement and test rather
+//! than implied claims of this wrapper.
 
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
+use affinidi_messaging_didcomm::crypto::key_agreement::{
+    Curve, PrivateKeyAgreement, PublicKeyAgreement,
 };
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
-use rand::RngCore;
-use sha2::{Digest, Sha256};
-use x25519_dalek::{EphemeralSecret, PublicKey};
+use affinidi_messaging_didcomm::jwe::{decrypt, encrypt};
 
 use crate::error::{DidcommError, DidcommResult};
 use crate::types::DidDocument;
 
-/// JWE protected header for DIDComm v2 anoncrypt.
-const PROTECTED_HEADER: &str =
-    r#"{"alg":"ECDH-ES+A256KW","enc":"A256GCM","typ":"application/didcomm-encrypted+json"}"#;
-
-/// Encrypt a DIDComm v2 plaintext message using the recipient's DID Document.
+/// Encrypt a DIDComm plaintext message for the first compatible X25519 key in
+/// the resolved recipient DID Document.
 ///
-/// Performs X25519 ECDH key agreement with the recipient's key agreement key,
-/// derives a 256-bit AES key via Concat KDF (NIST SP 800-56A), wraps a
-/// random CEK with AES-256-KW, and encrypts the plaintext with AES-256-GCM.
-///
-/// Returns the JWE JSON Serialization (General) string.
+/// The resulting JWE uses DIDComm v2.1 anoncrypt (`ECDH-ES+A256KW`) with the
+/// required `A256CBC-HS512` content-encryption algorithm.  The ephemeral key,
+/// recipient hash (`apv`), algorithm, and media type are integrity protected.
 pub fn encrypt_for_recipient(
     plaintext: &str,
     recipient_did_doc: &DidDocument,
 ) -> DidcommResult<String> {
-    // Extract recipient's X25519 public key
     let recipient_key_bytes = recipient_did_doc.x25519_key_agreement().ok_or_else(|| {
         DidcommError::NoKeyAgreementKey {
             did: recipient_did_doc.id.clone(),
         }
     })?;
+    let recipient_kid =
+        recipient_did_doc
+            .x25519_key_id()
+            .ok_or_else(|| DidcommError::NoKeyAgreementKey {
+                did: recipient_did_doc.id.clone(),
+            })?;
+    let recipient_public = PublicKeyAgreement::from_raw_bytes(Curve::X25519, &recipient_key_bytes)
+        .map_err(|error| DidcommError::Crypto(format!("invalid recipient X25519 key: {error}")))?;
 
-    let key_id = recipient_did_doc
-        .x25519_key_id()
-        .unwrap_or_else(|| format!("{}#key-1", recipient_did_doc.id));
-
-    if recipient_key_bytes.len() != 32 {
-        return Err(DidcommError::Crypto(format!(
-            "Expected 32-byte X25519 key, got {}",
-            recipient_key_bytes.len()
-        )));
-    }
-
-    let mut recipient_key_arr = [0u8; 32];
-    recipient_key_arr.copy_from_slice(&recipient_key_bytes);
-    let recipient_pub = PublicKey::from(recipient_key_arr);
-
-    // Generate ephemeral X25519 keypair for ECDH
-    let mut rng = rand::thread_rng();
-    let ephemeral_secret = EphemeralSecret::random_from_rng(&mut rng);
-    let ephemeral_pub = PublicKey::from(&ephemeral_secret);
-
-    // Perform X25519 ECDH
-    let shared_secret = ephemeral_secret.diffie_hellman(&recipient_pub);
-
-    // Derive wrapping key via Concat KDF (SP 800-56A, single pass)
-    let kek = concat_kdf_sha256(shared_secret.as_bytes(), b"ECDH-ES+A256KW", 32);
-
-    // Generate random CEK (Content Encryption Key) for AES-256-GCM
-    let mut cek = [0u8; 32];
-    rng.fill_bytes(&mut cek);
-
-    // Wrap CEK with the KEK using AES-256-KW (RFC 3394)
-    let wrapped_cek = aes_key_wrap(&kek, &cek)?;
-
-    // Encrypt plaintext with AES-256-GCM using the CEK
-    let mut iv = [0u8; 12];
-    rng.fill_bytes(&mut iv);
-
-    let cipher =
-        Aes256Gcm::new_from_slice(&cek).map_err(|e| DidcommError::Crypto(e.to_string()))?;
-    let nonce = Nonce::from_slice(&iv);
-
-    // AAD = the protected header base64url-encoded
-    let protected_b64 = URL_SAFE_NO_PAD.encode(PROTECTED_HEADER.as_bytes());
-    let ciphertext_with_tag = cipher
-        .encrypt(
-            nonce,
-            aes_gcm::aead::Payload {
-                msg: plaintext.as_bytes(),
-                aad: protected_b64.as_bytes(),
-            },
-        )
-        .map_err(|e| DidcommError::Crypto(format!("AES-GCM encrypt failed: {e}")))?;
-
-    // AES-GCM appends the 16-byte tag to the ciphertext
-    let (ct, tag) = ciphertext_with_tag.split_at(ciphertext_with_tag.len() - 16);
-
-    // Build JWE JSON Serialization (General)
-    let epk_b64 = URL_SAFE_NO_PAD.encode(ephemeral_pub.as_bytes());
-
-    let jwe = serde_json::json!({
-        "protected": protected_b64,
-        "recipients": [{
-            "header": {
-                "kid": key_id,
-                "epk": {
-                    "kty": "OKP",
-                    "crv": "X25519",
-                    "x": epk_b64
-                }
-            },
-            "encrypted_key": URL_SAFE_NO_PAD.encode(&wrapped_cek)
-        }],
-        "iv": URL_SAFE_NO_PAD.encode(iv),
-        "ciphertext": URL_SAFE_NO_PAD.encode(ct),
-        "tag": URL_SAFE_NO_PAD.encode(tag)
-    });
-
-    serde_json::to_string(&jwe).map_err(|e| DidcommError::PackError(e.to_string()))
+    encrypt::anoncrypt(
+        plaintext.as_bytes(),
+        &[(recipient_kid.as_str(), &recipient_public)],
+    )
+    .map_err(|error| DidcommError::Crypto(format!("DIDComm anoncrypt failed: {error}")))
 }
 
-/// Decrypt a DIDComm v2 JWE (anoncrypt) using the recipient's X25519 private key.
+/// Decrypt a single-recipient DIDComm v2.1 anoncrypt JWE.
 ///
-/// # Arguments
-///
-/// * `jwe_json` — JWE JSON Serialization string
-/// * `recipient_private_key` — The recipient's 32-byte X25519 private key
+/// This compatibility entry point retains the existing Python/Rust API while
+/// delegating all protected-header, key-derivation, key-wrap, and content-
+/// authentication validation to the maintained DIDComm implementation.
 pub fn decrypt_jwe(jwe_json: &str, recipient_private_key: &[u8; 32]) -> DidcommResult<String> {
-    let jwe: serde_json::Value =
-        serde_json::from_str(jwe_json).map_err(|e| DidcommError::UnpackError(e.to_string()))?;
+    let jwe: serde_json::Value = serde_json::from_str(jwe_json)
+        .map_err(|error| DidcommError::UnpackError(format!("invalid JWE JSON: {error}")))?;
+    let recipient_kid = jwe
+        .get("recipients")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|recipients| recipients.first())
+        .and_then(|recipient| recipient.pointer("/header/kid"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| DidcommError::UnpackError("missing recipient kid".into()))?;
 
-    let protected_b64 = jwe["protected"]
-        .as_str()
-        .ok_or_else(|| DidcommError::UnpackError("missing protected header".into()))?;
+    let recipient_private =
+        PrivateKeyAgreement::from_raw_bytes(Curve::X25519, recipient_private_key).map_err(
+            |error| DidcommError::Crypto(format!("invalid recipient X25519 key: {error}")),
+        )?;
+    let decrypted = decrypt::decrypt(jwe_json, recipient_kid, &recipient_private, None)
+        .map_err(|error| DidcommError::UnpackError(format!("DIDComm decrypt failed: {error}")))?;
 
-    let recipients = jwe["recipients"]
-        .as_array()
-        .ok_or_else(|| DidcommError::UnpackError("missing recipients".into()))?;
-
-    if recipients.is_empty() {
-        return Err(DidcommError::UnpackError("no recipients".into()));
-    }
-
-    // Extract ephemeral public key from first recipient
-    let recip = &recipients[0];
-    let epk_x = recip["header"]["epk"]["x"]
-        .as_str()
-        .ok_or_else(|| DidcommError::UnpackError("missing epk.x".into()))?;
-    let epk_bytes = URL_SAFE_NO_PAD
-        .decode(epk_x)
-        .map_err(|e| DidcommError::UnpackError(format!("epk decode: {e}")))?;
-
-    if epk_bytes.len() != 32 {
-        return Err(DidcommError::UnpackError(format!(
-            "expected 32-byte epk, got {}",
-            epk_bytes.len()
-        )));
-    }
-
-    let mut epk_arr = [0u8; 32];
-    epk_arr.copy_from_slice(&epk_bytes);
-    let epk = PublicKey::from(epk_arr);
-
-    // Perform ECDH with the recipient's static private key
-    let static_secret = x25519_dalek::StaticSecret::from(*recipient_private_key);
-    let shared_secret = static_secret.diffie_hellman(&epk);
-
-    // Derive KEK via Concat KDF
-    let kek = concat_kdf_sha256(shared_secret.as_bytes(), b"ECDH-ES+A256KW", 32);
-
-    // Unwrap CEK
-    let wrapped_cek_b64 = recip["encrypted_key"]
-        .as_str()
-        .ok_or_else(|| DidcommError::UnpackError("missing encrypted_key".into()))?;
-    let wrapped_cek = URL_SAFE_NO_PAD
-        .decode(wrapped_cek_b64)
-        .map_err(|e| DidcommError::UnpackError(format!("encrypted_key decode: {e}")))?;
-    let cek = aes_key_unwrap(&kek, &wrapped_cek)?;
-
-    // Decrypt ciphertext
-    let iv_b64 = jwe["iv"]
-        .as_str()
-        .ok_or_else(|| DidcommError::UnpackError("missing iv".into()))?;
-    let ct_b64 = jwe["ciphertext"]
-        .as_str()
-        .ok_or_else(|| DidcommError::UnpackError("missing ciphertext".into()))?;
-    let tag_b64 = jwe["tag"]
-        .as_str()
-        .ok_or_else(|| DidcommError::UnpackError("missing tag".into()))?;
-
-    let iv = URL_SAFE_NO_PAD
-        .decode(iv_b64)
-        .map_err(|e| DidcommError::UnpackError(format!("iv decode: {e}")))?;
-    let ct = URL_SAFE_NO_PAD
-        .decode(ct_b64)
-        .map_err(|e| DidcommError::UnpackError(format!("ct decode: {e}")))?;
-    let tag = URL_SAFE_NO_PAD
-        .decode(tag_b64)
-        .map_err(|e| DidcommError::UnpackError(format!("tag decode: {e}")))?;
-
-    // Reassemble ciphertext + tag for AES-GCM
-    let mut ct_with_tag = ct;
-    ct_with_tag.extend_from_slice(&tag);
-
-    let cipher =
-        Aes256Gcm::new_from_slice(&cek).map_err(|e| DidcommError::Crypto(e.to_string()))?;
-    let nonce = Nonce::from_slice(&iv);
-
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            aes_gcm::aead::Payload {
-                msg: &ct_with_tag,
-                aad: protected_b64.as_bytes(),
-            },
-        )
-        .map_err(|e| DidcommError::Crypto(format!("AES-GCM decrypt failed: {e}")))?;
-
-    String::from_utf8(plaintext).map_err(|e| DidcommError::UnpackError(e.to_string()))
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/// Concat KDF (NIST SP 800-56A, single-pass SHA-256) for ECDH-ES key derivation.
-///
-/// ```text
-/// DK = SHA-256(0x00000001 || Z || OtherInfo)
-/// OtherInfo = AlgorithmID_len || AlgorithmID || PartyUInfo_len(0) || PartyVInfo_len(0) || SuppPubInfo
-/// ```
-fn concat_kdf_sha256(shared_secret: &[u8], algorithm_id: &[u8], key_len_bytes: usize) -> Vec<u8> {
-    let key_len_bits = (key_len_bytes * 8) as u32;
-    let alg_id_len = (algorithm_id.len() as u32).to_be_bytes();
-
-    let mut hasher = Sha256::new();
-    hasher.update(1u32.to_be_bytes()); // round = 1
-    hasher.update(shared_secret);
-    // OtherInfo per JWA §4.6.2
-    hasher.update(alg_id_len);
-    hasher.update(algorithm_id);
-    hasher.update(0u32.to_be_bytes()); // PartyUInfo (empty)
-    hasher.update(0u32.to_be_bytes()); // PartyVInfo (empty)
-    hasher.update(key_len_bits.to_be_bytes()); // SuppPubInfo = keydatalen
-    let hash = hasher.finalize();
-
-    hash[..key_len_bytes].to_vec()
-}
-
-/// AES Key Wrap (RFC 3394) — wraps a 256-bit key with a 256-bit KEK.
-fn aes_key_wrap(kek: &[u8], plaintext: &[u8]) -> DidcommResult<Vec<u8>> {
-    use aes::cipher::KeyInit as AesKeyInit;
-    use aes::Aes256;
-
-    if !plaintext.len().is_multiple_of(8) || plaintext.is_empty() {
-        return Err(DidcommError::Crypto(
-            "AES Key Wrap: plaintext must be a non-empty multiple of 8 bytes".into(),
+    if decrypted.authenticated || decrypted.sender_kid.is_some() {
+        return Err(DidcommError::UnpackError(
+            "authenticated DIDComm envelope is not valid for the anoncrypt API".into(),
         ));
     }
 
-    let n = plaintext.len() / 8;
-    let mut a = 0xA6A6A6A6A6A6A6A6u64;
-    let mut r: Vec<[u8; 8]> = plaintext
-        .chunks(8)
-        .map(|c| {
-            let mut block = [0u8; 8];
-            block.copy_from_slice(c);
-            block
-        })
-        .collect();
-
-    let cipher = Aes256::new_from_slice(kek)
-        .map_err(|e| DidcommError::Crypto(format!("AES key init: {e}")))?;
-
-    for j in 0..6u64 {
-        for (i, r_block) in r.iter_mut().enumerate() {
-            let mut block = [0u8; 16];
-            block[..8].copy_from_slice(&a.to_be_bytes());
-            block[8..].copy_from_slice(r_block);
-
-            let b = aes::Block::from(block);
-            let encrypted = cipher.encrypt_with_backend_b(b);
-            let encrypted_bytes: [u8; 16] = encrypted.into();
-
-            let t = (n as u64) * j + (i as u64) + 1;
-            a = u64::from_be_bytes(encrypted_bytes[..8].try_into().unwrap()) ^ t;
-            r_block.copy_from_slice(&encrypted_bytes[8..]);
-        }
-    }
-
-    let mut result = Vec::with_capacity(8 + plaintext.len());
-    result.extend_from_slice(&a.to_be_bytes());
-    for block in &r {
-        result.extend_from_slice(block);
-    }
-    Ok(result)
-}
-
-/// AES Key Unwrap (RFC 3394) — unwraps a key using a 256-bit KEK.
-fn aes_key_unwrap(kek: &[u8], ciphertext: &[u8]) -> DidcommResult<Vec<u8>> {
-    use aes::cipher::KeyInit as AesKeyInit;
-    use aes::Aes256;
-
-    if !ciphertext.len().is_multiple_of(8) || ciphertext.len() < 24 {
-        return Err(DidcommError::Crypto(
-            "AES Key Unwrap: ciphertext must be >= 24 bytes and a multiple of 8".into(),
-        ));
-    }
-
-    let n = (ciphertext.len() / 8) - 1;
-    let mut a = u64::from_be_bytes(ciphertext[..8].try_into().unwrap());
-    let mut r: Vec<[u8; 8]> = ciphertext[8..]
-        .chunks(8)
-        .map(|c| {
-            let mut block = [0u8; 8];
-            block.copy_from_slice(c);
-            block
-        })
-        .collect();
-
-    let cipher = Aes256::new_from_slice(kek)
-        .map_err(|e| DidcommError::Crypto(format!("AES key init: {e}")))?;
-
-    for j in (0..6u64).rev() {
-        for i in (0..n).rev() {
-            let t = (n as u64) * j + (i as u64) + 1;
-            let a_xored = a ^ t;
-
-            let mut block = [0u8; 16];
-            block[..8].copy_from_slice(&a_xored.to_be_bytes());
-            block[8..].copy_from_slice(&r[i]);
-
-            let b = aes::Block::from(block);
-            let decrypted = cipher.decrypt_with_backend_b(b);
-            let decrypted_bytes: [u8; 16] = decrypted.into();
-
-            a = u64::from_be_bytes(decrypted_bytes[..8].try_into().unwrap());
-            r[i].copy_from_slice(&decrypted_bytes[8..]);
-        }
-    }
-
-    // Verify integrity check value
-    if a != 0xA6A6A6A6A6A6A6A6 {
-        return Err(DidcommError::Crypto(
-            "AES Key Unwrap: integrity check failed".into(),
-        ));
-    }
-
-    let mut result = Vec::with_capacity(n * 8);
-    for block in &r {
-        result.extend_from_slice(block);
-    }
-    Ok(result)
-}
-
-// ---------------------------------------------------------------------------
-// Extension trait for AES block cipher — needed for encrypt/decrypt of single blocks
-// ---------------------------------------------------------------------------
-
-trait BlockEncryptExt {
-    fn encrypt_with_backend_b(&self, block: aes::Block) -> aes::Block;
-}
-
-trait BlockDecryptExt {
-    fn decrypt_with_backend_b(&self, block: aes::Block) -> aes::Block;
-}
-
-impl BlockEncryptExt for aes::Aes256 {
-    fn encrypt_with_backend_b(&self, mut block: aes::Block) -> aes::Block {
-        use aes::cipher::BlockEncrypt;
-        self.encrypt_block(&mut block);
-        block
-    }
-}
-
-impl BlockDecryptExt for aes::Aes256 {
-    fn decrypt_with_backend_b(&self, mut block: aes::Block) -> aes::Block {
-        use aes::cipher::BlockDecrypt;
-        self.decrypt_block(&mut block);
-        block
-    }
+    String::from_utf8(decrypted.plaintext)
+        .map_err(|error| DidcommError::UnpackError(format!("plaintext is not UTF-8: {error}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
 
-    #[test]
-    fn test_aes_key_wrap_unwrap_roundtrip() {
-        let kek = [0x42u8; 32];
-        let plaintext = [0x01u8; 32]; // 256-bit key to wrap
+    // DIDComm Messaging 2.1 Appendix C, X25519 authcrypt example. Keep this
+    // fixture byte-for-byte aligned with the published normative vector:
+    // https://identity.foundation/didcomm-messaging/spec/v2.1/#appendix-c-encrypted-message-examples
+    const OFFICIAL_AUTHCRYPT_X25519_A256CBC: &str = r#"
+{
+    "ciphertext": "MJezmxJ8DzUB01rMjiW6JViSaUhsZBhMvYtezkhmwts1qXWtDB63i4-FHZP6cJSyCI7eU-gqH8lBXO_UVuviWIqnIUrTRLaumanZ4q1dNKAnxNL-dHmb3coOqSvy3ZZn6W17lsVudjw7hUUpMbeMbQ5W8GokK9ZCGaaWnqAzd1ZcuGXDuemWeA8BerQsfQw_IQm-aUKancldedHSGrOjVWgozVL97MH966j3i9CJc3k9jS9xDuE0owoWVZa7SxTmhl1PDetmzLnYIIIt-peJtNYGdpd-FcYxIFycQNRUoFEr77h4GBTLbC-vqbQHJC1vW4O2LEKhnhOAVlGyDYkNbA4DSL-LMwKxenQXRARsKSIMn7z-ZIqTE-VCNj9vbtgR",
+    "protected": "eyJlcGsiOnsia3R5IjoiT0tQIiwiY3J2IjoiWDI1NTE5IiwieCI6IkdGY01vcEpsamY0cExaZmNoNGFfR2hUTV9ZQWY2aU5JMWRXREd5VkNhdzAifSwiYXB2IjoiTmNzdUFuclJmUEs2OUEtcmtaMEw5WFdVRzRqTXZOQzNaZzc0QlB6NTNQQSIsInNraWQiOiJkaWQ6ZXhhbXBsZTphbGljZSNrZXkteDI1NTE5LTEiLCJhcHUiOiJaR2xrT21WNFlXMXdiR1U2WVd4cFkyVWphMlY1TFhneU5UVXhPUzB4IiwidHlwIjoiYXBwbGljYXRpb24vZGlkY29tbS1lbmNyeXB0ZWQranNvbiIsImVuYyI6IkEyNTZDQkMtSFM1MTIiLCJhbGciOiJFQ0RILTFQVStBMjU2S1cifQ",
+    "recipients": [{
+            "encrypted_key": "o0FJASHkQKhnFo_rTMHTI9qTm_m2mkJp-wv96mKyT5TP7QjBDuiQ0AMKaPI_RLLB7jpyE-Q80Mwos7CvwbMJDhIEBnk2qHVB",
+            "header": {
+                "kid": "did:example:bob#key-x25519-1"
+            }
+        },{
+            "encrypted_key": "rYlafW0XkNd8kaXCqVbtGJ9GhwBC3lZ9AihHK4B6J6V2kT7vjbSYuIpr1IlAjvxYQOw08yqEJNIwrPpB0ouDzKqk98FVN7rK",
+            "header": {
+                "kid": "did:example:bob#key-x25519-2"
+            }
+        },{
+            "encrypted_key": "aqfxMY2sV-njsVo-_9Ke9QbOf6hxhGrUVh_m-h_Aq530w3e_4IokChfKWG1tVJvXYv_AffY7vxj0k5aIfKZUxiNmBwC_QsNo",
+            "header": {
+                "kid": "did:example:bob#key-x25519-3"
+            }
+        }],
+    "tag": "uYeo7IsZjN7AnvBjUZE5lNryNENbf6_zew_VC-d4b3U",
+    "iv": "o02OXDQ6_-sKz2PX_6oyJg"
+}
+"#;
 
-        let wrapped = aes_key_wrap(&kek, &plaintext).unwrap();
-        assert_eq!(wrapped.len(), 40); // 32 + 8 overhead
+    const OFFICIAL_PLAINTEXT: &str = r#"
+{
+    "id": "1234567890",
+    "typ": "application/didcomm-plain+json",
+    "type": "http://example.com/protocols/lets_do_lunch/1.0/proposal",
+    "from": "did:example:alice",
+    "to": ["did:example:bob"],
+    "created_time": 1516269022,
+    "expires_time": 1516385931,
+    "body": {"messagespecificattribute": "and its value"}
+}
+"#;
 
-        let unwrapped = aes_key_unwrap(&kek, &wrapped).unwrap();
-        assert_eq!(unwrapped, plaintext);
-    }
-
-    #[test]
-    fn test_aes_key_unwrap_tampered() {
-        let kek = [0x42u8; 32];
-        let plaintext = [0x01u8; 32];
-        let mut wrapped = aes_key_wrap(&kek, &plaintext).unwrap();
-        wrapped[0] ^= 0xFF; // tamper
-        assert!(aes_key_unwrap(&kek, &wrapped).is_err());
-    }
-
-    #[test]
-    fn test_concat_kdf() {
-        let shared = [0xABu8; 32];
-        let key = concat_kdf_sha256(&shared, b"ECDH-ES+A256KW", 32);
-        assert_eq!(key.len(), 32);
-        // Deterministic — same input always produces same output
-        let key2 = concat_kdf_sha256(&shared, b"ECDH-ES+A256KW", 32);
-        assert_eq!(key, key2);
-    }
-
-    #[test]
-    fn test_encrypt_decrypt_roundtrip() {
-        // Build a minimal DID Document with X25519 key agreement
-        let recipient_private = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
-        let recipient_public = PublicKey::from(&recipient_private);
+    fn recipient_fixture() -> (DidDocument, [u8; 32]) {
+        let recipient_private = PrivateKeyAgreement::generate(Curve::X25519);
+        let recipient_private_bytes = match &recipient_private {
+            PrivateKeyAgreement::X25519(secret) => secret.to_bytes(),
+            _ => unreachable!("fixture explicitly generates an X25519 key"),
+        };
+        let recipient_public = recipient_private.public_key();
+        let recipient_public_jwk = recipient_public.to_jwk();
 
         let did_doc = DidDocument {
-            id: "did:key:test-recipient".into(),
+            id: "did:example:bob".into(),
             context: serde_json::json!("https://www.w3.org/ns/did/v1"),
             authentication: vec![],
             key_agreement: vec![],
             verification_method: vec![crate::types::VerificationMethod {
-                id: "did:key:test-recipient#key-1".into(),
-                r#type: "X25519KeyAgreementKey2020".into(),
-                controller: "did:key:test-recipient".into(),
+                id: "did:example:bob#key-x25519-1".into(),
+                r#type: "JsonWebKey2020".into(),
+                controller: "did:example:bob".into(),
                 public_key_jwk: Some(crate::types::Jwk {
                     kty: "OKP".into(),
                     crv: Some("X25519".into()),
-                    x: Some(URL_SAFE_NO_PAD.encode(recipient_public.as_bytes())),
+                    x: recipient_public_jwk
+                        .get("x")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
                     y: None,
                     d: None,
                     kid: None,
@@ -459,57 +166,109 @@ mod tests {
             service: vec![],
         };
 
-        let plaintext = r#"{"id":"msg-1","type":"https://didcomm.org/issue-credential/3.0/issue-credential","body":{}}"#;
+        (did_doc, recipient_private_bytes)
+    }
 
-        // Encrypt
-        let jwe_json = encrypt_for_recipient(plaintext, &did_doc).unwrap();
+    fn decode_protected_header(jwe: &serde_json::Value) -> serde_json::Value {
+        let protected = jwe["protected"]
+            .as_str()
+            .expect("JWE must have a protected header");
+        let decoded = URL_SAFE_NO_PAD
+            .decode(protected)
+            .expect("protected header must be base64url");
+        serde_json::from_slice(&decoded).expect("protected header must be JSON")
+    }
 
-        // Verify it's valid JSON
-        let jwe: serde_json::Value = serde_json::from_str(&jwe_json).unwrap();
-        assert!(jwe["protected"].is_string());
-        assert!(jwe["recipients"].is_array());
-        assert!(jwe["iv"].is_string());
-        assert!(jwe["ciphertext"].is_string());
-        assert!(jwe["tag"].is_string());
+    #[test]
+    fn encrypts_with_normative_didcomm_v2_1_headers() {
+        let (did_doc, _) = recipient_fixture();
+        let encrypted = encrypt_for_recipient(r#"{"id":"message-1","type":"test"}"#, &did_doc)
+            .expect("DIDComm encryption must succeed");
+        let jwe: serde_json::Value = serde_json::from_str(&encrypted).unwrap();
+        let protected = decode_protected_header(&jwe);
 
-        // Decrypt
-        let private_bytes: [u8; 32] = recipient_private.to_bytes();
-        let decrypted = decrypt_jwe(&jwe_json, &private_bytes).unwrap();
+        assert_eq!(protected["typ"], "application/didcomm-encrypted+json");
+        assert_eq!(protected["alg"], "ECDH-ES+A256KW");
+        assert_eq!(protected["enc"], "A256CBC-HS512");
+        assert_eq!(protected["epk"]["kty"], "OKP");
+        assert_eq!(protected["epk"]["crv"], "X25519");
+        assert!(protected["apv"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert!(protected.get("apu").is_none());
+        assert_eq!(
+            jwe["recipients"][0]["header"]["kid"],
+            "did:example:bob#key-x25519-1"
+        );
+        assert!(jwe["recipients"][0]["header"].get("epk").is_none());
+    }
+
+    #[test]
+    fn underlying_engine_decrypts_unmodified_official_didcomm_v2_1_vector() {
+        let recipient_private_bytes: [u8; 32] = URL_SAFE_NO_PAD
+            .decode("b9NnuOCB0hm7YGNvaE9DMhwH_wjZA1-gWD6dA0JWdL0")
+            .expect("official Bob private key must be base64url")
+            .try_into()
+            .expect("official Bob X25519 private key must be 32 bytes");
+        let recipient_private =
+            PrivateKeyAgreement::from_raw_bytes(Curve::X25519, &recipient_private_bytes).unwrap();
+        let sender_public = PublicKeyAgreement::from_jwk(&serde_json::json!({
+            "kty": "OKP",
+            "crv": "X25519",
+            "x": "avH0O2Y4tqLAq8y9zpianr8ajii5m4F_mICrzNlatXs"
+        }))
+        .unwrap();
+
+        let decrypted = decrypt::decrypt(
+            OFFICIAL_AUTHCRYPT_X25519_A256CBC,
+            "did:example:bob#key-x25519-1",
+            &recipient_private,
+            Some(&sender_public),
+        )
+        .expect("the published DIDComm 2.1 vector must decrypt");
+        let actual: serde_json::Value = serde_json::from_slice(&decrypted.plaintext).unwrap();
+        let expected: serde_json::Value = serde_json::from_str(OFFICIAL_PLAINTEXT).unwrap();
+
+        assert_eq!(actual, expected);
+        assert!(decrypted.authenticated);
+        assert_eq!(
+            decrypted.sender_kid.as_deref(),
+            Some("did:example:alice#key-x25519-1")
+        );
+        assert!(!decrypted.legacy_kek_used);
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip_uses_standards_envelope() {
+        let (did_doc, recipient_private) = recipient_fixture();
+        let plaintext = r#"{"id":"message-1","type":"https://didcomm.org/issue-credential/3.0/issue-credential","body":{}}"#;
+
+        let encrypted = encrypt_for_recipient(plaintext, &did_doc).unwrap();
+        let decrypted = decrypt_jwe(&encrypted, &recipient_private).unwrap();
+
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_decrypt_wrong_key_fails() {
-        let recipient_private = x25519_dalek::StaticSecret::random_from_rng(rand::thread_rng());
-        let recipient_public = PublicKey::from(&recipient_private);
+    fn rejects_wrong_recipient_key() {
+        let (did_doc, _) = recipient_fixture();
+        let encrypted = encrypt_for_recipient("secret message", &did_doc).unwrap();
+        let (_, wrong_private) = recipient_fixture();
 
-        let did_doc = DidDocument {
-            id: "did:key:test".into(),
-            context: serde_json::json!("https://www.w3.org/ns/did/v1"),
-            authentication: vec![],
-            key_agreement: vec![],
-            verification_method: vec![crate::types::VerificationMethod {
-                id: "did:key:test#key-1".into(),
-                r#type: "X25519KeyAgreementKey2020".into(),
-                controller: "did:key:test".into(),
-                public_key_jwk: Some(crate::types::Jwk {
-                    kty: "OKP".into(),
-                    crv: Some("X25519".into()),
-                    x: Some(URL_SAFE_NO_PAD.encode(recipient_public.as_bytes())),
-                    y: None,
-                    d: None,
-                    kid: None,
-                }),
-                public_key_multibase: None,
-                public_key_base58: None,
-            }],
-            service: vec![],
-        };
+        assert!(decrypt_jwe(&encrypted, &wrong_private).is_err());
+    }
 
-        let jwe = encrypt_for_recipient("secret message", &did_doc).unwrap();
+    #[test]
+    fn rejects_missing_normative_apv() {
+        let (did_doc, recipient_private) = recipient_fixture();
+        let encrypted = encrypt_for_recipient("secret message", &did_doc).unwrap();
+        let mut jwe: serde_json::Value = serde_json::from_str(&encrypted).unwrap();
+        let mut protected = decode_protected_header(&jwe);
+        protected.as_object_mut().unwrap().remove("apv");
+        jwe["protected"] = serde_json::Value::String(
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&protected).unwrap()),
+        );
 
-        // Try decrypting with a different key
-        let wrong_key = [0x99u8; 32];
-        assert!(decrypt_jwe(&jwe, &wrong_key).is_err());
+        assert!(decrypt_jwe(&serde_json::to_string(&jwe).unwrap(), &recipient_private).is_err());
     }
 }
