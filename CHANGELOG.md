@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.34] - 2026-08-07
+
+### Documentation
+
+- Correct the public Python binding documentation to describe the implemented
+  DIDComm Messaging 2.1 X25519 anoncrypt profile: `ECDH-ES+A256KW` key wrapping
+  with required `A256CBC-HS512` content encryption.
+- Scope `marty-didcomm` package metadata to the credential-delivery capability
+  that is implemented and tested instead of implying a complete DIDComm agent.
+
 ## [0.1.33] - 2026-08-07
 
 ### Fixed
