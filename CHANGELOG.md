@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.33] - 2026-08-07
+
+### Fixed
+
+- Replace the partial hand-written DIDComm JWE implementation with a maintained,
+  exact-pinned envelope engine.
+- Produce DIDComm Messaging 2.1 X25519 anoncrypt envelopes whose `epk`, `apv`,
+  `alg`, `enc`, and media type are integrity protected.
+- Use `ECDH-ES+A256KW` with the required `A256CBC-HS512` content-encryption
+  profile, and fail closed on malformed recipient binding or authentication.
+
+### Changed
+
+- Raise the workspace MSRV to Rust 1.95 to match the maintained DIDComm
+  dependency; the repository toolchain remains pinned to Rust 1.97.1.
+- Document the exact credential-delivery profile Marty currently supports and
+  keep full-agent authcrypt, routing, additional curves, and state-machine
+  interoperability as explicit tracked capabilities rather than broad claims.
+
+### Security
+
+- Remove Marty's duplicate JOSE, ECDH, AES, and key-wrapping implementation from
+  the DIDComm boundary.
+- Add negative tests for wrong recipient keys and missing protected `apv`, plus
+  an unmodified DIDComm Messaging 2.1 Appendix C authcrypt vector that verifies
+  sender authentication and the corrected ECDH-1PU key derivation.
+
 ## [0.1.32] - 2026-08-02
 
 ### Fixed
