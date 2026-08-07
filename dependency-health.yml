@@ -1,5 +1,17 @@
 version: 1
 dependencies:
+  - package: affinidi-messaging-didcomm
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/affinidi/affinidi-tdk-rs
+    current: "0.14.0"
+    target: latest-after-workspace-rustcrypto-0.14-migration
+    status: maintained
+    decision: retain
+    advisories: []
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/99
+    review-after: 2026-09-07
+    rationale: Version 0.14.0 is the first release with the corrected ECDH-1PU tag KDF and supplies the DIDComm 2.1 envelope implementation without introducing duplicate RustCrypto major versions. Marty uses its anoncrypt boundary today. Upgrade to the latest release in the same change that moves the workspace to RustCrypto elliptic-curve 0.14, ed25519-dalek 3, and x25519-dalek 3; do not carry two production crypto stacks merely to raise this package version.
   - package: ssi subcrates
     ecosystem: rust
     owner: ElevenID
