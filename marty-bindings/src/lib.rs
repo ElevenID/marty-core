@@ -1333,7 +1333,11 @@ fn didcomm_unpack_message(message_json: &str) -> PyResult<String> {
     serde_json::to_string(&msg).map_err(to_pyerr)
 }
 
-/// Encrypt a DIDComm v2 plaintext message for a recipient using ECDH-ES+A256KW + A256GCM.
+/// Encrypt a DIDComm Messaging 2.1 plaintext message for one recipient.
+///
+/// The public credential-delivery profile uses X25519 anonymous encryption
+/// with `ECDH-ES+A256KW` key wrapping and the required `A256CBC-HS512`
+/// content-encryption algorithm.
 ///
 /// Args:
 ///     plaintext_json: The DIDComm plaintext message (JSON string)

@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "DIDComm v2 messaging support for Marty digital identity platform"
+description = "DIDComm Messaging 2.1 credential-delivery support for Marty"
 keywords = ["didcomm", "did", "verifiable-credentials", "messaging"]
 categories = ["authentication", "cryptography"]
 
