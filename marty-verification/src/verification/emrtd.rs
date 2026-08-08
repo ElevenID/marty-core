@@ -464,7 +464,12 @@ pub fn verify_emrtd(
     if let Some(raw_sod) = sod.raw_sod.as_deref() {
         match crate::asn1::sod::verify_sod_signature(raw_sod) {
             Ok(true) => result.sod_signature_status = SignatureStatus::Valid,
-            Ok(false) => result.sod_signature_status = SignatureStatus::Invalid,
+            Ok(false) => {
+                result.sod_signature_status = SignatureStatus::Invalid;
+                result
+                    .errors
+                    .push("SOD signature verification failed".to_string());
+            }
             Err(err) => {
                 result.sod_signature_status = SignatureStatus::Invalid;
                 result.errors.push(err.to_string());
@@ -472,6 +477,9 @@ pub fn verify_emrtd(
         }
     } else {
         result.sod_signature_status = SignatureStatus::Unknown;
+        result
+            .errors
+            .push("SOD signature verification was not performed: raw SOD unavailable".to_string());
     }
 
     // Step 3: Verify data group hashes
@@ -486,9 +494,12 @@ pub fn verify_emrtd(
         }
     }
 
-    // Overall verification succeeds if chain and hashes are valid
-    result.verified =
-        result.dsc_chain_status == ChainStatus::Valid && result.dg_hash_status == HashStatus::Valid;
+    // Overall verification requires every mandatory authenticity and integrity
+    // check. A valid DSC chain and matching DG hashes do not authenticate the
+    // LDS Security Object when its signature is invalid or unavailable.
+    result.verified = result.dsc_chain_status == ChainStatus::Valid
+        && result.sod_signature_status == SignatureStatus::Valid
+        && result.dg_hash_status == HashStatus::Valid;
 
     result
 }
