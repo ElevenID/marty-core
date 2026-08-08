@@ -8,6 +8,7 @@
 //! - **chain**: Generic X.509 certificate chain validation
 
 pub mod chain;
+pub mod decision;
 pub mod mdl;
 pub mod vds_nc;
 
@@ -15,6 +16,13 @@ pub mod vds_nc;
 pub mod emrtd;
 
 pub use chain::{ChainValidationResult, ChainValidator, ChainValidatorConfig, KeyUsage};
+pub use decision::{
+    reduce_required_checks, ReducedVerificationDecision, VerificationCategoryOutcome,
+    VerificationCategorySummary, VerificationCheckCategory, VerificationCheckOutcome,
+    VerificationCheckResult, VerificationDecision, VerificationDecisionCode,
+    VerificationProcessingStatus, VerificationReductionError, REQUIRED_CHECK_REDUCER_ID,
+    REQUIRED_CHECK_REDUCER_VERSION,
+};
 pub use vds_nc::{
     verify_vds_nc, verify_vds_nc_jwk_json, SignatureVerificationStatus, VdsNcVerificationResult,
 };
