@@ -1249,12 +1249,13 @@ fn sha256<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
 
 /// Resolve a DID to its DID Document (JSON string).
 ///
-/// Supports did:key, did:web, did:peer, did:jwk.
+/// Resolves did:key, did:peer, and did:jwk locally. did:web and unsupported
+/// methods require a deployment-managed Universal Resolver URL.
 /// Does NOT support ledger-based methods (did:ion, did:ethr, did:sov).
 ///
 /// Args:
 ///     did: The DID to resolve
-///     universal_resolver_url: Optional URL to a Universal Resolver for unsupported methods
+///     universal_resolver_url: Optional deployment-managed Universal Resolver base URL
 ///
 /// Returns:
 ///     JSON string of the DID Document

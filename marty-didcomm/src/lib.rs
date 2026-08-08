@@ -17,7 +17,8 @@
 //! ## Supported DID Methods
 //!
 //! - **`did:key`** — Local derivation from public key (Ed25519, X25519, P-256)
-//! - **`did:web`** — HTTP-based resolution (`did:web:example.com` → `https://example.com/.well-known/did.json`)
+//! - **`did:web`** — Via a deployment-managed resolver by default, or direct
+//!   HTTPS only when a Rust caller supplies an exact host allowlist
 //! - **`did:peer`** — Peer-local resolution (method 0 and 2)
 //! - **`did:jwk`** — JWK-encoded public key
 //!
@@ -25,7 +26,7 @@
 //!
 //! Ledger-based DID methods (did:ion, did:ethr, did:sov, etc.) are explicitly
 //! out of scope. For those methods, use the DIF Universal Resolver as an HTTP
-//! proxy and configure it as a `did:web`-style endpoint.
+//! proxy and configure its HTTP(S) base URL explicitly.
 
 pub mod did_resolver;
 pub mod encrypted_envelope;
