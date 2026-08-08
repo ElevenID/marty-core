@@ -123,14 +123,37 @@ pub struct VerificationCategorySummary {
 }
 
 /// Decision fields and summaries derived from a canonical check set.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct ReducedVerificationDecision {
-    pub processing_status: VerificationProcessingStatus,
-    pub decision: VerificationDecision,
-    pub decision_code: VerificationDecisionCode,
+    pub(crate) processing_status: VerificationProcessingStatus,
+    pub(crate) decision: VerificationDecision,
+    pub(crate) decision_code: VerificationDecisionCode,
     /// Legacy compatibility projection, derived only from `decision`.
-    pub valid: bool,
-    pub category_summaries: Vec<VerificationCategorySummary>,
+    pub(crate) valid: bool,
+    pub(crate) category_summaries: Vec<VerificationCategorySummary>,
+}
+
+impl ReducedVerificationDecision {
+    pub fn processing_status(&self) -> VerificationProcessingStatus {
+        self.processing_status
+    }
+
+    pub fn decision(&self) -> VerificationDecision {
+        self.decision
+    }
+
+    pub fn decision_code(&self) -> VerificationDecisionCode {
+        self.decision_code
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub fn category_summaries(&self) -> &[VerificationCategorySummary] {
+        &self.category_summaries
+    }
 }
 
 /// Invalid reducer input that cannot safely produce a decision.
@@ -631,13 +654,14 @@ mod tests {
         assert_eq!(REQUIRED_CHECK_REDUCER_ID, "mip.required-check-reducer");
         assert_eq!(REQUIRED_CHECK_REDUCER_VERSION, "1.0.0");
 
-        let reduced = ReducedVerificationDecision {
-            processing_status: VerificationProcessingStatus::Completed,
-            decision: VerificationDecision::Pass,
-            decision_code: VerificationDecisionCode::AllRequiredChecksPassed,
-            valid: true,
-            category_summaries: Vec::new(),
-        };
+        let checks = [check(
+            "credential.proof",
+            VerificationCheckCategory::CredentialProof,
+            true,
+            VerificationCheckOutcome::Passed,
+        )];
+        let reduced = reduce_required_checks(VerificationProcessingStatus::Completed, &checks)
+            .expect("canonical checks");
 
         let value = serde_json::to_value(reduced).expect("serializable reducer output");
         assert_eq!(value["processing_status"], "COMPLETED");
