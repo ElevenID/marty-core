@@ -37,7 +37,7 @@
 //! 3. Receives a ZK proof from the wallet
 //! 4. Verifies the proof via `marty-zkp::Verifier` without seeing the value
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -175,17 +175,94 @@ pub struct ZkVerificationResult {
     pub error: Option<String>,
 }
 
-/// Result of verifying a VP token.
+/// Result of a scoped, low-level presentation verification check.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationResult {
-    /// Whether the overall verification passed.
+    /// Whether this result is sufficient for a final credential decision.
+    ///
+    /// Low-level presentation-proof, structural, and constraint checks never
+    /// set this field to `true`: none of those checks authenticates every
+    /// embedded credential, establishes issuer trust/status, and proves holder
+    /// binding. Callers that need the low-level result must inspect
+    /// `check_valid`, `scope`, and `evidence` explicitly.
     pub valid: bool,
+    /// Whether the check identified by `scope` passed.
+    pub check_valid: bool,
+    /// Whether all evidence required for a final credential decision exists.
+    pub decision_ready: bool,
+    /// The exact operation performed by this result.
+    pub scope: VerificationScope,
+    /// Proof and binding facts established (or not established) by the check.
+    pub evidence: VerificationEvidence,
     /// Per-descriptor results.
     pub descriptor_results: Vec<DescriptorVerificationResult>,
     /// ZK predicate verification results (if any).
     pub zk_results: Vec<ZkVerificationResult>,
     /// Errors encountered during verification.
     pub errors: Vec<String>,
+}
+
+/// Scope of a low-level verification operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationScope {
+    PresentationProof,
+    PresentationStructure,
+    PresentationExchange,
+}
+
+/// Four-state status for a required proof or binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationCheckStatus {
+    Passed,
+    Failed,
+    NotChecked,
+    Unsupported,
+}
+
+/// Evidence established by a low-level verification operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationEvidence {
+    pub presentation_proof: VerificationCheckStatus,
+    pub transaction_binding: VerificationCheckStatus,
+    pub credential_issuer_proofs: VerificationCheckStatus,
+    pub holder_binding: VerificationCheckStatus,
+    pub presentation_constraints: VerificationCheckStatus,
+}
+
+impl VerificationEvidence {
+    fn not_checked() -> Self {
+        Self {
+            presentation_proof: VerificationCheckStatus::NotChecked,
+            transaction_binding: VerificationCheckStatus::NotChecked,
+            credential_issuer_proofs: VerificationCheckStatus::NotChecked,
+            holder_binding: VerificationCheckStatus::NotChecked,
+            presentation_constraints: VerificationCheckStatus::NotChecked,
+        }
+    }
+}
+
+impl VerificationResult {
+    fn low_level(
+        scope: VerificationScope,
+        check_valid: bool,
+        evidence: VerificationEvidence,
+        descriptor_results: Vec<DescriptorVerificationResult>,
+        zk_results: Vec<ZkVerificationResult>,
+        errors: Vec<String>,
+    ) -> Self {
+        Self {
+            valid: false,
+            check_valid,
+            decision_ready: false,
+            scope,
+            evidence,
+            descriptor_results,
+            zk_results,
+            errors,
+        }
+    }
 }
 
 /// Result for a single input descriptor.
@@ -428,11 +505,17 @@ impl VerificationEngine {
     /// 2. `nonce` claim matches `expected_nonce`
     /// 3. `aud` claim contains this verifier's `verifier_id`
     /// 4. Token is not expired (60-second clock skew grace)
-    /// 5. JWT signature using the holder's embedded public key, sourced from
+    /// 5. JWT signature using the presentation's embedded public key, sourced from
     ///    (in priority order): JWT header `jwk`, payload `cnf.jwk`, payload `sub_jwk`
     ///
-    /// This handles the `jwt_vp_json` format (OID4VP §6.1).  For mDoc VP
-    /// verification use the ISO 18013-7 `DeviceResponse` path instead.
+    /// This establishes presentation proof and transaction binding only. A key
+    /// supplied by the presentation is self-declared: this method does not
+    /// authenticate embedded issuer credentials or bind the presentation key
+    /// to a credential confirmation key. Therefore `valid` and
+    /// `decision_ready` remain false even when `check_valid` is true.
+    ///
+    /// This handles the `jwt_vp_json` format. For mDoc VP verification use the
+    /// ISO 18013-7 `DeviceResponse` path instead.
     ///
     /// # Arguments
     /// * `vp_token`         — compact JWT VP token from the wallet
@@ -441,67 +524,116 @@ impl VerificationEngine {
         use base64::Engine;
         use jsonwebtoken::{decode_header, Algorithm, DecodingKey, Validation};
 
+        let failed = |message: String,
+                      presentation_proof: VerificationCheckStatus,
+                      transaction_binding: VerificationCheckStatus| {
+            let mut evidence = VerificationEvidence::not_checked();
+            evidence.presentation_proof = presentation_proof;
+            evidence.transaction_binding = transaction_binding;
+            VerificationResult::low_level(
+                VerificationScope::PresentationProof,
+                false,
+                evidence,
+                vec![],
+                vec![],
+                vec![message],
+            )
+        };
+
+        if expected_nonce.is_empty() {
+            return failed(
+                "Expected transaction nonce must be non-empty".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
+        }
+        if self.verifier_id.is_empty() {
+            return failed(
+                "Expected verifier audience must be non-empty".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
+        }
+
         // ── Step 1: Parse JWT header ──────────────────────────────────
         let header = match decode_header(vp_token) {
             Ok(h) => h,
             Err(e) => {
-                return VerificationResult {
-                    valid: false,
-                    descriptor_results: vec![],
-                    zk_results: vec![],
-                    errors: vec![format!("VP token header parse error: {}", e)],
-                }
+                return failed(
+                    format!("VP token header parse error: {e}"),
+                    VerificationCheckStatus::Failed,
+                    VerificationCheckStatus::NotChecked,
+                )
+            }
+        };
+
+        let format_label = match header.alg {
+            Algorithm::ES256
+            | Algorithm::ES384
+            | Algorithm::RS256
+            | Algorithm::RS384
+            | Algorithm::RS512
+            | Algorithm::EdDSA => "jwt_vp_json",
+            unsupported => {
+                return failed(
+                    format!("Unsupported VP token signature algorithm: {unsupported:?}"),
+                    VerificationCheckStatus::Unsupported,
+                    VerificationCheckStatus::NotChecked,
+                )
             }
         };
 
         // ── Step 2: Base64-decode payload to extract claims ───────────
         let parts: Vec<&str> = vp_token.split('.').collect();
         if parts.len() != 3 {
-            return VerificationResult {
-                valid: false,
-                descriptor_results: vec![],
-                zk_results: vec![],
-                errors: vec!["VP token is not a valid compact JWT (expected 3 parts)".into()],
-            };
+            return failed(
+                "VP token is not a valid compact JWT (expected 3 parts)".into(),
+                VerificationCheckStatus::Failed,
+                VerificationCheckStatus::NotChecked,
+            );
         }
 
         let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1])
         {
             Ok(b) => b,
             Err(e) => {
-                return VerificationResult {
-                    valid: false,
-                    descriptor_results: vec![],
-                    zk_results: vec![],
-                    errors: vec![format!("VP token payload base64 decode error: {}", e)],
-                }
+                return failed(
+                    format!("VP token payload base64 decode error: {e}"),
+                    VerificationCheckStatus::Failed,
+                    VerificationCheckStatus::NotChecked,
+                )
             }
         };
 
         let payload: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
             Ok(v) => v,
             Err(e) => {
-                return VerificationResult {
-                    valid: false,
-                    descriptor_results: vec![],
-                    zk_results: vec![],
-                    errors: vec![format!("VP token payload JSON parse error: {}", e)],
-                }
+                return failed(
+                    format!("VP token payload JSON parse error: {e}"),
+                    VerificationCheckStatus::Failed,
+                    VerificationCheckStatus::NotChecked,
+                )
             }
         };
 
         // ── Step 3: Validate nonce ────────────────────────────────────
-        let token_nonce = payload.get("nonce").and_then(|v| v.as_str()).unwrap_or("");
+        let Some(token_nonce) = payload
+            .get("nonce")
+            .and_then(|v| v.as_str())
+            .filter(|nonce| !nonce.is_empty())
+        else {
+            return failed(
+                "VP token nonce claim is missing or empty".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
+        };
         if token_nonce != expected_nonce {
-            return VerificationResult {
-                valid: false,
-                descriptor_results: vec![],
-                zk_results: vec![],
-                errors: vec![format!(
-                    "Nonce mismatch: expected '{}', got '{}'",
-                    expected_nonce, token_nonce
-                )],
-            };
+            return failed(
+                "VP token nonce does not match the transaction".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
         }
 
         // ── Step 4: Validate audience ─────────────────────────────────
@@ -513,32 +645,31 @@ impl VerificationEngine {
             _ => false,
         };
         if !aud_ok {
-            return VerificationResult {
-                valid: false,
-                descriptor_results: vec![],
-                zk_results: vec![],
-                errors: vec![format!(
-                    "Audience mismatch: expected '{}' in aud claim",
-                    self.verifier_id
-                )],
-            };
+            return failed(
+                "VP token audience does not match the verifier".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
         }
 
         // ── Step 5: Validate expiration ───────────────────────────────
-        if let Some(exp) = payload.get("exp").and_then(|v| v.as_i64()) {
-            let now = chrono::Utc::now().timestamp();
-            if now > exp + 60 {
-                // 60-second clock skew grace
-                return VerificationResult {
-                    valid: false,
-                    descriptor_results: vec![],
-                    zk_results: vec![],
-                    errors: vec!["VP token has expired".into()],
-                };
-            }
+        let Some(exp) = payload.get("exp").and_then(|v| v.as_i64()) else {
+            return failed(
+                "VP token expiration claim is missing or invalid".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
+        };
+        let now = chrono::Utc::now().timestamp();
+        if now > exp + 60 {
+            return failed(
+                "VP token has expired".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
         }
 
-        // ── Step 6: Locate holder public key ─────────────────────────
+        // ── Step 6: Locate presentation public key ───────────────────
         //   Priority:
         //   a) Header `jwk` (RFC 7517 §4.7) — set by spec-compliant wallets
         //   b) Payload `cnf.jwk`            — key confirmation claim (RFC 7800)
@@ -561,16 +692,11 @@ impl VerificationEngine {
         let jwk = match jwk {
             Some(j) => j,
             None => {
-                return VerificationResult {
-                    valid: false,
-                    descriptor_results: vec![],
-                    zk_results: vec![],
-                    errors: vec![
-                        "No holder public key found in VP token — expected header `jwk` \
-                         or payload `cnf.jwk`"
-                            .into(),
-                    ],
-                }
+                return failed(
+                    "No presentation public key found in VP token".into(),
+                    VerificationCheckStatus::Failed,
+                    VerificationCheckStatus::NotChecked,
+                )
             }
         };
 
@@ -578,12 +704,11 @@ impl VerificationEngine {
         let decoding_key = match DecodingKey::from_jwk(&jwk) {
             Ok(k) => k,
             Err(e) => {
-                return VerificationResult {
-                    valid: false,
-                    descriptor_results: vec![],
-                    zk_results: vec![],
-                    errors: vec![format!("Cannot build decoding key from JWK: {}", e)],
-                }
+                return failed(
+                    format!("Cannot build decoding key from JWK: {e}"),
+                    VerificationCheckStatus::Failed,
+                    VerificationCheckStatus::NotChecked,
+                )
             }
         };
 
@@ -593,38 +718,45 @@ impl VerificationEngine {
         let mut validation = Validation::new(header.alg);
         validation.validate_aud = false; // validated manually above
         validation.validate_exp = true;
+        validation.validate_nbf = true;
         validation.leeway = 60; // 60s clock skew tolerance
 
-        let format_label = match header.alg {
-            Algorithm::ES256 | Algorithm::ES384 => "jwt_vp_json",
-            Algorithm::RS256 | Algorithm::RS384 | Algorithm::RS512 => "jwt_vp_json",
-            Algorithm::EdDSA => "jwt_vp_json",
-            _ => "jwt_vp",
-        };
-
         match jsonwebtoken::decode::<serde_json::Value>(vp_token, &decoding_key, &validation) {
-            Ok(_) => VerificationResult {
-                valid: true,
-                descriptor_results: vec![DescriptorVerificationResult {
-                    descriptor_id: "vp_token".into(),
-                    valid: true,
-                    format: format_label.into(),
-                    error: None,
-                }],
-                zk_results: vec![],
-                errors: vec![],
-            },
-            Err(e) => VerificationResult {
-                valid: false,
-                descriptor_results: vec![DescriptorVerificationResult {
-                    descriptor_id: "vp_token".into(),
-                    valid: false,
-                    format: format_label.into(),
-                    error: Some(format!("JWT signature verification failed: {}", e)),
-                }],
-                zk_results: vec![],
-                errors: vec![format!("VP token signature verification failed: {}", e)],
-            },
+            Ok(_) => {
+                let mut evidence = VerificationEvidence::not_checked();
+                evidence.presentation_proof = VerificationCheckStatus::Passed;
+                evidence.transaction_binding = VerificationCheckStatus::Passed;
+                VerificationResult::low_level(
+                    VerificationScope::PresentationProof,
+                    true,
+                    evidence,
+                    vec![DescriptorVerificationResult {
+                        descriptor_id: "vp_token".into(),
+                        valid: true,
+                        format: format_label.into(),
+                        error: None,
+                    }],
+                    vec![],
+                    vec![],
+                )
+            }
+            Err(e) => {
+                let mut evidence = VerificationEvidence::not_checked();
+                evidence.presentation_proof = VerificationCheckStatus::Failed;
+                VerificationResult::low_level(
+                    VerificationScope::PresentationProof,
+                    false,
+                    evidence,
+                    vec![DescriptorVerificationResult {
+                        descriptor_id: "vp_token".into(),
+                        valid: false,
+                        format: format_label.into(),
+                        error: Some(format!("JWT signature verification failed: {e}")),
+                    }],
+                    vec![],
+                    vec![format!("VP token signature verification failed: {e}")],
+                )
+            }
         }
     }
 
@@ -640,6 +772,39 @@ impl VerificationEngine {
     ) -> VerificationResult {
         let mut descriptor_results = Vec::new();
         let mut errors = Vec::new();
+
+        if definition.input_descriptors.is_empty() {
+            errors.push("Presentation definition contains no input descriptors".into());
+        }
+        if submission.descriptor_map.is_empty() {
+            errors.push("Presentation submission contains no descriptor mappings".into());
+        }
+
+        let mut definition_ids = HashSet::new();
+        for descriptor in &definition.input_descriptors {
+            if !definition_ids.insert(descriptor.id.as_str()) {
+                errors.push(format!(
+                    "Presentation definition contains duplicate descriptor id '{}'",
+                    descriptor.id
+                ));
+            }
+        }
+
+        let mut mapped_ids = HashSet::new();
+        for entry in &submission.descriptor_map {
+            if !definition_ids.contains(entry.id.as_str()) {
+                errors.push(format!(
+                    "Submission maps unknown descriptor id '{}'",
+                    entry.id
+                ));
+            }
+            if !mapped_ids.insert(entry.id.as_str()) {
+                errors.push(format!(
+                    "Submission contains duplicate mapping for descriptor '{}'",
+                    entry.id
+                ));
+            }
+        }
 
         // Verify definition_id matches
         if submission.definition_id != definition.id {
@@ -658,29 +823,23 @@ impl VerificationEngine {
 
             match mapped {
                 Some(entry) => {
-                    // Verify format compatibility
-                    let format_ok = if let Some(ref required_formats) = descriptor.format {
-                        required_formats.contains_key(&entry.format)
-                    } else {
-                        true // no format restriction
-                    };
+                    let leaf = Self::leaf_descriptor_map(entry);
+                    let format_error = descriptor.format.as_ref().and_then(|required_formats| {
+                        (!required_formats.contains_key(&leaf.format)).then(|| {
+                            format!(
+                                "Format '{}' not in accepted formats: {:?}",
+                                leaf.format,
+                                required_formats.keys().collect::<Vec<_>>()
+                            )
+                        })
+                    });
+                    let format_ok = format_error.is_none();
 
                     descriptor_results.push(DescriptorVerificationResult {
                         descriptor_id: descriptor.id.clone(),
                         valid: format_ok,
-                        format: entry.format.clone(),
-                        error: if format_ok {
-                            None
-                        } else {
-                            Some(format!(
-                                "Format '{}' not in accepted formats: {:?}",
-                                entry.format,
-                                descriptor
-                                    .format
-                                    .as_ref()
-                                    .map(|f| f.keys().collect::<Vec<_>>())
-                            ))
-                        },
+                        format: leaf.format.clone(),
+                        error: format_error,
                     });
                 }
                 None => {
@@ -695,13 +854,21 @@ impl VerificationEngine {
         }
 
         let all_valid = errors.is_empty() && descriptor_results.iter().all(|r| r.valid);
+        let mut evidence = VerificationEvidence::not_checked();
+        evidence.presentation_constraints = if all_valid {
+            VerificationCheckStatus::Passed
+        } else {
+            VerificationCheckStatus::Failed
+        };
 
-        VerificationResult {
-            valid: all_valid,
+        VerificationResult::low_level(
+            VerificationScope::PresentationStructure,
+            all_valid,
+            evidence,
             descriptor_results,
-            zk_results: vec![],
+            vec![],
             errors,
-        }
+        )
     }
 
     /// Full Presentation Exchange (DIF PE v2) evaluation.
@@ -710,8 +877,8 @@ impl VerificationEngine {
     /// field constraint evaluation against the decoded VP token payload JSON.
     ///
     /// `vp_payload` is the JWT body (the `serde_json::Value` decoded from the
-    /// VP token's second segment). When `None`, the call delegates to
-    /// [`verify_presentation_structure`] for structural checks only.
+    /// VP token's second segment). When `None`, the full check fails closed.
+    /// Call [`verify_presentation_structure`] explicitly for structure only.
     ///
     /// For each `InputDescriptor`, the matching `descriptor_map` entry's `path`
     /// (and `path_nested.path` when present) navigates from the VP token payload
@@ -726,13 +893,26 @@ impl VerificationEngine {
     ) -> VerificationResult {
         // ── 1. Structural check ──────────────────────────────────────────────
         let structural = self.verify_presentation_structure(definition, submission);
-        if !structural.valid {
+        if !structural.check_valid {
             return structural;
         }
 
         let payload = match vp_payload {
             Some(p) => p,
-            None => return structural, // no payload — structural-only result
+            None => {
+                let mut evidence = VerificationEvidence::not_checked();
+                evidence.presentation_constraints = VerificationCheckStatus::Failed;
+                return VerificationResult::low_level(
+                    VerificationScope::PresentationExchange,
+                    false,
+                    evidence,
+                    structural.descriptor_results,
+                    vec![],
+                    vec![
+                        "Decoded presentation payload is required for constraint evaluation".into(),
+                    ],
+                );
+            }
         };
 
         // ── 2. Field constraint evaluation per descriptor ────────────────────
@@ -750,16 +930,48 @@ impl VerificationEngine {
                 None => continue,
             };
 
-            // Navigate to the credential document using path + path_nested.
-            let root_doc = Self::json_path_get(payload, &map_entry.path).unwrap_or(payload);
-            let credential_doc = match &map_entry.path_nested {
-                Some(nested) => Self::json_path_get(root_doc, &nested.path).unwrap_or(root_doc),
-                None => root_doc,
+            let leaf_map = Self::leaf_descriptor_map(map_entry);
+            if descriptor
+                .format
+                .as_ref()
+                .and_then(|formats| formats.get(&leaf_map.format))
+                .and_then(|requirement| requirement.alg.as_ref())
+                .is_some_and(|algorithms| !algorithms.is_empty())
+            {
+                let err = format!(
+                    "Descriptor '{}': format algorithm requirement has no authenticated algorithm evidence",
+                    descriptor.id
+                );
+                errors.push(err.clone());
+                descriptor_results.push(DescriptorVerificationResult {
+                    descriptor_id: descriptor.id.clone(),
+                    valid: false,
+                    format: leaf_map.format.clone(),
+                    error: Some(err),
+                });
+                continue;
+            }
+
+            // Navigate the complete descriptor chain. A bad mapping must never
+            // widen evaluation to an enclosing object or ignore deeper nesting.
+            let Some(credential_doc) = Self::descriptor_map_get(payload, map_entry) else {
+                let err = format!(
+                    "Descriptor '{}': mapping path chain did not resolve",
+                    descriptor.id
+                );
+                errors.push(err.clone());
+                descriptor_results.push(DescriptorVerificationResult {
+                    descriptor_id: descriptor.id.clone(),
+                    valid: false,
+                    format: leaf_map.format.clone(),
+                    error: Some(err),
+                });
+                continue;
             };
 
             // Enforce limit_disclosure: "required" — credential MUST be SD-JWT.
             if descriptor.constraints.limit_disclosure.as_deref() == Some("required") {
-                let fmt = map_entry.format.as_str();
+                let fmt = leaf_map.format.as_str();
                 if !fmt.contains("sd_jwt") && !fmt.contains("sd-jwt") {
                     let err = format!(
                         "Descriptor '{}': limit_disclosure:required but format '{}' is not SD-JWT",
@@ -769,7 +981,22 @@ impl VerificationEngine {
                     descriptor_results.push(DescriptorVerificationResult {
                         descriptor_id: descriptor.id.clone(),
                         valid: false,
-                        format: map_entry.format.clone(),
+                        format: leaf_map.format.clone(),
+                        error: Some(err),
+                    });
+                    continue;
+                }
+            } else if let Some(value) = descriptor.constraints.limit_disclosure.as_deref() {
+                if value != "preferred" {
+                    let err = format!(
+                        "Descriptor '{}': unsupported limit_disclosure value '{}'",
+                        descriptor.id, value
+                    );
+                    errors.push(err.clone());
+                    descriptor_results.push(DescriptorVerificationResult {
+                        descriptor_id: descriptor.id.clone(),
+                        valid: false,
+                        format: leaf_map.format.clone(),
                         error: Some(err),
                     });
                     continue;
@@ -779,8 +1006,30 @@ impl VerificationEngine {
             // Evaluate field constraints against the credential document.
             let mut field_errors: Vec<String> = Vec::new();
             for field in &descriptor.constraints.fields {
-                // ZK predicates are verified separately via verify_zk_predicate().
                 if field.zk_predicate.is_some() {
+                    field_errors.push(format!(
+                        "Descriptor '{}': required ZK predicate has no bound proof result",
+                        descriptor.id
+                    ));
+                    continue;
+                }
+
+                if field.path.is_empty() {
+                    field_errors.push(format!(
+                        "Descriptor '{}': field path array must not be empty",
+                        descriptor.id
+                    ));
+                    continue;
+                }
+                if let Some(unsupported) = field
+                    .path
+                    .iter()
+                    .find(|path| !Self::is_supported_json_path(path))
+                {
+                    field_errors.push(format!(
+                        "Descriptor '{}': unsupported JSONPath expression '{}'",
+                        descriptor.id, unsupported
+                    ));
                     continue;
                 }
 
@@ -824,7 +1073,7 @@ impl VerificationEngine {
                 .iter()
                 .find(|r| r.descriptor_id == descriptor.id)
                 .map(|r| r.format.clone())
-                .unwrap_or_else(|| map_entry.format.clone());
+                .unwrap_or_else(|| leaf_map.format.clone());
 
             descriptor_results.push(DescriptorVerificationResult {
                 descriptor_id: descriptor.id.clone(),
@@ -834,12 +1083,85 @@ impl VerificationEngine {
             });
         }
 
-        VerificationResult {
-            valid: errors.is_empty(),
+        let all_valid = errors.is_empty() && descriptor_results.iter().all(|r| r.valid);
+        let mut evidence = VerificationEvidence::not_checked();
+        evidence.presentation_constraints = if all_valid {
+            VerificationCheckStatus::Passed
+        } else {
+            VerificationCheckStatus::Failed
+        };
+        VerificationResult::low_level(
+            VerificationScope::PresentationExchange,
+            all_valid,
+            evidence,
             descriptor_results,
-            zk_results: structural.zk_results,
+            structural.zk_results,
             errors,
+        )
+    }
+
+    fn leaf_descriptor_map(entry: &DescriptorMapEntry) -> &DescriptorMapEntry {
+        match entry.path_nested.as_deref() {
+            Some(nested) => Self::leaf_descriptor_map(nested),
+            None => entry,
         }
+    }
+
+    fn descriptor_map_get<'a>(
+        root: &'a serde_json::Value,
+        entry: &DescriptorMapEntry,
+    ) -> Option<&'a serde_json::Value> {
+        let current = Self::json_path_get(root, &entry.path)?;
+        match entry.path_nested.as_deref() {
+            Some(nested) => Self::descriptor_map_get(current, nested),
+            None => Some(current),
+        }
+    }
+
+    fn is_supported_json_path(path: &str) -> bool {
+        if path == "$" {
+            return true;
+        }
+        let Some(rest) = path.strip_prefix("$.") else {
+            return false;
+        };
+        if rest.is_empty() {
+            return false;
+        }
+
+        let segments = Self::split_path_segments(rest);
+        if segments.is_empty() || segments.iter().any(|segment| segment.is_empty()) {
+            return false;
+        }
+
+        segments.iter().all(|segment| {
+            if segment.chars().any(|character| {
+                matches!(
+                    character,
+                    '*' | '?' | '@' | '(' | ')' | ',' | ':' | '\'' | '"'
+                )
+            }) {
+                return false;
+            }
+
+            let open_count = segment.matches('[').count();
+            let close_count = segment.matches(']').count();
+            match (open_count, close_count) {
+                (0, 0) => true,
+                (1, 1) => {
+                    let Some(open) = segment.find('[') else {
+                        return false;
+                    };
+                    segment.ends_with(']')
+                        && open > 0
+                        && segment[open + 1..segment.len() - 1]
+                            .chars()
+                            .all(|character| character.is_ascii_digit())
+                        && open + 1 < segment.len() - 1
+                }
+                _ => false,
+            }
+        })
     }
 
     /// Extract a value from a JSON document using a simple JSONPath expression.
@@ -857,6 +1179,9 @@ impl VerificationEngine {
         root: &'a serde_json::Value,
         path: &str,
     ) -> Option<&'a serde_json::Value> {
+        if !Self::is_supported_json_path(path) {
+            return None;
+        }
         let rest = path.strip_prefix('$')?;
         if rest.is_empty() {
             return Some(root);
@@ -914,29 +1239,59 @@ impl VerificationEngine {
     /// - `maximum`  — numeric upper bound (inclusive)
     /// - `pattern`  — ECMA 262 regular expression (JSON Schema §6.3.3)
     /// - `contains` — at least one array element satisfies a sub-schema
+    /// - `format`   — `date`, `date-time`, or `uri`
     ///
-    /// Unknown keywords are silently ignored.
+    /// Unsupported assertion keywords, malformed schemas, and invalid regular
+    /// expressions fail closed. Annotation-only keywords are ignored.
     fn apply_json_schema_filter(
         value: &serde_json::Value,
         filter: &serde_json::Value,
     ) -> Result<(), String> {
-        let Some(obj) = filter.as_object() else {
-            return Ok(());
-        };
+        let obj = filter
+            .as_object()
+            .ok_or_else(|| "JSON Schema filter must be an object".to_string())?;
 
-        if let Some(expected_type) = obj.get("type").and_then(|v| v.as_str()) {
-            let actual = match value {
-                serde_json::Value::String(_) => "string",
-                serde_json::Value::Number(_) => "number",
-                serde_json::Value::Array(_) => "array",
-                serde_json::Value::Object(_) => "object",
-                serde_json::Value::Bool(_) => "boolean",
-                serde_json::Value::Null => "null",
-            };
-            if expected_type != actual {
+        const SUPPORTED_ASSERTIONS: &[&str] = &[
+            "type", "const", "enum", "minimum", "maximum", "pattern", "contains", "format",
+        ];
+        const ANNOTATIONS: &[&str] = &[
+            "$schema",
+            "$id",
+            "$comment",
+            "title",
+            "description",
+            "default",
+            "examples",
+            "readOnly",
+            "writeOnly",
+        ];
+        for keyword in obj.keys() {
+            if !SUPPORTED_ASSERTIONS.contains(&keyword.as_str())
+                && !ANNOTATIONS.contains(&keyword.as_str())
+            {
                 return Err(format!(
-                    "type mismatch: expected '{}', got '{}'",
-                    expected_type, actual
+                    "unsupported JSON Schema assertion keyword '{keyword}'"
+                ));
+            }
+        }
+
+        if let Some(type_value) = obj.get("type") {
+            let expected_type = type_value
+                .as_str()
+                .ok_or_else(|| "JSON Schema 'type' must be a string".to_string())?;
+            let matches = match expected_type {
+                "string" => value.is_string(),
+                "number" => value.is_number(),
+                "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+                "array" => value.is_array(),
+                "object" => value.is_object(),
+                "boolean" => value.is_boolean(),
+                "null" => value.is_null(),
+                unsupported => return Err(format!("unsupported JSON Schema type '{unsupported}'")),
+            };
+            if !matches {
+                return Err(format!(
+                    "type mismatch: expected '{expected_type}', got {value}"
                 ));
             }
         }
@@ -947,13 +1302,20 @@ impl VerificationEngine {
             }
         }
 
-        if let Some(variants) = obj.get("enum").and_then(|v| v.as_array()) {
+        if let Some(enum_value) = obj.get("enum") {
+            let variants = enum_value
+                .as_array()
+                .filter(|variants| !variants.is_empty())
+                .ok_or_else(|| "JSON Schema 'enum' must be a non-empty array".to_string())?;
             if !variants.contains(value) {
                 return Err(format!("enum: {value} is not one of {variants:?}"));
             }
         }
 
-        if let Some(min) = obj.get("minimum").and_then(|v| v.as_f64()) {
+        if let Some(minimum_value) = obj.get("minimum") {
+            let min = minimum_value
+                .as_f64()
+                .ok_or_else(|| "JSON Schema 'minimum' must be a number".to_string())?;
             match value.as_f64() {
                 Some(n) if n >= min => {}
                 Some(n) => return Err(format!("minimum {min}: {n} is below minimum")),
@@ -961,7 +1323,10 @@ impl VerificationEngine {
             }
         }
 
-        if let Some(max) = obj.get("maximum").and_then(|v| v.as_f64()) {
+        if let Some(maximum_value) = obj.get("maximum") {
+            let max = maximum_value
+                .as_f64()
+                .ok_or_else(|| "JSON Schema 'maximum' must be a number".to_string())?;
             match value.as_f64() {
                 Some(n) if n <= max => {}
                 Some(n) => return Err(format!("maximum {max}: {n} exceeds maximum")),
@@ -969,8 +1334,13 @@ impl VerificationEngine {
             }
         }
 
-        if let Some(pattern) = obj.get("pattern").and_then(|v| v.as_str()) {
-            let s = value.as_str().unwrap_or("");
+        if let Some(pattern_value) = obj.get("pattern") {
+            let pattern = pattern_value
+                .as_str()
+                .ok_or_else(|| "JSON Schema 'pattern' must be a string".to_string())?;
+            let s = value
+                .as_str()
+                .ok_or_else(|| "JSON Schema 'pattern' requires a string value".to_string())?;
             // JSON Schema §6.3.3: pattern uses ECMA 262 regular expressions.
             // The `regex` crate is compatible for all patterns used in DIF PEX spec examples.
             match regex::Regex::new(pattern) {
@@ -979,13 +1349,31 @@ impl VerificationEngine {
                         return Err(format!("pattern '{pattern}' not matched by '{s}'"));
                     }
                 }
-                Err(_) => {
-                    // Graceful fallback for patterns that don't compile as Rust regex
-                    // (e.g. ECMA 262-only syntax). Fall back to substring check.
-                    if !s.contains(pattern) {
-                        return Err(format!("pattern '{pattern}' not satisfied by '{s}'"));
-                    }
+                Err(error) => return Err(format!("invalid pattern '{pattern}': {error}")),
+            }
+        }
+
+        if let Some(format_value) = obj.get("format") {
+            let format = format_value
+                .as_str()
+                .ok_or_else(|| "JSON Schema 'format' must be a string".to_string())?;
+            let text = value
+                .as_str()
+                .ok_or_else(|| format!("JSON Schema format '{format}' requires a string value"))?;
+            let valid = match format {
+                "date" => chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").is_ok(),
+                "date-time" => chrono::DateTime::parse_from_rfc3339(text).is_ok(),
+                "uri" => url::Url::parse(text).is_ok(),
+                unsupported => {
+                    return Err(format!(
+                        "unsupported JSON Schema format assertion '{unsupported}'"
+                    ))
                 }
+            };
+            if !valid {
+                return Err(format!(
+                    "value does not satisfy JSON Schema format '{format}'"
+                ));
             }
         }
 
@@ -1113,7 +1501,7 @@ mod tests {
         };
 
         let result = engine.verify_presentation_structure(&pd, &submission);
-        assert!(result.valid);
+        assert!(result.check_valid);
         assert!(result.errors.is_empty());
         assert_eq!(result.descriptor_results.len(), 1);
         assert!(result.descriptor_results[0].valid);
@@ -1139,7 +1527,7 @@ mod tests {
         };
 
         let result = engine.verify_presentation_structure(&pd, &submission);
-        assert!(!result.valid);
+        assert!(!result.check_valid);
         assert!(result.errors[0].contains("does not match"));
     }
 
@@ -1158,7 +1546,7 @@ mod tests {
         };
 
         let result = engine.verify_presentation_structure(&pd, &submission);
-        assert!(!result.valid);
+        assert!(!result.check_valid);
         assert!(result.descriptor_results[0]
             .error
             .as_ref()
@@ -1186,7 +1574,7 @@ mod tests {
         };
 
         let result = engine.verify_presentation_structure(&pd, &submission);
-        assert!(!result.valid);
+        assert!(!result.check_valid);
         assert!(result.descriptor_results[0]
             .error
             .as_ref()
@@ -1212,7 +1600,7 @@ mod tests {
     fn test_verify_vp_token_malformed() {
         let engine = test_engine();
         let result = engine.verify_vp_token("not.a.jwt.at.all", "nonce");
-        assert!(!result.valid);
+        assert!(!result.check_valid);
         assert!(
             result.errors[0].contains("header parse error") || result.errors[0].contains("3 parts")
         );
@@ -1230,8 +1618,8 @@ mod tests {
         );
         let fake_token = format!("{}.{}.fake_sig", header_b64, payload_b64);
         let result = engine.verify_vp_token(&fake_token, "correct_nonce");
-        assert!(!result.valid);
-        assert!(result.errors[0].contains("Nonce mismatch"));
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("nonce does not match"));
     }
 
     #[test]
@@ -1245,8 +1633,8 @@ mod tests {
         );
         let fake_token = format!("{}.{}.fake_sig", header_b64, payload_b64);
         let result = engine.verify_vp_token(&fake_token, "abc");
-        assert!(!result.valid);
-        assert!(result.errors[0].contains("Audience mismatch"));
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("audience does not match"));
     }
 
     #[test]
@@ -1256,12 +1644,12 @@ mod tests {
         let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(r#"{"alg":"ES256","typ":"JWT"}"#);
         let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
-            r#"{"iss":"did:example:holder","aud":"did:example:verifier","nonce":"testnonce","iat":1000000000}"#,
+            r#"{"iss":"did:example:holder","aud":"did:example:verifier","nonce":"testnonce","iat":1000000000,"exp":9999999999}"#,
         );
         let fake_token = format!("{}.{}.fake_sig", header_b64, payload_b64);
         let result = engine.verify_vp_token(&fake_token, "testnonce");
-        assert!(!result.valid);
-        assert!(result.errors[0].contains("No holder public key"));
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("No presentation public key"));
     }
 
     #[test]

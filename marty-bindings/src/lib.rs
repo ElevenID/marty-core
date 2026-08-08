@@ -1171,9 +1171,15 @@ fn normalize_zk_predicate_claims(
 
 /// Verify an OID4VP VP JWT token.
 ///
-/// Validates the JWT signature (when the holder public key is embedded in the
+/// Validates the JWT signature (when a presentation public key is embedded in the
 /// token via `jwk` header, `cnf.jwk`, or `sub_jwk`), the nonce, the audience,
 /// and the expiry.
+///
+/// This is a low-level presentation-proof check, not credential verification.
+/// A passing proof is reported as `check_valid: true` with scoped `evidence`;
+/// `valid` and `decision_ready` remain false until a higher-level verifier has
+/// authenticated every embedded credential and established holder binding,
+/// issuer trust, validity, and status.
 ///
 /// Args:
 ///     vp_token: The compact-serialised VP JWT (or SD-JWT presentation).
@@ -1181,7 +1187,8 @@ fn normalize_zk_predicate_claims(
 ///     verifier_id: The verifier's client_id / audience value.
 ///
 /// Returns:
-///     JSON object `{ "valid": bool, "errors": [str] }`.
+///     JSON object with `valid`, `check_valid`, `decision_ready`, `scope`,
+///     `evidence`, `descriptor_results`, and `errors` fields.
 #[pyfunction]
 fn oid4vp_verify_vp_token(
     vp_token: &str,
