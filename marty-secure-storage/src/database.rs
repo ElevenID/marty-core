@@ -15,6 +15,8 @@ use crate::keychain::KeychainManager;
 use crate::models::*;
 use crate::schema::{SCHEMA, SCHEMA_VERSION};
 
+const MAX_PACKAGE_FUTURE_SKEW_SECONDS: i64 = 300;
+
 /// Offline queue status
 #[derive(Debug, Serialize)]
 pub struct OfflineQueueStatus {
@@ -1465,9 +1467,21 @@ fn validate_open_badge_package(
             "package digest must be 64 lowercase hexadecimal characters".to_string(),
         ));
     }
-    if provenance.created_at > provenance.imported_at {
+    let now = Utc::now();
+    let allowed_skew = chrono::Duration::seconds(MAX_PACKAGE_FUTURE_SKEW_SECONDS);
+    if provenance.created_at > provenance.imported_at + allowed_skew {
         return Err(StorageError::InvalidTrustPackage(
-            "package creation time cannot be after import time".to_string(),
+            "package creation time exceeds the allowed import clock skew".to_string(),
+        ));
+    }
+    if provenance.created_at > now + allowed_skew {
+        return Err(StorageError::InvalidTrustPackage(
+            "package creation time exceeds the allowed local clock skew".to_string(),
+        ));
+    }
+    if provenance.imported_at > now + allowed_skew {
+        return Err(StorageError::InvalidTrustPackage(
+            "package import time exceeds the allowed local clock skew".to_string(),
         ));
     }
     if provenance.created_at >= provenance.expires_at {
@@ -2458,6 +2472,42 @@ mod tests {
                 storage.get_open_badge_keys().await,
                 Err(StorageError::InvalidTrustPackage(message))
                     if message.contains("expiry time has passed")
+            ));
+        });
+    }
+
+    #[test]
+    fn package_creation_and_import_clock_skew_is_bounded() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let now = Utc::now();
+            let mut within_skew =
+                package_provenance("usb:skew-ok", 1, "1.0.0", 1, "usb-root-1", 'a');
+            within_skew.created_at = now + chrono::Duration::minutes(5);
+            within_skew.imported_at = now;
+            within_skew.expires_at = now + chrono::Duration::days(1);
+            storage
+                .apply_trust_package(&within_skew, &[], &[])
+                .await
+                .unwrap();
+
+            let mut future_creation = within_skew.clone();
+            future_creation.trust_domain = "usb:skew-created".to_string();
+            future_creation.created_at = now + chrono::Duration::minutes(6);
+            assert!(matches!(
+                storage.apply_trust_package(&future_creation, &[], &[]).await,
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("creation time exceeds")
+            ));
+
+            let mut future_import = within_skew;
+            future_import.trust_domain = "usb:skew-imported".to_string();
+            future_import.imported_at = now + chrono::Duration::minutes(6);
+            assert!(matches!(
+                storage.apply_trust_package(&future_import, &[], &[]).await,
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("import time exceeds")
             ));
         });
     }
