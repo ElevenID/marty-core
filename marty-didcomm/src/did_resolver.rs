@@ -8,7 +8,7 @@ use crate::error::{DidcommError, DidcommResult};
 use crate::types::{DidDocument, Jwk, ServiceEntry, VerificationMethod};
 
 #[cfg(feature = "did_web")]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[cfg(feature = "did_web")]
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
@@ -85,9 +85,8 @@ impl DidResolver {
             "peer" => resolve_did_peer(did),
             #[cfg(feature = "did_web")]
             "web" => {
-                let direct_allowed =
-                    did_web_host(did).is_ok_and(|host| self.did_web_allowed_hosts.contains(&host));
-                if direct_allowed {
+                let host = did_web_host(did)?;
+                if self.did_web_allowed_hosts.contains(&host) {
                     resolve_did_web(did, &self.did_web_allowed_hosts).await
                 } else if let Some(ref base_url) = self.universal_resolver_url {
                     resolve_via_universal_resolver(base_url, did).await
@@ -480,6 +479,9 @@ fn did_web_host(did: &str) -> DidcommResult<String> {
     if !authority_url.username().is_empty()
         || authority_url.password().is_some()
         || authority_url.port_or_known_default() != Some(443)
+        || authority_url.path() != "/"
+        || authority_url.query().is_some()
+        || authority_url.fragment().is_some()
     {
         return Err(DidcommError::InvalidDid(format!(
             "did:web contains an unsafe authority: {did}"
@@ -509,6 +511,9 @@ async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommR
     if !authority_url.username().is_empty()
         || authority_url.password().is_some()
         || authority_url.port_or_known_default() != Some(443)
+        || authority_url.path() != "/"
+        || authority_url.query().is_some()
+        || authority_url.fragment().is_some()
         || !allowed_hosts.contains(&host)
     {
         return Err(DidcommError::ResolutionFailed {
@@ -624,7 +629,9 @@ async fn fetch_did_document(
                 reason: "did:web host does not resolve exclusively to public addresses".to_string(),
             });
         }
-        builder = builder.resolve_to_addrs(host, &addresses);
+        // Environment proxies resolve the destination independently and would
+        // bypass the address set validated and pinned above.
+        builder = builder.no_proxy().resolve_to_addrs(host, &addresses);
     }
 
     let client = builder
@@ -835,8 +842,8 @@ fn is_public_ip(address: std::net::IpAddr) -> bool {
                 || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19)))
         }
         std::net::IpAddr::V6(address) => {
-            if let Some(mapped) = address.to_ipv4_mapped() {
-                return is_public_ip(std::net::IpAddr::V4(mapped));
+            if let Some(embedded) = address.to_ipv4() {
+                return is_public_ip(std::net::IpAddr::V4(embedded));
             }
             let segments = address.segments();
             !(address.is_unspecified()
@@ -844,6 +851,11 @@ fn is_public_ip(address: std::net::IpAddr) -> bool {
                 || address.is_unique_local()
                 || address.is_unicast_link_local()
                 || address.is_multicast()
+                || (segments[0] & 0xffc0) == 0xfec0
+                || (segments[0] == 0x0064
+                    && segments[1] == 0xff9b
+                    && (segments[2] == 0 || segments[2] == 1))
+                || segments[0] == 0x2002
                 || (segments[0] == 0x2001 && segments[1] == 0x0db8))
         }
     }
@@ -858,12 +870,15 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
         });
     }
 
-    let mut method_ids = HashSet::new();
+    let mut methods = HashMap::new();
     for method in &document.verification_method {
-        if method.id.is_empty()
-            || method.controller != did
-            || !(method.id == did || method.id.starts_with(&format!("{did}#")))
-            || !method_ids.insert(method.id.as_str())
+        if !valid_verification_method(method, did)
+            || methods
+                .insert(
+                    method.id.clone(),
+                    serde_json::to_value(method).unwrap_or(serde_json::Value::Null),
+                )
+                .is_some()
         {
             return Err(DidcommError::ResolutionFailed {
                 did: did.to_string(),
@@ -880,7 +895,7 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
         .chain(document.key_agreement.iter())
     {
         if let Some(reference) = relationship.as_str() {
-            if !method_ids.contains(reference) {
+            if !methods.contains_key(reference) {
                 return Err(DidcommError::ResolutionFailed {
                     did: did.to_string(),
                     reason: "DID document references an unknown verification method".to_string(),
@@ -895,16 +910,26 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
                             .to_string(),
                     }
                 })?;
-            if method.id.is_empty()
-                || method.controller != did
-                || !(method.id == did || method.id.starts_with(&format!("{did}#")))
-            {
+            if !valid_verification_method(&method, did) {
                 return Err(DidcommError::ResolutionFailed {
                     did: did.to_string(),
                     reason: "DID document contains a foreign inline verification method"
                         .to_string(),
                 });
             }
+            let serialized = serde_json::to_value(&method).unwrap_or(serde_json::Value::Null);
+            if methods
+                .get(&method.id)
+                .is_some_and(|existing| existing != &serialized)
+            {
+                return Err(DidcommError::ResolutionFailed {
+                    did: did.to_string(),
+                    reason:
+                        "DID document contains conflicting verification methods with the same id"
+                            .to_string(),
+                });
+            }
+            methods.entry(method.id.clone()).or_insert(serialized);
         }
     }
 
@@ -925,6 +950,25 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
     Ok(())
 }
 
+#[cfg(feature = "did_web")]
+fn valid_verification_method(method: &VerificationMethod, did: &str) -> bool {
+    let key_material_count = usize::from(method.public_key_jwk.is_some())
+        + usize::from(method.public_key_multibase.is_some())
+        + usize::from(method.public_key_base58.is_some());
+    let public_jwk = method.public_key_jwk.as_ref().is_none_or(|jwk| {
+        !jwk.kty.is_empty()
+            && jwk.x.as_deref().is_some_and(|value| !value.is_empty())
+            && jwk.d.is_none()
+    });
+
+    !method.id.is_empty()
+        && method.controller == did
+        && (method.id == did || method.id.starts_with(&format!("{did}#")))
+        && !method.r#type.is_empty()
+        && key_material_count == 1
+        && public_jwk
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -942,6 +986,25 @@ mod tests {
             key_agreement: vec![],
             verification_method: vec![],
             service: vec![],
+        }
+    }
+
+    #[cfg(feature = "did_web")]
+    fn x25519_method(did: &str, fragment: &str) -> VerificationMethod {
+        VerificationMethod {
+            id: format!("{did}#{fragment}"),
+            r#type: "JsonWebKey2020".to_string(),
+            controller: did.to_string(),
+            public_key_jwk: Some(Jwk {
+                kty: "OKP".to_string(),
+                crv: Some("X25519".to_string()),
+                x: Some("avH0O2Y4tqLAq8y9zpianr8ajii5m4F_mICrzNlatXs".to_string()),
+                y: None,
+                d: None,
+                kid: None,
+            }),
+            public_key_multibase: None,
+            public_key_base58: None,
         }
     }
 
@@ -1029,6 +1092,20 @@ mod tests {
     }
 
     #[cfg(feature = "did_web")]
+    #[tokio::test]
+    async fn did_web_rejects_encoded_authority_components_before_network_access() {
+        let resolver = DidResolver::with_did_web_allowed_hosts(["example.com"]);
+        for did in [
+            "did:web:example.com%2Fadmin",
+            "did:web:example.com%3Ftarget=internal",
+            "did:web:example.com%23fragment",
+        ] {
+            let error = resolver.resolve(did).await.unwrap_err();
+            assert!(error.to_string().contains("unsafe authority"), "{error}");
+        }
+    }
+
+    #[cfg(feature = "did_web")]
     #[test]
     fn resolved_document_must_match_requested_did() {
         let document = empty_document("did:web:other.example");
@@ -1041,19 +1118,47 @@ mod tests {
     #[test]
     fn resolved_document_rejects_duplicate_verification_methods() {
         let did = "did:web:example.com";
-        let method = VerificationMethod {
-            id: format!("{did}#key-1"),
-            r#type: "JsonWebKey2020".to_string(),
-            controller: did.to_string(),
-            public_key_jwk: None,
-            public_key_multibase: None,
-            public_key_base58: None,
-        };
+        let method = x25519_method(did, "key-1");
         let mut document = empty_document(did);
         document.verification_method = vec![method.clone(), method];
 
         let error = validate_resolved_document(&document, did).unwrap_err();
         assert!(error.to_string().contains("duplicate, foreign, or invalid"));
+    }
+
+    #[cfg(feature = "did_web")]
+    #[test]
+    fn resolved_document_rejects_conflicting_inline_verification_methods() {
+        let did = "did:web:example.com";
+        let method = x25519_method(did, "key-1");
+        let mut conflicting = method.clone();
+        conflicting.public_key_jwk.as_mut().unwrap().x =
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string());
+        let mut document = empty_document(did);
+        document.authentication = vec![serde_json::to_value(method).unwrap()];
+        document.key_agreement = vec![serde_json::to_value(conflicting).unwrap()];
+
+        let error = validate_resolved_document(&document, did).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("conflicting verification methods"));
+    }
+
+    #[cfg(feature = "did_web")]
+    #[test]
+    fn resolved_document_rejects_private_or_ambiguous_key_material() {
+        let did = "did:web:example.com";
+        let mut private = x25519_method(did, "private");
+        private.public_key_jwk.as_mut().unwrap().d = Some("secret".to_string());
+        let mut ambiguous = x25519_method(did, "ambiguous");
+        ambiguous.public_key_multibase = Some("z6LSdummy".to_string());
+
+        for method in [private, ambiguous] {
+            let mut document = empty_document(did);
+            document.verification_method = vec![method];
+            let error = validate_resolved_document(&document, did).unwrap_err();
+            assert!(error.to_string().contains("duplicate, foreign, or invalid"));
+        }
     }
 
     #[cfg(feature = "did_web")]
@@ -1084,6 +1189,11 @@ mod tests {
             "fe80::1",
             "2001:db8::1",
             "::ffff:127.0.0.1",
+            "::127.0.0.1",
+            "64:ff9b::7f00:1",
+            "64:ff9b:1::1",
+            "2002:7f00:1::1",
+            "fec0::1",
         ] {
             assert!(
                 !is_public_ip(address.parse().unwrap()),
