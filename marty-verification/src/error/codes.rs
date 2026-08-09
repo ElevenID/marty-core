@@ -188,6 +188,9 @@ pub const OPEN_BADGES_REVOKED: &str = "E707";
 /// E708: Open Badges credential status check failed.
 pub const OPEN_BADGES_STATUS_CHECK_FAILED: &str = "E708";
 
+/// E709: Open Badges issuer proof is not authorized for credential assertions.
+pub const OPEN_BADGES_ISSUER_UNAUTHORIZED: &str = "E709";
+
 //=========================================================================
 // I/O and general errors (9xx) - General errors
 //=========================================================================
@@ -333,6 +336,7 @@ pub fn error_codes_markdown() -> String {
     );
     md.push_str("| E707 | `OPEN_BADGES_REVOKED` | Open Badges credential has been revoked |\n");
     md.push_str("| E708 | `OPEN_BADGES_STATUS_CHECK_FAILED` | Open Badges credential status check failed |\n");
+    md.push_str("| E709 | `OPEN_BADGES_ISSUER_UNAUTHORIZED` | Open Badges issuer proof is not authorized for credential assertions |\n");
     md.push('\n');
 
     md.push_str("## DTC Errors (E8xx)\n\n");
