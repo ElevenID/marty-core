@@ -172,7 +172,7 @@ impl AuthenticatedStatusList {
 
 pub(super) fn validate_status_iri(value: &str, name: &str) -> Result<(), String> {
     if value.is_empty()
-        || value.len() > MAX_STATUS_IRI_CHARS
+        || value.chars().count() > MAX_STATUS_IRI_CHARS
         || value.trim() != value
         || value.chars().any(char::is_control)
     {
@@ -255,10 +255,14 @@ mod status_authority_tests {
     #[test]
     fn authenticated_status_input_bounds_authority_identifiers() {
         let now = Utc::now();
-        let oversized = format!(
-            "https://status.example/{}",
-            "a".repeat(MAX_STATUS_IRI_CHARS)
+        let prefix = "https://status.example/";
+        let maximum = format!(
+            "{prefix}{}",
+            "é".repeat(MAX_STATUS_IRI_CHARS - prefix.chars().count())
         );
+        assert!(validate_status_iri(&maximum, "status-list URL").is_ok());
+
+        let oversized = format!("{prefix}{}", "a".repeat(MAX_STATUS_IRI_CHARS));
         let result = AuthenticatedStatusList::new(
             oversized,
             json!({}),

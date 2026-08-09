@@ -433,7 +433,7 @@ fn validate_status_messages(value: Option<&Value>, status_size: u8) -> Result<()
         object
             .get("message")
             .and_then(Value::as_str)
-            .filter(|value| !value.is_empty() && value.len() <= MAX_STATUS_MESSAGE_CHARS)
+            .filter(|value| !value.is_empty() && value.chars().count() <= MAX_STATUS_MESSAGE_CHARS)
             .ok_or_else(|| {
                 "Each Bitstring statusMessage must have a bounded, non-empty message".to_string()
             })?;
@@ -1172,6 +1172,11 @@ mod tests {
         assert!(parse_status_entry(&oversized_message)
             .expect_err("oversized status message must fail")
             .contains("bounded"));
+
+        let mut maximum_multibyte_message = status_entry("message", 2);
+        maximum_multibyte_message["statusMessage"][0]["message"] =
+            json!("é".repeat(MAX_STATUS_MESSAGE_CHARS));
+        assert!(parse_status_entry(&maximum_multibyte_message).is_ok());
     }
 
     #[test]
