@@ -36,6 +36,35 @@ pub struct TrustAnchor {
 
 pub use marty_types::open_badges::{OpenBadgeKeySource, OpenBadgeVerificationMethod};
 
+/// Authenticated provenance for a complete Open Badge trust package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenBadgeTrustPackageProvenance {
+    /// Stable trust domain whose active key set this package replaces.
+    pub trust_domain: String,
+    /// Strictly increasing sequence signed into the package.
+    pub sequence: u64,
+    /// Human-readable signed package version.
+    pub package_version: String,
+    /// Signed package creation time.
+    pub created_at: DateTime<Utc>,
+    /// Identifier of the pinned key that authenticated the package.
+    pub signer_key_id: String,
+    /// Lowercase hexadecimal BLAKE3 digest of the canonical signed package.
+    pub package_digest: String,
+    /// Local time at which the authenticated package was committed.
+    pub imported_at: DateTime<Utc>,
+}
+
+/// Open Badge method plus optional authenticated package provenance.
+///
+/// Legacy and manual records intentionally have `provenance: None` so
+/// production callers can distinguish them from governed package records.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenBadgeTrustRecord {
+    pub method: OpenBadgeVerificationMethod,
+    pub provenance: Option<OpenBadgeTrustPackageProvenance>,
+}
+
 /// Trust anchor type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
