@@ -574,6 +574,18 @@ impl VerificationError {
         })
     }
 
+    /// Create an Open Badges issuer authorization error.
+    pub fn open_badges_issuer_unauthorized(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::OpenBadgesError {
+            reason: reason.into(),
+            code: codes::OPEN_BADGES_ISSUER_UNAUTHORIZED,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
     /// Create a not-implemented error.
     pub fn not_implemented(feature: impl Into<String>) -> Box<Self> {
         Box::new(Self::Internal {

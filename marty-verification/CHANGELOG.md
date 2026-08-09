@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Fail closed when an Open Badge declares unavailable, unsupported, malformed, or undecodable credential status evidence.
+- Require Open Badge issuer proofs to use assertion authorization and reject wrong-controller, unlinked, or ambiguously resolved methods.
 
 ## [0.1.0] - 2026-01-07
 
