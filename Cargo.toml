@@ -44,7 +44,7 @@ cbc = { version = "0.1", features = ["alloc"] }
 des = "0.8"
 
 # Key derivation
-hkdf = "0.12"
+hkdf = "0.13"
 pbkdf2 = { version = "0.12", features = ["hmac"] }
 
 # Additional crypto
