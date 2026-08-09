@@ -349,15 +349,12 @@ mod ob3_tests {
         assert_invalid("OB3 missing verification method", &verify_result);
     }
 
-    /// Test that credential status checking detects a revoked credential.
+    /// Legacy unsigned StatusList2021 input cannot establish OB3 status.
     ///
-    /// This test verifies the status checking logic by:
-    /// 1. Issuing a valid credential (without status field during issuance)
-    /// 2. Manually adding the credentialStatus field to the issued credential
-    /// 3. Providing a status list with the bit set (revoked)
-    /// 4. Verifying that the status check detects the revocation
+    /// This Marty-owned compatibility test preserves the historical input shape
+    /// while asserting that it is no longer mistaken for authenticated status.
     #[test]
-    fn ob3_verify_detects_revoked_credential_via_status_list() {
+    fn ob3_verify_rejects_legacy_unsigned_status_list() {
         use base64::{engine::general_purpose, Engine as _};
         use flate2::write::GzEncoder;
         use flate2::Compression;
@@ -450,7 +447,7 @@ mod ob3_tests {
         let verify_value: Value =
             serde_json::from_str(&verify_result).expect("invalid OB3 verify JSON");
 
-        // Should be invalid due to revocation
+        // The current OB3 profile requires an authenticated Bitstring Status List.
         assert!(
             !verify_value
                 .get("valid")
@@ -460,20 +457,20 @@ mod ob3_tests {
             verify_value
         );
 
-        // Check for E707 (OPEN_BADGES_REVOKED) error code
+        // StatusList2021 is not accepted as the current OB3 status mechanism.
         let error_codes = verify_value.get("error_codes").and_then(|c| c.as_array());
         assert!(
             error_codes
-                .map(|codes| codes.iter().any(|c| c.as_str() == Some("E707")))
+                .map(|codes| codes.iter().any(|c| c.as_str() == Some("E706")))
                 .unwrap_or(false),
-            "expected E707 (OPEN_BADGES_REVOKED) in error_codes: {:?}",
+            "expected E706 (OPEN_BADGES_UNSUPPORTED) in error_codes: {:?}",
             verify_value
         );
     }
 
-    /// Test that non-revoked credentials pass status verification.
+    /// An unset bit in an unsigned legacy list is not positive status evidence.
     #[test]
-    fn ob3_verify_passes_non_revoked_credential_via_status_list() {
+    fn ob3_verify_rejects_unsigned_legacy_list_even_when_bit_is_clear() {
         use base64::{engine::general_purpose, Engine as _};
         use flate2::write::GzEncoder;
         use flate2::Compression;
@@ -560,9 +557,7 @@ mod ob3_tests {
         let verify_value: Value =
             serde_json::from_str(&verify_result).expect("invalid OB3 verify JSON");
 
-        // The credential status check should NOT add E707 (revoked) since bit 42 is not set
-        // Note: Full verification may fail due to JSON-LD expansion issues when credentialStatus
-        // is added post-issuance, but the revocation check should not trigger
+        // The untrusted list cannot assert revocation, but it is still unsupported.
         let error_codes = verify_value.get("error_codes").and_then(|c| c.as_array());
         let has_revocation_error = error_codes
             .map(|codes| codes.iter().any(|c| c.as_str() == Some("E707")))
@@ -570,6 +565,13 @@ mod ob3_tests {
         assert!(
             !has_revocation_error,
             "non-revoked credential should not have E707 (OPEN_BADGES_REVOKED) error: {:?}",
+            verify_value
+        );
+        assert!(
+            error_codes
+                .map(|codes| codes.iter().any(|c| c.as_str() == Some("E706")))
+                .unwrap_or(false),
+            "unsigned StatusList2021 input must fail closed: {:?}",
             verify_value
         );
     }
