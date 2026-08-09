@@ -69,6 +69,8 @@ pub use transport::Transport;
 #[cfg(feature = "python")]
 #[pymodule]
 fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+
     // Core types
     m.add_class::<DeviceEngagement>()?;
     m.add_class::<core::TransportMethod>()?;
@@ -76,6 +78,7 @@ fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Session types
     m.add_class::<SessionConfig>()?;
+    m.add_class::<Session>()?;
     m.add_class::<protocol::SessionState>()?;
 
     // Request/Response types
