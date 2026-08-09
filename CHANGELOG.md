@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.36] - 2026-08-09
+
+### Added
+
+- Expose typed, signature-authenticated mdoc document evidence from the Python
+  presentation-verification binding, including the authenticated document type,
+  algorithms, MSO validity interval, and issuer-certificate fingerprint.
+
+### Security
+
+- Require a protected ES256 issuer algorithm and a valid Tag24 Mobile Security
+  Object whose version, document type, chronology, and current validity agree
+  with the authenticated document.
+- Report revocation as unchecked and unknown when no status authority ran,
+  preventing downstream consumers from inventing positive non-revocation.
+
+## [0.1.35] - 2026-08-09
+
+### Fixed
+
+- Verify every disclosed issuer-signed mdoc value against the namespace and
+  digest-ID commitment authenticated by the Mobile Security Object.
+- Replace the permissive mdoc validity placeholder with deterministic verifier-
+  time evaluation, including inclusive validity boundaries.
+
+### Security
+
+- Reject altered disclosures, missing namespace or digest commitments,
+  malformed timestamps, contradictory validity chronology, not-yet-valid
+  evidence, and expired evidence.
+
 ## [0.1.34] - 2026-08-07
 
 ### Documentation
