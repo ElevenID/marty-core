@@ -6,6 +6,7 @@
 use const_oid::AssociatedOid;
 use der::Decode;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use x509_cert::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
 use x509_cert::Certificate;
 
@@ -297,7 +298,77 @@ pub fn verify_issuer_signature(
 
     issuer_authentication(x5chain.clone(), issuer_signed).map_err(|e| {
         VerificationError::issuer_auth_failed(format!("COSE signature verification failed: {}", e))
-    })
+    })?;
+
+    let mso_bytes =
+        issuer_signed.issuer_auth.payload.as_ref().ok_or_else(|| {
+            VerificationError::issuer_auth_failed("issuerAuth payload is detached")
+        })?;
+    let mso = isomdl::cbor::from_slice::<
+        isomdl::definitions::helpers::Tag24<isomdl::definitions::Mso>,
+    >(mso_bytes)
+    .map_err(|error| {
+        VerificationError::issuer_auth_failed(format!(
+            "unable to parse the signature-authenticated MSO: {error}"
+        ))
+    })?
+    .into_inner();
+
+    if let Some(namespaces) = &issuer_signed.namespaces {
+        verify_issuer_value_digests(&mso, namespaces)?;
+    }
+
+    Ok(())
+}
+
+/// Bind every disclosed issuer-signed value to the digest authenticated by the MSO.
+///
+/// The reverse mapping is intentionally not required: an MSO can contain digests for
+/// undisclosed values and decoys. Every value that is disclosed must have exactly the
+/// digest committed under its namespace and digest identifier.
+fn verify_issuer_value_digests(
+    mso: &isomdl::definitions::Mso,
+    namespaces: &isomdl::definitions::issuer_signed::IssuerNamespaces,
+) -> VerificationResult<()> {
+    use isomdl::definitions::DigestAlgorithm;
+
+    for (namespace, items) in namespaces.iter() {
+        let expected_digests = mso.value_digests.get(namespace).ok_or_else(|| {
+            VerificationError::issuer_auth_failed(format!(
+                "MSO contains no value digests for disclosed namespace {namespace}"
+            ))
+        })?;
+
+        for tagged_item in items.iter() {
+            let item = tagged_item.as_ref();
+            let expected = expected_digests.get(&item.digest_id).ok_or_else(|| {
+                VerificationError::issuer_auth_failed(format!(
+                    "MSO contains no digest for disclosed element {} in namespace {namespace}",
+                    item.element_identifier
+                ))
+            })?;
+            let item_bytes = isomdl::cbor::to_vec(tagged_item).map_err(|error| {
+                VerificationError::issuer_auth_failed(format!(
+                    "unable to encode disclosed element {} for digest verification: {error}",
+                    item.element_identifier
+                ))
+            })?;
+            let computed = match mso.digest_algorithm {
+                DigestAlgorithm::SHA256 => Sha256::digest(&item_bytes).to_vec(),
+                DigestAlgorithm::SHA384 => Sha384::digest(&item_bytes).to_vec(),
+                DigestAlgorithm::SHA512 => Sha512::digest(&item_bytes).to_vec(),
+            };
+
+            if computed.as_slice() != expected.as_ref() {
+                return Err(VerificationError::issuer_auth_failed(format!(
+                    "issuer-signed value digest mismatch for element {} in namespace {namespace}",
+                    item.element_identifier
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Full mDL verification including trust chain and signatures.
@@ -545,6 +616,90 @@ mod tests {
         );
         let error = validate_document_signer_certificate_der(&mixed_usage).unwrap_err();
         assert_eq!(error.code(), codes::CERT_KEY_USAGE_MISMATCH);
+    }
+
+    fn issuer_value_digest_fixture(
+        disclosed_value: &str,
+    ) -> (Mso, isomdl::definitions::issuer_signed::IssuerNamespaces) {
+        use isomdl::definitions::helpers::{NonEmptyMap, NonEmptyVec};
+        use isomdl::definitions::{DigestId, IssuerSignedItem};
+
+        let digest_id = DigestId::new(7);
+        let tagged_item = Tag24::new(IssuerSignedItem {
+            digest_id,
+            random: vec![9_u8; 16].into(),
+            element_identifier: "family_name".to_string(),
+            element_value: ciborium::Value::Text(disclosed_value.to_string()),
+        })
+        .unwrap();
+        let item_bytes = isomdl::cbor::to_vec(&tagged_item).unwrap();
+        let mut namespace_digests = BTreeMap::new();
+        namespace_digests.insert(digest_id, Sha256::digest(item_bytes).to_vec().into());
+        let mut value_digests = BTreeMap::new();
+        value_digests.insert("org.iso.18013.5.1".to_string(), namespace_digests);
+
+        let mut namespace_items = BTreeMap::new();
+        namespace_items.insert(
+            "org.iso.18013.5.1".to_string(),
+            NonEmptyVec::try_from(vec![tagged_item]).unwrap(),
+        );
+        let namespaces = NonEmptyMap::try_from(namespace_items).unwrap();
+
+        let signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let device_key = isomdl::definitions::device_key::CoseKey::EC2 {
+            crv: isomdl::definitions::device_key::EC2Curve::P256,
+            x: point.x().unwrap().to_vec(),
+            y: EC2Y::Value(point.y().unwrap().to_vec()),
+        };
+        let now = OffsetDateTime::now_utc();
+        let mso = Mso {
+            version: "1.0".to_string(),
+            digest_algorithm: DigestAlgorithm::SHA256,
+            value_digests,
+            device_key_info: DeviceKeyInfo {
+                device_key,
+                key_authorizations: None,
+                key_info: None,
+            },
+            doc_type: "org.iso.18013.5.1.mDL".to_string(),
+            validity_info: ValidityInfo {
+                signed: now,
+                valid_from: now,
+                valid_until: now + Duration::days(1),
+                expected_update: None,
+            },
+        };
+
+        (mso, namespaces)
+    }
+
+    #[test]
+    fn issuer_value_digests_bind_every_disclosed_value() {
+        let (mso, namespaces) = issuer_value_digest_fixture("Doe");
+        assert!(verify_issuer_value_digests(&mso, &namespaces).is_ok());
+
+        let (_, tampered_namespaces) = issuer_value_digest_fixture("Mallory");
+        let error = verify_issuer_value_digests(&mso, &tampered_namespaces).unwrap_err();
+        assert!(error.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn issuer_value_digests_reject_missing_namespace_or_digest() {
+        let (mut mso, namespaces) = issuer_value_digest_fixture("Doe");
+        mso.value_digests.clear();
+        let error = verify_issuer_value_digests(&mso, &namespaces).unwrap_err();
+        assert!(error.to_string().contains("no value digests"));
+
+        let (mut mso, namespaces) = issuer_value_digest_fixture("Doe");
+        mso.value_digests
+            .get_mut("org.iso.18013.5.1")
+            .unwrap()
+            .clear();
+        let error = verify_issuer_value_digests(&mso, &namespaces).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("no digest for disclosed element"));
     }
 
     fn map_value_mut<'a>(
