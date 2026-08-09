@@ -36,6 +36,7 @@ base64 = { workspace = true }
 
 # DateTime for credential timestamps
 chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # Error handling
 anyhow = "1.0"
