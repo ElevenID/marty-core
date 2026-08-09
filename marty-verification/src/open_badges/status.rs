@@ -4,7 +4,6 @@ use std::io::Read;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
-use iref::IriBuf;
 use serde_json::Value;
 use ssi_claims::VerificationParameters;
 
@@ -15,7 +14,9 @@ use super::ob3::{
     collect_verification_methods, credential_issuer, push_error,
     validate_issuer_proof_authorization, AnyCredential,
 };
-use super::types::{AuthenticatedStatusList, OpenBadgeStatusCheck, OpenBadgeStatusOutcome};
+use super::types::{
+    validate_status_iri, AuthenticatedStatusList, OpenBadgeStatusCheck, OpenBadgeStatusOutcome,
+};
 
 const MAX_STATUS_ENTRIES: usize = 32;
 const MAX_AUTHENTICATED_LISTS: usize = 32;
@@ -24,6 +25,8 @@ const MAX_COMPRESSED_LIST_BYTES: usize = 1024 * 1024;
 const MAX_UNCOMPRESSED_LIST_BYTES: usize = 16 * 1024 * 1024;
 const MINIMUM_STATUS_ENTRIES: usize = 131_072;
 const MAX_SUPPORTED_STATUS_SIZE: u8 = 8;
+const MAX_STATUS_REFERENCES: usize = 32;
+const MAX_STATUS_MESSAGE_CHARS: usize = 1024;
 
 pub(super) async fn check_credential_status(
     credential: &Value,
@@ -73,13 +76,11 @@ pub(super) async fn check_credential_status(
                     status_checks.push(status_check);
                 }
             }
-            Some(unsupported) => push_error(
+            Some(_) => push_error(
                 errors,
                 error_codes_out,
                 error_codes::OPEN_BADGES_UNSUPPORTED,
-                format!(
-                    "Unsupported Open Badges v3 credential status type '{unsupported}'; expected BitstringStatusListEntry"
-                ),
+                "Unsupported Open Badges v3 credential status type; expected BitstringStatusListEntry",
             ),
             None => push_error(
                 errors,
@@ -114,10 +115,7 @@ fn authenticated_list_map<'a>(
                 errors,
                 error_codes_out,
                 error_codes::OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED,
-                format!(
-                    "Authenticated status-list URL '{}' is ambiguous",
-                    status_list.url()
-                ),
+                "Authenticated status-list URL is ambiguous",
             );
             return None;
         }
@@ -150,10 +148,7 @@ async fn check_bitstring_status_entry(
             errors,
             error_codes_out,
             error_codes::OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED,
-            format!(
-                "Status-list credential '{}' has no authenticated authority context",
-                entry.list_url
-            ),
+            "Status-list credential has no authenticated authority context",
         );
         return None;
     };
@@ -164,10 +159,7 @@ async fn check_bitstring_status_entry(
             errors,
             error_codes_out,
             error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
-            format!(
-                "Authenticated status-list credential '{}' is future-dated or stale",
-                entry.list_url
-            ),
+            "Authenticated status-list credential is future-dated or stale",
         );
         return None;
     }
@@ -205,22 +197,19 @@ async fn check_bitstring_status_entry(
             errors,
             error_codes_out,
             error_codes::OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED,
-            format!(
-                "Status-list issuer '{}' is not authorized by its assertion method",
-                authenticated.trusted_issuer()
-            ),
+            "Status-list issuer is not authorized by its assertion method",
         );
         return None;
     }
 
     let secured_status_list: AnyCredential = match serde_json::from_value(status_list.clone()) {
         Ok(credential) => credential,
-        Err(error) => {
+        Err(_) => {
             push_error(
                 errors,
                 error_codes_out,
                 error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
-                format!("Invalid status-list credential: {error}"),
+                "Invalid status-list credential",
             );
             return None;
         }
@@ -241,21 +230,21 @@ async fn check_bitstring_status_entry(
         VerificationParameters::from_resolver(collected.resolver).with_json_ld_loader(loader);
     match secured_status_list.verify(parameters).await {
         Ok(Ok(())) => {}
-        Ok(Err(invalid)) => {
+        Ok(Err(_)) => {
             push_error(
                 errors,
                 error_codes_out,
                 error_codes::OPEN_BADGES_PROOF_INVALID,
-                format!("Status-list credential proof is invalid: {invalid}"),
+                "Status-list credential proof is invalid",
             );
             return None;
         }
-        Err(error) => {
+        Err(_) => {
             push_error(
                 errors,
                 error_codes_out,
                 error_codes::OPEN_BADGES_PROOF_INVALID,
-                format!("Status-list credential proof verification failed: {error}"),
+                "Status-list credential proof verification failed",
             );
             return None;
         }
@@ -332,6 +321,7 @@ async fn check_bitstring_status_entry(
     })
 }
 
+#[derive(Debug)]
 struct ParsedStatusEntry<'a> {
     list_url: &'a str,
     index: u64,
@@ -348,15 +338,13 @@ fn parse_status_entry(status_entry: &Value) -> Result<ParsedStatusEntry<'_>, Str
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Bitstring status entry missing 'statusListCredential' URL".to_string())?;
-    IriBuf::new(list_url.to_string())
-        .map_err(|_| "Bitstring statusListCredential must be an absolute IRI".to_string())?;
+    validate_status_iri(list_url, "Bitstring statusListCredential")?;
 
     if let Some(id) = object.get("id") {
         let id = id
             .as_str()
             .ok_or_else(|| "Bitstring status entry id must be a URL".to_string())?;
-        IriBuf::new(id.to_string())
-            .map_err(|_| "Bitstring status entry id must be an absolute IRI".to_string())?;
+        validate_status_iri(id, "Bitstring status entry id")?;
         if id == list_url {
             return Err("Bitstring status entry id must not equal the status-list URL".to_string());
         }
@@ -445,9 +433,9 @@ fn validate_status_messages(value: Option<&Value>, status_size: u8) -> Result<()
         object
             .get("message")
             .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
+            .filter(|value| !value.is_empty() && value.len() <= MAX_STATUS_MESSAGE_CHARS)
             .ok_or_else(|| {
-                "Each Bitstring statusMessage must have a non-empty message".to_string()
+                "Each Bitstring statusMessage must have a bounded, non-empty message".to_string()
             })?;
     }
     Ok(())
@@ -458,11 +446,14 @@ fn validate_status_references(value: Option<&Value>) -> Result<(), String> {
         return Ok(());
     };
     let references: Vec<&Value> = match value {
-        Value::Array(values) if !values.is_empty() => values.iter().collect(),
+        Value::Array(values) if !values.is_empty() && values.len() <= MAX_STATUS_REFERENCES => {
+            values.iter().collect()
+        }
         Value::String(_) => vec![value],
         _ => {
             return Err(
-                "Bitstring statusReference must be a URL or non-empty URL array".to_string(),
+                "Bitstring statusReference must be a URL or an array of 1 through 32 URLs"
+                    .to_string(),
             )
         }
     };
@@ -470,8 +461,7 @@ fn validate_status_references(value: Option<&Value>) -> Result<(), String> {
         let reference = reference
             .as_str()
             .ok_or_else(|| "Every Bitstring statusReference must be a URL".to_string())?;
-        IriBuf::new(reference.to_string())
-            .map_err(|_| "Every Bitstring statusReference must be an absolute IRI".to_string())?;
+        validate_status_iri(reference, "Every Bitstring statusReference")?;
     }
     Ok(())
 }
@@ -1155,5 +1145,54 @@ mod tests {
             )
         };
         assert!(decode_status_value(&undersized, 0, 1).is_err());
+    }
+
+    #[test]
+    fn status_identifiers_references_and_messages_are_bounded() {
+        let mut oversized_url = status_entry("revocation", 1);
+        oversized_url["statusListCredential"] = json!(format!(
+            "https://status.example/{}",
+            "a".repeat(super::super::types::MAX_STATUS_IRI_CHARS)
+        ));
+        assert!(parse_status_entry(&oversized_url)
+            .expect_err("oversized status URL must fail")
+            .contains("bounded"));
+
+        let mut too_many_references = status_entry("revocation", 1);
+        too_many_references["statusReference"] = json!((0..=MAX_STATUS_REFERENCES)
+            .map(|index| format!("https://status.example/references/{index}"))
+            .collect::<Vec<_>>());
+        assert!(parse_status_entry(&too_many_references)
+            .expect_err("too many status references must fail")
+            .contains("1 through 32"));
+
+        let mut oversized_message = status_entry("message", 2);
+        oversized_message["statusMessage"][0]["message"] =
+            json!("a".repeat(MAX_STATUS_MESSAGE_CHARS + 1));
+        assert!(parse_status_entry(&oversized_message)
+            .expect_err("oversized status message must fail")
+            .contains("bounded"));
+    }
+
+    #[test]
+    fn unsupported_status_errors_do_not_reflect_untrusted_values() {
+        futures::executor::block_on(async {
+            let marker = "private-query-value";
+            let credential = json!({
+                "credentialStatus": {
+                    "type": marker,
+                }
+            });
+            let mut errors = Vec::new();
+            let mut codes = Vec::new();
+            let mut warnings = Vec::new();
+            let checks =
+                check_credential_status(&credential, &[], &mut errors, &mut codes, &mut warnings)
+                    .await;
+
+            assert!(checks.is_empty());
+            assert!(codes.contains(&error_codes::OPEN_BADGES_UNSUPPORTED.to_string()));
+            assert!(!errors.join(" ").contains(marker));
+        });
     }
 }

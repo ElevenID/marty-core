@@ -8,6 +8,7 @@ pub type DocumentStore = BTreeMap<String, Value>;
 
 const MAX_PROVENANCE_VALUE_LEN: usize = 256;
 const MAX_STATUS_AUTHORITY_DOCUMENTS: usize = 64;
+pub(super) const MAX_STATUS_IRI_CHARS: usize = 4096;
 
 /// Immutable identity for an authenticated configuration or software artifact.
 ///
@@ -121,10 +122,8 @@ impl AuthenticatedStatusList {
             fresh_until,
             provenance,
         };
-        IriBuf::new(status_list.url.clone())
-            .map_err(|_| "status-list URL must be an absolute IRI".to_string())?;
-        IriBuf::new(status_list.trusted_issuer.clone())
-            .map_err(|_| "trusted status issuer must be an absolute IRI".to_string())?;
+        validate_status_iri(&status_list.url, "status-list URL")?;
+        validate_status_iri(&status_list.trusted_issuer, "trusted status issuer")?;
         if !status_list.credential.is_object() {
             return Err("status-list credential must be a JSON object".to_string());
         }
@@ -169,6 +168,20 @@ impl AuthenticatedStatusList {
     pub fn provenance(&self) -> &StatusAuthorityProvenance {
         &self.provenance
     }
+}
+
+pub(super) fn validate_status_iri(value: &str, name: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > MAX_STATUS_IRI_CHARS
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "{name} must be a bounded, non-empty absolute IRI without surrounding whitespace"
+        ));
+    }
+    IriBuf::new(value.to_string()).map_err(|_| format!("{name} must be an absolute IRI"))?;
+    Ok(())
 }
 
 fn validate_provenance_value(name: &str, value: &str) -> Result<(), String> {
@@ -236,6 +249,42 @@ mod status_authority_tests {
         assert_eq!(
             result.expect_err("empty authority documents must be rejected"),
             "status authority must contain between 1 and 64 resolver-owned documents"
+        );
+    }
+
+    #[test]
+    fn authenticated_status_input_bounds_authority_identifiers() {
+        let now = Utc::now();
+        let oversized = format!(
+            "https://status.example/{}",
+            "a".repeat(MAX_STATUS_IRI_CHARS)
+        );
+        let result = AuthenticatedStatusList::new(
+            oversized,
+            json!({}),
+            "did:example:status-issuer",
+            DocumentStore::new(),
+            now,
+            now + Duration::minutes(1),
+            provenance(),
+        );
+        assert_eq!(
+            result.expect_err("oversized status URL must be rejected"),
+            "status-list URL must be a bounded, non-empty absolute IRI without surrounding whitespace"
+        );
+
+        let result = AuthenticatedStatusList::new(
+            "https://status.example/list",
+            json!({}),
+            format!("did:example:{}", "a".repeat(MAX_STATUS_IRI_CHARS)),
+            DocumentStore::new(),
+            now,
+            now + Duration::minutes(1),
+            provenance(),
+        );
+        assert_eq!(
+            result.expect_err("oversized issuer must be rejected"),
+            "trusted status issuer must be a bounded, non-empty absolute IRI without surrounding whitespace"
         );
     }
 
