@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
+
 use crate::{VerificationError, VerificationResult};
 
 /// The standard mDL namespace.
@@ -271,9 +273,37 @@ pub struct ValidityInfo {
 }
 
 impl ValidityInfo {
-    /// Check if the document is currently valid.
+    /// Check validity at an explicit verifier-owned instant.
+    ///
+    /// Malformed timestamps and contradictory validity chronology fail closed.
+    pub fn is_valid_at(&self, now: DateTime<Utc>) -> bool {
+        let Ok(signed) = DateTime::parse_from_rfc3339(&self.signed) else {
+            return false;
+        };
+        let Ok(valid_from) = DateTime::parse_from_rfc3339(&self.valid_from) else {
+            return false;
+        };
+        let Ok(valid_until) = DateTime::parse_from_rfc3339(&self.valid_until) else {
+            return false;
+        };
+        if self
+            .expected_update
+            .as_deref()
+            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
+        {
+            return false;
+        }
+
+        signed <= valid_from
+            && valid_from <= valid_until
+            && signed <= now
+            && valid_from <= now
+            && now <= valid_until
+    }
+
+    /// Check validity at the current UTC time.
     pub fn is_valid_now(&self) -> bool {
-        true
+        self.is_valid_at(Utc::now())
     }
 }
 
@@ -342,14 +372,71 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_validity_info() {
-        let info = ValidityInfo {
-            signed: "2024-01-01T00:00:00Z".to_string(),
-            valid_from: "2024-01-01T00:00:00Z".to_string(),
-            valid_until: "2025-12-31T23:59:59Z".to_string(),
+    fn validity_info(signed: &str, valid_from: &str, valid_until: &str) -> ValidityInfo {
+        ValidityInfo {
+            signed: signed.to_string(),
+            valid_from: valid_from.to_string(),
+            valid_until: valid_until.to_string(),
             expected_update: None,
-        };
+        }
+    }
+
+    #[test]
+    fn validity_info_accepts_only_the_authenticated_window() {
+        let info = validity_info(
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "2026-01-03T00:00:00Z",
+        );
+
+        assert!(info.is_valid_at("2026-01-02T12:00:00Z".parse().unwrap()));
+        assert!(info.is_valid_at("2026-01-02T00:00:00Z".parse().unwrap()));
+        assert!(info.is_valid_at("2026-01-03T00:00:00Z".parse().unwrap()));
+        assert!(!info.is_valid_at("2026-01-01T23:59:59Z".parse().unwrap()));
+        assert!(!info.is_valid_at("2026-01-03T00:00:01Z".parse().unwrap()));
+    }
+
+    #[test]
+    fn validity_info_rejects_malformed_or_contradictory_evidence() {
+        let now = "2026-01-02T12:00:00Z".parse().unwrap();
+
+        assert!(!validity_info(
+            "not-a-timestamp",
+            "2026-01-02T00:00:00Z",
+            "2026-01-03T00:00:00Z",
+        )
+        .is_valid_at(now));
+        assert!(!validity_info(
+            "2026-01-02T01:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "2026-01-03T00:00:00Z",
+        )
+        .is_valid_at(now));
+        assert!(!validity_info(
+            "2026-01-01T00:00:00Z",
+            "2026-01-03T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+        )
+        .is_valid_at(now));
+
+        let mut invalid_expected_update = validity_info(
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "2026-01-03T00:00:00Z",
+        );
+        invalid_expected_update.expected_update = Some("invalid".to_string());
+        assert!(!invalid_expected_update.is_valid_at(now));
+    }
+
+    #[test]
+    fn validity_info_checks_the_live_clock() {
+        let now = Utc::now();
+        let info = validity_info(
+            &(now - chrono::Duration::minutes(2)).to_rfc3339(),
+            &(now - chrono::Duration::minutes(1)).to_rfc3339(),
+            &(now + chrono::Duration::minutes(1)).to_rfc3339(),
+        );
+
         assert!(info.is_valid_now());
     }
 
