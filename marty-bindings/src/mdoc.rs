@@ -4,13 +4,17 @@
 //! These verifier bindings consume only public COSE and certificate material;
 //! they neither accept nor select a KMS service or key reference.
 
-use coset::{cbor::value::Value as CoseValue, Label};
+use coset::{cbor::value::Value as CoseValue, iana, Label, RegisteredLabelWithPrivate};
 use isomdl::definitions::device_response::{DeviceResponse, Status};
+use isomdl::definitions::helpers::Tag24;
 use isomdl::definitions::x509::x5chain::{X5Chain, X5CHAIN_COSE_HEADER_LABEL};
+use isomdl::definitions::{DigestAlgorithm, Mso};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
 use std::collections::HashMap;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 /// Parse a DeviceResponse and fail if its envelope is not ISO-compatible.
 ///
@@ -92,6 +96,36 @@ fn disclosed_claims(response: &marty_verification::mdoc::DeviceResponse) -> serd
     serde_json::Value::Object(claims)
 }
 
+/// Signature-authenticated evidence for one mdoc document.
+#[pyclass(skip_from_py_object)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MdocDocumentVerificationEvidence {
+    #[pyo3(get)]
+    pub(crate) document_type: String,
+    #[pyo3(get)]
+    pub(crate) signature_algorithm: String,
+    #[pyo3(get)]
+    pub(crate) digest_algorithm: String,
+    #[pyo3(get)]
+    pub(crate) signed_at: String,
+    #[pyo3(get)]
+    pub(crate) valid_from: String,
+    #[pyo3(get)]
+    pub(crate) valid_until: String,
+    #[pyo3(get)]
+    pub(crate) issuer_certificate_sha256: String,
+    #[pyo3(get)]
+    pub(crate) validity_checked: bool,
+    #[pyo3(get)]
+    pub(crate) valid_at_verification_time: bool,
+    /// Revocation is not checked by this offline binding.
+    #[pyo3(get)]
+    pub(crate) revocation_checked: bool,
+    /// No non-revocation result is invented when no status authority ran.
+    #[pyo3(get)]
+    pub(crate) not_revoked: Option<bool>,
+}
+
 /// Result of complete OpenID4VP mdoc presentation authentication.
 #[pyclass(skip_from_py_object)]
 #[derive(Clone)]
@@ -107,6 +141,14 @@ pub(crate) struct MdocPresentationVerificationResult {
     pub(crate) device_authentication_valid: bool,
     #[pyo3(get)]
     pub(crate) document_types: Vec<String>,
+    /// One complete record per signature-authenticated document.
+    #[pyo3(get)]
+    pub(crate) document_evidence: Vec<MdocDocumentVerificationEvidence>,
+    /// This offline binding does not perform CRL or status-authority retrieval.
+    #[pyo3(get)]
+    pub(crate) revocation_checked: bool,
+    #[pyo3(get)]
+    pub(crate) not_revoked: Option<bool>,
     #[pyo3(get)]
     pub(crate) error: Option<String>,
 }
@@ -171,6 +213,9 @@ pub(crate) fn verify_mdoc_presentation(
         issuer_trusted: issuer.issuer_trusted,
         device_authentication_valid,
         document_types,
+        document_evidence: issuer.document_evidence,
+        revocation_checked: false,
+        not_revoked: None,
         error: (!errors.is_empty()).then(|| errors.join("; ")),
     })
 }
@@ -179,6 +224,7 @@ struct IssuerAuthenticationResult {
     signature_valid: bool,
     issuer_trusted: bool,
     document_types: Vec<String>,
+    document_evidence: Vec<MdocDocumentVerificationEvidence>,
     error: Option<String>,
 }
 
@@ -230,6 +276,8 @@ fn verify_issuer_authentication(
 
     let mut all_signatures_valid = true;
     let mut issuer_trusted = trust_configuration_valid;
+    let mut document_evidence = Vec::with_capacity(documents.len());
+    let verification_time = OffsetDateTime::now_utc();
     for document in documents.iter() {
         let issuer_auth = &document.issuer_signed.issuer_auth;
         let x5chain_value = issuer_auth
@@ -301,14 +349,117 @@ fn verify_issuer_authentication(
         } else {
             issuer_trusted = false;
         }
+
+        match authenticated_document_evidence(document, &certificate_chain[0], verification_time) {
+            Ok(evidence) => document_evidence.push(evidence),
+            Err(error) => {
+                all_signatures_valid = false;
+                issuer_trusted = false;
+                errors.push(format!(
+                    "Authenticated MSO evidence is invalid for {}: {error}",
+                    document.doc_type
+                ));
+            }
+        }
     }
 
     IssuerAuthenticationResult {
         signature_valid: all_signatures_valid,
         issuer_trusted,
         document_types,
+        document_evidence,
         error: (!errors.is_empty()).then(|| errors.join("; ")),
     }
+}
+
+fn authenticated_document_evidence(
+    document: &isomdl::definitions::device_response::Document,
+    issuer_certificate_der: &[u8],
+    verification_time: OffsetDateTime,
+) -> Result<MdocDocumentVerificationEvidence, String> {
+    let signature_algorithm = match document
+        .issuer_signed
+        .issuer_auth
+        .protected
+        .header
+        .alg
+        .as_ref()
+    {
+        Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::ES256)) => "ES256",
+        Some(_) => return Err("unsupported issuer signature algorithm".to_string()),
+        None => return Err("issuer signature algorithm is not protected".to_string()),
+    };
+    let mso_bytes = document
+        .issuer_signed
+        .issuer_auth
+        .payload
+        .as_ref()
+        .ok_or_else(|| "issuerAuth payload is detached".to_string())?;
+    let mso = isomdl::cbor::from_slice::<Tag24<Mso>>(mso_bytes)
+        .map_err(|error| format!("unable to parse MSO: {error}"))?
+        .into_inner();
+    validated_mso_evidence(
+        &mso,
+        &document.doc_type,
+        signature_algorithm,
+        issuer_certificate_der,
+        verification_time,
+    )
+}
+
+fn validated_mso_evidence(
+    mso: &Mso,
+    authenticated_document_type: &str,
+    signature_algorithm: &str,
+    issuer_certificate_der: &[u8],
+    verification_time: OffsetDateTime,
+) -> Result<MdocDocumentVerificationEvidence, String> {
+    if mso.version != "1.0" {
+        return Err(format!("unsupported MSO version {}", mso.version));
+    }
+    if mso.doc_type != authenticated_document_type {
+        return Err("MSO document type does not match the authenticated document".to_string());
+    }
+    if mso.validity_info.signed > mso.validity_info.valid_from
+        || mso.validity_info.valid_from > mso.validity_info.valid_until
+    {
+        return Err("MSO validity window is contradictory".to_string());
+    }
+    if verification_time < mso.validity_info.valid_from {
+        return Err("MSO is not yet valid".to_string());
+    }
+    if verification_time > mso.validity_info.valid_until {
+        return Err("MSO is expired".to_string());
+    }
+
+    let digest_algorithm = match mso.digest_algorithm {
+        DigestAlgorithm::SHA256 => "SHA-256",
+        DigestAlgorithm::SHA384 => "SHA-384",
+        DigestAlgorithm::SHA512 => "SHA-512",
+    };
+    let format_time = |value: OffsetDateTime| {
+        value
+            .format(&Rfc3339)
+            .map_err(|error| format!("unable to format MSO validity timestamp: {error}"))
+    };
+    let certificate_digest = marty_crypto::hashing::hash_sha256(issuer_certificate_der)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+
+    Ok(MdocDocumentVerificationEvidence {
+        document_type: authenticated_document_type.to_string(),
+        signature_algorithm: signature_algorithm.to_string(),
+        digest_algorithm: digest_algorithm.to_string(),
+        signed_at: format_time(mso.validity_info.signed)?,
+        valid_from: format_time(mso.validity_info.valid_from)?,
+        valid_until: format_time(mso.validity_info.valid_until)?,
+        issuer_certificate_sha256: certificate_digest,
+        validity_checked: true,
+        valid_at_verification_time: true,
+        revocation_checked: false,
+        not_revoked: None,
+    })
 }
 
 fn certificate_der_from_pem(pem: &str) -> Result<Vec<u8>, String> {
@@ -379,6 +530,7 @@ fn issuer_failure(error: impl Into<String>) -> IssuerAuthenticationResult {
         signature_valid: false,
         issuer_trusted: false,
         document_types: Vec::new(),
+        document_evidence: Vec::new(),
         error: Some(error.into()),
     }
 }
@@ -475,7 +627,115 @@ mod tests {
         assert!(!result.issuer_signature_valid);
         assert!(!result.issuer_trusted);
         assert!(!result.device_authentication_valid);
+        assert!(result.document_evidence.is_empty());
+        assert!(!result.revocation_checked);
+        assert_eq!(result.not_revoked, None);
         assert!(result.error.is_some());
+    }
+
+    fn mso_with_validity(valid_from: OffsetDateTime, valid_until: OffsetDateTime) -> Mso {
+        use isomdl::definitions::device_key::cose_key::EC2Y;
+        use isomdl::definitions::{DeviceKeyInfo, ValidityInfo};
+        use std::collections::BTreeMap;
+
+        Mso {
+            version: "1.0".to_string(),
+            digest_algorithm: DigestAlgorithm::SHA256,
+            value_digests: BTreeMap::new(),
+            device_key_info: DeviceKeyInfo {
+                device_key: isomdl::definitions::device_key::CoseKey::EC2 {
+                    crv: isomdl::definitions::device_key::EC2Curve::P256,
+                    x: vec![1; 32],
+                    y: EC2Y::Value(vec![2; 32]),
+                },
+                key_authorizations: None,
+                key_info: None,
+            },
+            doc_type: "org.iso.18013.5.1.mDL".to_string(),
+            validity_info: ValidityInfo {
+                signed: valid_from - time::Duration::minutes(1),
+                valid_from,
+                valid_until,
+                expected_update: None,
+            },
+        }
+    }
+
+    #[test]
+    fn authenticated_mso_evidence_is_typed_without_inventing_revocation() {
+        let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
+        let mso = mso_with_validity(
+            now - time::Duration::hours(1),
+            now + time::Duration::hours(1),
+        );
+
+        let evidence = validated_mso_evidence(
+            &mso,
+            "org.iso.18013.5.1.mDL",
+            "ES256",
+            b"issuer-certificate",
+            now,
+        )
+        .unwrap();
+
+        assert_eq!(evidence.document_type, "org.iso.18013.5.1.mDL");
+        assert_eq!(evidence.signature_algorithm, "ES256");
+        assert_eq!(evidence.digest_algorithm, "SHA-256");
+        assert_eq!(evidence.signed_at, "2026-08-09T10:59:00Z");
+        assert_eq!(evidence.valid_from, "2026-08-09T11:00:00Z");
+        assert_eq!(evidence.valid_until, "2026-08-09T13:00:00Z");
+        assert_eq!(evidence.issuer_certificate_sha256.len(), 64);
+        assert!(evidence
+            .issuer_certificate_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase()));
+        assert!(evidence.validity_checked);
+        assert!(evidence.valid_at_verification_time);
+        assert!(!evidence.revocation_checked);
+        assert_eq!(evidence.not_revoked, None);
+    }
+
+    #[test]
+    fn authenticated_mso_evidence_rejects_type_and_validity_failures() {
+        let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
+        let valid = mso_with_validity(
+            now - time::Duration::hours(1),
+            now + time::Duration::hours(1),
+        );
+        assert!(validated_mso_evidence(&valid, "wrong.type", "ES256", b"cert", now).is_err());
+
+        let future = mso_with_validity(
+            now + time::Duration::seconds(1),
+            now + time::Duration::hours(1),
+        );
+        assert!(
+            validated_mso_evidence(&future, "org.iso.18013.5.1.mDL", "ES256", b"cert", now,)
+                .unwrap_err()
+                .contains("not yet valid")
+        );
+
+        let expired = mso_with_validity(
+            now - time::Duration::hours(1),
+            now - time::Duration::seconds(1),
+        );
+        assert!(
+            validated_mso_evidence(&expired, "org.iso.18013.5.1.mDL", "ES256", b"cert", now,)
+                .unwrap_err()
+                .contains("expired")
+        );
+
+        let mut contradictory = valid;
+        contradictory.validity_info.signed =
+            contradictory.validity_info.valid_from + time::Duration::seconds(1);
+        assert!(validated_mso_evidence(
+            &contradictory,
+            "org.iso.18013.5.1.mDL",
+            "ES256",
+            b"cert",
+            now,
+        )
+        .unwrap_err()
+        .contains("validity window is contradictory"));
     }
 
     #[test]
