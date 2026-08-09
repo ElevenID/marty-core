@@ -57,6 +57,17 @@ pub struct TrustPackageProvenance {
     pub imported_at: DateTime<Utc>,
 }
 
+/// Signer transition policy authenticated as part of a trust package.
+///
+/// The next signer is an optional, one-step authorization. The recovery
+/// signer is stable once established and cannot be replaced by later
+/// packages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustPackageSignerPolicy {
+    pub next_signer_key_id: Option<String>,
+    pub recovery_signer_key_id: String,
+}
+
 /// Backward-compatible name for callers that only consume Open Badge records.
 pub type OpenBadgeTrustPackageProvenance = TrustPackageProvenance;
 
