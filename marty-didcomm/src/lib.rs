@@ -1,9 +1,18 @@
 //! # marty-didcomm
 //!
-//! DIDComm v2 messaging support for the Marty digital identity platform.
+//! DIDComm Messaging 2.1 support for the Marty digital identity platform.
 //!
 //! This crate provides DID resolution (did:key, did:web, did:peer, did:jwk)
-//! and DIDComm v2 envelope packing/unpacking for credential delivery.
+//! and a deliberately narrow credential-delivery profile: X25519 key
+//! agreement, `ECDH-ES+A256KW` anonymous encryption, and the required
+//! `A256CBC-HS512` content encryption algorithm. The encrypted-envelope
+//! implementation is checked against unmodified Appendix C data.
+//!
+//! This is not a claim that Marty is a complete general-purpose DIDComm agent.
+//! The public Marty API does not yet expose authcrypt, signed envelopes,
+//! mediator routing/forwarding, every required key-agreement curve, or every
+//! protocol state machine. Those capabilities need product-boundary and
+//! interoperability tests before they can be advertised as supported.
 //!
 //! ## Supported DID Methods
 //!

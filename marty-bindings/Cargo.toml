@@ -26,12 +26,17 @@ pyo3 = { workspace = true, features = ["abi3-py311"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+ciborium = { workspace = true }
+coset = "0.3.8"
+isomdl = "0.2.0"
+pem-rfc7468 = { workspace = true }
 
 # Base64 encoding
 base64 = { workspace = true }
 
 # DateTime for credential timestamps
 chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # Error handling
 anyhow = "1.0"
@@ -41,6 +46,7 @@ thiserror = "2.0"
 tokio = { version = "1.35", features = ["rt", "macros"] }
 
 [dev-dependencies]
+rcgen = { workspace = true }
 serde_json = "1.0"
 
 [features]

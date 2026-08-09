@@ -46,6 +46,19 @@ struct ProofHeader {
     /// Type (must be "openid4vci-proof+jwt").
     #[serde(default)]
     typ: Option<String>,
+    /// A key attestation JWT validated by the issuer's tenant-bound policy.
+    #[serde(default)]
+    key_attestation: Option<String>,
+}
+
+enum ProofKeySource<'a> {
+    Header,
+    ValidatedKeyAttestation { jwt: &'a str },
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyAttestationPayload {
+    attested_keys: Vec<JWK>,
 }
 
 /// JWT proof payload fields.
@@ -88,6 +101,55 @@ pub fn verify_jwt_proof(
     expected_c_nonce: Option<&str>,
     max_age_seconds: i64,
 ) -> Oid4vciResult<VerifiedProof> {
+    verify_jwt_proof_with_key_source(
+        proof_jwt,
+        expected_issuer_url,
+        expected_c_nonce,
+        max_age_seconds,
+        ProofKeySource::Header,
+    )
+}
+
+/// Verify a key-attestation-bound OID4VCI JWT proof.
+///
+/// The caller is responsible for validating `validated_key_attestation_jwt`
+/// against the organization and issuer profile's trust policy, including its
+/// certificate chain, signature, time, nonce, status, and assurance claims.
+/// This function enforces the cryptographic boundary after that policy check:
+/// the proof must carry that exact attestation JWT, the key identified in its
+/// JOSE header must be one of the `attested_keys` embedded in that JWT, and its
+/// signature must verify with that key. OID4VCI wallets can identify the proof
+/// key with an embedded `jwk` or a standards-defined `kid`; Marty does not add
+/// a private key-index convention to either form.
+///
+/// Keeping the complete validated attestation token in this interface prevents
+/// a caller from accidentally validating one token and accepting public keys
+/// for a different token.
+pub fn verify_key_attestation_bound_jwt_proof(
+    proof_jwt: &str,
+    expected_issuer_url: &str,
+    expected_c_nonce: Option<&str>,
+    max_age_seconds: i64,
+    validated_key_attestation_jwt: &str,
+) -> Oid4vciResult<VerifiedProof> {
+    verify_jwt_proof_with_key_source(
+        proof_jwt,
+        expected_issuer_url,
+        expected_c_nonce,
+        max_age_seconds,
+        ProofKeySource::ValidatedKeyAttestation {
+            jwt: validated_key_attestation_jwt,
+        },
+    )
+}
+
+fn verify_jwt_proof_with_key_source(
+    proof_jwt: &str,
+    expected_issuer_url: &str,
+    expected_c_nonce: Option<&str>,
+    max_age_seconds: i64,
+    key_source: ProofKeySource<'_>,
+) -> Oid4vciResult<VerifiedProof> {
     // Step 1: Split and decode
     let parts: Vec<&str> = proof_jwt.split('.').collect();
     if parts.len() != 3 {
@@ -113,43 +175,100 @@ pub fn verify_jwt_proof(
         Oid4vciError::ProofVerificationFailed(format!("Invalid payload JSON: {}", e))
     })?;
 
-    // Step 2: Validate typ header
-    if let Some(typ) = &header.typ {
-        if typ != "openid4vci-proof+jwt" {
+    // Step 2: Validate the required explicit proof type.
+    match header.typ.as_deref() {
+        Some("openid4vci-proof+jwt") => {}
+        Some(typ) => {
             return Err(Oid4vciError::ProofVerificationFailed(format!(
                 "Invalid typ header: expected 'openid4vci-proof+jwt', got '{}'",
                 typ
             )));
         }
-    }
-    // Note: typ is recommended but not strictly required per some wallet implementations
-
-    // Step 3: Extract public key from kid or jwk
-    let (derived_holder_id, holder_jwk) = extract_holder_key(&header)?;
-    let holder_id = payload.iss.clone().unwrap_or(derived_holder_id);
-
-    // Step 4: Cryptographic signature verification
-    if let Some(ref jwk) = holder_jwk {
-        verify_signature(jwk, &header.alg, parts[0], parts[1], &signature_bytes)?;
-    } else {
-        // If no JWK is available (kid-only), we log a warning but continue.
-        // In production, this should resolve the kid to a DID document and extract the key.
-        tracing::warn!(
-            kid = ?header.kid,
-            "Proof JWT uses kid without embedded jwk — signature not cryptographically verified. \
-             DID resolution needed for full verification."
-        );
+        None => {
+            return Err(Oid4vciError::ProofVerificationFailed(
+                "Missing required typ header 'openid4vci-proof+jwt'".into(),
+            ));
+        }
     }
 
-    // Step 5: Validate audience (skipped when expected_issuer_url is empty)
-    if !expected_issuer_url.is_empty() {
-        if let Some(ref aud) = payload.aud {
-            if aud != expected_issuer_url {
-                return Err(Oid4vciError::ProofVerificationFailed(format!(
-                    "Audience mismatch: expected '{}', got '{}'",
-                    expected_issuer_url, aud
-                )));
+    // Step 3: Resolve the proof key through exactly one trusted path. A key
+    // attestation header must never be ignored by the ordinary verifier.
+    let (derived_holder_id, holder_jwk) = match key_source {
+        ProofKeySource::Header => {
+            if header.key_attestation.is_some() {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Proof carries key_attestation but no validated issuer policy context was provided"
+                        .into(),
+                ));
             }
+            extract_holder_key(&header)?
+        }
+        ProofKeySource::ValidatedKeyAttestation { jwt } => {
+            extract_key_attestation_holder_key(&header, jwt)?
+        }
+    };
+
+    // Step 4: Cryptographic signature verification.  `extract_holder_key`
+    // resolves every accepted header to public key material.  Keep this
+    // explicit guard so a future key-reference variant cannot accidentally
+    // reintroduce an unverified success path.
+    let verification_jwk = holder_jwk.as_ref().ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Proof key could not be resolved to public key material".into(),
+        )
+    })?;
+    verify_signature(
+        verification_jwk,
+        &header.alg,
+        parts[0],
+        parts[1],
+        &signature_bytes,
+    )?;
+
+    // `iss`, when present, is the OAuth client_id.  It is not generally a
+    // holder identity.  Preserve a self-certifying DID client identifier only
+    // when it resolves to the exact key that just verified the proof.
+    let holder_id =
+        verified_holder_id(&derived_holder_id, verification_jwk, payload.iss.as_deref())?;
+
+    // Step 5: The audience is required even when the caller has already
+    // validated its value at a routing boundary.
+    let audience = payload.aud.as_deref().ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed("Missing required aud claim".into())
+    })?;
+    if !expected_issuer_url.is_empty() && audience != expected_issuer_url {
+        return Err(Oid4vciError::ProofVerificationFailed(format!(
+            "Audience mismatch: expected '{}', got '{}'",
+            expected_issuer_url, audience
+        )));
+    }
+
+    // Step 7: iat is required by the JWT proof profile.
+    let issued_at = payload.iat.ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed("Missing required iat claim".into())
+    })?;
+    let now = chrono::Utc::now().timestamp();
+    if now - issued_at > max_age_seconds {
+        return Err(Oid4vciError::ProofVerificationFailed(format!(
+            "Proof JWT too old: iat={}, now={}, max_age={}s",
+            issued_at, now, max_age_seconds
+        )));
+    }
+    // Allow small clock skew (30 seconds into the future)
+    if issued_at > now + 30 {
+        return Err(Oid4vciError::ProofVerificationFailed(format!(
+            "Proof JWT iat is in the future: iat={}, now={}",
+            issued_at, now
+        )));
+    }
+
+    // Step 8: Validate exp
+    if let Some(exp) = payload.exp {
+        if now > exp {
+            return Err(Oid4vciError::ProofVerificationFailed(format!(
+                "Proof JWT has expired: exp={}, now={}",
+                exp, now
+            )));
         }
     }
 
@@ -171,41 +290,147 @@ pub fn verify_jwt_proof(
         }
     }
 
-    // Step 7: Validate iat
-    if let Some(iat) = payload.iat {
-        let now = chrono::Utc::now().timestamp();
-        if now - iat > max_age_seconds {
-            return Err(Oid4vciError::ProofVerificationFailed(format!(
-                "Proof JWT too old: iat={}, now={}, max_age={}s",
-                iat, now, max_age_seconds
-            )));
-        }
-        // Allow small clock skew (30 seconds into the future)
-        if iat > now + 30 {
-            return Err(Oid4vciError::ProofVerificationFailed(format!(
-                "Proof JWT iat is in the future: iat={}, now={}",
-                iat, now
-            )));
-        }
-    }
-
-    // Step 8: Validate exp
-    if let Some(exp) = payload.exp {
-        let now = chrono::Utc::now().timestamp();
-        if now > exp {
-            return Err(Oid4vciError::ProofVerificationFailed(format!(
-                "Proof JWT has expired: exp={}, now={}",
-                exp, now
-            )));
-        }
-    }
-
     Ok(VerifiedProof {
         holder_id,
         holder_jwk,
         nonce: payload.nonce,
         audience: payload.aud,
-        iat: payload.iat,
+        iat: Some(issued_at),
+    })
+}
+
+fn public_jwk_holder_id(jwk: &JWK) -> Oid4vciResult<String> {
+    let jwk_json = serde_json::to_string(jwk).map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Failed to serialize attested public JWK: {error}"
+        ))
+    })?;
+    Ok(format!("did:jwk:{}", B64.encode(jwk_json.as_bytes())))
+}
+
+fn jwk_has_private_material(jwk: &JWK) -> bool {
+    match &jwk.params {
+        Params::OKP(params) => params.private_key.is_some(),
+        Params::EC(params) => params.ecc_private_key.is_some(),
+        Params::RSA(params) => {
+            params.private_exponent.is_some()
+                || params.first_prime_factor.is_some()
+                || params.second_prime_factor.is_some()
+                || params.first_prime_factor_crt_exponent.is_some()
+                || params.second_prime_factor_crt_exponent.is_some()
+                || params.first_crt_coefficient.is_some()
+                || params.other_primes_info.is_some()
+        }
+        Params::Symmetric(_) => true,
+    }
+}
+
+fn extract_key_attestation_holder_key(
+    header: &ProofHeader,
+    validated_key_attestation_jwt: &str,
+) -> Oid4vciResult<(String, Option<JWK>)> {
+    if header.kid.is_some() && header.jwk.is_some() {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Key-attestation-bound proof must not contain both 'kid' and 'jwk'".into(),
+        ));
+    }
+    let header_attestation = header.key_attestation.as_deref().ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Key-attestation-bound proof is missing key_attestation header".into(),
+        )
+    })?;
+    if header_attestation != validated_key_attestation_jwt {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Proof key_attestation does not match the issuer-validated attestation".into(),
+        ));
+    }
+    let attestation_parts: Vec<&str> = validated_key_attestation_jwt.split('.').collect();
+    if attestation_parts.len() != 3 {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation JWT must have exactly 3 parts".into(),
+        ));
+    }
+    let attestation_payload = B64.decode(attestation_parts[1]).map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Validated key attestation payload is not base64url: {error}"
+        ))
+    })?;
+    let attestation: KeyAttestationPayload =
+        serde_json::from_slice(&attestation_payload).map_err(|error| {
+            Oid4vciError::ProofVerificationFailed(format!(
+                "Validated key attestation payload is invalid: {error}"
+            ))
+        })?;
+    if attestation.attested_keys.is_empty() {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation has no attested public keys".into(),
+        ));
+    }
+    if attestation
+        .attested_keys
+        .iter()
+        .any(jwk_has_private_material)
+    {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation must contain public keys only".into(),
+        ));
+    }
+
+    let jwk = match (&header.kid, &header.jwk) {
+        (None, Some(jwk_value)) => {
+            let proof_jwk: JWK = serde_json::from_value(jwk_value.clone()).map_err(|error| {
+                Oid4vciError::ProofVerificationFailed(format!(
+                    "Invalid JWK in key-attestation-bound proof header: {error}"
+                ))
+            })?;
+            if jwk_has_private_material(&proof_jwk) {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Key-attestation-bound proof header must contain a public JWK only".into(),
+                ));
+            }
+            let proof_thumbprint = proof_jwk.thumbprint().map_err(|error| {
+                Oid4vciError::ProofVerificationFailed(format!(
+                    "Could not fingerprint key-attestation-bound proof JWK: {error}"
+                ))
+            })?;
+            let matches_attestation = attestation.attested_keys.iter().any(|attested_jwk| {
+                attested_jwk
+                    .thumbprint()
+                    .is_ok_and(|thumbprint| thumbprint == proof_thumbprint)
+            });
+            if !matches_attestation {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Key-attestation-bound proof JWK is not contained in attested_keys".into(),
+                ));
+            }
+            proof_jwk
+        }
+        (Some(kid), None) => select_etsi_attested_key(kid, &attestation.attested_keys)?,
+        (None, None) => {
+            return Err(Oid4vciError::ProofVerificationFailed(
+                "Key-attestation-bound proof must contain either 'kid' or 'jwk'".into(),
+            ));
+        }
+        (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
+    };
+    Ok((public_jwk_holder_id(&jwk)?, Some(jwk)))
+}
+
+fn select_etsi_attested_key(kid: &str, attested_keys: &[JWK]) -> Oid4vciResult<JWK> {
+    // ETSI TS 119 472-3 binds this proof to the first public key in the
+    // validated attestation. The current EUDI wallet reference implementation
+    // represents that position as the canonical JOSE `kid` value "0".
+    // This is deliberately not a general numeric-index or key-id fallback.
+    if kid != "0" {
+        return Err(Oid4vciError::ProofVerificationFailed(format!(
+            "ETSI key-attestation-bound proof kid must be the canonical first-key selector '0', got '{kid}'"
+        )));
+    }
+
+    attested_keys.first().cloned().ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Validated key attestation has no first public key".into(),
+        )
     })
 }
 
@@ -309,8 +534,11 @@ fn resolve_did_key_to_jwk(kid: &str) -> Oid4vciResult<(String, Option<JWK>)> {
 /// Extract the holder's identity and optional JWK from the proof header.
 fn extract_holder_key(header: &ProofHeader) -> Oid4vciResult<(String, Option<JWK>)> {
     match (&header.kid, &header.jwk) {
+        (Some(_), Some(_)) => Err(Oid4vciError::ProofVerificationFailed(
+            "Proof JWT header must not contain both 'kid' and 'jwk'".into(),
+        )),
         // JWK embedded in header — we can verify the signature
-        (_, Some(jwk_value)) => {
+        (None, Some(jwk_value)) => {
             let jwk: JWK = serde_json::from_value(jwk_value.clone()).map_err(|e| {
                 Oid4vciError::ProofVerificationFailed(format!("Invalid JWK in proof header: {}", e))
             })?;
@@ -324,17 +552,17 @@ fn extract_holder_key(header: &ProofHeader) -> Oid4vciResult<(String, Option<JWK
 
             Ok((holder_id, Some(jwk)))
         }
-        // kid only — attempt did:key resolution (no network I/O for self-describing keys)
+        // kid only — resolve did:key locally.  Other DID methods require a
+        // trusted resolver and verification-method authorization supplied by
+        // the caller; accepting them here would skip signature verification.
         (Some(kid), None) => {
             if kid.contains("did:key:z") {
                 resolve_did_key_to_jwk(kid)
             } else {
-                tracing::warn!(
-                    kid = %kid,
-                    "Proof JWT kid is not a did:key — DID resolution needed for full sig verification"
-                );
-                let did = kid.split('#').next().unwrap_or(kid).to_string();
-                Ok((did, None))
+                Err(Oid4vciError::ProofVerificationFailed(format!(
+                    "Proof JWT kid '{}' cannot be resolved locally; provide an embedded public JWK or a did:key verification method",
+                    kid
+                )))
             }
         }
         // Neither kid nor jwk
@@ -342,6 +570,42 @@ fn extract_holder_key(header: &ProofHeader) -> Oid4vciResult<(String, Option<JWK
             "Proof JWT header must contain either 'kid' or 'jwk'".into(),
         )),
     }
+}
+
+fn verified_holder_id(
+    derived_holder_id: &str,
+    verification_jwk: &JWK,
+    client_id: Option<&str>,
+) -> Oid4vciResult<String> {
+    let Some(client_id) = client_id else {
+        return Ok(derived_holder_id.to_string());
+    };
+    if !client_id.starts_with("did:key:z") {
+        return Ok(derived_holder_id.to_string());
+    }
+
+    let (client_did, client_jwk) = resolve_did_key_to_jwk(client_id)?;
+    let client_jwk = client_jwk.ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Self-certifying proof client_id did not resolve to key material".into(),
+        )
+    })?;
+    let client_thumbprint = client_jwk.thumbprint().map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Could not fingerprint proof client_id key: {error}"
+        ))
+    })?;
+    let verification_thumbprint = verification_jwk.thumbprint().map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Could not fingerprint verified proof key: {error}"
+        ))
+    })?;
+    if client_thumbprint != verification_thumbprint {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Self-certifying proof client_id does not identify the verified proof key".into(),
+        ));
+    }
+    Ok(client_did)
 }
 
 /// Cryptographically verify the JWT signature using the provided JWK.
@@ -538,6 +802,70 @@ pub fn create_proof_jwt(aud: &str, c_nonce: &str) -> Oid4vciResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
+
+    fn embedded_ed25519_jwk(signing_key: &SigningKey) -> serde_json::Value {
+        serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": B64.encode(signing_key.verifying_key().to_bytes()),
+        })
+    }
+
+    fn sign_test_proof(
+        signing_key: &SigningKey,
+        header: serde_json::Value,
+        payload: serde_json::Value,
+    ) -> String {
+        let header_b64 = B64.encode(serde_json::to_vec(&header).unwrap());
+        let payload_b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
+        let signing_input = format!("{header_b64}.{payload_b64}");
+        let signature = signing_key.sign(signing_input.as_bytes());
+        format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
+    }
+
+    fn embedded_p256_jwk(signing_key: &P256SigningKey) -> serde_json::Value {
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": B64.encode(point.x().expect("P-256 x coordinate")),
+            "y": B64.encode(point.y().expect("P-256 y coordinate")),
+            "kid": "wallet-proof-key",
+        })
+    }
+
+    fn sign_test_p256_proof(
+        signing_key: &P256SigningKey,
+        header: serde_json::Value,
+        payload: serde_json::Value,
+    ) -> String {
+        let header_b64 = B64.encode(serde_json::to_vec(&header).unwrap());
+        let payload_b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
+        let signing_input = format!("{header_b64}.{payload_b64}");
+        let signature: P256Signature = signing_key.sign(signing_input.as_bytes());
+        format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
+    }
+
+    fn validated_key_attestation_jwt(attested_keys: Vec<serde_json::Value>) -> String {
+        let header = B64.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "alg": "ES256",
+                "typ": "key-attestation+jwt",
+            }))
+            .unwrap(),
+        );
+        let payload = B64.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "attested_keys": attested_keys,
+            }))
+            .unwrap(),
+        );
+        // Signature validation belongs to the tenant-bound issuer policy.
+        // This protocol-layer fixture needs only the exact already-validated
+        // compact token so it can prove key selection is bound to its payload.
+        format!("{header}.{payload}.{}", B64.encode(b"validated-signature"))
+    }
 
     #[test]
     fn test_extract_proof_jwts_v1_format() {
@@ -581,6 +909,7 @@ mod tests {
             kid: Some("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK#z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into()),
             jwk: None,
             typ: Some("openid4vci-proof+jwt".into()),
+            key_attestation: None,
         };
 
         let (holder_id, jwk) = extract_holder_key(&header).unwrap();
@@ -600,9 +929,175 @@ mod tests {
             kid: None,
             jwk: None,
             typ: Some("openid4vci-proof+jwt".into()),
+            key_attestation: None,
         };
 
         assert!(extract_holder_key(&header).is_err());
+    }
+
+    #[test]
+    fn test_non_self_resolving_kid_cannot_bypass_signature_verification() {
+        let header = serde_json::json!({
+            "alg": "ES256",
+            "typ": "openid4vci-proof+jwt",
+            "kid": "did:web:wallet.example#holder-key",
+        });
+        let payload = serde_json::json!({
+            "iss": "did:web:wallet.example",
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+        let proof = format!(
+            "{}.{}.{}",
+            B64.encode(serde_json::to_vec(&header).unwrap()),
+            B64.encode(serde_json::to_vec(&payload).unwrap()),
+            B64.encode([0_u8; 64]),
+        );
+
+        let error =
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot be resolved locally"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_required_typ_aud_and_iat_are_enforced() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let jwk = embedded_ed25519_jwk(&signing_key);
+        let base_payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+
+        let missing_typ = sign_test_proof(
+            &signing_key,
+            serde_json::json!({"alg": "EdDSA", "jwk": jwk}),
+            base_payload.clone(),
+        );
+        assert!(
+            verify_jwt_proof(&missing_typ, "https://issuer.example", Some("nonce-1"), 300,)
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required typ")
+        );
+
+        let valid_header = serde_json::json!({
+            "alg": "EdDSA",
+            "typ": "openid4vci-proof+jwt",
+            "jwk": embedded_ed25519_jwk(&signing_key),
+        });
+        let missing_aud = sign_test_proof(
+            &signing_key,
+            valid_header.clone(),
+            serde_json::json!({
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+        assert!(verify_jwt_proof(&missing_aud, "", Some("nonce-1"), 300)
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required aud"));
+
+        let missing_iat = sign_test_proof(
+            &signing_key,
+            valid_header,
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "nonce": "nonce-1",
+            }),
+        );
+        assert!(
+            verify_jwt_proof(&missing_iat, "https://issuer.example", Some("nonce-1"), 300,)
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required iat")
+        );
+    }
+
+    #[test]
+    fn test_kid_and_jwk_are_mutually_exclusive() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "did:key:z6MkhInvalidForThisTest",
+                "jwk": embedded_ed25519_jwk(&signing_key),
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        assert!(
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300,)
+                .unwrap_err()
+                .to_string()
+                .contains("must not contain both")
+        );
+    }
+
+    #[test]
+    fn test_iss_client_id_cannot_replace_cryptographic_holder_identity() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": embedded_ed25519_jwk(&signing_key),
+            }),
+            serde_json::json!({
+                "iss": "wallet-oauth-client",
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        let verified =
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300).unwrap();
+        assert_ne!(verified.holder_id, "wallet-oauth-client");
+        assert!(verified.holder_id.starts_with("did:jwk:"));
+        assert!(verified.holder_jwk.is_some());
+    }
+
+    #[test]
+    fn test_mismatched_self_certifying_client_id_is_rejected() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let other_key = SigningKey::generate(&mut OsRng);
+        let mut prefixed = vec![0xed_u8, 0x01];
+        prefixed.extend_from_slice(&other_key.verifying_key().to_bytes());
+        let other_did = format!("did:key:z{}", base58btc_encode(&prefixed));
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": embedded_ed25519_jwk(&signing_key),
+            }),
+            serde_json::json!({
+                "iss": other_did,
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        assert!(
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300,)
+                .unwrap_err()
+                .to_string()
+                .contains("does not identify the verified proof key")
+        );
     }
 
     #[test]
@@ -631,5 +1126,370 @@ mod tests {
             verify_jwt_proof(&tampered, "https://issuer.example", Some("nonce-1"), 300).is_err(),
             "a modified JWT signature must never verify"
         );
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_accepts_oidf_jwk_binding() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let proof_jwk = embedded_p256_jwk(&signing_key);
+        let attestation = validated_key_attestation_jwt(vec![proof_jwk.clone()]);
+        let proof = sign_test_p256_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": proof_jwk,
+                "key_attestation": &attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        let verified = verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .unwrap();
+
+        assert!(verified.holder_id.starts_with("did:jwk:"));
+        assert!(verified.holder_jwk.is_some());
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_rejects_jwk_not_in_attestation() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let other_key = P256SigningKey::random(&mut OsRng);
+        let proof_jwk = embedded_p256_jwk(&signing_key);
+        let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&other_key)]);
+        let proof = sign_test_p256_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": proof_jwk,
+                "key_attestation": &attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        let error = verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not contained in attested_keys"));
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_accepts_current_etsi_first_key_selector() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&signing_key)]);
+        let proof = sign_test_p256_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        assert!(verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_rejects_noncanonical_etsi_key_selectors() {
+        let signing_key = P256SigningKey::random(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&signing_key)]);
+        let payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+
+        for kid in ["1", "-1", "00", "wallet-proof-key"] {
+            let proof = sign_test_p256_proof(
+                &signing_key,
+                serde_json::json!({
+                    "alg": "ES256",
+                    "typ": "openid4vci-proof+jwt",
+                    "kid": kid,
+                    "key_attestation": &attestation,
+                }),
+                payload.clone(),
+            );
+            let error = verify_key_attestation_bound_jwt_proof(
+                &proof,
+                "https://issuer.example",
+                Some("nonce-1"),
+                300,
+                &attestation,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("canonical first-key selector '0'"),
+                "unexpected error for kid {kid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_attestation_bound_proof_uses_only_first_attested_key() {
+        let first_key = P256SigningKey::random(&mut OsRng);
+        let second_key = P256SigningKey::random(&mut OsRng);
+        let attestation = validated_key_attestation_jwt(vec![
+            embedded_p256_jwk(&first_key),
+            embedded_p256_jwk(&second_key),
+        ]);
+        let payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+        let first_key_proof = sign_test_p256_proof(
+            &first_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &attestation,
+            }),
+            payload.clone(),
+        );
+        assert!(verify_key_attestation_bound_jwt_proof(
+            &first_key_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .is_ok());
+
+        let second_key_proof = sign_test_p256_proof(
+            &second_key,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": &attestation,
+            }),
+            payload,
+        );
+        assert!(verify_key_attestation_bound_jwt_proof(
+            &second_key_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn ordinary_verifier_never_ignores_key_attestation_header() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "0",
+                "key_attestation": "unvalidated.attestation.jwt",
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+
+        let error =
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("no validated issuer policy context"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn key_attestation_binding_rejects_token_key_and_private_material_mismatch() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let other_key = SigningKey::generate(&mut OsRng);
+        let proof_jwk = embedded_ed25519_jwk(&signing_key);
+        let attestation = validated_key_attestation_jwt(vec![proof_jwk.clone()]);
+        let payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+        let proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": proof_jwk.clone(),
+                "key_attestation": &attestation,
+            }),
+            payload.clone(),
+        );
+
+        let mismatch = verify_key_attestation_bound_jwt_proof(
+            &proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            "different.key.attestation",
+        )
+        .unwrap_err();
+        assert!(mismatch.to_string().contains("does not match"));
+
+        let wrong_attestation =
+            validated_key_attestation_jwt(vec![embedded_ed25519_jwk(&other_key)]);
+        let wrong_key_proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": proof_jwk,
+                "key_attestation": &wrong_attestation,
+            }),
+            payload.clone(),
+        );
+        let wrong_key = verify_key_attestation_bound_jwt_proof(
+            &wrong_key_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &wrong_attestation,
+        )
+        .unwrap_err();
+        assert!(wrong_key
+            .to_string()
+            .contains("not contained in attested_keys"));
+
+        let noncanonical_numeric_kid = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "kid": "1",
+                "key_attestation": &attestation,
+            }),
+            payload,
+        );
+        let kid_error = verify_key_attestation_bound_jwt_proof(
+            &noncanonical_numeric_kid,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &attestation,
+        )
+        .unwrap_err();
+        assert!(kid_error
+            .to_string()
+            .contains("canonical first-key selector '0'"));
+
+        let private_jwk = serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": B64.encode(signing_key.verifying_key().to_bytes()),
+            "d": B64.encode(signing_key.to_bytes()),
+        });
+        let private_attestation = validated_key_attestation_jwt(vec![private_jwk]);
+        let private_proof = sign_test_proof(
+            &signing_key,
+            serde_json::json!({
+                "alg": "EdDSA",
+                "typ": "openid4vci-proof+jwt",
+                "jwk": embedded_ed25519_jwk(&signing_key),
+                "key_attestation": &private_attestation,
+            }),
+            serde_json::json!({
+                "aud": "https://issuer.example",
+                "iat": chrono::Utc::now().timestamp(),
+                "nonce": "nonce-1",
+            }),
+        );
+        let private_error = verify_key_attestation_bound_jwt_proof(
+            &private_proof,
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &private_attestation,
+        )
+        .unwrap_err();
+        assert!(private_error.to_string().contains("public keys only"));
+    }
+
+    #[test]
+    fn key_attestation_binding_rejects_malformed_or_empty_attestation_payloads() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let proof_for = |attestation: &str| {
+            sign_test_proof(
+                &signing_key,
+                serde_json::json!({
+                    "alg": "EdDSA",
+                    "typ": "openid4vci-proof+jwt",
+                    "kid": "0",
+                    "key_attestation": attestation,
+                }),
+                serde_json::json!({
+                    "aud": "https://issuer.example",
+                    "iat": chrono::Utc::now().timestamp(),
+                    "nonce": "nonce-1",
+                }),
+            )
+        };
+
+        let malformed = "not.*.signature";
+        let malformed_error = verify_key_attestation_bound_jwt_proof(
+            &proof_for(malformed),
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            malformed,
+        )
+        .unwrap_err();
+        assert!(malformed_error.to_string().contains("not base64url"));
+
+        let empty = validated_key_attestation_jwt(Vec::new());
+        let empty_error = verify_key_attestation_bound_jwt_proof(
+            &proof_for(&empty),
+            "https://issuer.example",
+            Some("nonce-1"),
+            300,
+            &empty,
+        )
+        .unwrap_err();
+        assert!(empty_error.to_string().contains("no attested public keys"));
     }
 }

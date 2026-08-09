@@ -20,3 +20,7 @@ Thumbs.db
 *.profraw
 lcov.info
 coverage/
+
+# Python tooling
+__pycache__/
+*.py[cod]

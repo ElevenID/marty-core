@@ -7,6 +7,8 @@
 // Rust 1.97 flags even though they are outside the handwritten function bodies.
 #![allow(clippy::useless_conversion)]
 
+mod mdoc;
+
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -165,6 +167,42 @@ fn verify_ed25519(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResu
     Ok(marty_crypto::ed25519::verify_bool(
         public_key, message, signature,
     ))
+}
+
+/// Verify a W3C VCDM v2 JSON-LD Data Integrity credential or presentation.
+///
+/// The request and response are JSON strings so the cryptographic boundary is
+/// stable across Rust and Python releases. Verification uses Marty's embedded
+/// contexts and offline did:key resolution.
+#[pyfunction]
+fn verify_vcdm_data_integrity(request_json: &str) -> String {
+    marty_verification::vcdm::verify_vcdm_data_integrity_json(request_json)
+}
+
+/// Verify a compact W3C VCDM v2 VC-JWT with public issuer-profile DID material.
+///
+/// The JSON request accepts `token` and an optional `issuer_public_jwk`. The
+/// JWK must be public; signing and private-key custody remain behind the issuer
+/// profile rather than crossing the Python/Rust verification boundary.
+#[pyfunction]
+fn verify_vcdm_jwt(request_json: &str) -> String {
+    marty_verification::vcdm::verify_vcdm_jwt_json(request_json)
+}
+
+/// Prepare the exact canonical bytes for an issuer-profile-backed
+/// `eddsa-rdfc-2022` credential signature.
+#[pyfunction]
+fn prepare_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+    marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Insert a remote issuer-profile signature and verify the completed
+/// `eddsa-rdfc-2022` credential before returning it.
+#[pyfunction]
+fn complete_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+    marty_verification::vcdm::complete_vcdm_data_integrity_credential_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 // ============================================================================
@@ -527,6 +565,58 @@ fn oid4vci_verify_proof_jwt(
     Ok((verified.holder_id, verified.nonce, holder_jwk_json))
 }
 
+/// Verify an OID4VCI proof bound to an issuer-validated key attestation.
+///
+/// `validated_key_attestation_jwt` must be the exact compact JWT that the
+/// tenant-bound issuer policy already validated. The Rust protocol layer then
+/// requires the proof's `key_attestation` header to match that token
+/// byte-for-byte, confirms the proof header's `jwk` or standards-defined `kid`
+/// identifies a key in the token's `attested_keys`, and verifies the proof
+/// signature with that key. No separately supplied key list can drift from the
+/// validated token.
+///
+/// Certificate-chain, status, assurance, and organization/profile policy
+/// checks intentionally remain at the product boundary that owns those
+/// tenant-scoped records. This binding does not accept trust decisions or
+/// private custody selectors.
+#[pyfunction]
+#[pyo3(signature = (
+    proof_jwt,
+    validated_key_attestation_jwt,
+    expected_c_nonce=None,
+    issuer_url=None,
+))]
+fn oid4vci_verify_key_attestation_bound_proof_jwt(
+    proof_jwt: &str,
+    validated_key_attestation_jwt: &str,
+    expected_c_nonce: Option<&str>,
+    issuer_url: Option<&str>,
+) -> PyResult<(String, Option<String>, String)> {
+    let verified = marty_oid4vci::proof::verify_key_attestation_bound_jwt_proof(
+        proof_jwt,
+        issuer_url.unwrap_or(""),
+        expected_c_nonce,
+        300,
+        validated_key_attestation_jwt,
+    )
+    .map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Key-attestation-bound proof JWT verification failed: {e}"
+        ))
+    })?;
+    let holder_jwk = verified.holder_jwk.ok_or_else(|| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "Verified key-attestation-bound proof did not return its selected public key",
+        )
+    })?;
+    let holder_jwk_json = serde_json::to_string(&holder_jwk).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Holder JWK serialization failed: {e}"
+        ))
+    })?;
+    Ok((verified.holder_id, verified.nonce, holder_jwk_json))
+}
+
 /// Verify an SD-JWT VC presentation using Marty Core's RFC 9449 engine.
 ///
 /// The issuer JWK must contain public material only. When both expected
@@ -842,9 +932,9 @@ fn oid4vci_assemble_credential(
 }
 
 /// Opaque mDoc preparation state retained inside the native extension between
-/// a remote KMS signing call and final COSE assembly.  The protected header,
+/// issuer-profile signing and final COSE assembly. The protected header,
 /// MSO and issuer-signed items must never be reconstructed from a lossy
-/// Python representation after the KMS signs the exact TBS bytes.
+/// Python representation after the profile signs the exact TBS bytes as its DID.
 #[pyclass]
 struct PreparedMdocForRemoteSigning {
     inner: Option<marty_oid4vci::formats::mdoc::PreparedMdoc>,
@@ -877,13 +967,26 @@ impl PreparedMdocForRemoteSigning {
     }
 }
 
-/// Prepare an ISO 18013-5 mDoc for remote KMS signing.
+/// Prepare an ISO 18013-5 mDoc for issuer-profile signing.
 ///
 /// This keeps the complete prepared state in Rust and returns only the COSE
-/// Sig_structure bytes that a document-signing key must sign. The caller must
-/// pass the raw IEEE P1363 ECDSA signature to ``oid4vci_assemble_mdoc``.
+/// Sig_structure bytes that the issuer profile must sign as its DID. The caller
+/// must pass the raw IEEE P1363 ECDSA signature to
+/// ``oid4vci_assemble_mdoc``.
 #[pyfunction]
-#[pyo3(signature = (issuer_id, algorithm, credential_type, namespace, claims_json, expiration_seconds=None))]
+// Python keeps these protocol fields explicit so an issuer cannot smuggle
+// holder key binding or issuer identity through an opaque options object.
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    issuer_id,
+    algorithm,
+    credential_type,
+    namespace,
+    claims_json,
+    expiration_seconds=None,
+    credential_id=None,
+    holder_jwk_json=None
+))]
 fn oid4vci_prepare_mdoc(
     issuer_id: &str,
     algorithm: &str,
@@ -891,6 +994,8 @@ fn oid4vci_prepare_mdoc(
     namespace: &str,
     claims_json: &str,
     expiration_seconds: Option<i64>,
+    credential_id: Option<&str>,
+    holder_jwk_json: Option<&str>,
 ) -> PyResult<PreparedMdocForRemoteSigning> {
     use marty_oid4vci::signer::CredentialSigner;
     use marty_oid4vci::types::{CredentialClaims, SigningAlgorithm};
@@ -928,7 +1033,15 @@ fn oid4vci_prepare_mdoc(
         }
     }
 
-    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc(
+    let holder_public_jwk = holder_jwk_json
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid holder public JWK JSON: {e}"
+            ))
+        })?;
+    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc_with_credential_id_and_device_key(
         &MetadataSigner {
             issuer_id: issuer_id.to_owned(),
             algorithm,
@@ -946,6 +1059,8 @@ fn oid4vci_prepare_mdoc(
             w3c_context: vec![],
             w3c_types: vec![],
         },
+        credential_id,
+        holder_public_jwk.as_ref(),
     )
     .map_err(to_pyerr)?;
     Ok(PreparedMdocForRemoteSigning {
@@ -953,7 +1068,7 @@ fn oid4vci_prepare_mdoc(
     })
 }
 
-/// Assemble one mDoc credential after its KMS signature is available.
+/// Assemble one mDoc credential after its issuer-profile signature is available.
 #[pyfunction]
 fn oid4vci_assemble_mdoc(
     prepared: &mut PreparedMdocForRemoteSigning,
@@ -1218,7 +1333,11 @@ fn didcomm_unpack_message(message_json: &str) -> PyResult<String> {
     serde_json::to_string(&msg).map_err(to_pyerr)
 }
 
-/// Encrypt a DIDComm v2 plaintext message for a recipient using ECDH-ES+A256KW + A256GCM.
+/// Encrypt a DIDComm Messaging 2.1 plaintext message for one recipient.
+///
+/// The public credential-delivery profile uses X25519 anonymous encryption
+/// with `ECDH-ES+A256KW` key wrapping and the required `A256CBC-HS512`
+/// content-encryption algorithm.
 ///
 /// Args:
 ///     plaintext_json: The DIDComm plaintext message (JSON string)
@@ -1344,7 +1463,19 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_p256, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p384, m)?)?;
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_vcdm_data_integrity, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        complete_vcdm_data_integrity_credential,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
+    m.add_class::<mdoc::MdocDocumentVerificationEvidence>()?;
+    m.add_class::<mdoc::MdocPresentationVerificationResult>()?;
+    m.add_function(wrap_pyfunction!(mdoc::parse_device_response, m)?)?;
+    m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_cbor, m)?)?;
+    m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_presentation, m)?)?;
 
     // Verifiable Credentials
     m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
@@ -1362,6 +1493,10 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        oid4vci_verify_key_attestation_bound_proof_jwt,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(verify_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;

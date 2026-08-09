@@ -134,6 +134,29 @@ class TestErrorHandling:
             _marty_rs.create_verifiable_credential("not json", secret, "key-1")
 
 
+class TestMdocPresentationVerification:
+    """The production wheel exposes fail-closed ISO presentation bindings."""
+
+    def test_mdoc_verifier_surface_is_packaged(self):
+        assert hasattr(_marty_rs, "parse_device_response")
+        assert hasattr(_marty_rs, "verify_mdoc_cbor")
+        assert hasattr(_marty_rs, "verify_mdoc_presentation")
+
+    def test_malformed_mdoc_presentation_fails_closed(self):
+        result = _marty_rs.verify_mdoc_presentation(
+            b"\xff",
+            bytes([0x83, 0xF6, 0xF6, 0x82, 0x71]),
+            [],
+        )
+        assert result.issuer_signature_valid is False
+        assert result.issuer_trusted is False
+        assert result.device_authentication_valid is False
+        assert result.document_evidence == []
+        assert result.revocation_checked is False
+        assert result.not_revoked is None
+        assert result.error
+
+
 # =========================================================================
 # Verifiable Credentials
 # =========================================================================
@@ -223,7 +246,10 @@ class TestOID4VCI:
             _marty_rs.oid4vci_verify_proof_jwt(jwt, "nonce-b", None)
 
     def test_remote_mdoc_prepare_sign_assemble_is_single_use(self):
-        """Remote KMS issuance retains COSE state inside the Rust extension."""
+        """Issuer-profile signing retains COSE state inside the extension."""
+        reserved_credential_id = (
+            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"
+        )
         prepared = _marty_rs.oid4vci_prepare_mdoc(
             "did:web:issuer.example",
             "ES256",
@@ -231,8 +257,9 @@ class TestOID4VCI:
             "org.iso.18013.5.1",
             json.dumps({"given_name": "Erika"}),
             3600,
+            reserved_credential_id,
         )
-        assert prepared.credential_id
+        assert prepared.credential_id == reserved_credential_id
         assert prepared.tbs_data
 
         private_key, _ = _marty_rs.generate_p256_key()
@@ -241,7 +268,7 @@ class TestOID4VCI:
             prepared, raw_signature
         )
         assert credential
-        assert credential_id
+        assert credential_id == reserved_credential_id
         with pytest.raises(RuntimeError, match="only be assembled once"):
             _marty_rs.oid4vci_assemble_mdoc(prepared, raw_signature)
 

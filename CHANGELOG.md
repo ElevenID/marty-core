@@ -5,6 +5,374 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.36] - 2026-08-09
+
+### Added
+
+- Expose typed, signature-authenticated mdoc document evidence from the Python
+  presentation-verification binding, including the authenticated document type,
+  algorithms, MSO validity interval, and issuer-certificate fingerprint.
+
+### Security
+
+- Require a protected ES256 issuer algorithm and a valid Tag24 Mobile Security
+  Object whose version, document type, chronology, and current validity agree
+  with the authenticated document.
+- Report revocation as unchecked and unknown when no status authority ran,
+  preventing downstream consumers from inventing positive non-revocation.
+
+## [0.1.35] - 2026-08-09
+
+### Fixed
+
+- Verify every disclosed issuer-signed mdoc value against the namespace and
+  digest-ID commitment authenticated by the Mobile Security Object.
+- Replace the permissive mdoc validity placeholder with deterministic verifier-
+  time evaluation, including inclusive validity boundaries.
+
+### Security
+
+- Reject altered disclosures, missing namespace or digest commitments,
+  malformed timestamps, contradictory validity chronology, not-yet-valid
+  evidence, and expired evidence.
+
+## [0.1.34] - 2026-08-07
+
+### Documentation
+
+- Correct the public Python binding documentation to describe the implemented
+  DIDComm Messaging 2.1 X25519 anoncrypt profile: `ECDH-ES+A256KW` key wrapping
+  with required `A256CBC-HS512` content encryption.
+- Scope `marty-didcomm` package metadata to the credential-delivery capability
+  that is implemented and tested instead of implying a complete DIDComm agent.
+
+## [0.1.33] - 2026-08-07
+
+### Fixed
+
+- Replace the partial hand-written DIDComm JWE implementation with a maintained,
+  exact-pinned envelope engine.
+- Produce DIDComm Messaging 2.1 X25519 anoncrypt envelopes whose `epk`, `apv`,
+  `alg`, `enc`, and media type are integrity protected.
+- Use `ECDH-ES+A256KW` with the required `A256CBC-HS512` content-encryption
+  profile, and fail closed on malformed recipient binding or authentication.
+
+### Changed
+
+- Raise the workspace MSRV to Rust 1.95 to match the maintained DIDComm
+  dependency; the repository toolchain remains pinned to Rust 1.97.1.
+- Document the exact credential-delivery profile Marty currently supports and
+  keep full-agent authcrypt, routing, additional curves, and state-machine
+  interoperability as explicit tracked capabilities rather than broad claims.
+
+### Security
+
+- Remove Marty's duplicate JOSE, ECDH, AES, and key-wrapping implementation from
+  the DIDComm boundary.
+- Add negative tests for wrong recipient keys and missing protected `apv`, plus
+  an unmodified DIDComm Messaging 2.1 Appendix C authcrypt vector that verifies
+  sender authentication and the corrected ECDH-1PU key derivation.
+
+## [0.1.32] - 2026-08-02
+
+### Fixed
+
+- Implement the current ETSI TS 119 472-3 key-attestation proof rule used by
+  the official EUDI wallet: the canonical `kid` value `"0"` selects only the
+  first public key in the issuer-policy-validated `attested_keys` array.
+- Correct the 0.1.31 interpretation that rejected the current ETSI first-key
+  selector as a non-standard compatibility convention.
+
+### Security
+
+- Accept `"0"` only for a proof carrying the exact issuer-validated key
+  attestation; reject every other numeric value, alternate spelling, named key
+  identifier, missing key, private key, and signature made by a later array
+  element.
+- Keep imported official compliance-suite sources byte-for-byte unchanged.
+
+## [0.1.31] - 2026-08-01
+
+### Fixed
+
+- Align key-attestation-bound OID4VCI proofs with the Final specification by
+  accepting an embedded public `jwk` only when its RFC 7638 thumbprint matches
+  a key in the issuer-policy-validated attestation.
+- Resolve a proof `kid` only when it uniquely identifies an attested JWK or a
+  self-certifying `did:key` whose public key is present in the attestation.
+- Remove Marty's pre-1.0, non-standard numeric `kid`-as-array-index convention.
+
+### Security
+
+- Continue requiring the exact issuer-profile-validated attestation token and
+  verify the proof signature with the public key bound to that token.
+- Reject private, unattested, ambiguous, or mutually conflicting proof keys.
+- Keep imported official compliance suites, fixtures, assertions, expected
+  results, selections, and exclusions unchanged; the interoperability fix is
+  entirely in ElevenID product code.
+
+## [0.1.30] - 2026-08-01
+
+### Added
+
+- Verify OID4VCI proofs whose numeric `kid` selects a public key from the
+  `attested_keys` claim in an issuer-policy-validated key-attestation JWT.
+- Expose the same fail-closed key-attestation proof boundary through the
+  production Python binding used by credential services.
+
+### Security
+
+- Require the proof header to carry the exact validated attestation token and
+  derive its verification key directly from that token; callers cannot supply
+  a separate key list that could drift from the issuer's trust decision.
+- Reject unvalidated key-attestation headers, mismatched or malformed tokens,
+  empty key sets, nonnumeric or out-of-range key indices, private/symmetric
+  keys, and signatures made by a key other than the selected attested key.
+- Keep imported official compliance suites, fixtures, assertions, expected
+  results, selections, and exclusions unchanged; remediation remains entirely
+  in ElevenID product code.
+
+## [0.1.29] - 2026-08-01
+
+### Fixed
+
+- Require an explicitly typed OID4VCI holder proof with audience and issued-at
+  claims, and verify every accepted proof signature against resolved public
+  key material.
+- Preserve a self-certifying `did:key` client identifier only when it resolves
+  to the exact key that verified the proof; arbitrary OAuth client IDs no
+  longer become holder identities.
+- Scope Cargo target caches by operating system, architecture, and Rust
+  toolchain so native build artifacts are never restored across incompatible
+  runners.
+
+### Security
+
+- Remove the fail-open path that accepted an unresolved, non-`did:key` `kid`
+  without cryptographic verification.
+- Reject missing or invalid `typ`, `aud`, and `iat` claims, conflicting `kid`
+  and `jwk` headers, tampered signatures, and mismatched self-certifying DIDs.
+- Keep imported official compliance suites, fixtures, assertions, and
+  expected results unchanged; remediation is entirely in product code.
+
+## [0.1.28] - 2026-07-29
+
+### Fixed
+
+- Verify mdoc issuer and device signatures against the exact session transcript
+  bytes supplied by the verifier instead of reconstructing a substitute.
+
+## [0.1.27] - 2026-07-29
+
+### Fixed
+
+- Enforce W3C Verifiable Credentials Data Model v2 protected-context
+  boundaries.
+- Record and pin the maintained ElevenID `isomdl` compatibility fork while its
+  upstream synchronization remains review-only.
+
+## [0.1.26] - 2026-07-28
+
+### Fixed
+
+- Accept standards-compliant mdoc presentations whose optional disclosed
+  namespaces are empty while preserving issuer and device authentication.
+- Separate exact document-signer certificate pinning from root-CA trust:
+  pinned issuer certificates require an exact DER match, while root-CA trust
+  continues to enforce the full PKIX chain and signing key-usage policy.
+- Expose pinned document-signer certificates through the stable Python
+  verification binding without changing existing call behavior.
+
+### Security
+
+- Continue failing closed for wrong pins, expired certificates, invalid
+  embedded certificate chains, invalid issuer signatures, and invalid holder
+  device-authentication signatures.
+- Pin the maintained ElevenID `isomdl` compatibility fork by immutable commit
+  while its monthly upstream synchronization remains review-only.
+
+## [0.1.25] - 2026-07-28
+
+### Fixed
+
+- Emit ISO 18013-5 `x5chain` certificate material in the COSE unprotected
+  header while retaining the signing algorithm in the protected header.
+- Preserve the same certificate-chain behavior across local signing and
+  remote issuer-profile prepare/assemble signing.
+
+### Security
+
+- Continue requiring certificate material to come from the resolved
+  issuer-profile context; credential claims cannot override the trusted chain.
+
+## [0.1.24] - 2026-07-28
+
+### Added
+
+- Allow the internal verification boundary to consume resolver-owned public
+  verification methods for tenant-scoped DID documents while retaining
+  offline `did:key` resolution.
+
+### Security
+
+- Require exact verification-method IDs and controllers, reject duplicate or
+  conflicting methods and private JWK parameters, and fail verification for
+  wrong keys, invalid signatures, and tampered credentials.
+- Keep DID resolution and tenant authorization outside the cryptographic
+  verifier so no public profile, key, KMS, provider, or custody selector is
+  introduced.
+
+## [0.1.23] - 2026-07-28
+
+### Fixed
+
+- Allow W3C VC Data Model v2 credentials with syntactically valid past or
+  future validity periods to complete remote Data Integrity signing.
+- Keep current-time expiration and premature-credential policy in the normal
+  public verifier instead of applying it to issuance.
+
+### Security
+
+- Validate RFC 3339 validity fields and reject reversed validity periods
+  before signing.
+- Continue verifying the exact remotely returned Data Integrity proof and
+  reject invalid signatures, tampered credentials, and signing substitutions.
+
+## [0.1.22] - 2026-07-28
+
+### Added
+
+- Prepare and complete native W3C VC Data Model v2
+  `eddsa-rdfc-2022` Data Integrity proofs around externally managed signing.
+- Expose the canonical signing bytes to issuer-profile-mediated custody and
+  return only public verification material with the completed credential.
+
+### Security
+
+- Reject private JWK parameters at the binding boundary.
+- Bind completion to the DID, verification method, algorithm, cryptosuite,
+  proof purpose, and unsigned credential established during preparation.
+- Verify the completed proof before returning it so invalid or substituted
+  signatures fail closed.
+
+## [0.1.21] - 2026-07-26
+
+### Bug Fixes
+
+- Extract authenticated claims from every disclosed mdoc document type and
+  namespace, including ICAO Digital Travel Credentials.
+- Preserve unique element identifiers as flat compatibility keys and expose
+  the complete document/namespace structure under `_mdoc`; omit ambiguous flat
+  names rather than overwriting claims.
+- Keep verification independent of KMS coordinates. Issuer signing remains
+  selected through the issuer profile and its DID verification method.
+
+## [0.1.20] - 2026-07-26
+
+### Bug Fixes
+
+- Bind the public key from the wallet's cryptographically verified OID4VCI
+  proof into `MobileSecurityObject.deviceKeyInfo.deviceKey`, enabling
+  standards-compliant mdoc holder `DeviceAuthentication`.
+- Encode only the public EC coordinates in the canonical COSE_Key and reject
+  incomplete or unsupported holder keys.
+- Keep issuer authentication signing behind the selected issuer profile and
+  its DID verification method; no caller-facing KMS identifier or holder
+  private key is introduced.
+
+## [0.1.19] - 2026-07-26
+
+### Bug Fixes
+
+- Expose complete ISO 18013-5 issuer, trust-chain, and holder
+  `DeviceAuthentication` verification through the released `marty_rs` Python
+  binding used by production presentation-policy services.
+- Retain the existing VCDM, SD-JWT, OID4VCI, OID4VP, and DIDComm binding
+  surface while adding mdoc parsing and disclosed-claim extraction.
+- Keep signing behind issuer profiles and DID verification methods; verifier
+  bindings accept no KMS service or key coordinate.
+
+## [0.1.18] - 2026-07-26
+
+### Bug Fixes
+
+- Embed ISO 18013-5 `issuerAuth` as the untagged COSE_Sign1 array expected by
+  mdoc wallet parsers while retaining tag-24 `MobileSecurityObjectBytes`.
+- Preserve issuer-profile and DID verification-method signing; KMS routing
+  remains an internal profile binding and is not exposed to issuance callers.
+
+## [0.1.17] - 2026-07-25
+
+### Bug Fixes
+
+- Encode ISO 18013-5 `MobileSecurityObjectBytes` as tagged encoded CBOR in
+  issuer authentication payloads for both local and issuer-profile signing.
+
+## [0.1.16] - 2026-07-25
+
+### Features
+
+- Verify holder `DeviceAuthentication` signatures for every ISO 18013-5
+  document against a verifier-supplied session transcript.
+
+### Maintenance
+
+- Adopt PyO3 0.29's explicit `from_py_object` behavior for existing Python
+  classes without changing their conversion semantics.
+
+## [0.1.15] - 2026-07-24
+
+### Bug Fixes
+
+- Preserve an issuance service's reserved mdoc credential identifier across
+  issuer-profile signing so retry protection does not reject a successfully
+  assembled credential.
+
+## [0.1.14] - 2026-07-22
+
+### Bug Fixes
+
+- Accept cryptographically valid VCDM v2 presentations that omit the optional `holder` property while continuing to bind a supplied holder to the Data Integrity verification method controller.
+
+## [0.1.13] - 2026-07-22
+
+### Bug Fixes
+
+- Make the VCDM JWT tampering regression deterministic by changing decoded
+  signature bytes rather than ambiguous base64url padding bits.
+
+## [0.1.12] - 2026-07-22
+
+### Features
+
+- Verify standalone W3C VCDM v2 JWT credentials with EdDSA or ES256 through the released Python binding.
+- Resolve `did:key` verification methods or consume only public issuer-profile JWK material.
+
+### Security
+
+- Reject private JWK members, unsupported algorithms, issuer/controller mismatches, tampering, and invalid temporal or registered-claim mappings.
+
+## [0.1.11] - 2026-07-21
+
+### Features
+
+- Verify W3C VCDM v2 `eddsa-rdfc-2022` credentials and presentations through the released Python binding.
+- Resolve `did:key` verification methods offline, bind presentation challenge and domain, and independently verify embedded credentials.
+
+### Security
+
+- Reject unsupported proof suites, proof purposes, malformed multibase proof values, signature tampering, and challenge or domain mismatches.
+
+## [0.1.10] - 2026-07-21
+
+### Bug Fixes
+
+- Encode ISO 18013-5 full-date claims with RFC 8943 CBOR tag 1004 while retaining tag 0 for RFC 3339 date-times.
+
+### CI
+
+- Enforce append-only release metadata and Cargo-derived Python package versions.
+
 ## [0.1.2] - 2026-07-17
 
 ### Bug Fixes

@@ -38,6 +38,7 @@ pub mod mrz;
 pub mod open_badges;
 pub mod policy;
 pub mod trust_anchor;
+pub mod vcdm;
 pub mod verification;
 
 #[cfg(any(feature = "aamva-client", feature = "icao-client"))]
@@ -75,7 +76,9 @@ pub use verification::emrtd::{
     ChainStatus, EmrtdVerificationOptions, EmrtdVerificationResult, HashStatus, RevocationStatus,
     SignatureStatus,
 };
-pub use verification::mdl::{AuthStatus, MdlVerificationResult};
+pub use verification::mdl::{
+    verify_device_authentication, AuthStatus, MdlDeviceAuthenticationResult, MdlVerificationResult,
+};
 
 // Re-export chip I/O types for government NFC integration
 #[cfg(feature = "csca")]

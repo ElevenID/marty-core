@@ -3,7 +3,11 @@
 //! This module provides trust chain verification for mobile driving licenses,
 //! adapted from the isomdl crate with extensions for Marty integration.
 
+use const_oid::AssociatedOid;
+use der::Decode;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256, Sha384, Sha512};
+use x509_cert::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
 use x509_cert::Certificate;
 
 use crate::error::{VerificationError, VerificationResult};
@@ -12,6 +16,176 @@ use crate::trust_anchor::IacaRegistry;
 // Re-export isomdl types for convenience
 pub use isomdl::definitions::x509::validation::{ValidationOutcome, ValidationRuleset};
 pub use isomdl::definitions::x509::x5chain::{Builder as X5ChainBuilder, X5Chain};
+
+/// Validate the ISO 18013-5 document-signer constraints Marty requires before
+/// accepting an mdoc issuer certificate as trusted.
+///
+/// This check is deliberately independent of how trust is established. An
+/// exact certificate pin authorizes a trust anchor, but it must never turn a
+/// CA certificate or a certificate-signing key into a document signer.
+pub fn validate_document_signer_certificate_profile(
+    certificate: &Certificate,
+) -> VerificationResult<()> {
+    let subject = certificate.tbs_certificate.subject.to_string();
+    let extensions = certificate
+        .tbs_certificate
+        .extensions
+        .as_deref()
+        .unwrap_or_default();
+
+    let basic_constraints = extensions
+        .iter()
+        .filter(|extension| extension.extn_id == BasicConstraints::OID)
+        .collect::<Vec<_>>();
+    if basic_constraints.len() > 1 {
+        return Err(VerificationError::invalid_extension(
+            BasicConstraints::OID.to_string(),
+            &subject,
+            "duplicate BasicConstraints extensions",
+        ));
+    }
+    if let Some(extension) = basic_constraints.first() {
+        let constraints =
+            BasicConstraints::from_der(extension.extn_value.as_bytes()).map_err(|error| {
+                VerificationError::invalid_extension(
+                    BasicConstraints::OID.to_string(),
+                    &subject,
+                    format!("unable to decode BasicConstraints: {error}"),
+                )
+            })?;
+        if constraints.ca {
+            return Err(VerificationError::invalid_extension(
+                BasicConstraints::OID.to_string(),
+                &subject,
+                "an mdoc document-signer certificate must not be a CA",
+            ));
+        }
+    }
+
+    let key_usage_extensions = extensions
+        .iter()
+        .filter(|extension| extension.extn_id == KeyUsage::OID)
+        .collect::<Vec<_>>();
+    let key_usage_extension = match key_usage_extensions.as_slice() {
+        [] => {
+            return Err(VerificationError::missing_extension(
+                KeyUsage::OID.to_string(),
+                &subject,
+            ));
+        }
+        [extension] => *extension,
+        _ => {
+            return Err(VerificationError::invalid_extension(
+                KeyUsage::OID.to_string(),
+                &subject,
+                "duplicate KeyUsage extensions",
+            ));
+        }
+    };
+    let key_usage =
+        KeyUsage::from_der(key_usage_extension.extn_value.as_bytes()).map_err(|error| {
+            VerificationError::invalid_extension(
+                KeyUsage::OID.to_string(),
+                &subject,
+                format!("unable to decode KeyUsage: {error}"),
+            )
+        })?;
+    let expected: der::flagset::FlagSet<KeyUsages> = KeyUsages::DigitalSignature.into();
+    if key_usage.0 != expected {
+        let found = format!("{:?}", key_usage.0.into_iter().collect::<Vec<KeyUsages>>());
+        return Err(VerificationError::key_usage_mismatch(
+            subject,
+            "DigitalSignature only",
+            found,
+        ));
+    }
+
+    Ok(())
+}
+
+/// Parse and validate a DER-encoded mdoc document-signer certificate.
+pub fn validate_document_signer_certificate_der(certificate_der: &[u8]) -> VerificationResult<()> {
+    let certificate = Certificate::from_der(certificate_der).map_err(|error| {
+        VerificationError::x5chain_parse_with_source(
+            "unable to parse mdoc document-signer certificate",
+            error,
+        )
+    })?;
+    validate_document_signer_certificate_profile(&certificate)
+}
+
+/// A verifier-supplied ISO 18013-5 session transcript.
+///
+/// The transcript is intentionally opaque to this layer. The protocol-facing
+/// verifier constructs it from its own request state (client identifier,
+/// nonce, response URI, and response-encryption key), then this type preserves
+/// its exact CBOR shape for ISO device authentication.
+#[cfg(test)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
+struct ExternalSessionTranscript(ciborium::Value);
+
+#[cfg(test)]
+impl isomdl::definitions::session::SessionTranscript for ExternalSessionTranscript {}
+
+/// Successful holder device-authentication result for a DeviceResponse.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MdlDeviceAuthenticationResult {
+    /// Every returned document has a valid holder device signature.
+    pub verified: bool,
+    /// Document types authenticated by the holder.
+    pub document_types: Vec<String>,
+}
+
+/// Verify holder DeviceAuthentication for every document in a DeviceResponse.
+///
+/// This verifies the detached COSE device signature with the device public key
+/// bound into each document's issuer-signed MSO. The caller must independently
+/// verify the issuer signature, certificate chain, validity, and revocation.
+/// The session transcript must be derived from verifier-owned request state;
+/// accepting a transcript supplied by the wallet would defeat nonce and
+/// audience binding.
+pub fn verify_device_authentication(
+    device_response_cbor: &[u8],
+    session_transcript_cbor: &[u8],
+) -> VerificationResult<MdlDeviceAuthenticationResult> {
+    use isomdl::definitions::device_response::{DeviceResponse, Status};
+    use isomdl::presentation::authentication::mdoc::device_authentication_with_raw_session_transcript;
+
+    let response: DeviceResponse = isomdl::cbor::from_slice(device_response_cbor).map_err(|e| {
+        VerificationError::cbor_error(format!("Unable to parse mdoc DeviceResponse: {e}"))
+    })?;
+    if response.version != DeviceResponse::VERSION {
+        return Err(VerificationError::device_auth_failed(format!(
+            "Unsupported DeviceResponse version {}",
+            response.version
+        )));
+    }
+    if !matches!(response.status, Status::OK) {
+        return Err(VerificationError::device_auth_failed(
+            "DeviceResponse status is not OK",
+        ));
+    }
+    let documents = response.documents.as_ref().ok_or_else(|| {
+        VerificationError::device_auth_failed("DeviceResponse contains no documents")
+    })?;
+    let mut document_types = Vec::with_capacity(documents.len());
+    for document in documents.iter() {
+        device_authentication_with_raw_session_transcript(document, session_transcript_cbor)
+            .map_err(|e| {
+                VerificationError::device_auth_failed(format!(
+                    "Holder authentication failed for document type {}: {e}",
+                    document.doc_type
+                ))
+            })?;
+        document_types.push(document.doc_type.clone());
+    }
+
+    Ok(MdlDeviceAuthenticationResult {
+        verified: true,
+        document_types,
+    })
+}
 
 /// Result of mDL issuer verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +264,12 @@ pub fn verify_x5chain(
 ) -> MdlVerificationResult {
     let isomdl_registry = registry.to_isomdl_registry();
     let outcome = ruleset.validate(x5chain, &isomdl_registry);
+    let mut errors = outcome.errors.clone();
+    if let Err(error) =
+        validate_document_signer_certificate_profile(x5chain.end_entity_certificate())
+    {
+        errors.push(error.to_string());
+    }
 
     let common_name = Some(x5chain.end_entity_common_name().to_string());
 
@@ -97,10 +277,10 @@ pub fn verify_x5chain(
     let jurisdiction = detect_jurisdiction_from_certificate(x5chain.end_entity_certificate());
 
     MdlVerificationResult {
-        verified: outcome.errors.is_empty(),
+        verified: errors.is_empty(),
         common_name,
         jurisdiction,
-        errors: outcome.errors.clone(),
+        errors,
         issuer_auth_status: AuthStatus::Unknown,
         device_auth_status: AuthStatus::Unknown,
     }
@@ -118,7 +298,77 @@ pub fn verify_issuer_signature(
 
     issuer_authentication(x5chain.clone(), issuer_signed).map_err(|e| {
         VerificationError::issuer_auth_failed(format!("COSE signature verification failed: {}", e))
-    })
+    })?;
+
+    let mso_bytes =
+        issuer_signed.issuer_auth.payload.as_ref().ok_or_else(|| {
+            VerificationError::issuer_auth_failed("issuerAuth payload is detached")
+        })?;
+    let mso = isomdl::cbor::from_slice::<
+        isomdl::definitions::helpers::Tag24<isomdl::definitions::Mso>,
+    >(mso_bytes)
+    .map_err(|error| {
+        VerificationError::issuer_auth_failed(format!(
+            "unable to parse the signature-authenticated MSO: {error}"
+        ))
+    })?
+    .into_inner();
+
+    if let Some(namespaces) = &issuer_signed.namespaces {
+        verify_issuer_value_digests(&mso, namespaces)?;
+    }
+
+    Ok(())
+}
+
+/// Bind every disclosed issuer-signed value to the digest authenticated by the MSO.
+///
+/// The reverse mapping is intentionally not required: an MSO can contain digests for
+/// undisclosed values and decoys. Every value that is disclosed must have exactly the
+/// digest committed under its namespace and digest identifier.
+fn verify_issuer_value_digests(
+    mso: &isomdl::definitions::Mso,
+    namespaces: &isomdl::definitions::issuer_signed::IssuerNamespaces,
+) -> VerificationResult<()> {
+    use isomdl::definitions::DigestAlgorithm;
+
+    for (namespace, items) in namespaces.iter() {
+        let expected_digests = mso.value_digests.get(namespace).ok_or_else(|| {
+            VerificationError::issuer_auth_failed(format!(
+                "MSO contains no value digests for disclosed namespace {namespace}"
+            ))
+        })?;
+
+        for tagged_item in items.iter() {
+            let item = tagged_item.as_ref();
+            let expected = expected_digests.get(&item.digest_id).ok_or_else(|| {
+                VerificationError::issuer_auth_failed(format!(
+                    "MSO contains no digest for disclosed element {} in namespace {namespace}",
+                    item.element_identifier
+                ))
+            })?;
+            let item_bytes = isomdl::cbor::to_vec(tagged_item).map_err(|error| {
+                VerificationError::issuer_auth_failed(format!(
+                    "unable to encode disclosed element {} for digest verification: {error}",
+                    item.element_identifier
+                ))
+            })?;
+            let computed = match mso.digest_algorithm {
+                DigestAlgorithm::SHA256 => Sha256::digest(&item_bytes).to_vec(),
+                DigestAlgorithm::SHA384 => Sha384::digest(&item_bytes).to_vec(),
+                DigestAlgorithm::SHA512 => Sha512::digest(&item_bytes).to_vec(),
+            };
+
+            if computed.as_slice() != expected.as_ref() {
+                return Err(VerificationError::issuer_auth_failed(format!(
+                    "issuer-signed value digest mismatch for element {} in namespace {namespace}",
+                    item.element_identifier
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Full mDL verification including trust chain and signatures.
@@ -301,6 +551,315 @@ pub fn build_x5chain_from_pem(pem_certs: &[&[u8]]) -> VerificationResult<X5Chain
 #[cfg(test)]
 mod tests {
     use super::*;
+    use isomdl::cose::sign1::PreparedCoseSign1;
+    use isomdl::definitions::device_key::cose_key::EC2Y;
+    use isomdl::definitions::device_response::{DeviceResponse, Document, Documents, Status};
+    use isomdl::definitions::device_signed::{DeviceAuth, DeviceSigned};
+    use isomdl::definitions::helpers::Tag24;
+    use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, IssuerSigned, Mso, ValidityInfo};
+    use p256::ecdsa::{Signature, SigningKey};
+    use signature::Signer;
+    use std::collections::BTreeMap;
+    use time::{Duration, OffsetDateTime};
+
+    fn document_signer_certificate(
+        is_ca: rcgen::IsCa,
+        key_usages: Vec<rcgen::KeyUsagePurpose>,
+    ) -> Vec<u8> {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::default();
+        params.distinguished_name.push(
+            rcgen::DnType::CommonName,
+            "Marty mdoc document signer regression fixture",
+        );
+        params.is_ca = is_ca;
+        params.key_usages = key_usages;
+        params.self_signed(&key).unwrap().der().to_vec()
+    }
+
+    #[test]
+    fn document_signer_profile_requires_non_ca_digital_signature_leaf() {
+        use crate::error::codes;
+        use rcgen::{BasicConstraints, IsCa, KeyUsagePurpose};
+
+        let valid = document_signer_certificate(
+            IsCa::ExplicitNoCa,
+            vec![KeyUsagePurpose::DigitalSignature],
+        );
+        assert!(validate_document_signer_certificate_der(&valid).is_ok());
+
+        let ca = document_signer_certificate(
+            IsCa::Ca(BasicConstraints::Unconstrained),
+            vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign],
+        );
+        let error = validate_document_signer_certificate_der(&ca).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_INVALID_EXTENSION);
+        assert!(error.to_string().contains("must not be a CA"));
+
+        let issuer_usage = document_signer_certificate(
+            IsCa::ExplicitNoCa,
+            vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign],
+        );
+        let error = validate_document_signer_certificate_der(&issuer_usage).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_KEY_USAGE_MISMATCH);
+
+        let missing_usage = document_signer_certificate(IsCa::ExplicitNoCa, Vec::new());
+        let error = validate_document_signer_certificate_der(&missing_usage).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_MISSING_EXTENSION);
+
+        let mixed_usage = document_signer_certificate(
+            IsCa::ExplicitNoCa,
+            vec![
+                KeyUsagePurpose::DigitalSignature,
+                KeyUsagePurpose::KeyEncipherment,
+            ],
+        );
+        let error = validate_document_signer_certificate_der(&mixed_usage).unwrap_err();
+        assert_eq!(error.code(), codes::CERT_KEY_USAGE_MISMATCH);
+    }
+
+    fn issuer_value_digest_fixture(
+        disclosed_value: &str,
+    ) -> (Mso, isomdl::definitions::issuer_signed::IssuerNamespaces) {
+        use isomdl::definitions::helpers::{NonEmptyMap, NonEmptyVec};
+        use isomdl::definitions::{DigestId, IssuerSignedItem};
+
+        let digest_id = DigestId::new(7);
+        let tagged_item = Tag24::new(IssuerSignedItem {
+            digest_id,
+            random: vec![9_u8; 16].into(),
+            element_identifier: "family_name".to_string(),
+            element_value: ciborium::Value::Text(disclosed_value.to_string()),
+        })
+        .unwrap();
+        let item_bytes = isomdl::cbor::to_vec(&tagged_item).unwrap();
+        let mut namespace_digests = BTreeMap::new();
+        namespace_digests.insert(digest_id, Sha256::digest(item_bytes).to_vec().into());
+        let mut value_digests = BTreeMap::new();
+        value_digests.insert("org.iso.18013.5.1".to_string(), namespace_digests);
+
+        let mut namespace_items = BTreeMap::new();
+        namespace_items.insert(
+            "org.iso.18013.5.1".to_string(),
+            NonEmptyVec::try_from(vec![tagged_item]).unwrap(),
+        );
+        let namespaces = NonEmptyMap::try_from(namespace_items).unwrap();
+
+        let signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let device_key = isomdl::definitions::device_key::CoseKey::EC2 {
+            crv: isomdl::definitions::device_key::EC2Curve::P256,
+            x: point.x().unwrap().to_vec(),
+            y: EC2Y::Value(point.y().unwrap().to_vec()),
+        };
+        let now = OffsetDateTime::now_utc();
+        let mso = Mso {
+            version: "1.0".to_string(),
+            digest_algorithm: DigestAlgorithm::SHA256,
+            value_digests,
+            device_key_info: DeviceKeyInfo {
+                device_key,
+                key_authorizations: None,
+                key_info: None,
+            },
+            doc_type: "org.iso.18013.5.1.mDL".to_string(),
+            validity_info: ValidityInfo {
+                signed: now,
+                valid_from: now,
+                valid_until: now + Duration::days(1),
+                expected_update: None,
+            },
+        };
+
+        (mso, namespaces)
+    }
+
+    #[test]
+    fn issuer_value_digests_bind_every_disclosed_value() {
+        let (mso, namespaces) = issuer_value_digest_fixture("Doe");
+        assert!(verify_issuer_value_digests(&mso, &namespaces).is_ok());
+
+        let (_, tampered_namespaces) = issuer_value_digest_fixture("Mallory");
+        let error = verify_issuer_value_digests(&mso, &tampered_namespaces).unwrap_err();
+        assert!(error.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn issuer_value_digests_reject_missing_namespace_or_digest() {
+        let (mut mso, namespaces) = issuer_value_digest_fixture("Doe");
+        mso.value_digests.clear();
+        let error = verify_issuer_value_digests(&mso, &namespaces).unwrap_err();
+        assert!(error.to_string().contains("no value digests"));
+
+        let (mut mso, namespaces) = issuer_value_digest_fixture("Doe");
+        mso.value_digests
+            .get_mut("org.iso.18013.5.1")
+            .unwrap()
+            .clear();
+        let error = verify_issuer_value_digests(&mso, &namespaces).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("no digest for disclosed element"));
+    }
+
+    fn map_value_mut<'a>(
+        entries: &'a mut [(ciborium::Value, ciborium::Value)],
+        key: &str,
+    ) -> &'a mut ciborium::Value {
+        entries
+            .iter_mut()
+            .find_map(|(candidate, value)| {
+                (candidate == &ciborium::Value::Text(key.to_string())).then_some(value)
+            })
+            .unwrap_or_else(|| panic!("fixture is missing CBOR key {key}"))
+    }
+
+    fn encode_empty_issuer_namespaces(response_cbor: &[u8]) -> Vec<u8> {
+        let mut response: ciborium::Value =
+            isomdl::cbor::from_slice(response_cbor).expect("DeviceResponse fixture must decode");
+        let ciborium::Value::Map(response_fields) = &mut response else {
+            panic!("DeviceResponse fixture must be a CBOR map");
+        };
+        let ciborium::Value::Array(documents) = map_value_mut(response_fields, "documents") else {
+            panic!("DeviceResponse documents must be a CBOR array");
+        };
+        let ciborium::Value::Map(document) = &mut documents[0] else {
+            panic!("DeviceResponse document must be a CBOR map");
+        };
+        let ciborium::Value::Map(issuer_signed) = map_value_mut(document, "issuerSigned") else {
+            panic!("issuerSigned must be a CBOR map");
+        };
+        issuer_signed.push((
+            ciborium::Value::Text("nameSpaces".to_string()),
+            ciborium::Value::Map(Vec::new()),
+        ));
+        isomdl::cbor::to_vec(&response).expect("DeviceResponse fixture must encode")
+    }
+
+    fn device_response_fixture(
+        session_transcript: &ExternalSessionTranscript,
+    ) -> (Vec<u8>, Vec<u8>) {
+        device_response_fixture_with_encoding(session_transcript, None)
+    }
+
+    fn device_response_fixture_with_encoding(
+        session_transcript: &ExternalSessionTranscript,
+        raw_session_transcript_cbor: Option<&[u8]>,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let device_key = isomdl::definitions::device_key::CoseKey::EC2 {
+            crv: isomdl::definitions::device_key::EC2Curve::P256,
+            x: point.x().unwrap().to_vec(),
+            y: EC2Y::Value(point.y().unwrap().to_vec()),
+        };
+        let now = OffsetDateTime::now_utc();
+        let mso = Mso {
+            version: "1.0".to_string(),
+            digest_algorithm: DigestAlgorithm::SHA256,
+            value_digests: BTreeMap::new(),
+            device_key_info: DeviceKeyInfo {
+                device_key,
+                key_authorizations: None,
+                key_info: None,
+            },
+            doc_type: "org.iso.18013.5.1.mDL".to_string(),
+            validity_info: ValidityInfo {
+                signed: now,
+                valid_from: now,
+                valid_until: now + Duration::days(1),
+                expected_update: None,
+            },
+        };
+        let tagged_mso = Tag24::new(mso).unwrap();
+        let mso_bytes = isomdl::cbor::to_vec(&tagged_mso).unwrap();
+        let issuer_auth = PreparedCoseSign1::new(
+            coset::CoseSign1Builder::new().payload(mso_bytes),
+            None,
+            None,
+            true,
+        )
+        .unwrap()
+        .finalize(vec![0_u8; 64]);
+        let namespaces = Tag24::new(BTreeMap::new()).unwrap();
+        let detached_payload = match raw_session_transcript_cbor {
+            Some(raw) => {
+                raw_device_authentication_fixture(raw, "org.iso.18013.5.1.mDL", &namespaces)
+            }
+            None => {
+                let device_authentication = Tag24::new(
+                    isomdl::definitions::device_signed::DeviceAuthentication::new(
+                        session_transcript.clone(),
+                        "org.iso.18013.5.1.mDL".to_string(),
+                        namespaces.clone(),
+                    ),
+                )
+                .unwrap();
+                isomdl::cbor::to_vec(&device_authentication).unwrap()
+            }
+        };
+        let prepared_device_signature = PreparedCoseSign1::new(
+            coset::CoseSign1Builder::new().protected(
+                coset::HeaderBuilder::new()
+                    .algorithm(coset::iana::Algorithm::ES256)
+                    .build(),
+            ),
+            Some(&detached_payload),
+            None,
+            false,
+        )
+        .unwrap();
+        let signature: Signature = signing_key
+            .try_sign(prepared_device_signature.signature_payload())
+            .unwrap();
+        let device_signature = prepared_device_signature.finalize(signature.to_vec());
+        let response = DeviceResponse {
+            version: DeviceResponse::VERSION.to_string(),
+            documents: Some(Documents::new(Document {
+                doc_type: "org.iso.18013.5.1.mDL".to_string(),
+                issuer_signed: IssuerSigned {
+                    namespaces: None,
+                    issuer_auth,
+                },
+                device_signed: DeviceSigned {
+                    namespaces,
+                    device_auth: DeviceAuth::DeviceSignature(device_signature),
+                },
+                errors: None,
+            })),
+            document_errors: None,
+            status: Status::OK,
+        };
+        let transcript_cbor = raw_session_transcript_cbor
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| isomdl::cbor::to_vec(session_transcript).unwrap());
+        (isomdl::cbor::to_vec(&response).unwrap(), transcript_cbor)
+    }
+
+    fn raw_device_authentication_fixture(
+        session_transcript_cbor: &[u8],
+        doc_type: &str,
+        namespaces: &isomdl::definitions::device_signed::DeviceNamespacesBytes,
+    ) -> Vec<u8> {
+        let mut inner = vec![0x84];
+        inner.extend(isomdl::cbor::to_vec(&"DeviceAuthentication").unwrap());
+        inner.extend_from_slice(session_transcript_cbor);
+        inner.extend(isomdl::cbor::to_vec(&doc_type).unwrap());
+        inner.extend(isomdl::cbor::to_vec(namespaces).unwrap());
+
+        let mut tagged = vec![0xd8, 0x18];
+        match inner.len() {
+            0..=23 => tagged.push(0x40 | inner.len() as u8),
+            24..=0xff => tagged.extend([0x58, inner.len() as u8]),
+            0x100..=0xffff => {
+                tagged.push(0x59);
+                tagged.extend((inner.len() as u16).to_be_bytes());
+            }
+            _ => panic!("test fixture unexpectedly exceeds 65535 bytes"),
+        }
+        tagged.extend(inner);
+        tagged
+    }
 
     #[test]
     fn test_state_name_to_code() {
@@ -390,6 +949,107 @@ mod tests {
         assert!(result.verified);
         assert_eq!(result.common_name, Some("Test Issuer".to_string()));
         assert_eq!(result.jurisdiction, Some("US-CA".to_string()));
+    }
+
+    #[test]
+    fn verifies_holder_signature_against_verifier_transcript() {
+        let transcript = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        let (response, transcript_cbor) = device_response_fixture(&transcript);
+
+        let result = verify_device_authentication(&response, &transcript_cbor).unwrap();
+
+        assert!(result.verified);
+        assert_eq!(
+            result.document_types,
+            vec!["org.iso.18013.5.1.mDL".to_string()]
+        );
+    }
+
+    #[test]
+    fn preserves_exact_transcript_cbor_for_holder_signature() {
+        let transcript = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        let canonical = isomdl::cbor::to_vec(&transcript).unwrap();
+        let null_offset = canonical
+            .iter()
+            .position(|byte| *byte == 0xf6)
+            .expect("fixture must contain null");
+        let mut non_preferred = canonical.clone();
+        non_preferred.splice(null_offset..=null_offset, [0xf8, 0x16]);
+        let decoded: ExternalSessionTranscript = isomdl::cbor::from_slice(&non_preferred).unwrap();
+        assert_eq!(decoded.0, transcript.0);
+        assert_ne!(non_preferred, canonical);
+
+        let (response, transcript_cbor) =
+            device_response_fixture_with_encoding(&transcript, Some(&non_preferred));
+
+        let result = verify_device_authentication(&response, &transcript_cbor).unwrap();
+        assert!(result.verified);
+        assert!(verify_device_authentication(&response, &canonical).is_err());
+    }
+
+    #[test]
+    fn verifies_holder_signature_with_empty_issuer_disclosure_map() {
+        let transcript = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        let (response, transcript_cbor) = device_response_fixture(&transcript);
+        let response = encode_empty_issuer_namespaces(&response);
+
+        let parsed = crate::mdoc::parse_device_response(&response).unwrap();
+        let authenticated = verify_device_authentication(&response, &transcript_cbor).unwrap();
+
+        assert_eq!(parsed.documents.len(), 1);
+        assert!(parsed.documents[0].namespaces.is_empty());
+        assert!(authenticated.verified);
+        assert_eq!(
+            authenticated.document_types,
+            vec!["org.iso.18013.5.1.mDL".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_holder_signature_for_changed_verifier_transcript() {
+        let transcript = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        let (response, _) = device_response_fixture(&transcript);
+        let changed = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![2_u8; 32]),
+            ]),
+        ]));
+        let changed_cbor = isomdl::cbor::to_vec(&changed).unwrap();
+
+        let error = verify_device_authentication(&response, &changed_cbor).unwrap_err();
+
+        assert_eq!(error.code(), crate::error::codes::AUTH_DEVICE_FAILED);
     }
 
     #[test]
