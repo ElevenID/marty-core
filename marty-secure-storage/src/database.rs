@@ -217,13 +217,41 @@ impl SecureStorage {
     /// Store a trust anchor certificate
     pub async fn store_trust_anchor(&self, anchor: &TrustAnchor) -> Result<(), StorageError> {
         let conn = self.conn.lock().await;
+        let governed = conn
+            .query_row(
+                "SELECT trust_domain FROM trust_anchors WHERE id = ?",
+                [&anchor.id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .is_some();
+        if governed {
+            return Err(StorageError::TrustPackageConflict(format!(
+                "legacy write cannot replace governed trust anchor {}",
+                anchor.id
+            )));
+        }
 
-        conn.execute(
+        let changed = conn.execute(
             r#"
-            INSERT OR REPLACE INTO trust_anchors 
+            INSERT INTO trust_anchors
                 (id, anchor_type, jurisdiction, subject, issuer, serial_number,
                  not_before, not_after, certificate_der, certificate_hash, source, synced_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                anchor_type = excluded.anchor_type,
+                jurisdiction = excluded.jurisdiction,
+                subject = excluded.subject,
+                issuer = excluded.issuer,
+                serial_number = excluded.serial_number,
+                not_before = excluded.not_before,
+                not_after = excluded.not_after,
+                certificate_der = excluded.certificate_der,
+                certificate_hash = excluded.certificate_hash,
+                source = excluded.source,
+                synced_at = excluded.synced_at
+            WHERE trust_anchors.trust_domain IS NULL
             "#,
             rusqlite::params![
                 anchor.id,
@@ -241,6 +269,13 @@ impl SecureStorage {
             ],
         )?;
 
+        if changed == 0 {
+            return Err(StorageError::TrustPackageConflict(format!(
+                "legacy write cannot replace governed trust anchor {}",
+                anchor.id
+            )));
+        }
+
         Ok(())
     }
 
@@ -251,6 +286,21 @@ impl SecureStorage {
     ) -> Result<(), StorageError> {
         let conn = self.conn.lock().await;
         let document_json = serde_json::to_string(&method.document)?;
+        let governed = conn
+            .query_row(
+                "SELECT trust_domain FROM open_badge_keys WHERE id = ?",
+                [&method.id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .is_some();
+        if governed {
+            return Err(StorageError::TrustPackageConflict(format!(
+                "legacy write cannot replace governed method {}",
+                method.id
+            )));
+        }
 
         let changed = conn.execute(
             r#"
@@ -293,22 +343,35 @@ impl SecureStorage {
         Ok(())
     }
 
-    /// Atomically replace one trust domain's Open Badge methods with a newer
-    /// authenticated package.
+    /// Atomically replace one trust domain's complete anchor and Open Badge
+    /// trust set with a newer authenticated package.
     ///
-    /// Comparison, deletion, insertion, and package-state advancement happen
-    /// in one immediate SQLite transaction. Any validation or storage failure
-    /// leaves the previously active package untouched.
-    pub async fn apply_open_badge_trust_package(
+    /// Comparison, same-domain replacement, package-state advancement, sync
+    /// metadata, and the minimized audit outcome happen in one immediate
+    /// SQLite transaction. Any validation or storage failure leaves every
+    /// previously active record and metadata row untouched.
+    pub async fn apply_trust_package(
         &self,
-        provenance: &OpenBadgeTrustPackageProvenance,
+        provenance: &TrustPackageProvenance,
+        anchors: &[TrustAnchor],
         methods: &[OpenBadgeVerificationMethod],
-    ) -> Result<usize, StorageError> {
-        let sequence = validate_open_badge_package(provenance, methods)?;
+    ) -> Result<TrustPackageApplyResult, StorageError> {
+        let sequence = validate_trust_package(provenance, anchors, methods)?;
         let documents = methods
             .iter()
             .map(|method| serde_json::to_string(&method.document))
             .collect::<Result<Vec<_>, _>>()?;
+        let audit_details = serde_json::to_string(&serde_json::json!({
+            "trust_domain": provenance.trust_domain,
+            "sequence": provenance.sequence,
+            "package_version": provenance.package_version,
+            "package_expires_at": provenance.expires_at.to_rfc3339(),
+            "signer_key_id": provenance.signer_key_id,
+            "package_digest": provenance.package_digest,
+            "trust_anchor_count": anchors.len(),
+            "open_badge_method_count": methods.len(),
+            "outcome": "applied"
+        }))?;
 
         let mut conn = self.conn.lock().await;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -317,8 +380,8 @@ impl SecureStorage {
             .query_row(
                 r#"
                 SELECT sequence, package_version, package_created_at,
-                       signer_key_id, package_digest, imported_at
-                FROM open_badge_trust_packages
+                       package_expires_at, signer_key_id, package_digest, imported_at
+                FROM trust_packages
                 WHERE trust_domain = ?
                 "#,
                 [&provenance.trust_domain],
@@ -327,9 +390,10 @@ impl SecureStorage {
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
                     ))
                 },
             )
@@ -339,6 +403,7 @@ impl SecureStorage {
             current_sequence,
             current_version,
             current_created_at,
+            current_expires_at,
             current_signer,
             current_digest,
             _current_imported_at,
@@ -394,6 +459,16 @@ impl SecureStorage {
                     )
                 })?
                 .with_timezone(&Utc);
+            let current_expires_at = current_expires_at.ok_or_else(|| {
+                StorageError::InvalidTrustPackage(
+                    "stored package expiry time is missing".to_string(),
+                )
+            })?;
+            chrono::DateTime::parse_from_rfc3339(&current_expires_at).map_err(|_| {
+                StorageError::InvalidTrustPackage(
+                    "stored package expiry time is malformed".to_string(),
+                )
+            })?;
             if provenance.created_at <= current_created_at {
                 return Err(StorageError::TrustPackageConflict(format!(
                     "domain {} package creation time did not advance",
@@ -403,9 +478,29 @@ impl SecureStorage {
         }
 
         tx.execute(
+            "DELETE FROM trust_anchors WHERE trust_domain = ?",
+            [&provenance.trust_domain],
+        )?;
+        tx.execute(
             "DELETE FROM open_badge_keys WHERE trust_domain = ?",
             [&provenance.trust_domain],
         )?;
+
+        for anchor in anchors {
+            let conflicting_domain = tx
+                .query_row(
+                    "SELECT trust_domain FROM trust_anchors WHERE id = ?",
+                    [&anchor.id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?;
+            if conflicting_domain.is_some() {
+                return Err(StorageError::TrustPackageConflict(format!(
+                    "trust anchor {} is already owned by another or legacy trust source",
+                    anchor.id
+                )));
+            }
+        }
 
         for method in methods {
             let conflicting_domain = tx
@@ -423,6 +518,43 @@ impl SecureStorage {
             }
         }
 
+        for anchor in anchors {
+            tx.execute(
+                r#"
+                INSERT INTO trust_anchors
+                    (id, anchor_type, jurisdiction, subject, issuer,
+                     serial_number, not_before, not_after, certificate_der,
+                     certificate_hash, source, synced_at, trust_domain,
+                     package_sequence, package_version, package_created_at,
+                     package_expires_at, package_signer_key_id, package_digest,
+                     package_imported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+                rusqlite::params![
+                    anchor.id,
+                    anchor.anchor_type.to_string(),
+                    anchor.jurisdiction,
+                    anchor.subject,
+                    anchor.issuer,
+                    anchor.serial_number,
+                    anchor.not_before.map(|dt| dt.to_rfc3339()),
+                    anchor.not_after.map(|dt| dt.to_rfc3339()),
+                    anchor.certificate_der,
+                    anchor.certificate_hash,
+                    anchor.source.to_string(),
+                    provenance.created_at.to_rfc3339(),
+                    provenance.trust_domain,
+                    sequence,
+                    provenance.package_version,
+                    provenance.created_at.to_rfc3339(),
+                    provenance.expires_at.to_rfc3339(),
+                    provenance.signer_key_id,
+                    provenance.package_digest,
+                    provenance.imported_at.to_rfc3339(),
+                ],
+            )?;
+        }
+
         for (method, document_json) in methods.iter().zip(documents) {
             tx.execute(
                 r#"
@@ -430,8 +562,9 @@ impl SecureStorage {
                     (id, document_json, controller, issuer, kid, not_before,
                      not_after, status, source, synced_at, trust_domain,
                      package_sequence, package_version, package_created_at,
-                     package_signer_key_id, package_digest, package_imported_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     package_expires_at, package_signer_key_id, package_digest,
+                     package_imported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
                 rusqlite::params![
                     method.id,
@@ -448,6 +581,7 @@ impl SecureStorage {
                     sequence,
                     provenance.package_version,
                     provenance.created_at.to_rfc3339(),
+                    provenance.expires_at.to_rfc3339(),
                     provenance.signer_key_id,
                     provenance.package_digest,
                     provenance.imported_at.to_rfc3339(),
@@ -457,14 +591,15 @@ impl SecureStorage {
 
         tx.execute(
             r#"
-            INSERT INTO open_badge_trust_packages
+            INSERT INTO trust_packages
                 (trust_domain, sequence, package_version, package_created_at,
-                 signer_key_id, package_digest, imported_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 package_expires_at, signer_key_id, package_digest, imported_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(trust_domain) DO UPDATE SET
                 sequence = excluded.sequence,
                 package_version = excluded.package_version,
                 package_created_at = excluded.package_created_at,
+                package_expires_at = excluded.package_expires_at,
                 signer_key_id = excluded.signer_key_id,
                 package_digest = excluded.package_digest,
                 imported_at = excluded.imported_at,
@@ -475,6 +610,7 @@ impl SecureStorage {
                 sequence,
                 provenance.package_version,
                 provenance.created_at.to_rfc3339(),
+                provenance.expires_at.to_rfc3339(),
                 provenance.signer_key_id,
                 provenance.package_digest,
                 provenance.imported_at.to_rfc3339(),
@@ -482,8 +618,49 @@ impl SecureStorage {
             ],
         )?;
 
+        tx.execute(
+            r#"
+            INSERT INTO sync_state
+                (id, last_iaca_sync, last_csca_sync, iaca_version,
+                 csca_version, sync_in_progress, last_error, updated_at)
+            VALUES ('current', ?, ?, ?, ?, 0, NULL, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                last_iaca_sync = excluded.last_iaca_sync,
+                last_csca_sync = excluded.last_csca_sync,
+                iaca_version = excluded.iaca_version,
+                csca_version = excluded.csca_version,
+                sync_in_progress = 0,
+                last_error = NULL,
+                updated_at = excluded.updated_at
+            "#,
+            rusqlite::params![
+                provenance.created_at.to_rfc3339(),
+                provenance.created_at.to_rfc3339(),
+                provenance.package_version,
+                provenance.package_version,
+                provenance.imported_at.to_rfc3339(),
+            ],
+        )?;
+
+        tx.execute(
+            r#"
+            INSERT INTO audit_log
+                (id, event_type, actor, target, details, ip_address, created_at)
+            VALUES (?, 'trust_package_applied', NULL, ?, ?, NULL, ?)
+            "#,
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                provenance.trust_domain,
+                audit_details,
+                provenance.imported_at.to_rfc3339(),
+            ],
+        )?;
+
         tx.commit()?;
-        Ok(methods.len())
+        Ok(TrustPackageApplyResult {
+            trust_anchors: anchors.len(),
+            open_badge_methods: methods.len(),
+        })
     }
 
     /// Get trust anchors by type and jurisdiction
@@ -492,108 +669,105 @@ impl SecureStorage {
         anchor_type: TrustAnchorType,
         jurisdiction: Option<&str>,
     ) -> Result<Vec<TrustAnchor>, StorageError> {
+        Ok(self
+            .get_trust_anchor_records(anchor_type, jurisdiction)
+            .await?
+            .into_iter()
+            .map(|record| record.anchor)
+            .collect())
+    }
+
+    /// Get trust anchors together with authenticated package provenance.
+    /// Partial, malformed, stale, or package-state-conflicting provenance
+    /// fails closed instead of being treated as a legacy anchor.
+    pub async fn get_trust_anchor_records(
+        &self,
+        anchor_type: TrustAnchorType,
+        jurisdiction: Option<&str>,
+    ) -> Result<Vec<TrustAnchorRecord>, StorageError> {
         let conn = self.conn.lock().await;
 
         let sql = if jurisdiction.is_some() {
             r#"
             SELECT id, anchor_type, jurisdiction, subject, issuer, serial_number,
-                   not_before, not_after, certificate_der, certificate_hash, source, synced_at
+                   not_before, not_after, certificate_der, certificate_hash, source, synced_at,
+                   trust_domain, package_sequence, package_version,
+                   package_created_at, package_expires_at,
+                   package_signer_key_id, package_digest, package_imported_at
             FROM trust_anchors
             WHERE anchor_type = ? AND jurisdiction = ?
             "#
         } else {
             r#"
             SELECT id, anchor_type, jurisdiction, subject, issuer, serial_number,
-                   not_before, not_after, certificate_der, certificate_hash, source, synced_at
+                   not_before, not_after, certificate_der, certificate_hash, source, synced_at,
+                   trust_domain, package_sequence, package_version,
+                   package_created_at, package_expires_at,
+                   package_signer_key_id, package_digest, package_imported_at
             FROM trust_anchors
             WHERE anchor_type = ?
             "#
         };
 
         let mut stmt = conn.prepare(sql)?;
-
-        let rows = if let Some(jur) = jurisdiction {
-            stmt.query_map(
-                [anchor_type.to_string(), jur.to_string()],
-                Self::map_trust_anchor,
-            )?
+        let mut rows = if let Some(jurisdiction) = jurisdiction {
+            stmt.query(rusqlite::params![anchor_type.to_string(), jurisdiction])?
         } else {
-            stmt.query_map([anchor_type.to_string()], Self::map_trust_anchor)?
+            stmt.query(rusqlite::params![anchor_type.to_string()])?
         };
 
-        let mut anchors = Vec::new();
-        for row in rows {
-            anchors.push(row?);
+        let mut records = Vec::new();
+        while let Some(row) = rows.next()? {
+            records.push(map_trust_anchor_record(row)?);
         }
+        drop(rows);
+        drop(stmt);
 
-        Ok(anchors)
-    }
-
-    fn map_trust_anchor(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrustAnchor> {
-        let anchor_type_str: String = row.get(1)?;
-        let source_str: String = row.get(10)?;
-
-        Ok(TrustAnchor {
-            id: row.get(0)?,
-            anchor_type: match anchor_type_str.as_str() {
-                "iaca" => TrustAnchorType::Iaca,
-                "csca" => TrustAnchorType::Csca,
-                "dsc" => TrustAnchorType::Dsc,
-                _ => TrustAnchorType::Iaca,
-            },
-            jurisdiction: row.get(2)?,
-            subject: row.get(3)?,
-            issuer: row.get(4)?,
-            serial_number: row.get(5)?,
-            not_before: row.get::<_, Option<String>>(6)?.and_then(|s| {
-                chrono::DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            }),
-            not_after: row.get::<_, Option<String>>(7)?.and_then(|s| {
-                chrono::DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            }),
-            certificate_der: row.get(8)?,
-            certificate_hash: row.get(9)?,
-            source: match source_str.as_str() {
-                "aamva_dts" => TrustAnchorSource::AamvaDts,
-                "icao_pkd" => TrustAnchorSource::IcaoPkd,
-                "usb_import" => TrustAnchorSource::UsbImport,
-                _ => TrustAnchorSource::Manual,
-            },
-            synced_at: row
-                .get::<_, String>(11)
-                .ok()
-                .and_then(|s| {
-                    chrono::DateTime::parse_from_rfc3339(&s)
-                        .ok()
-                        .map(|dt| dt.with_timezone(&Utc))
-                })
-                .unwrap_or_else(Utc::now),
-        })
+        let mut package_states = HashMap::new();
+        for record in &records {
+            let Some(provenance) = &record.provenance else {
+                continue;
+            };
+            let stored = if let Some(stored) = package_states.get(&provenance.trust_domain) {
+                stored
+            } else {
+                let stored = load_open_badge_package_provenance(&conn, &provenance.trust_domain)?
+                    .ok_or_else(|| {
+                    StorageError::InvalidTrustPackage(format!(
+                        "trust anchor {} references missing package state for domain {}",
+                        record.anchor.id, provenance.trust_domain
+                    ))
+                })?;
+                package_states.insert(provenance.trust_domain.clone(), stored);
+                package_states
+                    .get(&provenance.trust_domain)
+                    .ok_or_else(|| {
+                        StorageError::InvalidTrustPackage(format!(
+                            "trust anchor {} could not load package state for domain {}",
+                            record.anchor.id, provenance.trust_domain
+                        ))
+                    })?
+            };
+            if stored != provenance {
+                return Err(StorageError::InvalidTrustPackage(format!(
+                    "trust anchor {} provenance conflicts with package state for domain {}",
+                    record.anchor.id, provenance.trust_domain
+                )));
+            }
+        }
+        Ok(records)
     }
 
     /// Get all trusted Open Badge verification methods
     pub async fn get_open_badge_keys(
         &self,
     ) -> Result<Vec<OpenBadgeVerificationMethod>, StorageError> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare(
-            r#"
-            SELECT id, document_json, controller, issuer, kid, not_before, not_after, status, source, synced_at
-            FROM open_badge_keys
-            "#,
-        )?;
-
-        let rows = stmt.query_map([], Self::map_open_badge_key)?;
-        let mut methods = Vec::new();
-        for row in rows {
-            methods.push(row?);
-        }
-
-        Ok(methods)
+        Ok(self
+            .get_open_badge_trust_records()
+            .await?
+            .into_iter()
+            .map(|record| record.method)
+            .collect())
     }
 
     /// Get Open Badge methods together with authenticated package provenance.
@@ -610,7 +784,8 @@ impl SecureStorage {
             SELECT id, document_json, controller, issuer, kid, not_before,
                    not_after, status, source, synced_at, trust_domain,
                    package_sequence, package_version, package_created_at,
-                   package_signer_key_id, package_digest, package_imported_at
+                   package_expires_at, package_signer_key_id, package_digest,
+                   package_imported_at
             FROM open_badge_keys
             "#,
         )?;
@@ -618,20 +793,22 @@ impl SecureStorage {
         let mut records = Vec::new();
 
         while let Some(row) = rows.next()? {
-            let method = Self::map_open_badge_key(row)?;
+            let method = map_open_badge_key_strict(row)?;
             let trust_domain = row.get::<_, Option<String>>(10)?;
             let sequence = row.get::<_, Option<i64>>(11)?;
             let package_version = row.get::<_, Option<String>>(12)?;
             let package_created_at = row.get::<_, Option<String>>(13)?;
-            let signer_key_id = row.get::<_, Option<String>>(14)?;
-            let package_digest = row.get::<_, Option<String>>(15)?;
-            let package_imported_at = row.get::<_, Option<String>>(16)?;
+            let package_expires_at = row.get::<_, Option<String>>(14)?;
+            let signer_key_id = row.get::<_, Option<String>>(15)?;
+            let package_digest = row.get::<_, Option<String>>(16)?;
+            let package_imported_at = row.get::<_, Option<String>>(17)?;
 
             let provenance = match trust_domain {
                 None => {
                     if sequence.is_some()
                         || package_version.is_some()
                         || package_created_at.is_some()
+                        || package_expires_at.is_some()
                         || signer_key_id.is_some()
                         || package_digest.is_some()
                         || package_imported_at.is_some()
@@ -682,6 +859,11 @@ impl SecureStorage {
                             "package version",
                         )?,
                         created_at,
+                        expires_at: parse_stored_timestamp(
+                            package_expires_at.as_deref(),
+                            &method.id,
+                            "package expiry time",
+                        )?,
                         signer_key_id: required_stored_value(
                             signer_key_id,
                             &method.id,
@@ -729,7 +911,12 @@ impl SecureStorage {
                 package_states.insert(provenance.trust_domain.clone(), stored);
                 package_states
                     .get(&provenance.trust_domain)
-                    .expect("package state inserted")
+                    .ok_or_else(|| {
+                        StorageError::InvalidTrustPackage(format!(
+                            "method {} could not load package state for domain {}",
+                            record.method.id, provenance.trust_domain
+                        ))
+                    })?
             };
             if stored != provenance {
                 return Err(StorageError::InvalidTrustPackage(format!(
@@ -744,73 +931,19 @@ impl SecureStorage {
 
     /// Count trusted Open Badge verification methods
     pub async fn count_open_badge_keys(&self) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().await;
-        let count: usize = conn.query_row("SELECT COUNT(*) FROM open_badge_keys", [], |row| {
-            let value = row.get::<_, i64>(0)?;
-            usize::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
-        })?;
-        Ok(count)
+        Ok(self.get_open_badge_trust_records().await?.len())
     }
 
     /// Get latest Open Badge trust list sync timestamp
     pub async fn get_latest_open_badge_sync(
         &self,
     ) -> Result<Option<chrono::DateTime<chrono::Utc>>, StorageError> {
-        let conn = self.conn.lock().await;
-        let synced_at: Option<String> = conn
-            .query_row("SELECT MAX(synced_at) FROM open_badge_keys", [], |row| {
-                row.get(0)
-            })
-            .ok()
-            .flatten();
-
-        Ok(synced_at.and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(&s)
-                .ok()
-                .map(|dt| dt.with_timezone(&Utc))
-        }))
-    }
-
-    fn map_open_badge_key(
-        row: &rusqlite::Row<'_>,
-    ) -> rusqlite::Result<OpenBadgeVerificationMethod> {
-        let source_str: String = row.get(8)?;
-        let document_json: String = row.get(1)?;
-        let document: Value =
-            serde_json::from_str(&document_json).unwrap_or(serde_json::Value::Null);
-
-        Ok(OpenBadgeVerificationMethod {
-            id: row.get(0)?,
-            document,
-            controller: row.get(2)?,
-            issuer: row.get(3)?,
-            kid: row.get(4)?,
-            not_before: row.get::<_, Option<String>>(5)?.and_then(|s| {
-                chrono::DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            }),
-            not_after: row.get::<_, Option<String>>(6)?.and_then(|s| {
-                chrono::DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|dt| dt.with_timezone(&Utc))
-            }),
-            status: row.get(7)?,
-            source: match source_str.as_str() {
-                "sync" => OpenBadgeKeySource::Sync,
-                "usb_import" => OpenBadgeKeySource::UsbImport,
-                _ => OpenBadgeKeySource::Manual,
-            },
-            synced_at: row
-                .get::<_, String>(9)
-                .ok()
-                .and_then(|s| {
-                    chrono::DateTime::parse_from_rfc3339(&s)
-                        .ok()
-                        .map(|dt| dt.with_timezone(&Utc))
-                })
-                .unwrap_or_else(Utc::now),
-        })
+        Ok(self
+            .get_open_badge_trust_records()
+            .await?
+            .into_iter()
+            .map(|record| record.method.synced_at)
+            .max())
     }
 
     /// Count trust anchors by type
@@ -818,17 +951,10 @@ impl SecureStorage {
         &self,
         anchor_type: TrustAnchorType,
     ) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().await;
-        let count: usize = conn.query_row(
-            "SELECT COUNT(*) FROM trust_anchors WHERE anchor_type = ?",
-            [anchor_type.to_string()],
-            |row| {
-                let value = row.get::<_, i64>(0)?;
-                usize::try_from(value)
-                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, value))
-            },
-        )?;
-        Ok(count)
+        Ok(self
+            .get_trust_anchor_records(anchor_type, None)
+            .await?
+            .len())
     }
 
     /// Get license state
@@ -1069,8 +1195,229 @@ impl SecureStorage {
     }
 }
 
+fn map_trust_anchor_record(row: &rusqlite::Row<'_>) -> Result<TrustAnchorRecord, StorageError> {
+    let id: String = row.get(0)?;
+    let anchor_type = match row.get::<_, String>(1)?.as_str() {
+        "iaca" => TrustAnchorType::Iaca,
+        "csca" => TrustAnchorType::Csca,
+        "dsc" => TrustAnchorType::Dsc,
+        other => {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {id} has unknown type {other}"
+            )));
+        }
+    };
+    let source = match row.get::<_, String>(10)?.as_str() {
+        "aamva_dts" => TrustAnchorSource::AamvaDts,
+        "icao_pkd" => TrustAnchorSource::IcaoPkd,
+        "usb_import" => TrustAnchorSource::UsbImport,
+        "manual" => TrustAnchorSource::Manual,
+        other => {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {id} has unknown source {other}"
+            )));
+        }
+    };
+    let anchor = TrustAnchor {
+        id: id.clone(),
+        anchor_type,
+        jurisdiction: row.get(2)?,
+        subject: row.get(3)?,
+        issuer: row.get(4)?,
+        serial_number: row.get(5)?,
+        not_before: parse_optional_stored_timestamp(
+            row.get::<_, Option<String>>(6)?.as_deref(),
+            &id,
+            "not_before",
+        )?,
+        not_after: parse_optional_stored_timestamp(
+            row.get::<_, Option<String>>(7)?.as_deref(),
+            &id,
+            "not_after",
+        )?,
+        certificate_der: row.get(8)?,
+        certificate_hash: row.get(9)?,
+        source,
+        synced_at: parse_stored_timestamp(
+            row.get::<_, Option<String>>(11)?.as_deref(),
+            &id,
+            "synced_at",
+        )?,
+    };
+
+    let trust_domain = row.get::<_, Option<String>>(12)?;
+    let sequence = row.get::<_, Option<i64>>(13)?;
+    let package_version = row.get::<_, Option<String>>(14)?;
+    let package_created_at = row.get::<_, Option<String>>(15)?;
+    let package_expires_at = row.get::<_, Option<String>>(16)?;
+    let signer_key_id = row.get::<_, Option<String>>(17)?;
+    let package_digest = row.get::<_, Option<String>>(18)?;
+    let package_imported_at = row.get::<_, Option<String>>(19)?;
+    let provenance = match trust_domain {
+        None => {
+            if sequence.is_some()
+                || package_version.is_some()
+                || package_created_at.is_some()
+                || package_expires_at.is_some()
+                || signer_key_id.is_some()
+                || package_digest.is_some()
+                || package_imported_at.is_some()
+            {
+                return Err(StorageError::InvalidTrustPackage(format!(
+                    "trust anchor {id} has partial package provenance"
+                )));
+            }
+            None
+        }
+        Some(trust_domain) => {
+            let sequence = sequence.ok_or_else(|| {
+                StorageError::InvalidTrustPackage(format!(
+                    "trust anchor {id} is missing package sequence"
+                ))
+            })?;
+            let sequence = u64::try_from(sequence).map_err(|_| {
+                StorageError::InvalidTrustPackage(format!(
+                    "trust anchor {id} has invalid package sequence"
+                ))
+            })?;
+            let provenance = TrustPackageProvenance {
+                trust_domain,
+                sequence,
+                package_version: required_stored_value(package_version, &id, "package version")?,
+                created_at: parse_stored_timestamp(
+                    package_created_at.as_deref(),
+                    &id,
+                    "package creation time",
+                )?,
+                expires_at: parse_stored_timestamp(
+                    package_expires_at.as_deref(),
+                    &id,
+                    "package expiry time",
+                )?,
+                signer_key_id: required_stored_value(signer_key_id, &id, "package signer key id")?,
+                package_digest: required_stored_value(package_digest, &id, "package digest")?,
+                imported_at: parse_stored_timestamp(
+                    package_imported_at.as_deref(),
+                    &id,
+                    "package import time",
+                )?,
+            };
+            validate_trust_package(&provenance, std::slice::from_ref(&anchor), &[])?;
+            Some(provenance)
+        }
+    };
+    Ok(TrustAnchorRecord { anchor, provenance })
+}
+
+fn map_open_badge_key_strict(
+    row: &rusqlite::Row<'_>,
+) -> Result<OpenBadgeVerificationMethod, StorageError> {
+    let id: String = row.get(0)?;
+    let document_json: String = row.get(1)?;
+    let document = serde_json::from_str(&document_json).map_err(|_| {
+        StorageError::InvalidTrustPackage(format!(
+            "Open Badge method {id} has malformed document JSON"
+        ))
+    })?;
+    let source = match row.get::<_, String>(8)?.as_str() {
+        "sync" => OpenBadgeKeySource::Sync,
+        "usb_import" => OpenBadgeKeySource::UsbImport,
+        "manual" => OpenBadgeKeySource::Manual,
+        other => {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "Open Badge method {id} has unknown source {other}"
+            )));
+        }
+    };
+    Ok(OpenBadgeVerificationMethod {
+        id: id.clone(),
+        document,
+        controller: row.get(2)?,
+        issuer: row.get(3)?,
+        kid: row.get(4)?,
+        not_before: parse_optional_stored_timestamp(
+            row.get::<_, Option<String>>(5)?.as_deref(),
+            &id,
+            "not_before",
+        )?,
+        not_after: parse_optional_stored_timestamp(
+            row.get::<_, Option<String>>(6)?.as_deref(),
+            &id,
+            "not_after",
+        )?,
+        status: row.get(7)?,
+        source,
+        synced_at: parse_stored_timestamp(
+            row.get::<_, Option<String>>(9)?.as_deref(),
+            &id,
+            "synced_at",
+        )?,
+    })
+}
+
+fn validate_trust_package(
+    provenance: &TrustPackageProvenance,
+    anchors: &[TrustAnchor],
+    methods: &[OpenBadgeVerificationMethod],
+) -> Result<i64, StorageError> {
+    let sequence = validate_open_badge_package(provenance, methods)?;
+    let mut ids = HashSet::new();
+    for anchor in anchors {
+        if anchor.id.is_empty() || anchor.id.len() > 512 || !ids.insert(anchor.id.as_str()) {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor id {} is empty, oversized, or duplicated",
+                anchor.id
+            )));
+        }
+        if anchor.jurisdiction.is_empty()
+            || anchor.jurisdiction.len() > 512
+            || anchor.jurisdiction.chars().any(char::is_control)
+        {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {} has invalid jurisdiction metadata",
+                anchor.id
+            )));
+        }
+        if anchor.source == TrustAnchorSource::Manual {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {} uses manual source in an authenticated package",
+                anchor.id
+            )));
+        }
+        if anchor.synced_at != provenance.created_at {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {} freshness does not match signed package time",
+                anchor.id
+            )));
+        }
+        if anchor.certificate_der.is_empty() {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {} has empty certificate DER",
+                anchor.id
+            )));
+        }
+        let digest = blake3::hash(&anchor.certificate_der).to_hex().to_string();
+        if anchor.certificate_hash != digest || anchor.id != digest {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {} does not match its certificate digest",
+                anchor.id
+            )));
+        }
+        if matches!(
+            (anchor.not_before, anchor.not_after),
+            (Some(not_before), Some(not_after)) if not_before >= not_after
+        ) {
+            return Err(StorageError::InvalidTrustPackage(format!(
+                "trust anchor {} has a non-positive validity interval",
+                anchor.id
+            )));
+        }
+    }
+    Ok(sequence)
+}
+
 fn validate_open_badge_package(
-    provenance: &OpenBadgeTrustPackageProvenance,
+    provenance: &TrustPackageProvenance,
     methods: &[OpenBadgeVerificationMethod],
 ) -> Result<i64, StorageError> {
     if provenance.trust_domain.is_empty()
@@ -1121,6 +1468,21 @@ fn validate_open_badge_package(
     if provenance.created_at > provenance.imported_at {
         return Err(StorageError::InvalidTrustPackage(
             "package creation time cannot be after import time".to_string(),
+        ));
+    }
+    if provenance.created_at >= provenance.expires_at {
+        return Err(StorageError::InvalidTrustPackage(
+            "package expiry time must be after its creation time".to_string(),
+        ));
+    }
+    if provenance.imported_at > provenance.expires_at {
+        return Err(StorageError::InvalidTrustPackage(
+            "package cannot be imported after its signed expiry time".to_string(),
+        ));
+    }
+    if Utc::now() > provenance.expires_at {
+        return Err(StorageError::InvalidTrustPackage(
+            "package signed expiry time has passed".to_string(),
         ));
     }
 
@@ -1205,27 +1567,37 @@ fn contains_private_key_material(value: &Value) -> bool {
 
 fn required_stored_value(
     value: Option<String>,
-    method_id: &str,
+    record_id: &str,
     field: &str,
 ) -> Result<String, StorageError> {
     value.filter(|value| !value.is_empty()).ok_or_else(|| {
-        StorageError::InvalidTrustPackage(format!("method {method_id} is missing {field}"))
+        StorageError::InvalidTrustPackage(format!("record {record_id} is missing {field}"))
     })
 }
 
 fn parse_stored_timestamp(
     value: Option<&str>,
-    method_id: &str,
+    record_id: &str,
     field: &str,
 ) -> Result<chrono::DateTime<Utc>, StorageError> {
     let value = value.ok_or_else(|| {
-        StorageError::InvalidTrustPackage(format!("method {method_id} is missing {field}"))
+        StorageError::InvalidTrustPackage(format!("record {record_id} is missing {field}"))
     })?;
     chrono::DateTime::parse_from_rfc3339(value)
         .map(|timestamp| timestamp.with_timezone(&Utc))
         .map_err(|_| {
-            StorageError::InvalidTrustPackage(format!("method {method_id} has malformed {field}"))
+            StorageError::InvalidTrustPackage(format!("record {record_id} has malformed {field}"))
         })
+}
+
+fn parse_optional_stored_timestamp(
+    value: Option<&str>,
+    record_id: &str,
+    field: &str,
+) -> Result<Option<chrono::DateTime<Utc>>, StorageError> {
+    value
+        .map(|value| parse_stored_timestamp(Some(value), record_id, field))
+        .transpose()
 }
 
 fn load_open_badge_package_provenance(
@@ -1236,8 +1608,8 @@ fn load_open_badge_package_provenance(
         .query_row(
             r#"
             SELECT sequence, package_version, package_created_at,
-                   signer_key_id, package_digest, imported_at
-            FROM open_badge_trust_packages
+                   package_expires_at, signer_key_id, package_digest, imported_at
+            FROM trust_packages
             WHERE trust_domain = ?
             "#,
             [trust_domain],
@@ -1246,15 +1618,18 @@ fn load_open_badge_package_provenance(
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
                 ))
             },
         )
         .optional()?;
 
-    let Some((sequence, version, created_at, signer_key_id, digest, imported_at)) = stored else {
+    let Some((sequence, version, created_at, expires_at, signer_key_id, digest, imported_at)) =
+        stored
+    else {
         return Ok(None);
     };
     let sequence = u64::try_from(sequence).map_err(|_| {
@@ -1269,6 +1644,18 @@ fn load_open_badge_package_provenance(
                 "domain {trust_domain} has malformed creation time"
             ))
         })?;
+    let expires_at = expires_at.ok_or_else(|| {
+        StorageError::InvalidTrustPackage(format!(
+            "domain {trust_domain} is missing signed expiry time"
+        ))
+    })?;
+    let expires_at = chrono::DateTime::parse_from_rfc3339(&expires_at)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|_| {
+            StorageError::InvalidTrustPackage(format!(
+                "domain {trust_domain} has malformed expiry time"
+            ))
+        })?;
     let imported_at = chrono::DateTime::parse_from_rfc3339(&imported_at)
         .map(|timestamp| timestamp.with_timezone(&Utc))
         .map_err(|_| {
@@ -1277,11 +1664,12 @@ fn load_open_badge_package_provenance(
             ))
         })?;
 
-    let provenance = OpenBadgeTrustPackageProvenance {
+    let provenance = TrustPackageProvenance {
         trust_domain: trust_domain.to_string(),
         sequence,
         package_version: version,
         created_at,
+        expires_at,
         signer_key_id,
         package_digest: digest,
         imported_at,
@@ -1336,6 +1724,12 @@ fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), Storage
             [],
         )?;
     }
+    if !column_exists(conn, "open_badge_keys", "package_expires_at")? {
+        conn.execute(
+            "ALTER TABLE open_badge_keys ADD COLUMN package_expires_at TEXT",
+            [],
+        )?;
+    }
     if !column_exists(conn, "open_badge_keys", "package_signer_key_id")? {
         conn.execute(
             "ALTER TABLE open_badge_keys ADD COLUMN package_signer_key_id TEXT",
@@ -1354,23 +1748,118 @@ fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), Storage
             [],
         )?;
     }
+    for (column, definition) in [
+        ("trust_domain", "TEXT"),
+        ("package_sequence", "INTEGER"),
+        ("package_version", "TEXT"),
+        ("package_created_at", "TEXT"),
+        ("package_expires_at", "TEXT"),
+        ("package_signer_key_id", "TEXT"),
+        ("package_digest", "TEXT"),
+        ("package_imported_at", "TEXT"),
+    ] {
+        if !column_exists(conn, "trust_anchors", column)? {
+            conn.execute(
+                &format!("ALTER TABLE trust_anchors ADD COLUMN {column} {definition}"),
+                [],
+            )?;
+        }
+    }
     conn.execute_batch(
         r#"
         CREATE INDEX IF NOT EXISTS idx_open_badge_keys_trust_domain
             ON open_badge_keys(trust_domain);
-        CREATE TABLE IF NOT EXISTS open_badge_trust_packages (
+        CREATE INDEX IF NOT EXISTS idx_trust_anchors_trust_domain
+            ON trust_anchors(trust_domain);
+        CREATE TABLE IF NOT EXISTS trust_packages (
             trust_domain TEXT PRIMARY KEY,
             sequence INTEGER NOT NULL,
             package_version TEXT NOT NULL,
             package_created_at TEXT NOT NULL,
+            package_expires_at TEXT,
             signer_key_id TEXT NOT NULL,
             package_digest TEXT NOT NULL,
             imported_at TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        CREATE TRIGGER IF NOT EXISTS prevent_legacy_open_badge_overwrite
+        BEFORE INSERT ON open_badge_keys
+        WHEN NEW.trust_domain IS NULL
+         AND EXISTS (
+             SELECT 1 FROM open_badge_keys
+             WHERE id = NEW.id AND trust_domain IS NOT NULL
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy write cannot replace governed Open Badge method');
+        END;
+        CREATE TRIGGER IF NOT EXISTS prevent_open_badge_provenance_removal
+        BEFORE UPDATE ON open_badge_keys
+        WHEN OLD.trust_domain IS NOT NULL
+         AND (
+             NEW.trust_domain IS NULL
+             OR NEW.package_sequence IS NULL
+             OR NEW.package_version IS NULL
+             OR NEW.package_created_at IS NULL
+             OR NEW.package_expires_at IS NULL
+             OR NEW.package_signer_key_id IS NULL
+             OR NEW.package_digest IS NULL
+             OR NEW.package_imported_at IS NULL
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'governed Open Badge provenance cannot be removed');
+        END;
+        CREATE TRIGGER IF NOT EXISTS prevent_legacy_anchor_overwrite
+        BEFORE INSERT ON trust_anchors
+        WHEN NEW.trust_domain IS NULL
+         AND EXISTS (
+             SELECT 1 FROM trust_anchors
+             WHERE id = NEW.id AND trust_domain IS NOT NULL
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy write cannot replace governed trust anchor');
+        END;
+        CREATE TRIGGER IF NOT EXISTS prevent_anchor_provenance_removal
+        BEFORE UPDATE ON trust_anchors
+        WHEN OLD.trust_domain IS NOT NULL
+         AND (
+             NEW.trust_domain IS NULL
+             OR NEW.package_sequence IS NULL
+             OR NEW.package_version IS NULL
+             OR NEW.package_created_at IS NULL
+             OR NEW.package_expires_at IS NULL
+             OR NEW.package_signer_key_id IS NULL
+             OR NEW.package_digest IS NULL
+             OR NEW.package_imported_at IS NULL
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'governed trust-anchor provenance cannot be removed');
+        END;
         "#,
     )?;
+    if !column_exists(conn, "trust_packages", "package_expires_at")? {
+        // Pre-release package state did not persist a signed expiry. Leave the
+        // migrated value null so governed reads fail closed instead of
+        // synthesizing security metadata that was never authenticated.
+        conn.execute(
+            "ALTER TABLE trust_packages ADD COLUMN package_expires_at TEXT",
+            [],
+        )?;
+    }
+    if table_exists(conn, "open_badge_trust_packages")? {
+        conn.execute_batch(
+            r#"
+            INSERT OR IGNORE INTO trust_packages
+                (trust_domain, sequence, package_version, package_created_at,
+                 package_expires_at, signer_key_id, package_digest, imported_at,
+                 created_at, updated_at)
+            SELECT trust_domain, sequence, package_version, package_created_at,
+                   NULL, signer_key_id, package_digest, imported_at, created_at, updated_at
+            FROM open_badge_trust_packages;
+            DROP TABLE open_badge_trust_packages;
+            "#,
+        )?;
+    }
 
     Ok(())
 }
@@ -1385,6 +1874,15 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, S
         }
     }
     Ok(false)
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, StorageError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+        [table],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -1402,6 +1900,16 @@ impl SecureStorage {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    async fn apply_open_badge_trust_package(
+        &self,
+        provenance: &OpenBadgeTrustPackageProvenance,
+        methods: &[OpenBadgeVerificationMethod],
+    ) -> Result<usize, StorageError> {
+        self.apply_trust_package(provenance, &[], methods)
+            .await
+            .map(|result| result.open_badge_methods)
     }
 }
 
@@ -1434,6 +1942,7 @@ mod tests {
             sequence,
             package_version: version.to_string(),
             created_at,
+            expires_at: created_at + chrono::Duration::days(365),
             signer_key_id: signer.to_string(),
             package_digest: digest_byte.to_string().repeat(64),
             imported_at: created_at + chrono::Duration::hours(1),
@@ -1461,6 +1970,29 @@ mod tests {
             status: Some("active".to_string()),
             source: OpenBadgeKeySource::UsbImport,
             synced_at: Utc::now(),
+        }
+    }
+
+    fn trust_anchor(
+        certificate_der: &[u8],
+        anchor_type: TrustAnchorType,
+        jurisdiction: &str,
+        created_at: chrono::DateTime<Utc>,
+    ) -> TrustAnchor {
+        let digest = blake3::hash(certificate_der).to_hex().to_string();
+        TrustAnchor {
+            id: digest.clone(),
+            anchor_type,
+            jurisdiction: jurisdiction.to_string(),
+            subject: Some(format!("CN={jurisdiction}")),
+            issuer: Some("CN=Marty Test Root".to_string()),
+            serial_number: Some(hex::encode(certificate_der)),
+            not_before: Some(created_at - chrono::Duration::days(1)),
+            not_after: Some(created_at + chrono::Duration::days(365)),
+            certificate_der: certificate_der.to_vec(),
+            certificate_hash: digest,
+            source: TrustAnchorSource::UsbImport,
+            synced_at: created_at,
         }
     }
 
@@ -1655,6 +2187,388 @@ mod tests {
                     .await
                     .unwrap(),
                 0
+            );
+        });
+    }
+
+    // ====================================================================
+    // Mixed trust packages
+    // ====================================================================
+
+    #[test]
+    fn mixed_package_replaces_all_domain_records_and_advances_metadata_once() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let first = package_provenance("usb:mixed", 1, "1.0.0", 1, "usb-root-1", 'a');
+            let iaca = trust_anchor(&[1, 2, 3], TrustAnchorType::Iaca, "US-CO", first.created_at);
+            let csca = trust_anchor(&[4, 5, 6], TrustAnchorType::Csca, "US", first.created_at);
+            let key = open_badge_method("did:example:issuer#key-1", "did:example:issuer");
+
+            let applied = storage
+                .apply_trust_package(
+                    &first,
+                    &[iaca.clone(), csca.clone()],
+                    std::slice::from_ref(&key),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                applied,
+                TrustPackageApplyResult {
+                    trust_anchors: 2,
+                    open_badge_methods: 1,
+                }
+            );
+            let iaca_records = storage
+                .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                .await
+                .unwrap();
+            assert_eq!(iaca_records.len(), 1);
+            assert_eq!(iaca_records[0].provenance.as_ref(), Some(&first));
+            assert_eq!(
+                storage.get_open_badge_trust_records().await.unwrap()[0]
+                    .provenance
+                    .as_ref(),
+                Some(&first)
+            );
+            let sync = storage.get_sync_state().await.unwrap().unwrap();
+            assert_eq!(sync.last_iaca_sync, Some(first.created_at));
+            assert_eq!(sync.last_csca_sync, Some(first.created_at));
+            assert_eq!(sync.iaca_version.as_deref(), Some("1.0.0"));
+
+            let second = package_provenance("usb:mixed", 2, "2.0.0", 2, "usb-root-1", 'b');
+            let replacement = trust_anchor(
+                &[7, 8, 9],
+                TrustAnchorType::Iaca,
+                "US-UT",
+                second.created_at,
+            );
+            let replacement_key =
+                open_badge_method("did:example:issuer#key-2", "did:example:issuer");
+            storage
+                .apply_trust_package(
+                    &second,
+                    std::slice::from_ref(&replacement),
+                    std::slice::from_ref(&replacement_key),
+                )
+                .await
+                .unwrap();
+
+            assert!(storage
+                .get_trust_anchor_records(TrustAnchorType::Csca, None)
+                .await
+                .unwrap()
+                .is_empty());
+            let active = storage
+                .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                .await
+                .unwrap();
+            assert_eq!(active.len(), 1);
+            assert_eq!(active[0].anchor.id, replacement.id);
+            assert_eq!(active[0].provenance.as_ref(), Some(&second));
+            let methods = storage.get_open_badge_trust_records().await.unwrap();
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].method.id, replacement_key.id);
+
+            assert!(matches!(
+                storage
+                    .apply_trust_package(&first, &[iaca, csca], std::slice::from_ref(&key))
+                    .await
+                    .unwrap_err(),
+                StorageError::TrustPackageRollback { .. }
+            ));
+            let legacy_overwrite = storage.store_trust_anchor(&replacement).await.unwrap_err();
+            assert!(matches!(
+                legacy_overwrite,
+                StorageError::TrustPackageConflict(_)
+            ));
+
+            let conn = storage.conn.lock().await;
+            let audit_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_log WHERE event_type = 'trust_package_applied'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(audit_count, 2);
+            assert_eq!(
+                load_open_badge_package_provenance(&conn, "usb:mixed").unwrap(),
+                Some(second)
+            );
+        });
+    }
+
+    #[test]
+    fn mixed_package_failure_after_delete_rolls_back_every_state_class() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let current = package_provenance("usb:mixed", 1, "1.0.0", 1, "usb-root-1", 'a');
+            let anchor = trust_anchor(
+                &[1, 2, 3],
+                TrustAnchorType::Iaca,
+                "US-CO",
+                current.created_at,
+            );
+            let key = open_badge_method("did:example:issuer#key-1", "did:example:issuer");
+            storage
+                .apply_trust_package(
+                    &current,
+                    std::slice::from_ref(&anchor),
+                    std::slice::from_ref(&key),
+                )
+                .await
+                .unwrap();
+
+            let mut legacy = trust_anchor(
+                &[9, 9, 9],
+                TrustAnchorType::Csca,
+                "legacy",
+                current.created_at,
+            );
+            legacy.source = TrustAnchorSource::Manual;
+            storage.store_trust_anchor(&legacy).await.unwrap();
+
+            let newer = package_provenance("usb:mixed", 2, "2.0.0", 2, "usb-root-1", 'b');
+            let replacement =
+                trust_anchor(&[4, 5, 6], TrustAnchorType::Iaca, "US-UT", newer.created_at);
+            let conflicting = trust_anchor(
+                &[9, 9, 9],
+                TrustAnchorType::Csca,
+                "legacy",
+                newer.created_at,
+            );
+            let error = storage
+                .apply_trust_package(&newer, &[replacement, conflicting], &[])
+                .await
+                .unwrap_err();
+            assert!(matches!(error, StorageError::TrustPackageConflict(_)));
+
+            let active = storage
+                .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                .await
+                .unwrap();
+            assert_eq!(active.len(), 1);
+            assert_eq!(active[0].anchor.id, anchor.id);
+            assert_eq!(active[0].provenance.as_ref(), Some(&current));
+            let methods = storage.get_open_badge_trust_records().await.unwrap();
+            assert_eq!(methods.len(), 1);
+            assert_eq!(methods[0].method.id, key.id);
+            assert_eq!(methods[0].provenance.as_ref(), Some(&current));
+            assert_eq!(
+                storage
+                    .get_sync_state()
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .iaca_version,
+                Some("1.0.0".to_string())
+            );
+
+            let conn = storage.conn.lock().await;
+            let audit_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit_log WHERE event_type = 'trust_package_applied'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(audit_count, 1);
+            assert_eq!(
+                load_open_badge_package_provenance(&conn, "usb:mixed").unwrap(),
+                Some(current)
+            );
+        });
+    }
+
+    #[test]
+    fn expired_package_fails_closed_without_mutating_trust_state() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let mut expired = package_provenance("usb:expired", 1, "1.0.0", 1, "usb-root-1", 'a');
+            expired.expires_at = Utc::now() - chrono::Duration::seconds(1);
+            let anchor = trust_anchor(
+                &[1, 2, 3],
+                TrustAnchorType::Iaca,
+                "US-CO",
+                expired.created_at,
+            );
+
+            let error = storage
+                .apply_trust_package(&expired, std::slice::from_ref(&anchor), &[])
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                StorageError::InvalidTrustPackage(message)
+                    if message.contains("expiry time has passed")
+            ));
+
+            let conn = storage.conn.lock().await;
+            for table in ["trust_anchors", "trust_packages", "audit_log"] {
+                let count: i64 = conn
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(count, 0, "expired package mutated {table}");
+            }
+            drop(conn);
+
+            let active = package_provenance("usb:active", 1, "1.0.0", 1, "usb-root-1", 'b');
+            let method = open_badge_method("did:example:issuer#key-1", "did:example:issuer");
+            storage
+                .apply_trust_package(
+                    &active,
+                    std::slice::from_ref(&anchor),
+                    std::slice::from_ref(&method),
+                )
+                .await
+                .unwrap();
+            let past = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+            let conn = storage.conn.lock().await;
+            conn.execute(
+                "UPDATE trust_anchors SET package_expires_at = ? WHERE trust_domain = ?",
+                rusqlite::params![past, active.trust_domain],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE trust_packages SET package_expires_at = ? WHERE trust_domain = ?",
+                rusqlite::params![past, active.trust_domain],
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE open_badge_keys SET package_expires_at = ? WHERE trust_domain = ?",
+                rusqlite::params![past, active.trust_domain],
+            )
+            .unwrap();
+            drop(conn);
+
+            assert!(matches!(
+                storage
+                    .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                    .await,
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("expiry time has passed")
+            ));
+            assert!(matches!(
+                storage.get_open_badge_keys().await,
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("expiry time has passed")
+            ));
+        });
+    }
+
+    #[test]
+    fn tampered_governed_anchor_fails_closed() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let package = package_provenance("usb:mixed", 1, "1.0.0", 1, "usb-root-1", 'a');
+            let anchor = trust_anchor(
+                &[1, 2, 3],
+                TrustAnchorType::Iaca,
+                "US-CO",
+                package.created_at,
+            );
+            storage
+                .apply_trust_package(&package, std::slice::from_ref(&anchor), &[])
+                .await
+                .unwrap();
+            {
+                let conn = storage.conn.lock().await;
+                conn.execute(
+                    "UPDATE trust_anchors SET not_before = 'not-a-time' WHERE id = ?",
+                    [&anchor.id],
+                )
+                .unwrap();
+            }
+            assert!(matches!(
+                storage
+                    .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                    .await
+                    .unwrap_err(),
+                StorageError::InvalidTrustPackage(_)
+            ));
+        });
+    }
+
+    #[test]
+    fn raw_legacy_adapter_writes_cannot_strip_governed_provenance() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let package = package_provenance("usb:mixed", 1, "1.0.0", 1, "usb-root-1", 'a');
+            let anchor = trust_anchor(
+                &[1, 2, 3],
+                TrustAnchorType::Iaca,
+                "US-CO",
+                package.created_at,
+            );
+            let key = open_badge_method("did:example:issuer#key-1", "did:example:issuer");
+            storage
+                .apply_trust_package(
+                    &package,
+                    std::slice::from_ref(&anchor),
+                    std::slice::from_ref(&key),
+                )
+                .await
+                .unwrap();
+
+            {
+                let conn = storage.conn.lock().await;
+                assert!(conn
+                    .execute(
+                        r#"
+                        INSERT OR REPLACE INTO trust_anchors
+                            (id, anchor_type, jurisdiction, certificate_der,
+                             certificate_hash, source, synced_at)
+                        VALUES (?, 'iaca', 'legacy', X'01', ?, 'manual', ?)
+                        "#,
+                        rusqlite::params![anchor.id, anchor.id, Utc::now().to_rfc3339()],
+                    )
+                    .is_err());
+                assert!(conn
+                    .execute(
+                        r#"
+                        INSERT OR REPLACE INTO open_badge_keys
+                            (id, document_json, source, synced_at)
+                        VALUES (?, '{}', 'manual', ?)
+                        "#,
+                        rusqlite::params![key.id, Utc::now().to_rfc3339()],
+                    )
+                    .is_err());
+                assert!(conn
+                    .execute(
+                        "UPDATE trust_anchors SET trust_domain = NULL WHERE id = ?",
+                        [&anchor.id],
+                    )
+                    .is_err());
+                assert!(conn
+                    .execute(
+                        "UPDATE open_badge_keys SET trust_domain = NULL WHERE id = ?",
+                        [&key.id],
+                    )
+                    .is_err());
+            }
+
+            assert_eq!(
+                storage
+                    .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                    .await
+                    .unwrap()[0]
+                    .provenance
+                    .as_ref(),
+                Some(&package)
+            );
+            assert_eq!(
+                storage.get_open_badge_trust_records().await.unwrap()[0]
+                    .provenance
+                    .as_ref(),
+                Some(&package)
             );
         });
     }
@@ -1955,7 +2869,7 @@ mod tests {
                 )
                 .unwrap();
                 conn.execute(
-                    "UPDATE open_badge_trust_packages SET package_digest = 'BAD' WHERE trust_domain = ?",
+                    "UPDATE trust_packages SET package_digest = 'BAD' WHERE trust_domain = ?",
                     [&package.trust_domain],
                 )
                 .unwrap();
@@ -2190,6 +3104,25 @@ mod tests {
                     (id, document_json, source, synced_at)
                 VALUES
                     ('legacy-key', '{"id":"legacy-key"}', 'manual', '2026-01-01T00:00:00Z');
+                CREATE TABLE open_badge_trust_packages (
+                    trust_domain TEXT PRIMARY KEY,
+                    sequence INTEGER NOT NULL,
+                    package_version TEXT NOT NULL,
+                    package_created_at TEXT NOT NULL,
+                    signer_key_id TEXT NOT NULL,
+                    package_digest TEXT NOT NULL,
+                    imported_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                INSERT INTO open_badge_trust_packages
+                    (trust_domain, sequence, package_version, package_created_at,
+                     signer_key_id, package_digest, imported_at)
+                VALUES
+                    ('usb:migrated', 1, '1.0.0', '2026-01-01T00:00:00Z',
+                     'usb-root-1',
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     '2026-01-01T01:00:00Z');
                 "#,
             )
             .unwrap();
@@ -2204,20 +3137,29 @@ mod tests {
                 "package_sequence",
                 "package_version",
                 "package_created_at",
+                "package_expires_at",
                 "package_signer_key_id",
                 "package_digest",
                 "package_imported_at",
             ] {
                 assert!(column_exists(&conn, "open_badge_keys", column).unwrap());
+                assert!(column_exists(&conn, "trust_anchors", column).unwrap());
             }
             let package_table: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'open_badge_trust_packages'",
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'trust_packages'",
                     [],
                     |row| row.get(0),
                 )
                 .unwrap();
             assert_eq!(package_table, 1);
+            assert!(column_exists(&conn, "trust_packages", "package_expires_at").unwrap());
+            assert!(!table_exists(&conn, "open_badge_trust_packages").unwrap());
+            assert!(matches!(
+                load_open_badge_package_provenance(&conn, "usb:migrated"),
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("missing signed expiry")
+            ));
             let trust_domain_index: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_open_badge_keys_trust_domain'",

@@ -36,10 +36,10 @@ pub struct TrustAnchor {
 
 pub use marty_types::open_badges::{OpenBadgeKeySource, OpenBadgeVerificationMethod};
 
-/// Authenticated provenance for a complete Open Badge trust package.
+/// Authenticated provenance for a complete mixed trust package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenBadgeTrustPackageProvenance {
-    /// Stable trust domain whose active key set this package replaces.
+pub struct TrustPackageProvenance {
+    /// Stable trust domain whose active anchor and key sets this package replaces.
     pub trust_domain: String,
     /// Strictly increasing sequence signed into the package.
     pub sequence: u64,
@@ -47,12 +47,24 @@ pub struct OpenBadgeTrustPackageProvenance {
     pub package_version: String,
     /// Signed package creation time.
     pub created_at: DateTime<Utc>,
+    /// Signed package expiry after which derived trust records fail closed.
+    pub expires_at: DateTime<Utc>,
     /// Identifier of the pinned key that authenticated the package.
     pub signer_key_id: String,
     /// Lowercase hexadecimal BLAKE3 digest of the canonical signed package.
     pub package_digest: String,
     /// Local time at which the authenticated package was committed.
     pub imported_at: DateTime<Utc>,
+}
+
+/// Backward-compatible name for callers that only consume Open Badge records.
+pub type OpenBadgeTrustPackageProvenance = TrustPackageProvenance;
+
+/// Trust anchor plus optional authenticated package provenance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustAnchorRecord {
+    pub anchor: TrustAnchor,
+    pub provenance: Option<TrustPackageProvenance>,
 }
 
 /// Open Badge method plus optional authenticated package provenance.
@@ -62,7 +74,14 @@ pub struct OpenBadgeTrustPackageProvenance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenBadgeTrustRecord {
     pub method: OpenBadgeVerificationMethod,
-    pub provenance: Option<OpenBadgeTrustPackageProvenance>,
+    pub provenance: Option<TrustPackageProvenance>,
+}
+
+/// Counts committed by one atomic mixed trust-package transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrustPackageApplyResult {
+    pub trust_anchors: usize,
+    pub open_badge_methods: usize,
 }
 
 /// Trust anchor type

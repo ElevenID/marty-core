@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Persist and atomically enforce monotonic Open Badge trust-package provenance so replayed, conflicting, or cross-domain key sets cannot replace active trust state.
+- Extend that authority to the complete IACA, CSCA, DSC, and Open Badge trust package so signed expiry, records, package state, sync metadata, and a minimized audit outcome are enforced and commit or roll back together.
 
 ## [0.1.0] - 2026-01-07
 

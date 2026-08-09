@@ -22,14 +22,14 @@ pub enum StorageError {
     #[error("Record not found: {0}")]
     NotFound(String),
 
-    #[error("Invalid Open Badge trust package: {0}")]
+    #[error("Invalid trust package: {0}")]
     InvalidTrustPackage(String),
 
-    #[error("Open Badge trust package replay for domain {domain} at sequence {sequence}")]
+    #[error("Trust package replay for domain {domain} at sequence {sequence}")]
     TrustPackageReplay { domain: String, sequence: u64 },
 
     #[error(
-        "Open Badge trust package rollback for domain {domain}: current sequence {current_sequence}, attempted {attempted_sequence}"
+        "Trust package rollback for domain {domain}: current sequence {current_sequence}, attempted {attempted_sequence}"
     )]
     TrustPackageRollback {
         domain: String,
@@ -37,10 +37,10 @@ pub enum StorageError {
         attempted_sequence: u64,
     },
 
-    #[error("Open Badge trust package conflict: {0}")]
+    #[error("Trust package conflict: {0}")]
     TrustPackageConflict(String),
 
-    #[error("Open Badge trust package signer change is not authorized for domain {0}")]
+    #[error("Trust package signer change is not authorized for domain {0}")]
     TrustPackageSignerChange(String),
 
     #[error("Storage not initialized")]
