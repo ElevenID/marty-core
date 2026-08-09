@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add the framework-neutral canonical required-check reducer and explicit
   verification decision, check outcome, and category-summary domain types;
   reducer outputs are serialize-only and externally immutable.
+- Add canonical decision-result assembly with exclusive authorization context,
+  exact provenance, and cross-array component-reference validation.
+- Add strict caller-fact deserialization for the canonical builder and expose it
+  through the Python binding without accepting reducer-derived fields.
 
 ## [0.1.0] - 2026-01-07
 
