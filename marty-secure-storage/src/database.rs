@@ -358,23 +358,42 @@ impl SecureStorage {
         anchors: &[TrustAnchor],
         methods: &[OpenBadgeVerificationMethod],
     ) -> Result<TrustPackageApplyResult, StorageError> {
+        self.apply_trust_package_internal(provenance, anchors, methods, None)
+            .await
+    }
+
+    /// Atomically apply a package whose signed payload carries an explicit
+    /// signer transition and recovery policy.
+    ///
+    /// A signer change is accepted only when the prior committed package
+    /// authorized that exact key as its next signer, or when it matches the
+    /// stable recovery signer. Recovery use must authorize a distinct next
+    /// operational signer. The legacy API never authorizes signer changes and
+    /// preserves any policy already committed for the trust domain.
+    pub async fn apply_trust_package_with_signer_policy(
+        &self,
+        provenance: &TrustPackageProvenance,
+        anchors: &[TrustAnchor],
+        methods: &[OpenBadgeVerificationMethod],
+        signer_policy: &TrustPackageSignerPolicy,
+    ) -> Result<TrustPackageApplyResult, StorageError> {
+        validate_trust_package_signer_policy(signer_policy)?;
+        self.apply_trust_package_internal(provenance, anchors, methods, Some(signer_policy))
+            .await
+    }
+
+    async fn apply_trust_package_internal(
+        &self,
+        provenance: &TrustPackageProvenance,
+        anchors: &[TrustAnchor],
+        methods: &[OpenBadgeVerificationMethod],
+        signer_policy: Option<&TrustPackageSignerPolicy>,
+    ) -> Result<TrustPackageApplyResult, StorageError> {
         let sequence = validate_trust_package(provenance, anchors, methods)?;
         let documents = methods
             .iter()
             .map(|method| serde_json::to_string(&method.document))
             .collect::<Result<Vec<_>, _>>()?;
-        let audit_details = serde_json::to_string(&serde_json::json!({
-            "trust_domain": provenance.trust_domain,
-            "sequence": provenance.sequence,
-            "package_version": provenance.package_version,
-            "package_expires_at": provenance.expires_at.to_rfc3339(),
-            "signer_key_id": provenance.signer_key_id,
-            "package_digest": provenance.package_digest,
-            "trust_anchor_count": anchors.len(),
-            "open_badge_method_count": methods.len(),
-            "outcome": "applied"
-        }))?;
-
         let mut conn = self.conn.lock().await;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -382,7 +401,8 @@ impl SecureStorage {
             .query_row(
                 r#"
                 SELECT sequence, package_version, package_created_at,
-                       package_expires_at, signer_key_id, package_digest, imported_at
+                       package_expires_at, signer_key_id, next_signer_key_id,
+                       recovery_signer_key_id, package_digest, imported_at
                 FROM trust_packages
                 WHERE trust_domain = ?
                 "#,
@@ -394,12 +414,20 @@ impl SecureStorage {
                         row.get::<_, String>(2)?,
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
                     ))
                 },
             )
             .optional()?;
+
+        let mut signer_role = "bootstrap";
+        let mut effective_next_signer =
+            signer_policy.and_then(|policy| policy.next_signer_key_id.clone());
+        let mut effective_recovery_signer =
+            signer_policy.map(|policy| policy.recovery_signer_key_id.clone());
 
         if let Some((
             current_sequence,
@@ -407,10 +435,17 @@ impl SecureStorage {
             current_created_at,
             current_expires_at,
             current_signer,
+            current_next_signer,
+            current_recovery_signer,
             current_digest,
             _current_imported_at,
         )) = current
         {
+            validate_stored_trust_package_signer_policy(
+                &current_signer,
+                current_next_signer.as_deref(),
+                current_recovery_signer.as_deref(),
+            )?;
             let current_sequence = u64::try_from(current_sequence).map_err(|_| {
                 StorageError::InvalidTrustPackage(
                     "stored package sequence is negative or out of range".to_string(),
@@ -436,10 +471,48 @@ impl SecureStorage {
                     provenance.trust_domain, provenance.sequence
                 )));
             }
-            if provenance.signer_key_id != current_signer {
+            signer_role = if provenance.signer_key_id == current_signer {
+                "current"
+            } else if current_next_signer.as_deref() == Some(&provenance.signer_key_id) {
+                "next"
+            } else if current_recovery_signer.as_deref() == Some(&provenance.signer_key_id) {
+                "recovery"
+            } else {
                 return Err(StorageError::TrustPackageSignerChange(
                     provenance.trust_domain.clone(),
                 ));
+            };
+
+            if let Some(policy) = signer_policy {
+                if let Some(stored_recovery) = current_recovery_signer.as_deref() {
+                    if policy.recovery_signer_key_id != stored_recovery {
+                        return Err(StorageError::TrustPackageSignerChange(
+                            provenance.trust_domain.clone(),
+                        ));
+                    }
+                } else if signer_role != "current" {
+                    return Err(StorageError::TrustPackageSignerChange(
+                        provenance.trust_domain.clone(),
+                    ));
+                }
+
+                let signer_is_recovery = signer_role == "recovery"
+                    || current_recovery_signer.as_deref() == Some(&provenance.signer_key_id);
+                validate_trust_package_signer_relationships(
+                    policy,
+                    &provenance.signer_key_id,
+                    signer_is_recovery,
+                )?;
+                effective_next_signer = policy.next_signer_key_id.clone();
+                effective_recovery_signer = Some(policy.recovery_signer_key_id.clone());
+            } else {
+                if signer_role != "current" {
+                    return Err(StorageError::TrustPackageSignerChange(
+                        provenance.trust_domain.clone(),
+                    ));
+                }
+                effective_next_signer = current_next_signer;
+                effective_recovery_signer = current_recovery_signer;
             }
             if provenance.package_version == current_version {
                 return Err(StorageError::TrustPackageConflict(format!(
@@ -477,7 +550,24 @@ impl SecureStorage {
                     provenance.trust_domain
                 )));
             }
+        } else if let Some(policy) = signer_policy {
+            validate_trust_package_signer_relationships(policy, &provenance.signer_key_id, false)?;
         }
+
+        let audit_details = serde_json::to_string(&serde_json::json!({
+            "trust_domain": provenance.trust_domain,
+            "sequence": provenance.sequence,
+            "package_version": provenance.package_version,
+            "package_expires_at": provenance.expires_at.to_rfc3339(),
+            "signer_key_id": provenance.signer_key_id,
+            "signer_role": signer_role,
+            "next_signer_authorized": effective_next_signer.is_some(),
+            "recovery_policy_established": effective_recovery_signer.is_some(),
+            "package_digest": provenance.package_digest,
+            "trust_anchor_count": anchors.len(),
+            "open_badge_method_count": methods.len(),
+            "outcome": "applied"
+        }))?;
 
         tx.execute(
             "DELETE FROM trust_anchors WHERE trust_domain = ?",
@@ -595,14 +685,17 @@ impl SecureStorage {
             r#"
             INSERT INTO trust_packages
                 (trust_domain, sequence, package_version, package_created_at,
-                 package_expires_at, signer_key_id, package_digest, imported_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 package_expires_at, signer_key_id, next_signer_key_id,
+                 recovery_signer_key_id, package_digest, imported_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(trust_domain) DO UPDATE SET
                 sequence = excluded.sequence,
                 package_version = excluded.package_version,
                 package_created_at = excluded.package_created_at,
                 package_expires_at = excluded.package_expires_at,
                 signer_key_id = excluded.signer_key_id,
+                next_signer_key_id = excluded.next_signer_key_id,
+                recovery_signer_key_id = excluded.recovery_signer_key_id,
                 package_digest = excluded.package_digest,
                 imported_at = excluded.imported_at,
                 updated_at = excluded.updated_at
@@ -614,6 +707,8 @@ impl SecureStorage {
                 provenance.created_at.to_rfc3339(),
                 provenance.expires_at.to_rfc3339(),
                 provenance.signer_key_id,
+                effective_next_signer,
+                effective_recovery_signer,
                 provenance.package_digest,
                 provenance.imported_at.to_rfc3339(),
                 provenance.imported_at.to_rfc3339(),
@@ -1357,6 +1452,83 @@ fn map_open_badge_key_strict(
     })
 }
 
+fn validate_trust_package_signer_policy(
+    policy: &TrustPackageSignerPolicy,
+) -> Result<(), StorageError> {
+    validate_trust_package_signer_id(&policy.recovery_signer_key_id, "recovery signer")?;
+    if let Some(next_signer) = policy.next_signer_key_id.as_deref() {
+        validate_trust_package_signer_id(next_signer, "next signer")?;
+        if next_signer == policy.recovery_signer_key_id {
+            return Err(StorageError::InvalidTrustPackage(
+                "next and recovery signer ids must be distinct".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_trust_package_signer_id(value: &str, role: &str) -> Result<(), StorageError> {
+    if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
+        return Err(StorageError::InvalidTrustPackage(format!(
+            "{role} key id must be a bounded printable value"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_trust_package_signer_relationships(
+    policy: &TrustPackageSignerPolicy,
+    signer_key_id: &str,
+    signer_is_recovery: bool,
+) -> Result<(), StorageError> {
+    if policy.next_signer_key_id.as_deref() == Some(signer_key_id) {
+        return Err(StorageError::InvalidTrustPackage(
+            "next signer must differ from the package signer".to_string(),
+        ));
+    }
+    if policy.recovery_signer_key_id == signer_key_id && !signer_is_recovery {
+        return Err(StorageError::InvalidTrustPackage(
+            "operational and recovery signer ids must be distinct".to_string(),
+        ));
+    }
+    if signer_is_recovery && policy.next_signer_key_id.is_none() {
+        return Err(StorageError::InvalidTrustPackage(
+            "a recovery-signed package must authorize a next operational signer".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stored_trust_package_signer_policy(
+    current_signer: &str,
+    next_signer: Option<&str>,
+    recovery_signer: Option<&str>,
+) -> Result<(), StorageError> {
+    validate_trust_package_signer_id(current_signer, "current signer")?;
+    let Some(recovery_signer) = recovery_signer else {
+        if next_signer.is_some() {
+            return Err(StorageError::InvalidTrustPackage(
+                "stored next signer is missing its recovery policy".to_string(),
+            ));
+        }
+        return Ok(());
+    };
+    validate_trust_package_signer_id(recovery_signer, "stored recovery signer")?;
+    if let Some(next_signer) = next_signer {
+        validate_trust_package_signer_id(next_signer, "stored next signer")?;
+        if next_signer == current_signer || next_signer == recovery_signer {
+            return Err(StorageError::InvalidTrustPackage(
+                "stored current, next, and recovery signer roles are not distinct".to_string(),
+            ));
+        }
+    } else if current_signer == recovery_signer {
+        return Err(StorageError::InvalidTrustPackage(
+            "stored recovery signer is active without a next operational signer".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_trust_package(
     provenance: &TrustPackageProvenance,
     anchors: &[TrustAnchor],
@@ -1622,7 +1794,8 @@ fn load_open_badge_package_provenance(
         .query_row(
             r#"
             SELECT sequence, package_version, package_created_at,
-                   package_expires_at, signer_key_id, package_digest, imported_at
+                   package_expires_at, signer_key_id, next_signer_key_id,
+                   recovery_signer_key_id, package_digest, imported_at
             FROM trust_packages
             WHERE trust_domain = ?
             "#,
@@ -1634,18 +1807,34 @@ fn load_open_badge_package_provenance(
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             },
         )
         .optional()?;
 
-    let Some((sequence, version, created_at, expires_at, signer_key_id, digest, imported_at)) =
-        stored
+    let Some((
+        sequence,
+        version,
+        created_at,
+        expires_at,
+        signer_key_id,
+        next_signer_key_id,
+        recovery_signer_key_id,
+        digest,
+        imported_at,
+    )) = stored
     else {
         return Ok(None);
     };
+    validate_stored_trust_package_signer_policy(
+        &signer_key_id,
+        next_signer_key_id.as_deref(),
+        recovery_signer_key_id.as_deref(),
+    )?;
     let sequence = u64::try_from(sequence).map_err(|_| {
         StorageError::InvalidTrustPackage(format!(
             "domain {trust_domain} has invalid stored sequence"
@@ -1792,6 +1981,8 @@ fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), Storage
             package_created_at TEXT NOT NULL,
             package_expires_at TEXT,
             signer_key_id TEXT NOT NULL,
+            next_signer_key_id TEXT,
+            recovery_signer_key_id TEXT,
             package_digest TEXT NOT NULL,
             imported_at TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1859,6 +2050,17 @@ fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), Storage
             "ALTER TABLE trust_packages ADD COLUMN package_expires_at TEXT",
             [],
         )?;
+    }
+    for (column, definition) in [
+        ("next_signer_key_id", "TEXT"),
+        ("recovery_signer_key_id", "TEXT"),
+    ] {
+        if !column_exists(conn, "trust_packages", column)? {
+            conn.execute(
+                &format!("ALTER TABLE trust_packages ADD COLUMN {column} {definition}"),
+                [],
+            )?;
+        }
     }
     if table_exists(conn, "open_badge_trust_packages")? {
         conn.execute_batch(
@@ -1961,6 +2163,29 @@ mod tests {
             package_digest: digest_byte.to_string().repeat(64),
             imported_at: created_at + chrono::Duration::hours(1),
         }
+    }
+
+    fn signer_policy(next: Option<&str>, recovery: &str) -> TrustPackageSignerPolicy {
+        TrustPackageSignerPolicy {
+            next_signer_key_id: next.map(str::to_string),
+            recovery_signer_key_id: recovery.to_string(),
+        }
+    }
+
+    fn stored_signer_state(
+        conn: &Connection,
+        domain: &str,
+    ) -> (i64, String, Option<String>, Option<String>) {
+        conn.query_row(
+            r#"
+            SELECT sequence, signer_key_id, next_signer_key_id, recovery_signer_key_id
+            FROM trust_packages
+            WHERE trust_domain = ?
+            "#,
+            [domain],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap()
     }
 
     fn open_badge_method(id: &str, controller: &str) -> OpenBadgeVerificationMethod {
@@ -2311,6 +2536,255 @@ mod tests {
                 load_open_badge_package_provenance(&conn, "usb:mixed").unwrap(),
                 Some(second)
             );
+        });
+    }
+
+    #[test]
+    fn signer_transition_and_recovery_are_explicit_atomic_and_fail_closed() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let domain = "usb:rotation";
+            let bootstrap = package_provenance(domain, 1, "1.0.0", 1, "signer-a", 'a');
+            let bootstrap_anchor = trust_anchor(
+                &[1, 1, 1],
+                TrustAnchorType::Iaca,
+                "bootstrap",
+                bootstrap.created_at,
+            );
+            storage
+                .apply_trust_package_with_signer_policy(
+                    &bootstrap,
+                    std::slice::from_ref(&bootstrap_anchor),
+                    &[],
+                    &signer_policy(Some("signer-b"), "recovery-r"),
+                )
+                .await
+                .unwrap();
+
+            let unauthorized =
+                package_provenance(domain, 2, "2.0.0", 2, "signer-c", 'b');
+            let unauthorized_anchor = trust_anchor(
+                &[2, 2, 2],
+                TrustAnchorType::Iaca,
+                "unauthorized",
+                unauthorized.created_at,
+            );
+            assert!(matches!(
+                storage
+                    .apply_trust_package_with_signer_policy(
+                        &unauthorized,
+                        std::slice::from_ref(&unauthorized_anchor),
+                        &[],
+                        &signer_policy(None, "recovery-r"),
+                    )
+                    .await,
+                Err(StorageError::TrustPackageSignerChange(_))
+            ));
+            assert_eq!(
+                storage
+                    .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                    .await
+                    .unwrap()[0]
+                    .anchor
+                    .id,
+                bootstrap_anchor.id
+            );
+
+            // The backward-compatible API may advance the current signer but
+            // cannot erase or create signer transition policy.
+            let legacy_current =
+                package_provenance(domain, 2, "2.0.0", 2, "signer-a", 'c');
+            let current_anchor = trust_anchor(
+                &[3, 3, 3],
+                TrustAnchorType::Iaca,
+                "current",
+                legacy_current.created_at,
+            );
+            storage
+                .apply_trust_package(
+                    &legacy_current,
+                    std::slice::from_ref(&current_anchor),
+                    &[],
+                )
+                .await
+                .unwrap();
+            {
+                let conn = storage.conn.lock().await;
+                assert_eq!(
+                    stored_signer_state(&conn, domain),
+                    (
+                        2,
+                        "signer-a".to_string(),
+                        Some("signer-b".to_string()),
+                        Some("recovery-r".to_string())
+                    )
+                );
+            }
+
+            let next = package_provenance(domain, 3, "3.0.0", 3, "signer-b", 'd');
+            let next_anchor = trust_anchor(
+                &[4, 4, 4],
+                TrustAnchorType::Iaca,
+                "next",
+                next.created_at,
+            );
+            storage
+                .apply_trust_package_with_signer_policy(
+                    &next,
+                    std::slice::from_ref(&next_anchor),
+                    &[],
+                    &signer_policy(None, "recovery-r"),
+                )
+                .await
+                .unwrap();
+
+            let old_signer = package_provenance(domain, 4, "4.0.0", 4, "signer-a", 'e');
+            assert!(matches!(
+                storage.apply_trust_package(&old_signer, &[], &[]).await,
+                Err(StorageError::TrustPackageSignerChange(_))
+            ));
+
+            let recovery_without_next =
+                package_provenance(domain, 4, "4.0.0", 4, "recovery-r", 'f');
+            assert!(matches!(
+                storage
+                    .apply_trust_package_with_signer_policy(
+                        &recovery_without_next,
+                        &[],
+                        &[],
+                        &signer_policy(None, "recovery-r"),
+                    )
+                    .await,
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("recovery-signed package")
+            ));
+            {
+                let conn = storage.conn.lock().await;
+                assert_eq!(
+                    stored_signer_state(&conn, domain),
+                    (
+                        3,
+                        "signer-b".to_string(),
+                        None,
+                        Some("recovery-r".to_string())
+                    )
+                );
+            }
+
+            let recovery = package_provenance(domain, 4, "4.0.0", 4, "recovery-r", '0');
+            let recovery_anchor = trust_anchor(
+                &[5, 5, 5],
+                TrustAnchorType::Iaca,
+                "recovery",
+                recovery.created_at,
+            );
+            storage
+                .apply_trust_package_with_signer_policy(
+                    &recovery,
+                    std::slice::from_ref(&recovery_anchor),
+                    &[],
+                    &signer_policy(Some("signer-c"), "recovery-r"),
+                )
+                .await
+                .unwrap();
+
+            let recovered = package_provenance(domain, 5, "5.0.0", 5, "signer-c", '1');
+            let recovered_anchor = trust_anchor(
+                &[6, 6, 6],
+                TrustAnchorType::Iaca,
+                "recovered",
+                recovered.created_at,
+            );
+            storage
+                .apply_trust_package_with_signer_policy(
+                    &recovered,
+                    std::slice::from_ref(&recovered_anchor),
+                    &[],
+                    &signer_policy(None, "recovery-r"),
+                )
+                .await
+                .unwrap();
+
+            let changed_recovery =
+                package_provenance(domain, 6, "6.0.0", 6, "signer-c", '2');
+            assert!(matches!(
+                storage
+                    .apply_trust_package_with_signer_policy(
+                        &changed_recovery,
+                        &[],
+                        &[],
+                        &signer_policy(None, "recovery-x"),
+                    )
+                    .await,
+                Err(StorageError::TrustPackageSignerChange(_))
+            ));
+
+            let records = storage
+                .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                .await
+                .unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].anchor.id, recovered_anchor.id);
+            assert_eq!(records[0].provenance.as_ref(), Some(&recovered));
+            let conn = storage.conn.lock().await;
+            assert_eq!(
+                stored_signer_state(&conn, domain),
+                (
+                    5,
+                    "signer-c".to_string(),
+                    None,
+                    Some("recovery-r".to_string())
+                )
+            );
+            let signer_roles: Vec<String> = conn
+                .prepare(
+                    "SELECT details FROM audit_log WHERE event_type = 'trust_package_applied' ORDER BY created_at",
+                )
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .map(|details| {
+                    serde_json::from_str::<Value>(&details.unwrap()).unwrap()["signer_role"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            assert_eq!(
+                signer_roles,
+                ["bootstrap", "current", "next", "recovery", "next"]
+            );
+            conn.execute(
+                "UPDATE trust_packages SET next_signer_key_id = signer_key_id WHERE trust_domain = ?",
+                [domain],
+            )
+            .unwrap();
+            drop(conn);
+
+            assert!(matches!(
+                storage
+                    .get_trust_anchor_records(TrustAnchorType::Iaca, None)
+                    .await,
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("signer roles are not distinct")
+            ));
+            let after_policy_corruption =
+                package_provenance(domain, 6, "6.0.0", 6, "signer-c", '3');
+            assert!(matches!(
+                storage
+                    .apply_trust_package_with_signer_policy(
+                        &after_policy_corruption,
+                        &[],
+                        &[],
+                        &signer_policy(None, "recovery-r"),
+                    )
+                    .await,
+                Err(StorageError::InvalidTrustPackage(message))
+                    if message.contains("signer roles are not distinct")
+            ));
+            let conn = storage.conn.lock().await;
+            assert_eq!(stored_signer_state(&conn, domain).0, 5);
         });
     }
 
@@ -3204,6 +3678,17 @@ mod tests {
                 .unwrap();
             assert_eq!(package_table, 1);
             assert!(column_exists(&conn, "trust_packages", "package_expires_at").unwrap());
+            assert!(column_exists(&conn, "trust_packages", "next_signer_key_id").unwrap());
+            assert!(column_exists(&conn, "trust_packages", "recovery_signer_key_id").unwrap());
+            assert_eq!(
+                conn.query_row(
+                    "SELECT next_signer_key_id, recovery_signer_key_id FROM trust_packages WHERE trust_domain = 'usb:migrated'",
+                    [],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .unwrap(),
+                (None, None)
+            );
             assert!(!table_exists(&conn, "open_badge_trust_packages").unwrap());
             assert!(matches!(
                 load_open_badge_package_provenance(&conn, "usb:migrated"),
