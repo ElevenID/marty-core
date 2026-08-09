@@ -186,13 +186,7 @@ pub async fn verify_ob3_json_async(request_json: &str) -> VerificationResult<Str
     }
 
     // Credential status check (revocation)
-    check_credential_status(
-        &req.credential,
-        &store,
-        &mut errors,
-        &mut error_codes_out,
-        &mut warnings,
-    );
+    check_credential_status(&req.credential, &store, &mut errors, &mut error_codes_out);
 
     let normalized = normalize_ob3(&req.credential);
 
@@ -429,7 +423,6 @@ fn check_credential_status(
     document_store: &super::types::DocumentStore,
     errors: &mut Vec<String>,
     error_codes_out: &mut Vec<String>,
-    warnings: &mut Vec<String>,
 ) {
     let Some(status) = credential.get("credentialStatus") else {
         // No credentialStatus field - nothing to check
@@ -442,6 +435,16 @@ fn check_credential_status(
         _ => vec![status],
     };
 
+    if statuses.is_empty() {
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+            "Credential status array must not be empty",
+        );
+        return;
+    }
+
     for status_entry in statuses {
         let status_type = status_entry
             .get("type")
@@ -450,31 +453,26 @@ fn check_credential_status(
 
         match status_type {
             "StatusList2021Entry" | "BitstringStatusListEntry" => {
-                check_status_list_entry(
-                    status_entry,
-                    document_store,
-                    errors,
-                    error_codes_out,
-                    warnings,
-                );
+                check_status_list_entry(status_entry, document_store, errors, error_codes_out);
             }
             "RevocationList2020Status" => {
-                check_revocation_list_2020(
-                    status_entry,
-                    document_store,
-                    errors,
-                    error_codes_out,
-                    warnings,
-                );
+                check_revocation_list_2020(status_entry, document_store, errors, error_codes_out);
             }
             _ if !status_type.is_empty() => {
-                warnings.push(format!(
-                    "Unsupported credential status type '{}', skipping revocation check",
-                    status_type
-                ));
+                push_error(
+                    errors,
+                    error_codes_out,
+                    error_codes::OPEN_BADGES_UNSUPPORTED,
+                    format!("Unsupported credential status type '{status_type}'"),
+                );
             }
             _ => {
-                warnings.push("Credential status entry missing 'type' field".to_string());
+                push_error(
+                    errors,
+                    error_codes_out,
+                    error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+                    "Credential status entry missing 'type' field",
+                );
             }
         }
     }
@@ -486,7 +484,6 @@ fn check_status_list_entry(
     document_store: &super::types::DocumentStore,
     errors: &mut Vec<String>,
     error_codes_out: &mut Vec<String>,
-    warnings: &mut Vec<String>,
 ) {
     let status_list_credential = status_entry
         .get("statusListCredential")
@@ -507,21 +504,33 @@ fn check_status_list_entry(
         .unwrap_or("revocation");
 
     let Some(list_url) = status_list_credential else {
-        warnings.push("StatusList entry missing 'statusListCredential' URL".to_string());
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+            "StatusList entry missing 'statusListCredential' URL",
+        );
         return;
     };
 
     let Some(index) = status_list_index else {
-        warnings.push("StatusList entry missing or invalid 'statusListIndex'".to_string());
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+            "StatusList entry missing or invalid 'statusListIndex'",
+        );
         return;
     };
 
     // Look up the status list credential in the document store
     let Some(status_list_doc) = document_store.get(list_url) else {
-        warnings.push(format!(
-            "StatusList credential '{}' not found in document store, unable to verify revocation status",
-            list_url
-        ));
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_DOCUMENT_MISSING,
+            format!("StatusList credential '{list_url}' not found in document store"),
+        );
         return;
     };
 
@@ -532,7 +541,12 @@ fn check_status_list_entry(
         .and_then(|v| v.as_str());
 
     let Some(encoded) = encoded_list else {
-        warnings.push("StatusList credential missing 'credentialSubject.encodedList'".to_string());
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+            "StatusList credential missing 'credentialSubject.encodedList'",
+        );
         return;
     };
 
@@ -552,7 +566,12 @@ fn check_status_list_entry(
             }
         }
         Err(e) => {
-            warnings.push(format!("Failed to decode status list: {}", e));
+            push_error(
+                errors,
+                error_codes_out,
+                error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+                format!("Failed to decode status list: {e}"),
+            );
         }
     }
 }
@@ -598,7 +617,6 @@ fn check_revocation_list_2020(
     document_store: &super::types::DocumentStore,
     errors: &mut Vec<String>,
     error_codes_out: &mut Vec<String>,
-    warnings: &mut Vec<String>,
 ) {
     let revocation_list_credential = status_entry
         .get("revocationListCredential")
@@ -610,23 +628,33 @@ fn check_revocation_list_2020(
     });
 
     let Some(list_url) = revocation_list_credential else {
-        warnings
-            .push("RevocationList2020 entry missing 'revocationListCredential' URL".to_string());
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+            "RevocationList2020 entry missing 'revocationListCredential' URL",
+        );
         return;
     };
 
     let Some(index) = revocation_list_index else {
-        warnings
-            .push("RevocationList2020 entry missing or invalid 'revocationListIndex'".to_string());
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+            "RevocationList2020 entry missing or invalid 'revocationListIndex'",
+        );
         return;
     };
 
     // Look up in document store
     let Some(revocation_list_doc) = document_store.get(list_url) else {
-        warnings.push(format!(
-            "RevocationList credential '{}' not found in document store, unable to verify revocation status",
-            list_url
-        ));
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_DOCUMENT_MISSING,
+            format!("RevocationList credential '{list_url}' not found in document store"),
+        );
         return;
     };
 
@@ -654,8 +682,108 @@ fn check_revocation_list_2020(
             );
         }
     } else {
-        warnings.push(
-            "RevocationList credential missing 'credentialSubject.revokedCredentials'".to_string(),
+        push_error(
+            errors,
+            error_codes_out,
+            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+            "RevocationList credential missing 'credentialSubject.revokedCredentials'",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_status(credential_status: Option<Value>, store: &DocumentStore) -> Vec<String> {
+        let mut credential = json!({});
+        if let Some(status) = credential_status {
+            credential["credentialStatus"] = status;
+        }
+
+        let mut errors = Vec::new();
+        let mut error_codes = Vec::new();
+        check_credential_status(&credential, store, &mut errors, &mut error_codes);
+        error_codes
+    }
+
+    #[test]
+    fn absent_status_does_not_create_a_status_failure() {
+        assert!(check_status(None, &DocumentStore::new()).is_empty());
+    }
+
+    #[test]
+    fn empty_or_unsupported_status_cannot_pass() {
+        assert_eq!(
+            check_status(Some(json!([])), &DocumentStore::new()),
+            vec![error_codes::OPEN_BADGES_STATUS_CHECK_FAILED]
+        );
+        assert_eq!(
+            check_status(
+                Some(json!({ "type": "UnsupportedStatusMethod" })),
+                &DocumentStore::new(),
+            ),
+            vec![error_codes::OPEN_BADGES_UNSUPPORTED]
+        );
+    }
+
+    #[test]
+    fn missing_status_list_document_cannot_pass() {
+        let status = json!({
+            "type": "StatusList2021Entry",
+            "statusListCredential": "https://issuer.example/status/1",
+            "statusListIndex": "1"
+        });
+
+        assert_eq!(
+            check_status(Some(status), &DocumentStore::new()),
+            vec![error_codes::OPEN_BADGES_DOCUMENT_MISSING]
+        );
+    }
+
+    #[test]
+    fn malformed_or_undecodable_status_list_cannot_pass() {
+        let list_url = "https://issuer.example/status/1";
+        let mut store = DocumentStore::new();
+        store.insert(
+            list_url.to_string(),
+            json!({ "credentialSubject": { "encodedList": "not-base64!" } }),
+        );
+
+        let missing_index = json!({
+            "type": "StatusList2021Entry",
+            "statusListCredential": list_url
+        });
+        assert_eq!(
+            check_status(Some(missing_index), &store),
+            vec![error_codes::OPEN_BADGES_STATUS_CHECK_FAILED]
+        );
+
+        let invalid_list = json!({
+            "type": "StatusList2021Entry",
+            "statusListCredential": list_url,
+            "statusListIndex": "1"
+        });
+        assert_eq!(
+            check_status(Some(invalid_list), &store),
+            vec![error_codes::OPEN_BADGES_STATUS_CHECK_FAILED]
+        );
+    }
+
+    #[test]
+    fn malformed_revocation_list_cannot_pass() {
+        let list_url = "https://issuer.example/revocations/1";
+        let mut store = DocumentStore::new();
+        store.insert(list_url.to_string(), json!({ "credentialSubject": {} }));
+        let status = json!({
+            "type": "RevocationList2020Status",
+            "revocationListCredential": list_url,
+            "revocationListIndex": "1"
+        });
+
+        assert_eq!(
+            check_status(Some(status), &store),
+            vec![error_codes::OPEN_BADGES_STATUS_CHECK_FAILED]
         );
     }
 }
