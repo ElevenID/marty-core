@@ -98,6 +98,7 @@ pub enum VerificationCategoryOutcome {
 
 /// Privacy-minimized input for one verification check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationCheckResult {
     pub check_id: String,
     pub category: VerificationCheckCategory,

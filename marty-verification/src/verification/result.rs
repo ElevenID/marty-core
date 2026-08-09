@@ -26,6 +26,7 @@ pub enum VerificationContextMode {
 
 /// Tenant and transaction scope in which verification was authorized.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationDecisionContext {
     pub mode: VerificationContextMode,
     pub verifier_id: String,
@@ -41,6 +42,7 @@ pub struct VerificationDecisionContext {
 
 /// Versioned policy or trust profile used by a decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationProfileReference {
     pub id: String,
     pub version: String,
@@ -49,6 +51,7 @@ pub struct VerificationProfileReference {
 
 /// Exact software or adapter artifact that produced verification evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationComponentVersion {
     pub component_id: String,
     pub version: String,
@@ -70,7 +73,8 @@ pub struct VerificationReducerReference {
 ///
 /// Decision, decision code, legacy validity, reducer identity, and category
 /// summaries are intentionally absent because callers cannot set them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationDecisionResultInput {
     pub verification_id: String,
     pub context: VerificationDecisionContext,

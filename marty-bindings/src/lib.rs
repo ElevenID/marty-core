@@ -17,6 +17,27 @@ fn to_pyerr(err: impl std::fmt::Display) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string())
 }
 
+fn verification_build_decision_result_impl(input_json: &str) -> Result<String, String> {
+    let input: marty_verification::verification::VerificationDecisionResultInput =
+        serde_json::from_str(input_json)
+            .map_err(|error| format!("invalid canonical verification input: {error}"))?;
+    let result = marty_verification::verification::build_verification_decision_result(input)
+        .map_err(|error| error.to_string())?;
+    serde_json::to_string(&result)
+        .map_err(|error| format!("canonical verification result serialization failed: {error}"))
+}
+
+/// Build the canonical verification decision result from caller-supplied facts.
+///
+/// The input intentionally has no decision, validity, reducer, or summary fields.
+/// Unknown fields are rejected rather than ignored. The returned JSON is produced
+/// by the sole Rust reducer and canonical result builder.
+#[pyfunction]
+fn verification_build_decision_result(input_json: &str) -> PyResult<String> {
+    verification_build_decision_result_impl(input_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 // ============================================================================
 // Key Generation
 // ============================================================================
@@ -1465,6 +1486,7 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_data_integrity, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(verification_build_decision_result, m)?)?;
     m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
     m.add_function(wrap_pyfunction!(
         complete_vcdm_data_integrity_credential,
@@ -1526,6 +1548,123 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn canonical_verification_input() -> serde_json::Value {
+        serde_json::json!({
+            "verification_id": "verification-123",
+            "context": {
+                "mode": "ONLINE",
+                "verifier_id": "verifier:example",
+                "organization_id": "123e4567-e89b-42d3-a456-426614174000",
+                "transaction_id": "transaction-example-001",
+                "audience": "https://verifier.example"
+            },
+            "processing_status": "COMPLETED",
+            "evaluated_at": "2026-08-08T23:30:00Z",
+            "input_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "evidence_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "policy": {
+                "id": "policy.example",
+                "version": "1.0.0",
+                "content_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            },
+            "trust_profile": {
+                "id": "trust.example",
+                "version": "1.0.0",
+                "content_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            },
+            "components": [{
+                "component_id": "marty-verification",
+                "version": "0.1.35",
+                "artifact_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+                "adapter_id": "oid4vp",
+                "adapter_version": "1.0.0"
+            }],
+            "checks": [{
+                "check_id": "credential.proof",
+                "category": "CREDENTIAL_PROOF",
+                "required": true,
+                "outcome": "PASSED",
+                "code": "CREDENTIAL_SIGNATURE_VALID",
+                "component_id": "marty-verification",
+                "evaluated_at": "2026-08-08T23:30:00Z",
+                "evidence_refs": [
+                    "urn:marty:evidence:123e4567-e89b-42d3-a456-426614174000"
+                ]
+            }]
+        })
+    }
+
+    #[test]
+    fn canonical_verification_binding_derives_the_result() {
+        let input = canonical_verification_input().to_string();
+        let output = verification_build_decision_result_impl(&input).expect("canonical result");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("result JSON");
+
+        assert_eq!(result["decision"], "PASS");
+        assert_eq!(result["decision_code"], "ALL_REQUIRED_CHECKS_PASSED");
+        assert_eq!(result["valid"], true);
+        assert_eq!(
+            result["reducer"]["reducer_id"],
+            "mip.required-check-reducer"
+        );
+        assert_eq!(result["reducer"]["version"], "1.0.0");
+    }
+
+    #[test]
+    fn canonical_verification_binding_rejects_derived_and_unknown_fields() {
+        for (path, value) in [
+            ("schema_version", serde_json::json!("1.0.0")),
+            ("decision", serde_json::json!("PASS")),
+            (
+                "decision_code",
+                serde_json::json!("ALL_REQUIRED_CHECKS_PASSED"),
+            ),
+            ("valid", serde_json::json!(true)),
+            (
+                "reducer",
+                serde_json::json!({"reducer_id": "caller", "version": "9"}),
+            ),
+            ("category_summaries", serde_json::json!([])),
+        ] {
+            let mut input = canonical_verification_input();
+            input
+                .as_object_mut()
+                .expect("input object")
+                .insert(path.to_owned(), value);
+            let error = verification_build_decision_result_impl(&input.to_string())
+                .expect_err("caller-derived field must fail");
+            assert!(error.contains("unknown field"), "unexpected error: {error}");
+        }
+
+        for pointer in [
+            "/context",
+            "/policy",
+            "/trust_profile",
+            "/components/0",
+            "/checks/0",
+        ] {
+            let mut nested = canonical_verification_input();
+            nested
+                .pointer_mut(pointer)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("nested input object")
+                .insert("caller_field".to_owned(), serde_json::json!("caller text"));
+            let error = verification_build_decision_result_impl(&nested.to_string())
+                .expect_err("unknown nested field must fail");
+            assert!(error.contains("unknown field"), "unexpected error: {error}");
+        }
+    }
+
+    #[test]
+    fn canonical_verification_binding_rejects_semantic_evidence_references() {
+        let mut input = canonical_verification_input();
+        input["checks"][0]["evidence_refs"] =
+            serde_json::json!(["urn:marty:evidence:customer-123"]);
+        let error = verification_build_decision_result_impl(&input.to_string())
+            .expect_err("semantic evidence reference must fail");
+        assert!(error.contains("opaque canonical Marty evidence UUID URN"));
+    }
 
     // ====================================================================
     // Helper function tests (pure Rust — no Python interpreter needed)
