@@ -31,6 +31,7 @@ RELEASE_DELETION_PATTERNS = (
     re.compile(r"\bDELETE\s+/repos/[^\r\n]+/releases(?:/|\b)", re.IGNORECASE),
 )
 CAPABILITY_LIFECYCLE = ROOT / "capability-lifecycle.json"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 def load_toml(path: Path) -> dict[str, object]:
@@ -129,6 +130,28 @@ def check_native_build_cache_scope() -> list[str]:
             f"architecture, and Rust toolchain; missing {', '.join(missing)}"
         ]
     return []
+
+
+def check_release_checksum_policy(workflow_text: str | None = None) -> list[str]:
+    contents = (
+        workflow_text
+        if workflow_text is not None
+        else RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    )
+    errors: list[str] = []
+    if "find . -type f ! -name SHA256SUMS -print0" not in contents:
+        errors.append(
+            ".github/workflows/release.yml: checksum manifest must exclude itself"
+        )
+    if "find . -type f -print0" in contents:
+        errors.append(
+            ".github/workflows/release.yml: unfiltered checksum discovery includes the manifest"
+        )
+    if "sha256sum --check --strict SHA256SUMS" not in contents:
+        errors.append(
+            ".github/workflows/release.yml: checksum manifest must verify before publication"
+        )
+    return errors
 
 
 def check_capability_lifecycle(as_of: date | None = None) -> list[str]:
@@ -230,6 +253,7 @@ def main() -> int:
         *check_python_versions(),
         *check_release_asset_policy(),
         *check_native_build_cache_scope(),
+        *check_release_checksum_policy(),
         *check_capability_lifecycle(),
     ]
     if errors:
@@ -243,6 +267,9 @@ def main() -> int:
     print(f"release-contract: Cargo-derived Python versions verified ({resolved})")
     print("release-contract: workflows contain no release-asset deletion operations")
     print("release-contract: Cargo target caches are platform and toolchain scoped")
+    print(
+        "release-contract: checksum manifest excludes itself and verifies listed assets"
+    )
     print("release-contract: temporary capability lifecycle policy is current")
     return 0
 
