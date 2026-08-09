@@ -170,6 +170,7 @@ pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
         errors,
         error_codes: error_codes_out,
         warnings,
+        status_checks: Vec::new(),
         normalized: Some(normalized),
     };
 

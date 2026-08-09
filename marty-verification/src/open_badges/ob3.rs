@@ -213,7 +213,7 @@ pub async fn verify_ob3_json_with_status_lists_async(
         ),
     }
 
-    check_credential_status(
+    let status_checks = check_credential_status(
         &req.credential,
         authenticated_status_lists,
         &mut errors,
@@ -230,6 +230,7 @@ pub async fn verify_ob3_json_with_status_lists_async(
         errors,
         error_codes: error_codes_out,
         warnings,
+        status_checks,
         normalized: Some(normalized),
     };
 

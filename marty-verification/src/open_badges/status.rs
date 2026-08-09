@@ -15,7 +15,7 @@ use super::ob3::{
     collect_verification_methods, credential_issuer, push_error,
     validate_issuer_proof_authorization, AnyCredential,
 };
-use super::types::AuthenticatedStatusList;
+use super::types::{AuthenticatedStatusList, OpenBadgeStatusCheck, OpenBadgeStatusOutcome};
 
 const MAX_STATUS_ENTRIES: usize = 32;
 const MAX_AUTHENTICATED_LISTS: usize = 32;
@@ -31,9 +31,9 @@ pub(super) async fn check_credential_status(
     errors: &mut Vec<String>,
     error_codes_out: &mut Vec<String>,
     warnings: &mut Vec<String>,
-) {
+) -> Vec<OpenBadgeStatusCheck> {
     let Some(status) = credential.get("credentialStatus") else {
-        return;
+        return Vec::new();
     };
 
     let statuses: Vec<&Value> = match status {
@@ -47,27 +47,31 @@ pub(super) async fn check_credential_status(
             error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
             "Credential status must contain between 1 and 32 entries",
         );
-        return;
+        return Vec::new();
     }
 
     let Some(status_lists) =
         authenticated_list_map(authenticated_status_lists, errors, error_codes_out)
     else {
-        return;
+        return Vec::new();
     };
 
+    let mut status_checks = Vec::new();
     for status_entry in statuses {
         let status_type = status_entry.get("type").and_then(Value::as_str);
         match status_type {
             Some("BitstringStatusListEntry") => {
-                check_bitstring_status_entry(
+                if let Some(status_check) = check_bitstring_status_entry(
                     status_entry,
                     &status_lists,
                     errors,
                     error_codes_out,
                     warnings,
                 )
-                .await;
+                .await
+                {
+                    status_checks.push(status_check);
+                }
             }
             Some(unsupported) => push_error(
                 errors,
@@ -85,6 +89,7 @@ pub(super) async fn check_credential_status(
             ),
         }
     }
+    status_checks
 }
 
 fn authenticated_list_map<'a>(
@@ -126,7 +131,7 @@ async fn check_bitstring_status_entry(
     errors: &mut Vec<String>,
     error_codes_out: &mut Vec<String>,
     warnings: &mut Vec<String>,
-) {
+) -> Option<OpenBadgeStatusCheck> {
     let entry = match parse_status_entry(status_entry) {
         Ok(entry) => entry,
         Err(message) => {
@@ -136,7 +141,7 @@ async fn check_bitstring_status_entry(
                 error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
                 message,
             );
-            return;
+            return None;
         }
     };
 
@@ -150,7 +155,7 @@ async fn check_bitstring_status_entry(
                 entry.list_url
             ),
         );
-        return;
+        return None;
     };
 
     let now = Utc::now();
@@ -164,7 +169,7 @@ async fn check_bitstring_status_entry(
                 entry.list_url
             ),
         );
-        return;
+        return None;
     }
 
     let status_list = authenticated.credential();
@@ -173,7 +178,7 @@ async fn check_bitstring_status_entry(
             Ok(valid_until) => valid_until,
             Err((code, message)) => {
                 push_error(errors, error_codes_out, code, message);
-                return;
+                return None;
             }
         };
     if authenticated.fresh_until() > signed_valid_until {
@@ -183,7 +188,7 @@ async fn check_bitstring_status_entry(
             error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
             "Status-list cache freshness cannot extend its signed validity period",
         );
-        return;
+        return None;
     }
 
     let mut authorization_errors = Vec::new();
@@ -205,7 +210,7 @@ async fn check_bitstring_status_entry(
                 authenticated.trusted_issuer()
             ),
         );
-        return;
+        return None;
     }
 
     let secured_status_list: AnyCredential = match serde_json::from_value(status_list.clone()) {
@@ -217,7 +222,7 @@ async fn check_bitstring_status_entry(
                 error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
                 format!("Invalid status-list credential: {error}"),
             );
-            return;
+            return None;
         }
     };
     let loader = match open_badges_context_loader() {
@@ -229,7 +234,7 @@ async fn check_bitstring_status_entry(
                 error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
                 format!("Unable to load pinned status-list contexts: {error}"),
             );
-            return;
+            return None;
         }
     };
     let parameters =
@@ -243,7 +248,7 @@ async fn check_bitstring_status_entry(
                 error_codes::OPEN_BADGES_PROOF_INVALID,
                 format!("Status-list credential proof is invalid: {invalid}"),
             );
-            return;
+            return None;
         }
         Err(error) => {
             push_error(
@@ -252,7 +257,7 @@ async fn check_bitstring_status_entry(
                 error_codes::OPEN_BADGES_PROOF_INVALID,
                 format!("Status-list credential proof verification failed: {error}"),
             );
-            return;
+            return None;
         }
     }
 
@@ -268,35 +273,63 @@ async fn check_bitstring_status_entry(
             error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
             "Status-list credential missing encodedList",
         );
-        return;
+        return None;
     };
-    match decode_status_value(encoded_list, entry.index, entry.status_size) {
-        Ok(0) => {}
-        Ok(value) if entry.purpose == "revocation" => push_error(
+    let status_value = match decode_status_value(encoded_list, entry.index, entry.status_size) {
+        Ok(value) => value,
+        Err(message) => {
+            push_error(
+                errors,
+                error_codes_out,
+                error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
+                message,
+            );
+            return None;
+        }
+    };
+    let outcome = if status_value == 0 {
+        OpenBadgeStatusOutcome::Good
+    } else if entry.purpose == "revocation" {
+        push_error(
             errors,
             error_codes_out,
             error_codes::OPEN_BADGES_REVOKED,
             format!(
-                "Credential has been revoked (statusListIndex: {}, status: 0x{value:x})",
+                "Credential has been revoked (statusListIndex: {}, status: 0x{status_value:x})",
                 entry.index
             ),
-        ),
-        Ok(value) => push_error(
+        );
+        OpenBadgeStatusOutcome::Revoked
+    } else {
+        push_error(
             errors,
             error_codes_out,
             error_codes::OPEN_BADGES_STATUS_ASSERTED,
             format!(
-                "Credential status '{}' is asserted at index {} with value 0x{value:x}",
+                "Credential status '{}' is asserted at index {} with value 0x{status_value:x}",
                 entry.purpose, entry.index
             ),
-        ),
-        Err(message) => push_error(
-            errors,
-            error_codes_out,
-            error_codes::OPEN_BADGES_STATUS_CHECK_FAILED,
-            message,
-        ),
-    }
+        );
+        if entry.purpose == "suspension" {
+            OpenBadgeStatusOutcome::Suspended
+        } else {
+            OpenBadgeStatusOutcome::Message
+        }
+    };
+
+    Some(OpenBadgeStatusCheck {
+        status_list_url: entry.list_url.to_string(),
+        status_issuer: authenticated.trusted_issuer().to_string(),
+        status_purpose: entry.purpose.to_string(),
+        status_list_index: entry.index,
+        status_size: entry.status_size,
+        status_value,
+        outcome,
+        checked_at: now,
+        retrieved_at: authenticated.retrieved_at(),
+        fresh_until: authenticated.fresh_until(),
+        authority_provenance: authenticated.provenance().clone(),
+    })
 }
 
 struct ParsedStatusEntry<'a> {
@@ -859,6 +892,13 @@ mod tests {
             );
             assert_eq!(result["valid"], true, "{result:#}");
             assert!(result.get("error_codes").is_none(), "{result:#}");
+            assert_eq!(result["status_checks"].as_array().map(Vec::len), Some(1));
+            assert_eq!(result["status_checks"][0]["outcome"], "GOOD");
+            assert_eq!(result["status_checks"][0]["status_value"], 0);
+            assert_eq!(
+                result["status_checks"][0]["authority_provenance"]["trust_profile"]["id"],
+                "trust-profile"
+            );
         });
     }
 
@@ -875,6 +915,8 @@ mod tests {
                 .expect("verify revoked status"),
             );
             assert!(has_code(&result, error_codes::OPEN_BADGES_REVOKED));
+            assert_eq!(result["status_checks"][0]["outcome"], "REVOKED");
+            assert_eq!(result["status_checks"][0]["status_value"], 1);
 
             let suspended = Fixture::new("suspension", 1, 1).await;
             let result = result_value(
@@ -886,6 +928,7 @@ mod tests {
                 .expect("verify suspended status"),
             );
             assert!(has_code(&result, error_codes::OPEN_BADGES_STATUS_ASSERTED));
+            assert_eq!(result["status_checks"][0]["outcome"], "SUSPENDED");
 
             let message = Fixture::new("message", 2, 2).await;
             let result = result_value(
@@ -897,6 +940,8 @@ mod tests {
                 .expect("verify multi-bit status"),
             );
             assert!(has_code(&result, error_codes::OPEN_BADGES_STATUS_ASSERTED));
+            assert_eq!(result["status_checks"][0]["outcome"], "MESSAGE");
+            assert_eq!(result["status_checks"][0]["status_value"], 2);
         });
     }
 
@@ -925,6 +970,7 @@ mod tests {
                 &result,
                 error_codes::OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED
             ));
+            assert!(result.get("status_checks").is_none());
 
             let mut bad_proof = fixture.status_list.clone();
             bad_proof["proof"]["proofValue"] = json!("zBadProof");
@@ -940,6 +986,7 @@ mod tests {
                     .expect("reject bad status proof"),
             );
             assert!(has_code(&result, error_codes::OPEN_BADGES_PROOF_INVALID));
+            assert!(result.get("status_checks").is_none());
 
             let wrong_jwk = JWK::generate_ed25519().expect("generate wrong status key");
             let mut wrong_authority_documents = fixture.status_documents.clone();

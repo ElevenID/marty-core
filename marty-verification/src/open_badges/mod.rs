@@ -55,8 +55,9 @@ pub use ob3::{
 };
 pub use suite_wrapper::OpenBadgeSuite;
 pub use types::{
-    ArtifactProvenance, AuthenticatedStatusList, DocumentStore, OpenBadgesIssueResult,
-    OpenBadgesVerificationResult, OpenBadgesVersion, StatusAuthorityProvenance,
+    ArtifactProvenance, AuthenticatedStatusList, DocumentStore, OpenBadgeStatusCheck,
+    OpenBadgeStatusOutcome, OpenBadgesIssueResult, OpenBadgesVerificationResult, OpenBadgesVersion,
+    StatusAuthorityProvenance,
 };
 pub use x509_suite::X509Signature2021;
 pub use x509_verification_method::X509VerificationKey2021;

@@ -276,8 +276,40 @@ pub struct OpenBadgesVerificationResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub error_codes: Vec<String>,
     pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub status_checks: Vec<OpenBadgeStatusCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized: Option<Value>,
+}
+
+/// Authenticated outcome of one Open Badge status-list entry.
+///
+/// This evidence is emitted only after the status-list credential proof,
+/// authority, binding, signed validity, cache freshness, and bit value have all
+/// been checked. Invalid or unavailable inputs remain represented by stable
+/// error codes and cannot create a positive status record.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct OpenBadgeStatusCheck {
+    pub status_list_url: String,
+    pub status_issuer: String,
+    pub status_purpose: String,
+    pub status_list_index: u64,
+    pub status_size: u8,
+    pub status_value: u16,
+    pub outcome: OpenBadgeStatusOutcome,
+    pub checked_at: DateTime<Utc>,
+    pub retrieved_at: DateTime<Utc>,
+    pub fresh_until: DateTime<Utc>,
+    pub authority_provenance: StatusAuthorityProvenance,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum OpenBadgeStatusOutcome {
+    Good,
+    Revoked,
+    Suspended,
+    Message,
 }
 
 #[derive(Debug, Serialize)]
