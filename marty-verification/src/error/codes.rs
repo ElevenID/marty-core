@@ -191,6 +191,12 @@ pub const OPEN_BADGES_STATUS_CHECK_FAILED: &str = "E708";
 /// E709: Open Badges issuer proof is not authorized for credential assertions.
 pub const OPEN_BADGES_ISSUER_UNAUTHORIZED: &str = "E709";
 
+/// E710: The status-list issuer or its provenance is not authenticated.
+pub const OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED: &str = "E710";
+
+/// E711: A supported non-revocation status purpose has a non-zero value.
+pub const OPEN_BADGES_STATUS_ASSERTED: &str = "E711";
+
 //=========================================================================
 // I/O and general errors (9xx) - General errors
 //=========================================================================
@@ -337,6 +343,8 @@ pub fn error_codes_markdown() -> String {
     md.push_str("| E707 | `OPEN_BADGES_REVOKED` | Open Badges credential has been revoked |\n");
     md.push_str("| E708 | `OPEN_BADGES_STATUS_CHECK_FAILED` | Open Badges credential status check failed |\n");
     md.push_str("| E709 | `OPEN_BADGES_ISSUER_UNAUTHORIZED` | Open Badges issuer proof is not authorized for credential assertions |\n");
+    md.push_str("| E710 | `OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED` | Open Badges status authority is not authenticated |\n");
+    md.push_str("| E711 | `OPEN_BADGES_STATUS_ASSERTED` | Open Badges credential has a non-zero status value |\n");
     md.push('\n');
 
     md.push_str("## DTC Errors (E8xx)\n\n");
