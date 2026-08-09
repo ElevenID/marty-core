@@ -352,18 +352,6 @@ fn validate_check(
     validate_code(&format!("{prefix}.code"), &check.code)?;
     validate_lower_id(&format!("{prefix}.component_id"), &check.component_id, 64)?;
     let evaluated_at = validate_datetime(&format!("{prefix}.evaluated_at"), &check.evaluated_at)?;
-    if let Some(message) = &check.safe_message {
-        validate_bounded_text(&format!("{prefix}.safe_message"), message, 1, 256)?;
-        if message
-            .chars()
-            .any(|character| character <= '\u{001f}' || character == '\u{007f}')
-        {
-            return invalid(
-                &format!("{prefix}.safe_message"),
-                "must not contain control characters",
-            );
-        }
-    }
     if check.evidence_refs.len() > MAX_CHECK_EVIDENCE_REFS {
         return invalid(
             &format!("{prefix}.evidence_refs"),
@@ -441,19 +429,21 @@ fn validate_check_id(field: &str, value: &str) -> Result<(), VerificationDecisio
 
 fn validate_evidence_ref(field: &str, value: &str) -> Result<(), VerificationDecisionResultError> {
     const PREFIX: &str = "urn:marty:evidence:";
-    if value.len() < 20 || value.len() > 224 || !value.is_ascii() {
-        return invalid(field, "must be a bounded Marty evidence URN");
-    }
     let Some(tail) = value.strip_prefix(PREFIX) else {
-        return invalid(field, "must be a bounded Marty evidence URN");
+        return invalid(field, "must be an opaque canonical Marty evidence UUID URN");
     };
-    if tail.len() < 2
-        || !tail.bytes().enumerate().all(|(index, byte)| {
-            byte.is_ascii_alphanumeric()
-                || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'/' | b'-'))
-        })
+    if tail.len() != 36 {
+        return invalid(field, "must be an opaque canonical Marty evidence UUID URN");
+    }
+    let Ok(uuid) = Uuid::parse_str(tail) else {
+        return invalid(field, "must be an opaque canonical Marty evidence UUID URN");
+    };
+    let bytes = tail.as_bytes();
+    if uuid.to_string() != tail
+        || !matches!(bytes[14], b'1'..=b'8')
+        || !matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
     {
-        return invalid(field, "must be a bounded Marty evidence URN");
+        return invalid(field, "must be an opaque canonical Marty evidence UUID URN");
     }
     Ok(())
 }
@@ -542,10 +532,11 @@ mod tests {
             required: true,
             outcome: VerificationCheckOutcome::Passed,
             code: "CREDENTIAL_SIGNATURE_VALID".to_owned(),
-            safe_message: None,
             component_id: component_id.to_owned(),
             evaluated_at: "2026-08-08T23:30:00Z".to_owned(),
-            evidence_refs: vec![format!("urn:marty:evidence:{check_id}")],
+            evidence_refs: vec![
+                "urn:marty:evidence:123e4567-e89b-42d3-a456-426614174000".to_owned()
+            ],
         }
     }
 
@@ -743,13 +734,20 @@ mod tests {
                 if field == "checks[0].evidence_refs[0]"
         ));
 
-        let mut unsafe_message = input();
-        unsafe_message.checks[0].safe_message = Some("operator\tmessage".to_owned());
-        assert!(matches!(
-            build_verification_decision_result(unsafe_message),
-            Err(VerificationDecisionResultError::InvalidField { field, .. })
-                if field == "checks[0].safe_message"
-        ));
+        for invalid_ref in [
+            "urn:marty:evidence:customer-123",
+            "urn:marty:evidence:123E4567-E89B-42D3-A456-426614174000",
+            "urn:marty:evidence:00000000-0000-0000-0000-000000000000",
+            "urn:marty:evidence:123e4567-e89b-42d3-7456-426614174000",
+        ] {
+            let mut evidence = input();
+            evidence.checks[0].evidence_refs = vec![invalid_ref.to_owned()];
+            assert!(matches!(
+                build_verification_decision_result(evidence),
+                Err(VerificationDecisionResultError::InvalidField { field, .. })
+                    if field == "checks[0].evidence_refs[0]"
+            ));
+        }
     }
 
     #[test]
