@@ -104,8 +104,6 @@ pub struct VerificationCheckResult {
     pub required: bool,
     pub outcome: VerificationCheckOutcome,
     pub code: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub safe_message: Option<String>,
     pub component_id: String,
     pub evaluated_at: String,
     pub evidence_refs: Vec<String>,
@@ -342,11 +340,10 @@ mod tests {
             required,
             outcome,
             code: "CHECK_EVALUATED".to_owned(),
-            safe_message: None,
             component_id: "test-adapter".to_owned(),
             evaluated_at: "2026-08-08T00:00:00Z".to_owned(),
             evidence_refs: if outcome.requires_evidence() {
-                vec![format!("urn:marty:evidence:{check_id}")]
+                vec!["urn:marty:evidence:123e4567-e89b-42d3-a456-426614174000".to_owned()]
             } else {
                 Vec::new()
             },
