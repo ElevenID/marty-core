@@ -176,7 +176,7 @@ pub struct ZkVerificationResult {
 }
 
 /// Result of a scoped, low-level presentation verification check.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VerificationResult {
     /// Whether this result is sufficient for a final credential decision.
     ///
@@ -228,6 +228,7 @@ pub struct VerificationEvidence {
     pub transaction_binding: VerificationCheckStatus,
     pub credential_issuer_proofs: VerificationCheckStatus,
     pub holder_binding: VerificationCheckStatus,
+    pub presentation_structure: VerificationCheckStatus,
     pub presentation_constraints: VerificationCheckStatus,
 }
 
@@ -238,6 +239,7 @@ impl VerificationEvidence {
             transaction_binding: VerificationCheckStatus::NotChecked,
             credential_issuer_proofs: VerificationCheckStatus::NotChecked,
             holder_binding: VerificationCheckStatus::NotChecked,
+            presentation_structure: VerificationCheckStatus::NotChecked,
             presentation_constraints: VerificationCheckStatus::NotChecked,
         }
     }
@@ -540,9 +542,13 @@ impl VerificationEngine {
             )
         };
 
-        if expected_nonce.is_empty() {
+        if expected_nonce.is_empty()
+            || !expected_nonce.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_' | '~')
+            })
+        {
             return failed(
-                "Expected transaction nonce must be non-empty".into(),
+                "Expected transaction nonce must be non-empty and ASCII URL-safe".into(),
                 VerificationCheckStatus::NotChecked,
                 VerificationCheckStatus::Failed,
             );
@@ -661,7 +667,7 @@ impl VerificationEngine {
             );
         };
         let now = chrono::Utc::now().timestamp();
-        if now > exp + 60 {
+        if now > exp.saturating_add(60) {
             return failed(
                 "VP token has expired".into(),
                 VerificationCheckStatus::NotChecked,
@@ -823,7 +829,19 @@ impl VerificationEngine {
 
             match mapped {
                 Some(entry) => {
-                    let leaf = Self::leaf_descriptor_map(entry);
+                    let leaf = match Self::validate_descriptor_map_chain(entry, &descriptor.id) {
+                        Ok(leaf) => leaf,
+                        Err(error) => {
+                            errors.push(error.clone());
+                            descriptor_results.push(DescriptorVerificationResult {
+                                descriptor_id: descriptor.id.clone(),
+                                valid: false,
+                                format: entry.format.clone(),
+                                error: Some(error),
+                            });
+                            continue;
+                        }
+                    };
                     let format_error = descriptor.format.as_ref().and_then(|required_formats| {
                         (!required_formats.contains_key(&leaf.format)).then(|| {
                             format!(
@@ -855,7 +873,7 @@ impl VerificationEngine {
 
         let all_valid = errors.is_empty() && descriptor_results.iter().all(|r| r.valid);
         let mut evidence = VerificationEvidence::not_checked();
-        evidence.presentation_constraints = if all_valid {
+        evidence.presentation_structure = if all_valid {
             VerificationCheckStatus::Passed
         } else {
             VerificationCheckStatus::Failed
@@ -901,6 +919,7 @@ impl VerificationEngine {
             Some(p) => p,
             None => {
                 let mut evidence = VerificationEvidence::not_checked();
+                evidence.presentation_structure = VerificationCheckStatus::Passed;
                 evidence.presentation_constraints = VerificationCheckStatus::Failed;
                 return VerificationResult::low_level(
                     VerificationScope::PresentationExchange,
@@ -930,7 +949,19 @@ impl VerificationEngine {
                 None => continue,
             };
 
-            let leaf_map = Self::leaf_descriptor_map(map_entry);
+            let leaf_map = match Self::validate_descriptor_map_chain(map_entry, &descriptor.id) {
+                Ok(leaf) => leaf,
+                Err(error) => {
+                    errors.push(error.clone());
+                    descriptor_results.push(DescriptorVerificationResult {
+                        descriptor_id: descriptor.id.clone(),
+                        valid: false,
+                        format: map_entry.format.clone(),
+                        error: Some(error),
+                    });
+                    continue;
+                }
+            };
             if descriptor
                 .format
                 .as_ref()
@@ -969,10 +1000,12 @@ impl VerificationEngine {
                 continue;
             };
 
-            // Enforce limit_disclosure: "required" — credential MUST be SD-JWT.
+            // A selective-disclosure designation must be an exact known value.
+            // Substring matching would let attacker-chosen format names such as
+            // `not_sd_jwt` masquerade as selective-disclosure credentials.
             if descriptor.constraints.limit_disclosure.as_deref() == Some("required") {
                 let fmt = leaf_map.format.as_str();
-                if !fmt.contains("sd_jwt") && !fmt.contains("sd-jwt") {
+                if !Self::is_selective_disclosure_format(fmt) {
                     let err = format!(
                         "Descriptor '{}': limit_disclosure:required but format '{}' is not SD-JWT",
                         descriptor.id, fmt
@@ -1005,6 +1038,7 @@ impl VerificationEngine {
 
             // Evaluate field constraints against the credential document.
             let mut field_errors: Vec<String> = Vec::new();
+            let mut selected_values: Vec<&serde_json::Value> = Vec::new();
             for field in &descriptor.constraints.fields {
                 if field.zk_predicate.is_some() {
                     field_errors.push(format!(
@@ -1036,7 +1070,7 @@ impl VerificationEngine {
                 let matched = field
                     .path
                     .iter()
-                    .find_map(|p| Self::json_path_get(credential_doc, p));
+                    .find_map(|path| Self::json_path_get(credential_doc, path));
 
                 match matched {
                     None if field.optional.unwrap_or(false) => {} // absent but optional — ok
@@ -1047,6 +1081,7 @@ impl VerificationEngine {
                         ));
                     }
                     Some(val) => {
+                        selected_values.push(val);
                         if let Some(ref filter) = field.filter {
                             if let Err(e) = Self::apply_json_schema_filter(val, filter) {
                                 field_errors.push(format!(
@@ -1057,6 +1092,16 @@ impl VerificationEngine {
                         }
                     }
                 }
+            }
+
+            if descriptor.constraints.limit_disclosure.as_deref() == Some("required")
+                && field_errors.is_empty()
+                && !Self::contains_only_selected_values(credential_doc, &selected_values)
+            {
+                field_errors.push(format!(
+                    "Descriptor '{}': limit_disclosure:required but unrequested values were disclosed",
+                    descriptor.id
+                ));
             }
 
             let valid = field_errors.is_empty();
@@ -1085,6 +1130,7 @@ impl VerificationEngine {
 
         let all_valid = errors.is_empty() && descriptor_results.iter().all(|r| r.valid);
         let mut evidence = VerificationEvidence::not_checked();
+        evidence.presentation_structure = VerificationCheckStatus::Passed;
         evidence.presentation_constraints = if all_valid {
             VerificationCheckStatus::Passed
         } else {
@@ -1100,10 +1146,34 @@ impl VerificationEngine {
         )
     }
 
-    fn leaf_descriptor_map(entry: &DescriptorMapEntry) -> &DescriptorMapEntry {
-        match entry.path_nested.as_deref() {
-            Some(nested) => Self::leaf_descriptor_map(nested),
-            None => entry,
+    fn validate_descriptor_map_chain<'a>(
+        entry: &'a DescriptorMapEntry,
+        expected_id: &str,
+    ) -> Result<&'a DescriptorMapEntry, String> {
+        let mut current = entry;
+        loop {
+            if current.id != expected_id {
+                return Err(format!(
+                    "Descriptor '{expected_id}': nested mapping id '{}' does not match",
+                    current.id
+                ));
+            }
+            if current.format.trim().is_empty() {
+                return Err(format!(
+                    "Descriptor '{expected_id}': mapping format must be non-empty"
+                ));
+            }
+            if !Self::is_supported_json_path(&current.path) {
+                return Err(format!(
+                    "Descriptor '{expected_id}': unsupported mapping JSONPath '{}'",
+                    current.path
+                ));
+            }
+
+            match current.path_nested.as_deref() {
+                Some(nested) => current = nested,
+                None => return Ok(current),
+            }
         }
     }
 
@@ -1111,10 +1181,64 @@ impl VerificationEngine {
         root: &'a serde_json::Value,
         entry: &DescriptorMapEntry,
     ) -> Option<&'a serde_json::Value> {
-        let current = Self::json_path_get(root, &entry.path)?;
-        match entry.path_nested.as_deref() {
-            Some(nested) => Self::descriptor_map_get(current, nested),
-            None => Some(current),
+        let mut current_value = root;
+        let mut current_entry = entry;
+        loop {
+            current_value = Self::json_path_get(current_value, &current_entry.path)?;
+            match current_entry.path_nested.as_deref() {
+                Some(nested) => current_entry = nested,
+                None => return Some(current_value),
+            }
+        }
+    }
+
+    fn is_selective_disclosure_format(format: &str) -> bool {
+        matches!(
+            format,
+            "dc+sd-jwt" | "vc+sd-jwt" | "spruce-vc+sd-jwt" | "sd_jwt" | "sd-jwt"
+        )
+    }
+
+    fn contains_only_selected_values(
+        root: &serde_json::Value,
+        selected: &[&serde_json::Value],
+    ) -> bool {
+        let mut allowed = HashSet::new();
+        for value in selected {
+            Self::collect_value_addresses(value, &mut allowed, false);
+        }
+
+        let mut disclosed = HashSet::new();
+        Self::collect_value_addresses(root, &mut disclosed, true);
+        disclosed.is_subset(&allowed)
+    }
+
+    fn collect_value_addresses(
+        value: &serde_json::Value,
+        addresses: &mut HashSet<usize>,
+        terminals_only: bool,
+    ) {
+        let terminal = match value {
+            serde_json::Value::Array(values) => values.is_empty(),
+            serde_json::Value::Object(values) => values.is_empty(),
+            _ => true,
+        };
+        if !terminals_only || terminal {
+            addresses.insert(value as *const serde_json::Value as usize);
+        }
+
+        match value {
+            serde_json::Value::Array(values) => {
+                for child in values {
+                    Self::collect_value_addresses(child, addresses, terminals_only);
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for child in values.values() {
+                    Self::collect_value_addresses(child, addresses, terminals_only);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1503,6 +1627,14 @@ mod tests {
         let result = engine.verify_presentation_structure(&pd, &submission);
         assert!(result.check_valid);
         assert!(result.errors.is_empty());
+        assert_eq!(
+            result.evidence.presentation_structure,
+            VerificationCheckStatus::Passed
+        );
+        assert_eq!(
+            result.evidence.presentation_constraints,
+            VerificationCheckStatus::NotChecked
+        );
         assert_eq!(result.descriptor_results.len(), 1);
         assert!(result.descriptor_results[0].valid);
     }
@@ -1580,6 +1712,162 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("not in accepted formats"));
+    }
+
+    #[test]
+    fn test_verify_presentation_structure_rejects_invalid_nested_mapping() {
+        let engine = test_engine();
+        let desc = engine.mdl_descriptor("mdl_request", &["family_name"]);
+        let pd = engine
+            .create_presentation_definition("test_pd", vec![desc])
+            .unwrap();
+
+        let submission = PresentationSubmission {
+            id: "sub_1".into(),
+            definition_id: "test_pd".into(),
+            descriptor_map: vec![DescriptorMapEntry {
+                id: "mdl_request".into(),
+                format: "jwt_vp".into(),
+                path: "$".into(),
+                path_nested: Some(Box::new(DescriptorMapEntry {
+                    id: "different_descriptor".into(),
+                    format: "mso_mdoc".into(),
+                    path: "$.credential".into(),
+                    path_nested: None,
+                })),
+            }],
+        };
+
+        let result = engine.verify_presentation_structure(&pd, &submission);
+        assert!(!result.check_valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("nested mapping id")));
+    }
+
+    #[test]
+    fn test_verify_presentation_structure_rejects_unsupported_mapping_path() {
+        let engine = test_engine();
+        let desc = engine.mdl_descriptor("mdl_request", &["family_name"]);
+        let pd = engine
+            .create_presentation_definition("test_pd", vec![desc])
+            .unwrap();
+
+        let submission = PresentationSubmission {
+            id: "sub_1".into(),
+            definition_id: "test_pd".into(),
+            descriptor_map: vec![DescriptorMapEntry {
+                id: "mdl_request".into(),
+                format: "mso_mdoc".into(),
+                path: "$..credential".into(),
+                path_nested: None,
+            }],
+        };
+
+        let result = engine.verify_presentation_structure(&pd, &submission);
+        assert!(!result.check_valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("unsupported mapping JSONPath")));
+    }
+
+    #[test]
+    fn test_limit_disclosure_rejects_spoofed_format_name() {
+        let engine = test_engine();
+        let pd = PresentationDefinition {
+            id: "test_pd".into(),
+            name: None,
+            purpose: None,
+            input_descriptors: vec![InputDescriptor {
+                id: "credential".into(),
+                name: None,
+                purpose: None,
+                format: None,
+                constraints: Constraints {
+                    fields: vec![],
+                    limit_disclosure: Some("required".into()),
+                },
+            }],
+        };
+        let submission = PresentationSubmission {
+            id: "sub_1".into(),
+            definition_id: "test_pd".into(),
+            descriptor_map: vec![DescriptorMapEntry {
+                id: "credential".into(),
+                format: "attacker_sd_jwt_wrapper".into(),
+                path: "$".into(),
+                path_nested: None,
+            }],
+        };
+
+        let result = engine.verify_presentation(&pd, &submission, Some(&serde_json::json!({})));
+        assert!(!result.check_valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("not SD-JWT")));
+    }
+
+    #[test]
+    fn test_limit_disclosure_rejects_unrequested_values() {
+        let engine = test_engine();
+        let pd = PresentationDefinition {
+            id: "test_pd".into(),
+            name: None,
+            purpose: None,
+            input_descriptors: vec![InputDescriptor {
+                id: "credential".into(),
+                name: None,
+                purpose: None,
+                format: None,
+                constraints: Constraints {
+                    fields: vec![FieldConstraint {
+                        path: vec!["$.role".into()],
+                        filter: None,
+                        optional: None,
+                        zk_predicate: None,
+                    }],
+                    limit_disclosure: Some("required".into()),
+                },
+            }],
+        };
+        let submission = PresentationSubmission {
+            id: "sub_1".into(),
+            definition_id: "test_pd".into(),
+            descriptor_map: vec![DescriptorMapEntry {
+                id: "credential".into(),
+                format: "dc+sd-jwt".into(),
+                path: "$".into(),
+                path_nested: None,
+            }],
+        };
+
+        let pass = engine.verify_presentation(
+            &pd,
+            &submission,
+            Some(&serde_json::json!({"role": "admin"})),
+        );
+        let fail = engine.verify_presentation(
+            &pd,
+            &submission,
+            Some(&serde_json::json!({"role": "admin", "secret": "extra"})),
+        );
+
+        assert!(pass.check_valid, "requested-only values should pass");
+        assert!(!fail.check_valid);
+        assert!(fail
+            .errors
+            .iter()
+            .any(|error| error.contains("unrequested values")));
+    }
+
+    #[test]
+    fn test_verify_vp_token_rejects_non_url_safe_expected_nonce() {
+        let result = test_engine().verify_vp_token("not.a.jwt", "nonce with spaces");
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("ASCII URL-safe"));
     }
 
     #[test]
