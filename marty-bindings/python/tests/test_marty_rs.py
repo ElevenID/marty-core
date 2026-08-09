@@ -151,6 +151,9 @@ class TestMdocPresentationVerification:
         assert result.issuer_signature_valid is False
         assert result.issuer_trusted is False
         assert result.device_authentication_valid is False
+        assert result.document_evidence == []
+        assert result.revocation_checked is False
+        assert result.not_revoked is None
         assert result.error
 
 

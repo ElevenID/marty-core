@@ -1493,6 +1493,7 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
+    m.add_class::<mdoc::MdocDocumentVerificationEvidence>()?;
     m.add_class::<mdoc::MdocPresentationVerificationResult>()?;
     m.add_function(wrap_pyfunction!(mdoc::parse_device_response, m)?)?;
     m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_cbor, m)?)?;
