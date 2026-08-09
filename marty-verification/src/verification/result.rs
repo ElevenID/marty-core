@@ -5,7 +5,7 @@ use super::decision::{
     VerificationDecision, VerificationDecisionCode, VerificationProcessingStatus,
     VerificationReductionError, REQUIRED_CHECK_REDUCER_ID, REQUIRED_CHECK_REDUCER_VERSION,
 };
-use chrono::DateTime;
+use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use thiserror::Error;
@@ -199,10 +199,10 @@ pub enum VerificationDecisionResultError {
 
 /// Validate provenance and assemble a canonical result using the sole reducer.
 pub fn build_verification_decision_result(
-    input: VerificationDecisionResultInput,
+    mut input: VerificationDecisionResultInput,
 ) -> Result<VerificationDecisionResult, VerificationDecisionResultError> {
     validate_scoped_id("verification_id", &input.verification_id, 128)?;
-    validate_datetime("evaluated_at", &input.evaluated_at)?;
+    let evaluated_at = validate_datetime("evaluated_at", &input.evaluated_at)?;
     validate_digest("input_digest", &input.input_digest)?;
     validate_digest("evidence_digest", &input.evidence_digest)?;
     validate_context(&input.context)?;
@@ -226,8 +226,15 @@ pub fn build_verification_decision_result(
         }
     }
 
-    for (index, check) in input.checks.iter().enumerate() {
-        validate_check(index, check)?;
+    for (index, check) in input.checks.iter_mut().enumerate() {
+        let check_evaluated_at = validate_check(index, check)?;
+        if check_evaluated_at > evaluated_at {
+            return invalid(
+                &format!("checks[{index}].evaluated_at"),
+                "must not be later than the enclosing result",
+            );
+        }
+        check.evaluated_at = canonical_datetime(check_evaluated_at);
         if !component_ids.contains(check.component_id.as_str()) {
             return Err(VerificationDecisionResultError::UndeclaredCheckComponent {
                 check_id: check.check_id.clone(),
@@ -246,7 +253,7 @@ pub fn build_verification_decision_result(
         decision: reduced.decision,
         decision_code: reduced.decision_code,
         valid: reduced.valid,
-        evaluated_at: input.evaluated_at,
+        evaluated_at: canonical_datetime(evaluated_at),
         input_digest: input.input_digest,
         evidence_digest: input.evidence_digest,
         policy: input.policy,
@@ -339,16 +346,22 @@ fn validate_component(
 fn validate_check(
     index: usize,
     check: &VerificationCheckResult,
-) -> Result<(), VerificationDecisionResultError> {
+) -> Result<DateTime<FixedOffset>, VerificationDecisionResultError> {
     let prefix = format!("checks[{index}]");
     validate_check_id(&format!("{prefix}.check_id"), &check.check_id)?;
     validate_code(&format!("{prefix}.code"), &check.code)?;
     validate_lower_id(&format!("{prefix}.component_id"), &check.component_id, 64)?;
-    validate_datetime(&format!("{prefix}.evaluated_at"), &check.evaluated_at)?;
+    let evaluated_at = validate_datetime(&format!("{prefix}.evaluated_at"), &check.evaluated_at)?;
     if let Some(message) = &check.safe_message {
         validate_bounded_text(&format!("{prefix}.safe_message"), message, 1, 256)?;
-        if message.contains(['\r', '\n']) {
-            return invalid(&format!("{prefix}.safe_message"), "must be a single line");
+        if message
+            .chars()
+            .any(|character| character <= '\u{001f}' || character == '\u{007f}')
+        {
+            return invalid(
+                &format!("{prefix}.safe_message"),
+                "must not contain control characters",
+            );
         }
     }
     if check.evidence_refs.len() > MAX_CHECK_EVIDENCE_REFS {
@@ -363,7 +376,7 @@ fn validate_check(
             evidence_ref,
         )?;
     }
-    Ok(())
+    Ok(evaluated_at)
 }
 
 fn validate_scoped_id(
@@ -459,13 +472,20 @@ fn validate_digest(field: &str, value: &str) -> Result<(), VerificationDecisionR
     Ok(())
 }
 
-fn validate_datetime(field: &str, value: &str) -> Result<(), VerificationDecisionResultError> {
-    DateTime::parse_from_rfc3339(value)
-        .map(|_| ())
-        .map_err(|_| VerificationDecisionResultError::InvalidField {
-            field: field.to_owned(),
-            reason: "must be an RFC 3339 date-time",
-        })
+fn validate_datetime(
+    field: &str,
+    value: &str,
+) -> Result<DateTime<FixedOffset>, VerificationDecisionResultError> {
+    DateTime::parse_from_rfc3339(value).map_err(|_| VerificationDecisionResultError::InvalidField {
+        field: field.to_owned(),
+        reason: "must be an RFC 3339 date-time",
+    })
+}
+
+fn canonical_datetime(value: DateTime<FixedOffset>) -> String {
+    value
+        .with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
 fn validate_bounded_text(
@@ -721,6 +741,33 @@ mod tests {
             build_verification_decision_result(evidence),
             Err(VerificationDecisionResultError::InvalidField { field, .. })
                 if field == "checks[0].evidence_refs[0]"
+        ));
+
+        let mut unsafe_message = input();
+        unsafe_message.checks[0].safe_message = Some("operator\tmessage".to_owned());
+        assert!(matches!(
+            build_verification_decision_result(unsafe_message),
+            Err(VerificationDecisionResultError::InvalidField { field, .. })
+                if field == "checks[0].safe_message"
+        ));
+    }
+
+    #[test]
+    fn normalizes_timestamps_and_rejects_checks_after_the_result() {
+        let mut normalized = input();
+        normalized.evaluated_at = "2026-08-09T00:30:00+01:00".to_owned();
+        normalized.checks[0].evaluated_at = "2026-08-08T18:30:00-05:00".to_owned();
+        let result =
+            build_verification_decision_result(normalized).expect("equivalent UTC timestamps");
+        assert_eq!(result.evaluated_at(), "2026-08-08T23:30:00Z");
+        assert_eq!(result.checks()[0].evaluated_at, "2026-08-08T23:30:00Z");
+
+        let mut future_check = input();
+        future_check.checks[0].evaluated_at = "2026-08-08T23:30:01Z".to_owned();
+        assert!(matches!(
+            build_verification_decision_result(future_check),
+            Err(VerificationDecisionResultError::InvalidField { field, .. })
+                if field == "checks[0].evaluated_at"
         ));
     }
 
