@@ -28,7 +28,8 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ed25519_dalek::{Signer, SigningKey};
 use marty_oid4vci::verifier::{
-    DescriptorMapEntry, PresentationDefinition, PresentationSubmission, VerificationEngine,
+    DescriptorMapEntry, PresentationDefinition, PresentationSubmission, VerificationCheckStatus,
+    VerificationEngine, VerificationResult, VerificationScope,
 };
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -72,6 +73,17 @@ fn make_engine() -> VerificationEngine {
 
 fn b64url_json(v: &Value) -> String {
     URL_SAFE_NO_PAD.encode(serde_json::to_string(v).unwrap().as_bytes())
+}
+
+fn sign_jwt(sk: &SigningKey, header: &Value, payload: &Value) -> String {
+    let h = b64url_json(header);
+    let p = b64url_json(payload);
+    let signing_input = format!("{h}.{p}");
+    let signature = sk.sign(signing_input.as_bytes());
+    format!(
+        "{signing_input}.{}",
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    )
 }
 
 /// Build and sign a compact VP JWT suitable for `verify_vp_token`.
@@ -120,13 +132,7 @@ fn make_vp_jwt(sk: &SigningKey, nonce: &str, aud: &str, exp_offset_secs: i64) ->
         }
     });
 
-    let h = b64url_json(&header);
-    let p = b64url_json(&payload);
-    let signing_input = format!("{}.{}", h, p);
-    let sig = sk.sign(signing_input.as_bytes());
-    let s = URL_SAFE_NO_PAD.encode(sig.to_bytes());
-
-    format!("{}.{}.{}", h, p, s)
+    sign_jwt(sk, &header, &payload)
 }
 
 fn make_pd_from_fixture() -> PresentationDefinition {
@@ -152,7 +158,7 @@ fn happy_path_vp_token_jwt() {
     let result = engine.verify_vp_token(&vp, NONCE);
 
     assert!(
-        result.valid,
+        result.check_valid,
         "expected valid VP, got errors: {:?}",
         result.errors
     );
@@ -164,6 +170,28 @@ fn happy_path_vp_token_jwt() {
     assert!(
         result.descriptor_results.iter().any(|r| r.valid),
         "at least one valid descriptor result expected"
+    );
+    assert!(
+        !result.valid,
+        "presentation proof alone is not a final decision"
+    );
+    assert!(!result.decision_ready);
+    assert_eq!(result.scope, VerificationScope::PresentationProof);
+    assert_eq!(
+        result.evidence.presentation_proof,
+        VerificationCheckStatus::Passed
+    );
+    assert_eq!(
+        result.evidence.transaction_binding,
+        VerificationCheckStatus::Passed
+    );
+    assert_eq!(
+        result.evidence.credential_issuer_proofs,
+        VerificationCheckStatus::NotChecked
+    );
+    assert_eq!(
+        result.evidence.holder_binding,
+        VerificationCheckStatus::NotChecked
     );
 }
 
@@ -177,7 +205,7 @@ fn static_fixture_vp_token_verifies() {
     let result = engine.verify_vp_token(STATIC_VP_TOKEN.trim(), NONCE);
 
     assert!(
-        result.valid,
+        result.check_valid,
         "static fixture VP token (from generate_fixtures.py) must verify — \
          check VERIFIER_ID and NONCE constants are in sync: {:?}",
         result.errors
@@ -201,7 +229,7 @@ fn invalid_nonce_rejected() {
 
     let result = engine.verify_vp_token(&vp, NONCE);
 
-    assert!(!result.valid, "VP with wrong nonce MUST be rejected");
+    assert!(!result.check_valid, "VP with wrong nonce MUST be rejected");
     assert!(
         result
             .errors
@@ -210,6 +238,127 @@ fn invalid_nonce_rejected() {
         "error MUST mention 'nonce', got: {:?}",
         result.errors
     );
+}
+
+#[test]
+fn empty_expected_and_presented_nonce_cannot_match() {
+    let sk = test_signing_key();
+    let vp = make_vp_jwt(&sk, "", VERIFIER_ID, 3600);
+
+    let result = make_engine().verify_vp_token(&vp, "");
+
+    assert!(!result.check_valid);
+    assert_eq!(
+        result.evidence.transaction_binding,
+        VerificationCheckStatus::Failed
+    );
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("non-empty")));
+}
+
+#[test]
+fn signed_token_without_nonce_is_rejected() {
+    let sk = test_signing_key();
+    let x = URL_SAFE_NO_PAD.encode(sk.verifying_key().as_bytes());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let token = sign_jwt(
+        &sk,
+        &json!({
+            "alg": "EdDSA",
+            "typ": "JWT",
+            "jwk": {"kty": "OKP", "crv": "Ed25519", "x": x}
+        }),
+        &json!({"aud": VERIFIER_ID, "exp": now + 3600, "vp": {}}),
+    );
+
+    let result = make_engine().verify_vp_token(&token, NONCE);
+
+    assert!(!result.check_valid);
+    assert!(result.errors.iter().any(|error| error.contains("nonce")));
+}
+
+#[test]
+fn signed_token_without_expiration_is_rejected() {
+    let sk = test_signing_key();
+    let x = URL_SAFE_NO_PAD.encode(sk.verifying_key().as_bytes());
+    let token = sign_jwt(
+        &sk,
+        &json!({
+            "alg": "EdDSA",
+            "typ": "JWT",
+            "jwk": {"kty": "OKP", "crv": "Ed25519", "x": x}
+        }),
+        &json!({"aud": VERIFIER_ID, "nonce": NONCE, "vp": {}}),
+    );
+
+    let result = make_engine().verify_vp_token(&token, NONCE);
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("expiration")));
+}
+
+#[test]
+fn token_that_is_not_yet_valid_is_rejected() {
+    let sk = test_signing_key();
+    let x = URL_SAFE_NO_PAD.encode(sk.verifying_key().as_bytes());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let token = sign_jwt(
+        &sk,
+        &json!({
+            "alg": "EdDSA",
+            "typ": "JWT",
+            "jwk": {"kty": "OKP", "crv": "Ed25519", "x": x}
+        }),
+        &json!({
+            "aud": VERIFIER_ID,
+            "nonce": NONCE,
+            "nbf": now + 3600,
+            "exp": now + 7200,
+            "vp": {}
+        }),
+    );
+
+    let result = make_engine().verify_vp_token(&token, NONCE);
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("signature verification")));
+}
+
+#[test]
+fn unsupported_signature_algorithm_is_rejected_before_key_use() {
+    let header = b64url_json(&json!({"alg": "HS256", "typ": "JWT"}));
+    let payload = b64url_json(&json!({
+        "aud": VERIFIER_ID,
+        "nonce": NONCE,
+        "exp": 9_999_999_999_i64
+    }));
+    let token = format!("{header}.{payload}.AA");
+
+    let result = make_engine().verify_vp_token(&token, NONCE);
+
+    assert!(!result.check_valid);
+    assert_eq!(
+        result.evidence.presentation_proof,
+        VerificationCheckStatus::Unsupported
+    );
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("algorithm")));
 }
 
 /// Sending the same VP token twice (replay) must fail because the nonce carried
@@ -226,7 +375,7 @@ fn nonce_replay_detected() {
     let result = engine.verify_vp_token(&vp, replay_nonce);
 
     assert!(
-        !result.valid,
+        !result.check_valid,
         "replayed VP token with stale nonce MUST be rejected"
     );
 }
@@ -253,7 +402,7 @@ fn tampered_vp_token_rejected() {
     let engine = make_engine();
     let result = engine.verify_vp_token(&tampered_vp, NONCE);
 
-    assert!(!result.valid, "bit-flipped VP JWT MUST be rejected");
+    assert!(!result.check_valid, "bit-flipped VP JWT MUST be rejected");
 }
 
 // ── §D  Expiration Validation ─────────────────────────────────────────────────
@@ -269,7 +418,7 @@ fn expired_vp_token_rejected() {
     let result = engine.verify_vp_token(&vp, NONCE);
 
     assert!(
-        !result.valid,
+        !result.check_valid,
         "expired VP JWT (exp 5 min ago) MUST be rejected"
     );
 }
@@ -286,7 +435,7 @@ fn audience_mismatch_rejected() {
 
     let result = engine.verify_vp_token(&vp, NONCE);
 
-    assert!(!result.valid, "VP with wrong `aud` MUST be rejected");
+    assert!(!result.check_valid, "VP with wrong `aud` MUST be rejected");
     assert!(
         result
             .errors
@@ -340,7 +489,7 @@ fn missing_holder_key_rejected() {
     let result = engine.verify_vp_token(&vp, NONCE);
 
     assert!(
-        !result.valid,
+        !result.check_valid,
         "VP without embedded holder public key MUST be rejected"
     );
 }
@@ -359,7 +508,7 @@ fn presentation_definition_matching() {
     let result = engine.verify_presentation_structure(&pd, &ps);
 
     assert!(
-        result.valid,
+        result.check_valid,
         "matching PD/PS from shared fixtures MUST pass: {:?}",
         result.errors
     );
@@ -389,7 +538,7 @@ fn presentation_definition_id_mismatch_rejected() {
 
     let result = engine.verify_presentation_structure(&pd, &ps);
 
-    assert!(!result.valid, "mismatched definition_id MUST fail");
+    assert!(!result.check_valid, "mismatched definition_id MUST fail");
     assert!(
         !result.errors.is_empty(),
         "must report at least one error for definition_id mismatch"
@@ -411,7 +560,7 @@ fn presentation_definition_missing_descriptor_rejected() {
     let result = engine.verify_presentation_structure(&pd, &ps);
 
     assert!(
-        !result.valid,
+        !result.check_valid,
         "empty descriptor_map for required descriptor MUST fail"
     );
     assert!(
@@ -450,7 +599,7 @@ fn presentation_definition_format_mismatch_rejected() {
     let engine = make_engine();
     let result = engine.verify_presentation_structure(&pd, &ps);
 
-    assert!(!result.valid, "format mismatch MUST be rejected");
+    assert!(!result.check_valid, "format mismatch MUST be rejected");
     assert!(
         result.descriptor_results.iter().any(|r| !r.valid),
         "the mismatched descriptor MUST be invalid"
@@ -465,7 +614,7 @@ fn malformed_vp_token_too_many_parts_rejected() {
     let engine = make_engine();
     let result = engine.verify_vp_token("not.a.proper.jwt.at.all", NONCE);
     assert!(
-        !result.valid,
+        !result.check_valid,
         "malformed VP token (too many dots) MUST be rejected"
     );
 }
@@ -475,7 +624,7 @@ fn malformed_vp_token_single_part_rejected() {
     let engine = make_engine();
     let result = engine.verify_vp_token("justonepart", NONCE);
     assert!(
-        !result.valid,
+        !result.check_valid,
         "single-part string MUST be rejected as invalid JWT"
     );
 }
@@ -484,7 +633,7 @@ fn malformed_vp_token_single_part_rejected() {
 fn empty_vp_token_rejected() {
     let engine = make_engine();
     let result = engine.verify_vp_token("", NONCE);
-    assert!(!result.valid, "empty string MUST be rejected");
+    assert!(!result.check_valid, "empty string MUST be rejected");
 }
 
 // ── §I  SIOPv2 — stubbed pending implementation ───────────────────────────────
@@ -509,11 +658,10 @@ fn siop_v2_well_known_discovery() {
 // both structural validation (§G) and field constraint evaluation against the
 // decoded VP token payload.
 
-/// When `vp_payload` is `None`, `verify_presentation` MUST fall back to
-/// structural-only validation and return the same result as
-/// `verify_presentation_structure`.
+/// A full PEX evaluation without a decoded payload MUST fail closed. Callers
+/// that only need structure validation use `verify_presentation_structure`.
 #[test]
-fn verify_presentation_no_payload_returns_structural_result() {
+fn verify_presentation_no_payload_fails_closed() {
     let pd = make_pd_from_fixture();
     let ps = make_ps_from_fixture();
     let engine = make_engine();
@@ -521,15 +669,11 @@ fn verify_presentation_no_payload_returns_structural_result() {
     let structural = engine.verify_presentation_structure(&pd, &ps);
     let full = engine.verify_presentation(&pd, &ps, None);
 
-    assert_eq!(
-        structural.valid, full.valid,
-        "no-payload results must agree"
-    );
-    assert_eq!(
-        structural.errors.len(),
-        full.errors.len(),
-        "no-payload error counts must agree"
-    );
+    assert!(structural.check_valid);
+    assert!(!structural.valid);
+    assert!(!full.check_valid);
+    assert!(!full.valid);
+    assert!(full.errors.iter().any(|error| error.contains("payload")));
 }
 
 /// DIF PE v2 §5.1: The fixture PD + PS + decoded static VP token MUST pass
@@ -551,7 +695,7 @@ fn verify_presentation_with_fixture_vp_payload_valid() {
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
     assert!(
-        result.valid,
+        result.check_valid,
         "fixture PD+PS+payload must pass full PEX evaluation: {:?}",
         result.errors
     );
@@ -600,7 +744,7 @@ fn verify_presentation_field_constraint_satisfied() {
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
     assert!(
-        result.valid,
+        result.check_valid,
         "satisfied field constraint MUST pass: {:?}",
         result.errors
     );
@@ -650,7 +794,7 @@ fn verify_presentation_field_filter_not_satisfied_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
-    assert!(!result.valid, "unsatisfied filter MUST fail");
+    assert!(!result.check_valid, "unsatisfied filter MUST fail");
     assert!(
         result
             .errors
@@ -698,7 +842,7 @@ fn verify_presentation_required_field_missing_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
-    assert!(!result.valid, "missing required field MUST fail");
+    assert!(!result.check_valid, "missing required field MUST fail");
     assert!(
         result
             .errors
@@ -748,7 +892,7 @@ fn verify_presentation_optional_field_absent_passes() {
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
     assert!(
-        result.valid,
+        result.check_valid,
         "absent optional field MUST NOT fail: {:?}",
         result.errors
     );
@@ -790,7 +934,7 @@ fn verify_presentation_limit_disclosure_required_non_sdjwt_fails() {
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
     assert!(
-        !result.valid,
+        !result.check_valid,
         "limit_disclosure:required with non-SD-JWT MUST fail"
     );
     assert!(
@@ -851,7 +995,7 @@ fn verify_presentation_multi_descriptor_all_satisfied() {
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
     assert!(
-        result.valid,
+        result.check_valid,
         "all descriptors satisfied MUST pass: {:?}",
         result.errors
     );
@@ -906,7 +1050,7 @@ fn verify_presentation_multi_descriptor_one_fails() {
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
     assert!(
-        !result.valid,
+        !result.check_valid,
         "one failing descriptor MUST make result invalid"
     );
     let failing = result
@@ -978,7 +1122,7 @@ fn verify_presentation_path_nested_navigates_to_credential() {
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
 
     assert!(
-        result.valid,
+        result.check_valid,
         "path_nested navigation to credential MUST resolve the field constraint: {:?}",
         result.errors
     );
@@ -1016,13 +1160,13 @@ fn verify_presentation_filter_minimum_satisfied() {
 
     let result_pass = engine.verify_presentation(&pd, &ps, Some(&json!({ "age": 21 })));
     assert!(
-        result_pass.valid,
+        result_pass.check_valid,
         "age 21 >= minimum 18 MUST pass: {:?}",
         result_pass.errors
     );
 
     let result_fail = engine.verify_presentation(&pd, &ps, Some(&json!({ "age": 16 })));
-    assert!(!result_fail.valid, "age 16 < minimum 18 MUST fail");
+    assert!(!result_fail.check_valid, "age 16 < minimum 18 MUST fail");
 }
 
 /// `enum` filter: a claim whose value is in the enum set MUST pass; outside
@@ -1057,8 +1201,309 @@ fn verify_presentation_filter_enum() {
     };
 
     let pass = engine.verify_presentation(&pd, &ps, Some(&json!({ "nationality": "DE" })));
-    assert!(pass.valid, "DE is in enum MUST pass: {:?}", pass.errors);
+    assert!(
+        pass.check_valid,
+        "DE is in enum MUST pass: {:?}",
+        pass.errors
+    );
 
     let fail = engine.verify_presentation(&pd, &ps, Some(&json!({ "nationality": "US" })));
-    assert!(!fail.valid, "US is not in enum MUST fail");
+    assert!(!fail.check_valid, "US is not in enum MUST fail");
+}
+
+fn evaluate_single_field(filter: Value, map_path: &str, payload: &Value) -> VerificationResult {
+    let pd: PresentationDefinition = serde_json::from_value(json!({
+        "id": "pd-strict",
+        "input_descriptors": [{
+            "id": "credential",
+            "constraints": {
+                "fields": [{"path": ["$.role"], "filter": filter}]
+            }
+        }]
+    }))
+    .unwrap();
+    let ps = PresentationSubmission {
+        id: "ps-strict".into(),
+        definition_id: "pd-strict".into(),
+        descriptor_map: vec![DescriptorMapEntry {
+            id: "credential".into(),
+            format: "jwt_vc".into(),
+            path: map_path.into(),
+            path_nested: None,
+        }],
+    };
+    make_engine().verify_presentation(&pd, &ps, Some(payload))
+}
+
+#[test]
+fn unresolved_descriptor_path_does_not_fall_back_to_root() {
+    let result = evaluate_single_field(
+        json!({"const": "admin"}),
+        "$.missing_credential",
+        &json!({"role": "admin"}),
+    );
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("did not resolve")));
+}
+
+#[test]
+fn unsupported_json_schema_assertion_fails_closed() {
+    let result = evaluate_single_field(
+        json!({"required": ["role"]}),
+        "$",
+        &json!({"role": "admin"}),
+    );
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("unsupported JSON Schema assertion")));
+}
+
+#[test]
+fn invalid_regular_expression_fails_closed() {
+    let result = evaluate_single_field(json!({"pattern": "("}), "$", &json!({"role": "("}));
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("invalid pattern")));
+}
+
+#[test]
+fn duplicate_and_unknown_descriptor_mappings_are_rejected() {
+    let pd: PresentationDefinition = serde_json::from_value(json!({
+        "id": "pd-mapping",
+        "input_descriptors": [{"id": "known", "constraints": {"fields": []}}]
+    }))
+    .unwrap();
+    let entry = DescriptorMapEntry {
+        id: "known".into(),
+        format: "jwt_vc".into(),
+        path: "$".into(),
+        path_nested: None,
+    };
+    let submission = PresentationSubmission {
+        id: "ps-mapping".into(),
+        definition_id: "pd-mapping".into(),
+        descriptor_map: vec![
+            entry.clone(),
+            entry,
+            DescriptorMapEntry {
+                id: "unknown".into(),
+                format: "jwt_vc".into(),
+                path: "$".into(),
+                path_nested: None,
+            },
+        ],
+    };
+
+    let result = make_engine().verify_presentation_structure(&pd, &submission);
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("duplicate")));
+    assert!(result.errors.iter().any(|error| error.contains("unknown")));
+}
+
+#[test]
+fn nested_leaf_format_is_used_for_compatibility() {
+    let pd: PresentationDefinition = serde_json::from_value(json!({
+        "id": "pd-leaf-format",
+        "input_descriptors": [{
+            "id": "credential",
+            "format": {"jwt_vc": {}},
+            "constraints": {"fields": []}
+        }]
+    }))
+    .unwrap();
+    let submission = PresentationSubmission {
+        id: "ps-leaf-format".into(),
+        definition_id: "pd-leaf-format".into(),
+        descriptor_map: vec![DescriptorMapEntry {
+            id: "credential".into(),
+            format: "jwt_vp".into(),
+            path: "$".into(),
+            path_nested: Some(Box::new(DescriptorMapEntry {
+                id: "credential".into(),
+                format: "jwt_vc".into(),
+                path: "$.credential".into(),
+                path_nested: None,
+            })),
+        }],
+    };
+
+    let result = make_engine().verify_presentation_structure(&pd, &submission);
+
+    assert!(
+        result.check_valid,
+        "leaf jwt_vc format should match: {:?}",
+        result.errors
+    );
+    assert_eq!(result.descriptor_results[0].format, "jwt_vc");
+}
+
+#[test]
+fn unevaluated_format_algorithm_requirement_fails_closed() {
+    let pd: PresentationDefinition = serde_json::from_value(json!({
+        "id": "pd-algorithm",
+        "input_descriptors": [{
+            "id": "credential",
+            "format": {"jwt_vc": {"alg": ["EdDSA"]}},
+            "constraints": {"fields": []}
+        }]
+    }))
+    .unwrap();
+    let submission = PresentationSubmission {
+        id: "ps-algorithm".into(),
+        definition_id: "pd-algorithm".into(),
+        descriptor_map: vec![DescriptorMapEntry {
+            id: "credential".into(),
+            format: "jwt_vc".into(),
+            path: "$".into(),
+            path_nested: None,
+        }],
+    };
+
+    let structural = make_engine().verify_presentation_structure(&pd, &submission);
+    let full = make_engine().verify_presentation(&pd, &submission, Some(&json!({})));
+
+    assert!(structural.check_valid);
+    assert!(!full.check_valid);
+    assert!(full
+        .errors
+        .iter()
+        .any(|error| error.contains("algorithm requirement")));
+}
+
+#[test]
+fn complete_nested_descriptor_chain_is_evaluated() {
+    let pd: PresentationDefinition = serde_json::from_value(json!({
+        "id": "pd-deep",
+        "input_descriptors": [{
+            "id": "credential",
+            "constraints": {"fields": [{"path": ["$.role"], "filter": {"const": "admin"}}]}
+        }]
+    }))
+    .unwrap();
+    let submission = PresentationSubmission {
+        id: "ps-deep".into(),
+        definition_id: "pd-deep".into(),
+        descriptor_map: vec![DescriptorMapEntry {
+            id: "credential".into(),
+            format: "jwt_vp".into(),
+            path: "$".into(),
+            path_nested: Some(Box::new(DescriptorMapEntry {
+                id: "credential".into(),
+                format: "jwt_vp".into(),
+                path: "$.vp".into(),
+                path_nested: Some(Box::new(DescriptorMapEntry {
+                    id: "credential".into(),
+                    format: "jwt_vc".into(),
+                    path: "$.credentials[0]".into(),
+                    path_nested: None,
+                })),
+            })),
+        }],
+    };
+
+    let pass = make_engine().verify_presentation(
+        &pd,
+        &submission,
+        Some(&json!({"vp": {"credentials": [{"role": "admin"}]}})),
+    );
+    let fail = make_engine().verify_presentation(
+        &pd,
+        &submission,
+        Some(&json!({"role": "admin", "vp": {"credentials": []}})),
+    );
+
+    assert!(
+        pass.check_valid,
+        "deep leaf should resolve: {:?}",
+        pass.errors
+    );
+    assert!(
+        !fail.check_valid,
+        "missing deep leaf must not fall back to root"
+    );
+}
+
+#[test]
+fn optional_field_cannot_hide_unsupported_jsonpath() {
+    let pd: PresentationDefinition = serde_json::from_value(json!({
+        "id": "pd-optional-path",
+        "input_descriptors": [{
+            "id": "credential",
+            "constraints": {"fields": [{"path": ["$..role"], "optional": true}]}
+        }]
+    }))
+    .unwrap();
+    let submission = PresentationSubmission {
+        id: "ps-optional-path".into(),
+        definition_id: "pd-optional-path".into(),
+        descriptor_map: vec![DescriptorMapEntry {
+            id: "credential".into(),
+            format: "jwt_vc".into(),
+            path: "$".into(),
+            path_nested: None,
+        }],
+    };
+
+    let result = make_engine().verify_presentation(&pd, &submission, Some(&json!({})));
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("unsupported JSONPath")));
+}
+
+#[test]
+fn required_zk_predicate_without_bound_result_fails_closed() {
+    let pd: PresentationDefinition = serde_json::from_value(json!({
+        "id": "pd-zk",
+        "input_descriptors": [{
+            "id": "credential",
+            "constraints": {"fields": [{
+                "path": ["$.birth_date"],
+                "zk_predicate": {
+                    "predicate": "age_over_18",
+                    "proof_type": "longfellow-zk-ligero",
+                    "nonce": "challenge"
+                }
+            }]}
+        }]
+    }))
+    .unwrap();
+    let submission = PresentationSubmission {
+        id: "ps-zk".into(),
+        definition_id: "pd-zk".into(),
+        descriptor_map: vec![DescriptorMapEntry {
+            id: "credential".into(),
+            format: "zk_mdoc".into(),
+            path: "$".into(),
+            path_nested: None,
+        }],
+    };
+
+    let result = make_engine().verify_presentation(
+        &pd,
+        &submission,
+        Some(&json!({"birth_date": "2000-01-01"})),
+    );
+
+    assert!(!result.check_valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("ZK predicate")));
 }

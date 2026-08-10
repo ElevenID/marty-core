@@ -92,6 +92,7 @@ impl Default for SessionConfig {
 }
 
 /// ISO 18013-5 session
+#[cfg_attr(feature = "python", pyclass)]
 pub struct Session {
     /// Session state
     state: Arc<RwLock<SessionState>>,
@@ -105,6 +106,61 @@ pub struct Session {
     /// Configuration
     #[allow(dead_code)]
     config: SessionConfig,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl Session {
+    #[staticmethod]
+    fn from_engagement_py(
+        engagement: &DeviceEngagement,
+        config: Option<SessionConfig>,
+    ) -> PyResult<Self> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        runtime
+            .block_on(Self::from_engagement(
+                engagement,
+                config.unwrap_or_default(),
+            ))
+            .map_err(Into::into)
+    }
+
+    fn state_py(&self) -> PyResult<SessionState> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        Ok(runtime.block_on(self.state()))
+    }
+
+    fn establish_py(&self, peer_public_key: &[u8]) -> PyResult<()> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        runtime
+            .block_on(self.establish(peer_public_key))
+            .map_err(Into::into)
+    }
+
+    fn send_encrypted_py(&self, message: &[u8]) -> PyResult<Vec<u8>> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        runtime
+            .block_on(self.send_encrypted(message))
+            .map_err(Into::into)
+    }
+
+    fn receive_encrypted_py(&self, ciphertext: &[u8]) -> PyResult<Vec<u8>> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        runtime
+            .block_on(self.receive_encrypted(ciphertext))
+            .map_err(Into::into)
+    }
+
+    fn terminate_py(&self) -> PyResult<()> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        runtime.block_on(self.terminate()).map_err(Into::into)
+    }
 }
 
 impl Session {

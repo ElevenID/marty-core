@@ -459,6 +459,52 @@ mod tests {
             result.sod_signature_status,
             crate::verification::emrtd::SignatureStatus::Valid
         );
+
+        // Chain validation and DG hashes alone must not authenticate a document
+        // when the raw SOD needed for signature verification is unavailable.
+        let mut missing_raw_sod = sod.clone();
+        missing_raw_sod.raw_sod = None;
+        let missing_signature_result =
+            verify_emrtd(&missing_raw_sod, &passport.data_groups, &registry);
+        assert!(!missing_signature_result.verified);
+        assert_eq!(
+            missing_signature_result.dsc_chain_status,
+            crate::verification::emrtd::ChainStatus::Valid
+        );
+        assert_eq!(
+            missing_signature_result.dg_hash_status,
+            crate::verification::emrtd::HashStatus::Valid
+        );
+        assert_eq!(
+            missing_signature_result.sod_signature_status,
+            crate::verification::emrtd::SignatureStatus::Unknown
+        );
+
+        // Mutating only the raw SignedData leaves the already-parsed chain and
+        // DG hashes intact, so this specifically proves the signature participates
+        // in the final decision reducer.
+        let mut tampered_sod = sod.clone();
+        let raw_sod = tampered_sod
+            .raw_sod
+            .as_mut()
+            .expect("parsed SOD must retain raw bytes");
+        let last = raw_sod.last_mut().expect("raw SOD must not be empty");
+        *last ^= 0x01;
+        let tampered_signature_result =
+            verify_emrtd(&tampered_sod, &passport.data_groups, &registry);
+        assert!(!tampered_signature_result.verified);
+        assert_eq!(
+            tampered_signature_result.dsc_chain_status,
+            crate::verification::emrtd::ChainStatus::Valid
+        );
+        assert_eq!(
+            tampered_signature_result.dg_hash_status,
+            crate::verification::emrtd::HashStatus::Valid
+        );
+        assert_eq!(
+            tampered_signature_result.sod_signature_status,
+            crate::verification::emrtd::SignatureStatus::Invalid
+        );
     }
 
     #[test]

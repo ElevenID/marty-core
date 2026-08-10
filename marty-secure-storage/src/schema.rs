@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS trust_anchors (
     certificate_hash TEXT NOT NULL,
     source TEXT, -- 'aamva_dts', 'icao_pkd', 'usb_import', 'manual'
     synced_at TEXT NOT NULL,
+    trust_domain TEXT,
+    package_sequence INTEGER,
+    package_version TEXT,
+    package_created_at TEXT,
+    package_expires_at TEXT,
+    package_signer_key_id TEXT,
+    package_digest TEXT,
+    package_imported_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -46,6 +54,8 @@ CREATE INDEX IF NOT EXISTS idx_trust_anchors_type_jurisdiction
     ON trust_anchors(anchor_type, jurisdiction);
 CREATE INDEX IF NOT EXISTS idx_trust_anchors_hash 
     ON trust_anchors(certificate_hash);
+CREATE INDEX IF NOT EXISTS idx_trust_anchors_trust_domain
+    ON trust_anchors(trust_domain);
 
 -- Open Badge verification methods (trusted public keys)
 CREATE TABLE IF NOT EXISTS open_badge_keys (
@@ -59,6 +69,14 @@ CREATE TABLE IF NOT EXISTS open_badge_keys (
     status TEXT,
     source TEXT, -- 'sync', 'usb_import', 'manual'
     synced_at TEXT NOT NULL,
+    trust_domain TEXT,
+    package_sequence INTEGER,
+    package_version TEXT,
+    package_created_at TEXT,
+    package_expires_at TEXT,
+    package_signer_key_id TEXT,
+    package_digest TEXT,
+    package_imported_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -66,6 +84,21 @@ CREATE INDEX IF NOT EXISTS idx_open_badge_keys_controller
     ON open_badge_keys(controller);
 CREATE INDEX IF NOT EXISTS idx_open_badge_keys_status
     ON open_badge_keys(status);
+-- Last accepted mixed trust package for each governed trust domain.
+CREATE TABLE IF NOT EXISTS trust_packages (
+    trust_domain TEXT PRIMARY KEY,
+    sequence INTEGER NOT NULL,
+    package_version TEXT NOT NULL,
+    package_created_at TEXT NOT NULL,
+    package_expires_at TEXT,
+    signer_key_id TEXT NOT NULL,
+    next_signer_key_id TEXT,
+    recovery_signer_key_id TEXT,
+    package_digest TEXT NOT NULL,
+    imported_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- CRL cache
 CREATE TABLE IF NOT EXISTS crl_cache (
@@ -162,4 +195,4 @@ CREATE TABLE IF NOT EXISTS config (
 "#;
 
 /// Schema version for migrations
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;

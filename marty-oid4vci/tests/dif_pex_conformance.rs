@@ -317,7 +317,7 @@ fn m1a_pd_minimal_dob_path_satisfies_field() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        result.valid,
+        result.check_valid,
         "$.credentialSubject.dob via multi-path resolution MUST satisfy the field: {:?}",
         result.errors
     );
@@ -336,7 +336,7 @@ fn m1b_pd_minimal_dateofbirth_path_satisfies_field() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        result.valid,
+        result.check_valid,
         "$.credentialSubject.dateOfBirth MUST satisfy the first path candidate: {:?}",
         result.errors
     );
@@ -357,7 +357,7 @@ fn m1c_pd_minimal_absent_field_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        !result.valid,
+        !result.check_valid,
         "absent field (none of the 4 candidate paths found) MUST fail"
     );
 }
@@ -385,7 +385,7 @@ fn m2a_pd_filter_matching_type_passes() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        result.valid,
+        result.check_valid,
         "type array containing the exact pattern-matched string MUST pass: {:?}",
         result.errors
     );
@@ -405,7 +405,7 @@ fn m2b_pd_filter_non_matching_type_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        !result.valid,
+        !result.check_valid,
         "'UniversityDegreeCredential' does not match the literal spec pattern so MUST fail"
     );
 }
@@ -431,7 +431,7 @@ fn m3a_pd_filter2_all_patterns_satisfied_passes() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        result.valid,
+        result.check_valid,
         "all three anchored patterns satisfied MUST pass: {:?}",
         result.errors
     );
@@ -456,7 +456,7 @@ fn m3b_pd_filter2_one_pattern_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        !result.valid,
+        !result.check_valid,
         "$.type = 'debitCard' does not match ^creditCard$ — MUST fail"
     );
 }
@@ -502,7 +502,7 @@ fn m4_pd_basic_limit_disclosure_required_non_sdjwt_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&credential));
     assert!(
-        !result.valid,
+        !result.check_valid,
         "limit_disclosure:required with non-SD-JWT format MUST fail"
     );
     assert!(
@@ -559,7 +559,7 @@ fn m5a_pd_basic_us_passport_const_satisfied_passes() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
     assert!(
-        result.valid,
+        result.check_valid,
         "us_passport credentialSchema.id const + birth_date field present MUST pass: {:?}",
         result.errors
     );
@@ -605,7 +605,7 @@ fn m5b_pd_basic_us_passport_const_mismatch_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
     assert!(
-        !result.valid,
+        !result.check_valid,
         "wrong credentialSchema.id (const mismatch) MUST fail"
     );
     assert!(
@@ -659,7 +659,7 @@ fn m6a_pd_basic_issuer_pattern_first_alternative_passes() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
     assert!(
-        result.valid,
+        result.check_valid,
         "issuer did:example:123 matches first alternative of pattern — MUST pass: {:?}",
         result.errors
     );
@@ -702,7 +702,7 @@ fn m6b_pd_basic_issuer_pattern_second_alternative_passes() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
     assert!(
-        result.valid,
+        result.check_valid,
         "issuer did:example:456 matches second alternative — MUST pass: {:?}",
         result.errors
     );
@@ -746,7 +746,7 @@ fn m6c_pd_basic_issuer_pattern_untrusted_issuer_fails() {
 
     let result = engine.verify_presentation(&pd, &ps, Some(&vp_payload));
     assert!(
-        !result.valid,
+        !result.check_valid,
         "untrusted issuer (not matching pattern alternation) MUST fail"
     );
 }

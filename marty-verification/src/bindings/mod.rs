@@ -962,6 +962,12 @@ fn verify_signature(
     marty_crypto::verify_signature(alg, public_key_der, message, signature).map_err(to_pyerr)
 }
 
+/// Verify an eMRTD EF.SOD CMS signature using the native ICAO verifier.
+#[pyfunction]
+fn verify_sod_signature(sod_der: &[u8]) -> PyResult<bool> {
+    crate::asn1::sod::verify_sod_signature(sod_der).map_err(to_pyerr)
+}
+
 // ============================================================================
 // mDL Document Parsing Bindings
 // ============================================================================
@@ -3139,6 +3145,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Crypto Operations - Base
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
@@ -3331,6 +3338,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Crypto Operations - Base
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
