@@ -1476,8 +1476,11 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
 ///     >>> signature = _marty_rs.sign_p256(secret, b"Hello!")
 ///     >>> _marty_rs.verify_p256(public, b"Hello!", signature)
 ///     True
-#[pymodule]
-fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+/// Register the canonical Marty credential/protocol Python surface.
+///
+/// Downstream extension crates use this entry point to extend ``_marty_rs``
+/// without copying bindings or publishing a second, incompatible module.
+pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Key Generation
     m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
     m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
@@ -1552,6 +1555,12 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(didcomm_encrypt, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_decrypt, m)?)?;
     Ok(())
+}
+
+#[cfg(feature = "extension-module")]
+#[pymodule]
+fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    register_marty_bindings(m)
 }
 
 #[cfg(test)]
