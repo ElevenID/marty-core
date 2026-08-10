@@ -968,6 +968,43 @@ fn verify_sod_signature(sod_der: &[u8]) -> PyResult<bool> {
     crate::asn1::sod::verify_sod_signature(sod_der).map_err(to_pyerr)
 }
 
+/// Parse an EF.SOD and return its native verification metadata.
+#[pyfunction]
+fn parse_sod<'py>(py: Python<'py>, sod_der: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    let sod = crate::asn1::sod::parse_sod(sod_der).map_err(to_pyerr)?;
+    let result = PyDict::new(py);
+    result.set_item("lds_version", sod.lds_version)?;
+    result.set_item("hash_algorithm", sod.hash_algorithm)?;
+    result.set_item(
+        "document_signer_cert",
+        sod.document_signer_cert.unwrap_or_default(),
+    )?;
+    let hashes = PyList::empty(py);
+    for hash in sod.data_group_hashes {
+        let item = PyDict::new(py);
+        item.set_item("data_group_number", hash.data_group_number)?;
+        item.set_item("hash_value", hash.hash_value)?;
+        hashes.append(item)?;
+    }
+    result.set_item("data_group_hashes", hashes)?;
+    Ok(result)
+}
+
+/// Verify one data-group hash against a native EF.SOD payload.
+#[pyfunction]
+fn verify_sod_data_group_hash(
+    sod_der: &[u8],
+    data_group_number: u8,
+    data_group_content: &[u8],
+) -> PyResult<bool> {
+    crate::asn1::sod::verify_data_group_hash_from_sod(
+        sod_der,
+        data_group_number,
+        data_group_content,
+    )
+    .map_err(to_pyerr)
+}
+
 // ============================================================================
 // mDL Document Parsing Bindings
 // ============================================================================
@@ -3146,6 +3183,8 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_sod, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sod_data_group_hash, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
@@ -3339,6 +3378,8 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_sod, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sod_data_group_hash, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;

@@ -395,6 +395,27 @@ pub fn verify_data_group_hash(
     Ok(computed == expected.hash_bytes)
 }
 
+/// Verify a data-group hash directly from an EF.SOD DER payload.
+pub fn verify_data_group_hash_from_sod(
+    sod_der: &[u8],
+    data_group_number: u8,
+    data_group_content: &[u8],
+) -> VerificationResult<bool> {
+    let sod = parse_sod(sod_der)?;
+    let expected = sod
+        .data_group_hashes
+        .iter()
+        .find(|hash| hash.data_group_number == data_group_number)
+        .ok_or_else(|| {
+            VerificationError::internal(format!(
+                "Data group {} not found in SOD",
+                data_group_number
+            ))
+        })?;
+    let algorithm = HashAlgorithm::from_oid(&sod.hash_algorithm)?;
+    Ok(marty_crypto::hashing::hash(algorithm, data_group_content) == expected.hash_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
