@@ -32,8 +32,40 @@ def test_python_binding_matches_shared_emrtd_golden_vector():
     assert marty_verification.verify_sod_data_group_hash(sod, 1, dg1) is True
     assert marty_verification.verify_sod_data_group_hash(sod, 2, dg2) is True
 
+    registry = marty_verification.CscaRegistry()
+    registry.add_country_csca(
+        "TST", marty_verification.certificate_der_to_pem(csca)
+    )
+    result = marty_verification.verify_emrtd(
+        sod, {1: dg1, 2: dg2}, registry, country_hint="TST"
+    )
+    assert result["verified"] is True
+    assert result["dsc_chain_status"] == "valid"
+    assert result["sod_signature_status"] == "valid"
+    assert result["dg_hash_status"] == "valid"
+    assert result["revocation_status"] == "unchecked"
+    assert result["error_codes"] == []
+    assert result["trust_anchor_subject"]
+    assert len(result["certificate_chain"]) == 2
+
     altered_dg1 = bytes([dg1[0] ^ 1]) + dg1[1:]
     assert marty_verification.verify_sod_data_group_hash(sod, 1, altered_dg1) is False
+    altered_result = marty_verification.verify_emrtd(
+        sod, {1: altered_dg1, 2: dg2}, registry, country_hint="TST"
+    )
+    assert altered_result["verified"] is False
+    assert altered_result["dg_hash_status"] == "invalid"
+    assert "EMRTD_DG_HASH_INVALID" in altered_result["error_codes"]
+
+    untrusted_result = marty_verification.verify_emrtd(
+        sod,
+        {1: dg1, 2: dg2},
+        marty_verification.CscaRegistry(),
+        country_hint="TST",
+    )
+    assert untrusted_result["verified"] is False
+    assert untrusted_result["dsc_chain_status"] == "invalid"
+    assert "EMRTD_CHAIN_INVALID" in untrusted_result["error_codes"]
 
     altered_sod = sod[:-1] + bytes([sod[-1] ^ 1])
     try:

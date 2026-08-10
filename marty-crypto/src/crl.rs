@@ -29,9 +29,11 @@
 use der::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use x509_cert::crl::{CertificateList, RevokedCert, TbsCertList};
+use x509_cert::ext::pkix::{BasicConstraints, KeyUsage};
 use x509_cert::name::Name;
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::time::Time;
+use x509_cert::Certificate;
 use x509_cert::Version;
 
 use crate::{CryptoError, CryptoResult};
@@ -140,6 +142,20 @@ pub struct RevokedCertInfo {
     pub revocation_date: String,
     /// Revocation reason (if present)
     pub reason: Option<RevocationReason>,
+}
+
+/// Authenticated and fresh CRL status for one certificate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatedCrlStatus {
+    pub revoked: bool,
+    pub revocation_date: Option<String>,
+    pub reason: Option<RevocationReason>,
+    pub issuer: String,
+    pub this_update: String,
+    pub next_update: Option<String>,
+    pub signature_valid: bool,
+    pub freshness_valid: bool,
+    pub certificate_id_valid: bool,
 }
 
 // ============================================================================
@@ -266,6 +282,170 @@ pub fn is_certificate_revoked(crl_der: &[u8], serial_hex: &str) -> CryptoResult<
         .any(|s| normalize_serial_hex(s) == normalized_query))
 }
 
+/// Authenticate a complete CRL against its issuer and enforce freshness.
+pub fn validate_crl(crl_der: &[u8], issuer_der: &[u8]) -> CryptoResult<CrlInfo> {
+    let crl = CertificateList::from_der(crl_der)
+        .map_err(|e| CryptoError::crl(format!("failed to parse CRL: {e}")))?;
+    let issuer = Certificate::from_der(issuer_der)
+        .map_err(|e| CryptoError::crl(format!("failed to parse issuer certificate: {e}")))?;
+    authenticate_crl(&crl, &issuer)?;
+    extract_crl_info(&crl)
+}
+
+/// Validate a CRL and check one certificate's revocation status.
+///
+/// This operation fails closed unless the target certificate and CRL are both
+/// bound to the supplied issuer, the CRL signature and issuer authorization are
+/// valid, and the CRL is current. A delta CRL is rejected because it cannot by
+/// itself prove a non-revoked status.
+pub fn validate_crl_for_certificate(
+    crl_der: &[u8],
+    cert_der: &[u8],
+    issuer_der: &[u8],
+) -> CryptoResult<ValidatedCrlStatus> {
+    let crl = CertificateList::from_der(crl_der)
+        .map_err(|e| CryptoError::crl(format!("failed to parse CRL: {e}")))?;
+    let cert = Certificate::from_der(cert_der)
+        .map_err(|e| CryptoError::crl(format!("failed to parse certificate: {e}")))?;
+    let issuer = Certificate::from_der(issuer_der)
+        .map_err(|e| CryptoError::crl(format!("failed to parse issuer certificate: {e}")))?;
+    if cert.tbs_certificate.issuer != issuer.tbs_certificate.subject {
+        return Err(CryptoError::crl(
+            "certificate issuer does not match supplied issuer certificate",
+        ));
+    }
+    if !crate::certificate::verify_certificate_signature(cert_der, issuer_der)? {
+        return Err(CryptoError::crl(
+            "certificate signature does not validate under supplied issuer",
+        ));
+    }
+    authenticate_crl(&crl, &issuer)?;
+
+    let revoked_entry = crl
+        .tbs_cert_list
+        .revoked_certificates
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|entry| entry.serial_number == cert.tbs_certificate.serial_number);
+    let (revoked, revocation_date, reason) = if let Some(entry) = revoked_entry {
+        (
+            true,
+            Some(format_time(&entry.revocation_date)),
+            extract_revocation_reason(entry),
+        )
+    } else {
+        (false, None, None)
+    };
+
+    Ok(ValidatedCrlStatus {
+        revoked,
+        revocation_date,
+        reason,
+        issuer: crl.tbs_cert_list.issuer.to_string(),
+        this_update: format_time(&crl.tbs_cert_list.this_update),
+        next_update: crl.tbs_cert_list.next_update.as_ref().map(format_time),
+        signature_valid: true,
+        freshness_valid: true,
+        certificate_id_valid: true,
+    })
+}
+
+fn authenticate_crl(crl: &CertificateList, issuer: &Certificate) -> CryptoResult<()> {
+    const CLOCK_SKEW_SECS: u64 = 5 * 60;
+    const MAX_AGE_WITHOUT_NEXT_UPDATE_SECS: u64 = 24 * 60 * 60;
+
+    if crl.tbs_cert_list.issuer != issuer.tbs_certificate.subject {
+        return Err(CryptoError::crl(
+            "CRL issuer does not match supplied issuer certificate",
+        ));
+    }
+    if crl.tbs_cert_list.signature.oid != crl.signature_algorithm.oid {
+        return Err(CryptoError::crl(
+            "CRL inner and outer signature algorithms do not match",
+        ));
+    }
+    let basic_constraints = issuer
+        .tbs_certificate
+        .get::<BasicConstraints>()
+        .map_err(|e| CryptoError::crl(format!("invalid issuer BasicConstraints: {e}")))?
+        .ok_or_else(|| CryptoError::crl("CRL issuer lacks BasicConstraints"))?
+        .1;
+    if !basic_constraints.ca {
+        return Err(CryptoError::crl("CRL issuer is not a CA certificate"));
+    }
+    if let Some((_, key_usage)) = issuer
+        .tbs_certificate
+        .get::<KeyUsage>()
+        .map_err(|e| CryptoError::crl(format!("invalid issuer KeyUsage: {e}")))?
+    {
+        if !key_usage.crl_sign() {
+            return Err(CryptoError::crl(
+                "CRL issuer KeyUsage does not permit CRL signing",
+            ));
+        }
+    }
+    let (_, is_delta) = extract_crl_extensions(&crl.tbs_cert_list);
+    if is_delta {
+        return Err(CryptoError::crl(
+            "delta CRL cannot be evaluated without its base CRL",
+        ));
+    }
+
+    let tbs_der = crl
+        .tbs_cert_list
+        .to_der()
+        .map_err(|e| CryptoError::crl(format!("failed to encode signed CRL data: {e}")))?;
+    let issuer_spki = issuer
+        .tbs_certificate
+        .subject_public_key_info
+        .to_der()
+        .map_err(|e| CryptoError::crl(format!("failed to encode issuer public key: {e}")))?;
+    let signature = crl
+        .signature
+        .as_bytes()
+        .ok_or_else(|| CryptoError::crl("CRL signature is not byte aligned"))?;
+    let algorithm = crate::SignatureAlgorithm::from_oid(&crl.signature_algorithm.oid.to_string())?;
+    if !crate::verify_signature(algorithm, &issuer_spki, &tbs_der, signature)? {
+        return Err(CryptoError::crl("invalid CRL signature"));
+    }
+    validate_crl_freshness(
+        &crl.tbs_cert_list.this_update,
+        crl.tbs_cert_list.next_update.as_ref(),
+        CLOCK_SKEW_SECS,
+        MAX_AGE_WITHOUT_NEXT_UPDATE_SECS,
+    )
+}
+
+fn validate_crl_freshness(
+    this_update: &Time,
+    next_update: Option<&Time>,
+    clock_skew_secs: u64,
+    max_age_without_next_update_secs: u64,
+) -> CryptoResult<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| CryptoError::crl("system clock is before Unix epoch"))?
+        .as_secs();
+    let this = this_update.to_unix_duration().as_secs();
+    if this > now.saturating_add(clock_skew_secs) {
+        return Err(CryptoError::crl("CRL thisUpdate is in the future"));
+    }
+    if let Some(next_update) = next_update {
+        let next = next_update.to_unix_duration().as_secs();
+        if next < this || now > next.saturating_add(clock_skew_secs) {
+            return Err(CryptoError::crl(
+                "CRL is stale or has an invalid validity interval",
+            ));
+        }
+    } else if now > this.saturating_add(max_age_without_next_update_secs + clock_skew_secs) {
+        return Err(CryptoError::crl(
+            "CRL without nextUpdate exceeds the maximum accepted age",
+        ));
+    }
+    Ok(())
+}
+
 /// Get detailed information about revoked certificates.
 pub fn get_revoked_certificates(crl_der: &[u8]) -> CryptoResult<Vec<RevokedCertInfo>> {
     let crl = CertificateList::from_der(crl_der)
@@ -299,11 +479,11 @@ fn extract_revocation_reason(cert: &RevokedCert) -> Option<RevocationReason> {
     if let Some(exts) = &cert.crl_entry_extensions {
         for ext in exts.iter() {
             if ext.extn_id == ID_CE_CRL_REASONS {
-                // CRL reason is an ENUMERATED value
-                if let Ok(enumerated) = der::asn1::Int::from_der(ext.extn_value.as_bytes()) {
-                    if let Some(&code) = enumerated.as_bytes().first() {
-                        return RevocationReason::from_code(code);
-                    }
+                // Every currently assigned CRLReason value fits in one DER
+                // ENUMERATED octet. Reject non-canonical encodings.
+                let encoded = ext.extn_value.as_bytes();
+                if encoded.len() == 3 && encoded[0] == 0x0A && encoded[1] == 0x01 {
+                    return RevocationReason::from_code(encoded[2]);
                 }
             }
         }
@@ -720,7 +900,7 @@ impl CrlBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cert_builder::create_ca_certificate;
+    use crate::cert_builder::{create_ca_certificate, create_signed_certificate};
     use crate::keygen::KeyType;
 
     #[test]
@@ -762,5 +942,48 @@ mod tests {
 
         assert!(is_certificate_revoked(&crl_der, "deadbeef").unwrap());
         assert!(!is_certificate_revoked(&crl_der, "cafebabe").unwrap());
+    }
+
+    #[test]
+    fn authenticated_crl_is_bound_to_certificate_issuer_and_signature() {
+        let (ca_der, ca_key) =
+            create_ca_certificate("Authenticated CRL CA", None, 365, KeyType::EcdsaP256).unwrap();
+        let (leaf_der, _) = create_signed_certificate(
+            "Revoked Leaf",
+            &ca_der,
+            &ca_key,
+            365,
+            false,
+            KeyType::EcdsaP256,
+        )
+        .unwrap();
+        let leaf = Certificate::from_der(&leaf_der).unwrap();
+        let serial = hex::encode(leaf.tbs_certificate.serial_number.as_bytes());
+        let crl_der = CrlBuilder::new()
+            .issuer_cn("Authenticated CRL CA")
+            .validity_days(30)
+            .add_revoked(&serial, Some(RevocationReason::KeyCompromise))
+            .build(&ca_key)
+            .unwrap();
+
+        let status = validate_crl_for_certificate(&crl_der, &leaf_der, &ca_der).unwrap();
+        assert!(status.revoked);
+        assert_eq!(status.reason, Some(RevocationReason::KeyCompromise));
+        assert!(status.signature_valid && status.freshness_valid && status.certificate_id_valid);
+
+        let mut tampered = crl_der;
+        *tampered.last_mut().unwrap() ^= 0x01;
+        assert!(validate_crl_for_certificate(&tampered, &leaf_der, &ca_der).is_err());
+    }
+
+    #[test]
+    fn stale_or_future_crl_fails_closed() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let stale = duration_to_x509_time(now - Duration::from_secs(48 * 60 * 60)).unwrap();
+        let future = duration_to_x509_time(now + Duration::from_secs(60 * 60)).unwrap();
+        assert!(validate_crl_freshness(&stale, None, 300, 24 * 60 * 60).is_err());
+        assert!(validate_crl_freshness(&future, None, 300, 24 * 60 * 60).is_err());
     }
 }

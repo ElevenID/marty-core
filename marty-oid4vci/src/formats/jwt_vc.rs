@@ -142,6 +142,37 @@ pub struct PreparedJwtVc {
     pub credential_id: String,
 }
 
+/// Optional protocol fields used by external issuer profiles.
+#[derive(Debug, Clone)]
+pub struct JwtVcPreparationOptions {
+    /// Preserve a service-assigned credential identifier when supplied.
+    pub credential_id: Option<String>,
+    /// Use this complete VCDM credential subject instead of deriving one from
+    /// the flat claims map.
+    pub credential_subject: Option<serde_json::Value>,
+    /// Optional VCDM credential status object.
+    pub credential_status: Option<serde_json::Value>,
+    /// Bind the JWT `sub` claim to `CredentialClaims::subject_id`.
+    pub include_subject_claim: bool,
+    /// Include the credential identifier inside the VCDM object.
+    pub include_vc_id: bool,
+    /// Include `nbf` at the issuance instant.
+    pub include_nbf: bool,
+}
+
+impl Default for JwtVcPreparationOptions {
+    fn default() -> Self {
+        Self {
+            credential_id: None,
+            credential_subject: None,
+            credential_status: None,
+            include_subject_claim: true,
+            include_vc_id: true,
+            include_nbf: false,
+        }
+    }
+}
+
 /// Prepare a JWT-VC for signing (build header + payload, but don't sign).
 ///
 /// Returns a [`PreparedJwtVc`] whose `signing_input` field contains the
@@ -150,13 +181,32 @@ pub fn prepare_jwt_vc(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<PreparedJwtVc> {
-    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
+    prepare_jwt_vc_with_options(signer, claims, JwtVcPreparationOptions::default())
+}
+
+/// Prepare a JWT-VC with explicit remote-issuer protocol fields.
+pub fn prepare_jwt_vc_with_options(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: JwtVcPreparationOptions,
+) -> Oid4vciResult<PreparedJwtVc> {
+    let credential_id = options
+        .credential_id
+        .clone()
+        .unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
     let now = chrono::Utc::now();
 
-    let mut credential_subject: HashMap<String, serde_json::Value> = claims.claims.clone();
-    if let Some(ref subject_id) = claims.subject_id {
-        credential_subject.insert("id".to_string(), serde_json::json!(subject_id));
-    }
+    let credential_subject = if let Some(ref explicit) = options.credential_subject {
+        explicit.clone()
+    } else {
+        let mut derived: HashMap<String, serde_json::Value> = claims.claims.clone();
+        if let Some(ref subject_id) = claims.subject_id {
+            derived.insert("id".to_string(), serde_json::json!(subject_id));
+        }
+        serde_json::to_value(derived).map_err(|error| {
+            Oid4vciError::SigningError(format!("Credential subject serialization failed: {error}"))
+        })?
+    };
 
     let use_vcdm_v2 = claims.credential_payload_format == CredentialPayloadFormat::W3cVcdmV2JwtVc;
 
@@ -172,12 +222,14 @@ pub fn prepare_jwt_vc(
         context.extend(claims.w3c_context.iter().cloned());
         let mut v = serde_json::json!({
             "@context": context,
-            "id": credential_id,
             "type": vc_types,
             "issuer": signer.issuer_id(),
             "validFrom": valid_from,
             "credentialSubject": credential_subject,
         });
+        if options.include_vc_id {
+            v["id"] = serde_json::json!(credential_id);
+        }
         if let Some(exp_secs) = claims.expiration_seconds {
             let valid_until = (now + chrono::Duration::seconds(exp_secs))
                 .format("%Y-%m-%dT%H:%M:%SZ")
@@ -189,12 +241,14 @@ pub fn prepare_jwt_vc(
         let issuance_date = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
         let mut v = serde_json::json!({
             "@context": ["https://www.w3.org/2018/credentials/v1"],
-            "id": credential_id,
             "type": vc_types,
             "issuer": signer.issuer_id(),
             "issuanceDate": issuance_date,
             "credentialSubject": credential_subject,
         });
+        if options.include_vc_id {
+            v["id"] = serde_json::json!(credential_id);
+        }
         if let Some(exp_secs) = claims.expiration_seconds {
             let expiration_date = (now + chrono::Duration::seconds(exp_secs))
                 .format("%Y-%m-%dT%H:%M:%SZ")
@@ -203,6 +257,10 @@ pub fn prepare_jwt_vc(
         }
         v
     };
+    let mut vc = vc;
+    if let Some(ref credential_status) = options.credential_status {
+        vc["credentialStatus"] = credential_status.clone();
+    }
 
     let mut payload = serde_json::json!({
         "iss": signer.issuer_id(),
@@ -210,8 +268,13 @@ pub fn prepare_jwt_vc(
         "jti": credential_id,
         "vc": vc,
     });
-    if let Some(ref subject_id) = claims.subject_id {
-        payload["sub"] = serde_json::json!(subject_id);
+    if options.include_subject_claim {
+        if let Some(ref subject_id) = claims.subject_id {
+            payload["sub"] = serde_json::json!(subject_id);
+        }
+    }
+    if options.include_nbf {
+        payload["nbf"] = serde_json::json!(now.timestamp());
     }
     if let Some(exp_secs) = claims.expiration_seconds {
         payload["exp"] = serde_json::json!(now.timestamp() + exp_secs);

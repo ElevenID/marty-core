@@ -13,25 +13,27 @@
 //! # Example
 //!
 //! ```ignore
-//! use marty_verification::crypto::ocsp::{OcspRequestBuilder, parse_ocsp_response, OcspCertStatus};
+//! use marty_verification::crypto::ocsp::{OcspRequestBuilder, validate_ocsp_response, OcspCertStatus};
 //!
 //! // Build an OCSP request
 //! let request_der = OcspRequestBuilder::new()
 //!     .add_certificate(&cert_der, &issuer_cert_der)
 //!     .build()?;
 //!
-//! // Parse an OCSP response
-//! let response = parse_ocsp_response(&response_der)?;
+//! // Authenticate an OCSP response for the requested certificate and issuer
+//! let response = validate_ocsp_response(&response_der, &cert_der, &issuer_der)?;
 //! match response.cert_status {
-//!     OcspCertStatus::Good => println!("Certificate is valid"),
+//!     OcspCertStatus::Good => println!("Certificate is not revoked"),
 //!     OcspCertStatus::Revoked { .. } => println!("Certificate is revoked"),
-//!     OcspCertStatus::Unknown => println!("Certificate status unknown"),
+//!     OcspCertStatus::Unknown => return Err("OCSP status unknown".into()),
 //! }
 //! ```
 
 use der::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha1::Sha1;
+use sha2::{Digest, Sha256, Sha384, Sha512};
+use x509_cert::ext::pkix::{ExtendedKeyUsage, KeyUsage};
 use x509_cert::Certificate;
 use x509_ocsp::{
     BasicOcspResponse, CertId, CertStatus, OcspGeneralizedTime, OcspRequest, OcspResponse,
@@ -106,6 +108,35 @@ pub struct OcspResponseInfo {
     pub responder_id: Option<String>,
     /// Produced at time
     pub produced_at: Option<String>,
+}
+
+/// Authenticated OCSP response information.
+///
+/// Values in this structure are returned only after the response signature,
+/// responder authorization, certificate binding, and freshness have all been
+/// validated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatedOcspResponse {
+    /// Authenticated certificate status.
+    pub cert_status: OcspCertStatus,
+    /// Time at which the status was known to be correct.
+    pub this_update: String,
+    /// Expiration time supplied by the responder, when present.
+    pub next_update: Option<String>,
+    /// Time at which the response was produced.
+    pub produced_at: String,
+    /// Responder identifier from the signed response.
+    pub responder_id: String,
+    /// Whether the issuer signed the response directly.
+    pub responder_is_issuer: bool,
+    /// Whether an issuer-authorized delegated responder signed the response.
+    pub delegated_responder: bool,
+    /// True after the BasicOCSPResponse signature has been verified.
+    pub signature_valid: bool,
+    /// True after CertID has been matched to the requested certificate/issuer.
+    pub certificate_id_valid: bool,
+    /// True after thisUpdate/nextUpdate/producedAt freshness checks pass.
+    pub freshness_valid: bool,
 }
 
 // ============================================================================
@@ -232,7 +263,10 @@ impl OcspRequestBuilder {
 // OCSP Response Parsing
 // ============================================================================
 
-/// Parse an OCSP response.
+/// Parse an OCSP response without authenticating it.
+///
+/// This is intended for diagnostics and display only. Call
+/// [`validate_ocsp_response`] before using status data in a trust decision.
 pub fn parse_ocsp_response(response_der: &[u8]) -> CryptoResult<OcspResponseInfo> {
     let response = OcspResponse::from_der(response_der)
         .map_err(|e| CryptoError::der_error(format!("Failed to parse OCSP response: {}", e)))?;
@@ -315,6 +349,305 @@ pub fn parse_ocsp_response(response_der: &[u8]) -> CryptoResult<OcspResponseInfo
     })
 }
 
+/// Validate an OCSP response for a specific certificate and issuer.
+///
+/// Unlike [`parse_ocsp_response`], this function is suitable for trust
+/// decisions. It fails closed unless the response is successful, signed by
+/// the issuer or an authorized delegated responder, bound to the supplied
+/// certificate and issuer, and current at the time of validation.
+pub fn validate_ocsp_response(
+    response_der: &[u8],
+    cert_der: &[u8],
+    issuer_der: &[u8],
+) -> CryptoResult<ValidatedOcspResponse> {
+    const CLOCK_SKEW_SECS: u64 = 5 * 60;
+    const MAX_AGE_WITHOUT_NEXT_UPDATE_SECS: u64 = 24 * 60 * 60;
+
+    let cert = Certificate::from_der(cert_der)
+        .map_err(|e| CryptoError::ocsp(format!("invalid certificate: {e}")))?;
+    let issuer = Certificate::from_der(issuer_der)
+        .map_err(|e| CryptoError::ocsp(format!("invalid issuer certificate: {e}")))?;
+
+    if cert.tbs_certificate.issuer != issuer.tbs_certificate.subject {
+        return Err(CryptoError::ocsp(
+            "certificate issuer does not match supplied issuer certificate",
+        ));
+    }
+    if !crate::certificate::verify_certificate_signature(cert_der, issuer_der)? {
+        return Err(CryptoError::ocsp(
+            "certificate signature does not validate under supplied issuer",
+        ));
+    }
+
+    let response = OcspResponse::from_der(response_der)
+        .map_err(|e| CryptoError::ocsp(format!("failed to parse OCSP response: {e}")))?;
+    if response.response_status != OcspResponseStatus::Successful {
+        return Err(CryptoError::ocsp(format!(
+            "OCSP responder returned non-success status: {:?}",
+            response.response_status
+        )));
+    }
+    let response_bytes = response
+        .response_bytes
+        .ok_or_else(|| CryptoError::ocsp("successful OCSP response has no response bytes"))?;
+    if response_bytes.response_type != const_oid::db::rfc6960::ID_PKIX_OCSP_BASIC {
+        return Err(CryptoError::ocsp("unsupported OCSP response type"));
+    }
+    let basic = BasicOcspResponse::from_der(response_bytes.response.as_bytes())
+        .map_err(|e| CryptoError::ocsp(format!("failed to parse BasicOCSPResponse: {e}")))?;
+
+    let matching_responses = basic
+        .tbs_response_data
+        .responses
+        .iter()
+        .filter(|single| cert_id_matches(&single.cert_id, &cert, &issuer).unwrap_or(false))
+        .collect::<Vec<_>>();
+    if matching_responses.len() != 1 {
+        return Err(CryptoError::ocsp(format!(
+            "expected exactly one certificate-bound SingleResponse, found {}",
+            matching_responses.len()
+        )));
+    }
+    let single = matching_responses[0];
+
+    let (responder, responder_is_issuer) =
+        select_authorized_responder(&basic, &issuer, issuer_der)?;
+    let tbs_der = basic
+        .tbs_response_data
+        .to_der()
+        .map_err(|e| CryptoError::ocsp(format!("failed to encode signed OCSP data: {e}")))?;
+    let responder_spki = responder
+        .tbs_certificate
+        .subject_public_key_info
+        .to_der()
+        .map_err(|e| CryptoError::ocsp(format!("failed to encode responder public key: {e}")))?;
+    let signature = basic
+        .signature
+        .as_bytes()
+        .ok_or_else(|| CryptoError::ocsp("OCSP signature is not byte aligned"))?;
+    let algorithm =
+        crate::SignatureAlgorithm::from_oid(&basic.signature_algorithm.oid.to_string())?;
+    if !crate::verify_signature(algorithm, &responder_spki, &tbs_der, signature)? {
+        return Err(CryptoError::ocsp("invalid BasicOCSPResponse signature"));
+    }
+
+    validate_ocsp_freshness(
+        &basic.tbs_response_data.produced_at,
+        &single.this_update,
+        single.next_update.as_ref(),
+        CLOCK_SKEW_SECS,
+        MAX_AGE_WITHOUT_NEXT_UPDATE_SECS,
+    )?;
+
+    let cert_status = match &single.cert_status {
+        CertStatus::Good(_) => OcspCertStatus::Good,
+        CertStatus::Revoked(info) => OcspCertStatus::Revoked {
+            revocation_time: format_ocsp_generalized_time(&info.revocation_time),
+            reason: info
+                .revocation_reason
+                .as_ref()
+                .map(|reason| format!("{reason:?}")),
+        },
+        CertStatus::Unknown(_) => OcspCertStatus::Unknown,
+    };
+    let responder_id = match &basic.tbs_response_data.responder_id {
+        x509_ocsp::ResponderId::ByName(name) => name.to_string(),
+        x509_ocsp::ResponderId::ByKey(key_hash) => hex::encode(key_hash.as_bytes()),
+    };
+
+    Ok(ValidatedOcspResponse {
+        cert_status,
+        this_update: format_ocsp_generalized_time(&single.this_update),
+        next_update: single
+            .next_update
+            .as_ref()
+            .map(format_ocsp_generalized_time),
+        produced_at: format_ocsp_generalized_time(&basic.tbs_response_data.produced_at),
+        responder_id,
+        responder_is_issuer,
+        delegated_responder: !responder_is_issuer,
+        signature_valid: true,
+        certificate_id_valid: true,
+        freshness_valid: true,
+    })
+}
+
+fn cert_id_matches(
+    cert_id: &CertId,
+    cert: &Certificate,
+    issuer: &Certificate,
+) -> CryptoResult<bool> {
+    if cert_id.serial_number != cert.tbs_certificate.serial_number {
+        return Ok(false);
+    }
+    let issuer_name_der = issuer
+        .tbs_certificate
+        .subject
+        .to_der()
+        .map_err(|e| CryptoError::ocsp(format!("failed to encode issuer name: {e}")))?;
+    let issuer_key = issuer
+        .tbs_certificate
+        .subject_public_key_info
+        .subject_public_key
+        .raw_bytes();
+    let name_hash = ocsp_hash(
+        cert_id.hash_algorithm.oid.to_string().as_str(),
+        &issuer_name_der,
+    )?;
+    let key_hash = ocsp_hash(cert_id.hash_algorithm.oid.to_string().as_str(), issuer_key)?;
+    Ok(cert_id.issuer_name_hash.as_bytes() == name_hash
+        && cert_id.issuer_key_hash.as_bytes() == key_hash)
+}
+
+fn ocsp_hash(oid: &str, value: &[u8]) -> CryptoResult<Vec<u8>> {
+    match oid {
+        "1.3.14.3.2.26" => Ok(Sha1::digest(value).to_vec()),
+        "2.16.840.1.101.3.4.2.1" => Ok(Sha256::digest(value).to_vec()),
+        "2.16.840.1.101.3.4.2.2" => Ok(Sha384::digest(value).to_vec()),
+        "2.16.840.1.101.3.4.2.3" => Ok(Sha512::digest(value).to_vec()),
+        _ => Err(CryptoError::unsupported_algorithm(format!(
+            "unsupported OCSP CertID hash algorithm: {oid}"
+        ))),
+    }
+}
+
+fn responder_id_matches(responder_id: &x509_ocsp::ResponderId, certificate: &Certificate) -> bool {
+    match responder_id {
+        x509_ocsp::ResponderId::ByName(name) => name == &certificate.tbs_certificate.subject,
+        x509_ocsp::ResponderId::ByKey(key_hash) => {
+            let subject_key = certificate
+                .tbs_certificate
+                .subject_public_key_info
+                .subject_public_key
+                .raw_bytes();
+            key_hash.as_bytes() == Sha1::digest(subject_key).as_slice()
+        }
+    }
+}
+
+fn select_authorized_responder(
+    basic: &BasicOcspResponse,
+    issuer: &Certificate,
+    issuer_der: &[u8],
+) -> CryptoResult<(Certificate, bool)> {
+    if responder_id_matches(&basic.tbs_response_data.responder_id, issuer) {
+        validate_certificate_current(issuer)?;
+        return Ok((issuer.clone(), true));
+    }
+
+    let mut matching = basic
+        .certs
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|candidate| responder_id_matches(&basic.tbs_response_data.responder_id, candidate));
+    let responder = matching.next().ok_or_else(|| {
+        CryptoError::ocsp("OCSP responder certificate is missing or unidentified")
+    })?;
+    if matching.next().is_some() {
+        return Err(CryptoError::ocsp(
+            "multiple embedded certificates match the OCSP responder ID",
+        ));
+    }
+    if responder.tbs_certificate.issuer != issuer.tbs_certificate.subject {
+        return Err(CryptoError::ocsp(
+            "delegated OCSP responder was not issued by the certificate issuer",
+        ));
+    }
+    let responder_der = responder
+        .to_der()
+        .map_err(|e| CryptoError::ocsp(format!("failed to encode responder certificate: {e}")))?;
+    if !crate::certificate::verify_certificate_signature(&responder_der, issuer_der)? {
+        return Err(CryptoError::ocsp(
+            "delegated OCSP responder certificate signature is invalid",
+        ));
+    }
+    validate_certificate_current(responder)?;
+
+    const OCSP_SIGNING_OID: &str = "1.3.6.1.5.5.7.3.9";
+    let eku = responder
+        .tbs_certificate
+        .get::<ExtendedKeyUsage>()
+        .map_err(|e| CryptoError::ocsp(format!("invalid responder EKU extension: {e}")))?
+        .ok_or_else(|| CryptoError::ocsp("delegated responder lacks extended key usage"))?
+        .1;
+    if !eku.0.iter().any(|oid| oid.to_string() == OCSP_SIGNING_OID) {
+        return Err(CryptoError::ocsp(
+            "delegated responder is not authorized for OCSP signing",
+        ));
+    }
+    if let Some((_, key_usage)) = responder
+        .tbs_certificate
+        .get::<KeyUsage>()
+        .map_err(|e| CryptoError::ocsp(format!("invalid responder key usage extension: {e}")))?
+    {
+        if !key_usage.digital_signature() {
+            return Err(CryptoError::ocsp(
+                "delegated responder key usage does not allow digital signatures",
+            ));
+        }
+    }
+    Ok((responder.clone(), false))
+}
+
+fn validate_certificate_current(certificate: &Certificate) -> CryptoResult<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| CryptoError::ocsp("system clock is before Unix epoch"))?
+        .as_secs();
+    let validity = certificate.tbs_certificate.validity;
+    if now < validity.not_before.to_unix_duration().as_secs()
+        || now > validity.not_after.to_unix_duration().as_secs()
+    {
+        return Err(CryptoError::ocsp(
+            "OCSP responder certificate is not currently valid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ocsp_freshness(
+    produced_at: &OcspGeneralizedTime,
+    this_update: &OcspGeneralizedTime,
+    next_update: Option<&OcspGeneralizedTime>,
+    clock_skew_secs: u64,
+    max_age_without_next_update_secs: u64,
+) -> CryptoResult<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| CryptoError::ocsp("system clock is before Unix epoch"))?
+        .as_secs();
+    let produced = produced_at.0.to_unix_duration().as_secs();
+    let this = this_update.0.to_unix_duration().as_secs();
+    if produced > now.saturating_add(clock_skew_secs) || this > now.saturating_add(clock_skew_secs)
+    {
+        return Err(CryptoError::ocsp(
+            "OCSP response contains a future timestamp",
+        ));
+    }
+    if produced.saturating_add(clock_skew_secs) < this {
+        return Err(CryptoError::ocsp(
+            "OCSP producedAt precedes thisUpdate beyond allowed clock skew",
+        ));
+    }
+    if let Some(next_update) = next_update {
+        let next = next_update.0.to_unix_duration().as_secs();
+        if next < this || now > next.saturating_add(clock_skew_secs) {
+            return Err(CryptoError::ocsp(
+                "OCSP response is stale or has an invalid validity interval",
+            ));
+        }
+        if produced > next.saturating_add(clock_skew_secs) {
+            return Err(CryptoError::ocsp("OCSP producedAt is after nextUpdate"));
+        }
+    } else if now > this.saturating_add(max_age_without_next_update_secs + clock_skew_secs) {
+        return Err(CryptoError::ocsp(
+            "OCSP response without nextUpdate exceeds the maximum accepted age",
+        ));
+    }
+    Ok(())
+}
+
 /// Format GeneralizedTime to string.
 fn format_generalized_time(time: &der::asn1::GeneralizedTime) -> String {
     time.to_date_time().to_string()
@@ -325,15 +658,16 @@ fn format_ocsp_generalized_time(time: &x509_ocsp::OcspGeneralizedTime) -> String
     format_generalized_time(&time.0)
 }
 
-/// Check if a certificate is revoked via OCSP response.
-pub fn is_revoked_via_ocsp(response_der: &[u8]) -> CryptoResult<bool> {
-    let response = parse_ocsp_response(response_der)?;
-
-    match response.cert_status {
-        Some(OcspCertStatus::Revoked { .. }) => Ok(true),
-        Some(OcspCertStatus::Good) => Ok(false),
-        Some(OcspCertStatus::Unknown) => Err(CryptoError::internal("OCSP returned unknown status")),
-        None => Err(CryptoError::internal("OCSP response was not successful")),
+/// Check whether a certificate is revoked using an authenticated OCSP response.
+pub fn is_revoked_via_ocsp(
+    response_der: &[u8],
+    cert_der: &[u8],
+    issuer_der: &[u8],
+) -> CryptoResult<bool> {
+    match validate_ocsp_response(response_der, cert_der, issuer_der)?.cert_status {
+        OcspCertStatus::Revoked { .. } => Ok(true),
+        OcspCertStatus::Good => Ok(false),
+        OcspCertStatus::Unknown => Err(CryptoError::ocsp("OCSP returned unknown status")),
     }
 }
 
@@ -634,15 +968,12 @@ pub async fn ocsp_check(
         .await
         .map_err(|e| CryptoError::network_error(format!("Failed to read OCSP response: {}", e)))?;
 
-    // Parse the OCSP response
-    let response_info = parse_ocsp_response(&response_bytes)?;
-
-    let status = response_info.cert_status.unwrap_or(OcspCertStatus::Unknown);
+    let response_info = validate_ocsp_response(&response_bytes, cert_der, issuer_cert_der)?;
     let raw_response = base64::engine::general_purpose::STANDARD.encode(&response_bytes);
 
     Ok(OcspCheckResult {
-        status,
-        this_update: response_info.this_update,
+        status: response_info.cert_status,
+        this_update: Some(response_info.this_update),
         next_update: response_info.next_update,
         raw_response: Some(raw_response),
     })
@@ -694,14 +1025,12 @@ pub async fn ocsp_check_get(
         .await
         .map_err(|e| CryptoError::network_error(format!("Failed to read OCSP response: {}", e)))?;
 
-    let response_info = parse_ocsp_response(&response_bytes)?;
-
-    let status = response_info.cert_status.unwrap_or(OcspCertStatus::Unknown);
+    let response_info = validate_ocsp_response(&response_bytes, cert_der, issuer_cert_der)?;
     let raw_response = base64::engine::general_purpose::STANDARD.encode(&response_bytes);
 
     Ok(OcspCheckResult {
-        status,
-        this_update: response_info.this_update,
+        status: response_info.cert_status,
+        this_update: Some(response_info.this_update),
         next_update: response_info.next_update,
         raw_response: Some(raw_response),
     })
@@ -945,13 +1274,12 @@ impl OcspClient {
             CryptoError::network_error(format!("Failed to read OCSP response: {}", e))
         })?;
 
-        let response_info = parse_ocsp_response(&response_bytes)?;
-        let status = response_info.cert_status.unwrap_or(OcspCertStatus::Unknown);
+        let response_info = validate_ocsp_response(&response_bytes, cert_der, issuer_cert_der)?;
         let raw_response = base64::engine::general_purpose::STANDARD.encode(&response_bytes);
 
         Ok(OcspCheckResult {
-            status,
-            this_update: response_info.this_update,
+            status: response_info.cert_status,
+            this_update: Some(response_info.this_update),
             next_update: response_info.next_update,
             raw_response: Some(raw_response),
         })
@@ -994,13 +1322,12 @@ impl OcspClient {
             CryptoError::network_error(format!("Failed to read OCSP response: {}", e))
         })?;
 
-        let response_info = parse_ocsp_response(&response_bytes)?;
-        let status = response_info.cert_status.unwrap_or(OcspCertStatus::Unknown);
+        let response_info = validate_ocsp_response(&response_bytes, cert_der, issuer_cert_der)?;
         let raw_response = base64::engine::general_purpose::STANDARD.encode(&response_bytes);
 
         Ok(OcspCheckResult {
-            status,
-            this_update: response_info.this_update,
+            status: response_info.cert_status,
+            this_update: Some(response_info.this_update),
             next_update: response_info.next_update,
             raw_response: Some(raw_response),
         })
@@ -1167,6 +1494,14 @@ mod tests_with_cert_builder {
             OcspResponseStatusCode::Successful
         );
         assert_eq!(response_info.cert_status, Some(OcspCertStatus::Good));
+
+        let validated = validate_ocsp_response(&response_der, &leaf_cert_der, &ca_cert_der)
+            .expect("authenticated OCSP response should validate");
+        assert_eq!(validated.cert_status, OcspCertStatus::Good);
+        assert!(validated.signature_valid);
+        assert!(validated.certificate_id_valid);
+        assert!(validated.freshness_valid);
+        assert!(validated.responder_is_issuer);
     }
 
     #[test]
@@ -1193,6 +1528,77 @@ mod tests_with_cert_builder {
             .expect("Failed to build OCSP response");
 
         // Check revocation
-        assert!(is_revoked_via_ocsp(&response_der).unwrap());
+        assert!(is_revoked_via_ocsp(&response_der, &leaf_cert_der, &ca_cert_der).unwrap());
+        let validated = validate_ocsp_response(&response_der, &leaf_cert_der, &ca_cert_der)
+            .expect("authenticated revoked response should validate");
+        assert!(matches!(
+            validated.cert_status,
+            OcspCertStatus::Revoked { .. }
+        ));
+    }
+
+    #[test]
+    fn authenticated_ocsp_rejects_tampering_and_certificate_mismatch() {
+        use der::asn1::{BitString, OctetString};
+
+        let (ca_cert_der, ca_key_pem) =
+            create_ca_certificate("OCSP Binding CA", None, 365, KeyType::EcdsaP256).unwrap();
+        let (leaf_cert_der, _) = create_signed_certificate(
+            "Bound Certificate",
+            &ca_cert_der,
+            &ca_key_pem,
+            365,
+            false,
+            KeyType::EcdsaP256,
+        )
+        .unwrap();
+        let (other_leaf_der, _) = create_signed_certificate(
+            "Different Certificate",
+            &ca_cert_der,
+            &ca_key_pem,
+            365,
+            false,
+            KeyType::EcdsaP256,
+        )
+        .unwrap();
+        let response_der = OcspResponseBuilder::new()
+            .certificate(&leaf_cert_der, &ca_cert_der)
+            .status_good()
+            .build(&ca_key_pem)
+            .unwrap();
+
+        assert!(validate_ocsp_response(&response_der, &other_leaf_der, &ca_cert_der).is_err());
+
+        let mut outer = OcspResponse::from_der(&response_der).unwrap();
+        let response_bytes = outer.response_bytes.as_mut().unwrap();
+        let mut basic = BasicOcspResponse::from_der(response_bytes.response.as_bytes()).unwrap();
+        let mut signature = basic.signature.as_bytes().unwrap().to_vec();
+        signature[0] ^= 0x01;
+        basic.signature = BitString::from_bytes(&signature).unwrap();
+        response_bytes.response = OctetString::new(basic.to_der().unwrap()).unwrap();
+        let tampered_der = outer.to_der().unwrap();
+
+        assert!(validate_ocsp_response(&tampered_der, &leaf_cert_der, &ca_cert_der).is_err());
+    }
+
+    #[test]
+    fn stale_ocsp_freshness_is_rejected() {
+        use der::asn1::GeneralizedTime;
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let stale =
+            GeneralizedTime::from_unix_duration(now - Duration::from_secs(48 * 60 * 60)).unwrap();
+        let produced =
+            GeneralizedTime::from_unix_duration(now - Duration::from_secs(47 * 60 * 60)).unwrap();
+
+        assert!(validate_ocsp_freshness(
+            &OcspGeneralizedTime(produced),
+            &OcspGeneralizedTime(stale),
+            None,
+            300,
+            24 * 60 * 60,
+        )
+        .is_err());
     }
 }

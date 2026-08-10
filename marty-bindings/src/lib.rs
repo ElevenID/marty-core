@@ -8,6 +8,7 @@
 #![allow(clippy::useless_conversion)]
 
 mod mdoc;
+mod remote_credential;
 mod status_list;
 
 use pyo3::prelude::*;
@@ -977,7 +978,9 @@ fn oid4vci_prepare_credential(
     }
     impl CredentialSigner for MetadataSigner {
         fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-            unreachable!("MetadataSigner.sign() should not be called during prepare")
+            Err(marty_oid4vci::Oid4vciError::SigningError(
+                "metadata-only credential signer cannot sign".to_string(),
+            ))
         }
         fn algorithm(&self) -> SigningAlgorithm {
             self.algorithm
@@ -1084,7 +1087,9 @@ fn oid4vci_assemble_credential(
             let signed = marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(prepared, &signature);
             match signed {
                 SignedCredential::JwtVcJson { jwt, credential_id } => Ok((jwt, credential_id)),
-                _ => unreachable!(),
+                _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "JWT-VC assembler returned an unexpected credential format",
+                )),
             }
         }
         "vds_nc" => {
@@ -1099,7 +1104,9 @@ fn oid4vci_assemble_credential(
                     barcode_data,
                     credential_id,
                 } => Ok((barcode_data, credential_id)),
-                _ => unreachable!(),
+                _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "VDS-NC assembler returned an unexpected credential format",
+                )),
             }
         }
         _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
@@ -1198,7 +1205,9 @@ fn oid4vci_prepare_mdoc(
     }
     impl CredentialSigner for MetadataSigner {
         fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-            unreachable!("remote mDoc preparation must not invoke the metadata signer")
+            Err(marty_oid4vci::Oid4vciError::SigningError(
+                "metadata-only mDoc signer cannot sign".to_string(),
+            ))
         }
         fn algorithm(&self) -> SigningAlgorithm {
             self.algorithm
@@ -1263,7 +1272,9 @@ fn oid4vci_assemble_mdoc(
             issuer_signed_b64,
             credential_id,
         } => Ok((issuer_signed_b64, credential_id)),
-        _ => unreachable!("mDoc assembler returned a different credential format"),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            "mDoc assembler returned an unexpected credential format",
+        )),
     }
 }
 
@@ -1675,6 +1686,7 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
 /// Downstream extension crates use this entry point to extend ``_marty_rs``
 /// without copying bindings or publishing a second, incompatible module.
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    remote_credential::register(m)?;
     status_list::register_status_list_bindings(m)?;
 
     // Key Generation

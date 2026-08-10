@@ -160,58 +160,6 @@ pub fn crl_pem_to_der(pem_data: &str) -> VerificationResult<Vec<u8>> {
     pem_to_der(pem_data, "X509 CRL")
 }
 
-/// Check if a certificate is revoked by any of the provided CRLs.
-///
-/// # Arguments
-///
-/// * `cert_serial` - Serial number of certificate to check (hex string)
-/// * `cert_issuer` - Issuer DN of certificate
-/// * `crls` - List of CRLs to check against
-///
-/// # Returns
-///
-/// `Ok(Some(reason))` if revoked, `Ok(None)` if not revoked.
-pub fn check_certificate_revocation(
-    cert_serial: &str,
-    cert_issuer: &str,
-    crls: &[CrlInfo],
-) -> VerificationResult<Option<RevocationReason>> {
-    // Normalize serial number for comparison
-    let normalized_serial = cert_serial.to_uppercase().replace(":", "").replace(" ", "");
-
-    for crl in crls {
-        // Check issuer matches (simplified comparison)
-        // In production, should compare RDN components properly
-        if !issuer_matches(cert_issuer, &crl.issuer) {
-            continue;
-        }
-
-        // Check if CRL is still valid
-        if let Some(next_update) = crl.next_update {
-            if next_update < Utc::now() {
-                tracing::warn!("CRL from {} has expired", crl.issuer);
-                // Continue checking but log warning
-            }
-        }
-
-        // Search for certificate in revoked list
-        for revoked in &crl.revoked_certificates {
-            let revoked_serial = revoked
-                .serial_number
-                .to_uppercase()
-                .replace(":", "")
-                .replace(" ", "");
-            if revoked_serial == normalized_serial {
-                return Ok(Some(
-                    revoked.reason.unwrap_or(RevocationReason::Unspecified),
-                ));
-            }
-        }
-    }
-
-    Ok(None)
-}
-
 /// Verify CRL signature against issuer's public key.
 ///
 /// # Arguments
@@ -283,13 +231,6 @@ fn pem_to_der(pem_data: &str, expected_label: &str) -> VerificationResult<Vec<u8
     Ok(der_bytes)
 }
 
-fn issuer_matches(cert_issuer: &str, crl_issuer: &str) -> bool {
-    // Simplified issuer comparison
-    // In production, parse and compare RDN components
-    let normalize = |s: &str| s.to_uppercase().replace(" ", "").replace(",", "");
-    normalize(cert_issuer) == normalize(crl_issuer)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,45 +250,5 @@ mod tests {
             RevocationReason::from_code(255),
             RevocationReason::Unspecified
         );
-    }
-
-    #[test]
-    fn test_check_revocation_not_found() {
-        let crls = vec![CrlInfo {
-            issuer: "CN=Test CA, C=US".to_string(),
-            this_update: Some(Utc::now()),
-            next_update: Some(Utc::now() + chrono::Duration::days(30)),
-            revoked_certificates: vec![RevokedCertificate {
-                serial_number: "01:02:03:04".to_string(),
-                revocation_date: Some(Utc::now()),
-                reason: Some(RevocationReason::KeyCompromise),
-            }],
-            crl_number: Some(1),
-        }];
-
-        let result =
-            check_certificate_revocation("FF:FF:FF:FF", "CN=Test CA, C=US", &crls).unwrap();
-
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_check_revocation_found() {
-        let crls = vec![CrlInfo {
-            issuer: "CN=Test CA, C=US".to_string(),
-            this_update: Some(Utc::now()),
-            next_update: Some(Utc::now() + chrono::Duration::days(30)),
-            revoked_certificates: vec![RevokedCertificate {
-                serial_number: "01:02:03:04".to_string(),
-                revocation_date: Some(Utc::now()),
-                reason: Some(RevocationReason::KeyCompromise),
-            }],
-            crl_number: Some(1),
-        }];
-
-        let result =
-            check_certificate_revocation("01:02:03:04", "CN=Test CA, C=US", &crls).unwrap();
-
-        assert_eq!(result, Some(RevocationReason::KeyCompromise));
     }
 }

@@ -16,7 +16,6 @@ use der::{Decode, DecodePem, Encode};
 use serde::{Deserialize, Serialize};
 use x509_cert::Certificate;
 
-use crate::asn1::crl::CrlInfo;
 use crate::{VerificationError, VerificationResult};
 
 /// Result of certificate chain validation.
@@ -124,7 +123,9 @@ pub struct ChainValidator {
     /// Configuration.
     config: ChainValidatorConfig,
     /// CRLs for revocation checking.
-    crls: Vec<CrlInfo>,
+    crls: Vec<Vec<u8>>,
+    /// DER OCSP responses for certificate-bound authenticated checking.
+    ocsp_responses: Vec<Vec<u8>>,
 }
 
 impl ChainValidator {
@@ -135,6 +136,7 @@ impl ChainValidator {
             intermediates: Vec::new(),
             config: ChainValidatorConfig::default(),
             crls: Vec::new(),
+            ocsp_responses: Vec::new(),
         }
     }
 
@@ -145,6 +147,7 @@ impl ChainValidator {
             intermediates: Vec::new(),
             config,
             crls: Vec::new(),
+            ocsp_responses: Vec::new(),
         }
     }
 
@@ -155,6 +158,7 @@ impl ChainValidator {
             intermediates: self.intermediates.clone(),
             config,
             crls: self.crls.clone(),
+            ocsp_responses: self.ocsp_responses.clone(),
         }
     }
 
@@ -194,9 +198,22 @@ impl ChainValidator {
         Ok(())
     }
 
-    /// Add a CRL for revocation checking.
-    pub fn add_crl(&mut self, crl: CrlInfo) {
-        self.crls.push(crl);
+    /// Add a DER CRL for authenticated revocation checking.
+    pub fn add_crl_der(&mut self, crl_der: &[u8]) -> VerificationResult<()> {
+        x509_cert::crl::CertificateList::from_der(crl_der)
+            .map_err(|e| VerificationError::der_error(format!("Invalid CRL DER: {e}")))?;
+        self.crls.push(crl_der.to_vec());
+        Ok(())
+    }
+
+    /// Add a DER OCSP response. Trust is established only when validating it
+    /// against a specific certificate and issuer during chain validation.
+    pub fn add_ocsp_response_der(&mut self, response_der: &[u8]) -> VerificationResult<()> {
+        marty_crypto::ocsp::parse_ocsp_response(response_der).map_err(|error| {
+            VerificationError::der_error(format!("Invalid OCSP response DER: {error}"))
+        })?;
+        self.ocsp_responses.push(response_der.to_vec());
+        Ok(())
     }
 
     /// Validate a certificate chain.
@@ -292,6 +309,10 @@ impl ChainValidator {
             result.valid = false;
             result.errors.push(e);
         }
+        if let Err(e) = self.check_chain_constraints(chain) {
+            result.valid = false;
+            result.errors.push(e);
+        }
 
         // Check key usage for end-entity
         if let Err(e) = self.check_key_usage(end_entity) {
@@ -304,26 +325,81 @@ impl ChainValidator {
         }
 
         // Check revocation if configured
-        if self.config.check_crl && !self.crls.is_empty() {
-            for (i, cert) in chain.iter().enumerate() {
-                match self.check_revocation(cert) {
-                    Ok(false) => {} // Not revoked
-                    Ok(true) => {
-                        let msg = format!("Certificate {} is revoked", i);
-                        if self.config.revocation_mode == "hard_fail" {
-                            result.valid = false;
-                            result.errors.push(msg);
-                        } else {
-                            result.warnings.push(msg);
+        if self.config.check_crl {
+            if self.crls.is_empty() {
+                let message = "CRL checking requested but no CRL evidence was supplied".to_string();
+                if self.config.revocation_mode == "hard_fail" {
+                    result.valid = false;
+                    result.errors.push(message);
+                } else {
+                    result.warnings.push(message);
+                }
+            } else {
+                for (i, cert) in chain.iter().enumerate() {
+                    if self.is_configured_trust_anchor(cert) {
+                        continue;
+                    }
+                    match self.check_revocation(cert, chain) {
+                        Ok(false) => {} // Not revoked
+                        Ok(true) => {
+                            let msg = format!("Certificate {} is revoked", i);
+                            if self.config.revocation_mode == "hard_fail" {
+                                result.valid = false;
+                                result.errors.push(msg);
+                            } else {
+                                result.warnings.push(msg);
+                            }
+                        }
+                        Err(e) => {
+                            let msg =
+                                format!("Revocation check failed for certificate {}: {}", i, e);
+                            if self.config.revocation_mode == "hard_fail" {
+                                result.valid = false;
+                                result.errors.push(msg);
+                            } else {
+                                result.warnings.push(msg);
+                            }
                         }
                     }
-                    Err(e) => {
-                        let msg = format!("Revocation check failed for certificate {}: {}", i, e);
-                        if self.config.revocation_mode == "hard_fail" {
-                            result.valid = false;
-                            result.errors.push(msg);
-                        } else {
-                            result.warnings.push(msg);
+                }
+            }
+        }
+        if self.config.check_ocsp {
+            if self.ocsp_responses.is_empty() {
+                let message =
+                    "OCSP checking requested but no certificate-bound response evidence was supplied"
+                        .to_string();
+                if self.config.revocation_mode == "hard_fail" {
+                    result.valid = false;
+                    result.errors.push(message);
+                } else {
+                    result.warnings.push(message);
+                }
+            } else {
+                for (index, cert) in chain.iter().enumerate() {
+                    if self.is_configured_trust_anchor(cert) {
+                        continue;
+                    }
+                    match self.check_ocsp_status(cert, chain) {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            let message = format!("Certificate {index} is revoked by OCSP");
+                            if self.config.revocation_mode == "hard_fail" {
+                                result.valid = false;
+                                result.errors.push(message);
+                            } else {
+                                result.warnings.push(message);
+                            }
+                        }
+                        Err(error) => {
+                            let message =
+                                format!("OCSP check failed for certificate {index}: {error}");
+                            if self.config.revocation_mode == "hard_fail" {
+                                result.valid = false;
+                                result.errors.push(message);
+                            } else {
+                                result.warnings.push(message);
+                            }
                         }
                     }
                 }
@@ -363,16 +439,13 @@ impl ChainValidator {
             let issuer_cert = &chain[i + 1];
 
             // Check issuer/subject match
-            let subject_issuer = subject_cert.tbs_certificate.issuer.to_string();
-            let issuer_subject = issuer_cert.tbs_certificate.subject.to_string();
-
-            if subject_issuer != issuer_subject {
+            if subject_cert.tbs_certificate.issuer != issuer_cert.tbs_certificate.subject {
                 return Err(format!(
                     "Chain broken: cert {} issuer '{}' != cert {} subject '{}'",
                     i,
-                    subject_issuer,
+                    subject_cert.tbs_certificate.issuer,
                     i + 1,
-                    issuer_subject
+                    issuer_cert.tbs_certificate.subject
                 ));
             }
 
@@ -382,6 +455,121 @@ impl ChainValidator {
                     "Signature verification failed for cert {}: {}",
                     i, e
                 ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_chain_constraints(&self, chain: &[Certificate]) -> Result<(), String> {
+        use x509_cert::ext::pkix::{BasicConstraints, KeyUsage as X509KeyUsage};
+
+        const UNDERSTOOD_CRITICAL_EXTENSIONS: &[&str] = &[
+            "2.5.29.9",           // subjectDirectoryAttributes
+            "2.5.29.14",          // subjectKeyIdentifier
+            "2.5.29.15",          // keyUsage
+            "2.5.29.16",          // privateKeyUsagePeriod
+            "2.5.29.17",          // subjectAltName
+            "2.5.29.18",          // issuerAltName
+            "2.5.29.19",          // basicConstraints
+            "2.5.29.30",          // nameConstraints (rejected below until enforced)
+            "2.5.29.31",          // cRLDistributionPoints
+            "2.5.29.32",          // certificatePolicies
+            "2.5.29.33",          // policyMappings (rejected below)
+            "2.5.29.35",          // authorityKeyIdentifier
+            "2.5.29.36",          // policyConstraints (rejected below)
+            "2.5.29.37",          // extendedKeyUsage
+            "2.5.29.46",          // freshestCRL
+            "2.5.29.54",          // inhibitAnyPolicy (rejected below)
+            "1.3.6.1.5.5.7.1.1",  // authorityInfoAccess
+            "1.3.6.1.5.5.7.1.11", // subjectInfoAccess
+        ];
+        const UNIMPLEMENTED_CONSTRAINTS: &[&str] =
+            &["2.5.29.30", "2.5.29.33", "2.5.29.36", "2.5.29.54"];
+
+        for (index, cert) in chain.iter().enumerate() {
+            if cert.tbs_certificate.signature.oid != cert.signature_algorithm.oid {
+                return Err(format!(
+                    "Certificate {index} inner and outer signature algorithms differ"
+                ));
+            }
+            let mut seen = std::collections::HashSet::new();
+            for extension in cert
+                .tbs_certificate
+                .extensions
+                .as_deref()
+                .unwrap_or_default()
+            {
+                let oid = extension.extn_id.to_string();
+                if !seen.insert(oid.clone()) {
+                    return Err(format!("Certificate {index} has duplicate extension {oid}"));
+                }
+                if extension.critical && !UNDERSTOOD_CRITICAL_EXTENSIONS.contains(&oid.as_str()) {
+                    return Err(format!(
+                        "Certificate {index} has unsupported critical extension {oid}"
+                    ));
+                }
+                if UNIMPLEMENTED_CONSTRAINTS.contains(&oid.as_str()) {
+                    return Err(format!(
+                        "Certificate {index} contains constraint extension {oid} that cannot yet be safely enforced"
+                    ));
+                }
+            }
+
+            if index == 0 && chain.len() > 1 {
+                if let Some((_, constraints)) = cert
+                    .tbs_certificate
+                    .get::<BasicConstraints>()
+                    .map_err(|error| format!("Invalid end-entity BasicConstraints: {error}"))?
+                {
+                    if constraints.ca {
+                        return Err("End-entity certificate is marked as a CA".to_string());
+                    }
+                }
+            }
+        }
+
+        for issuer_index in 1..chain.len() {
+            let issuer = &chain[issuer_index];
+            let constraints = issuer
+                .tbs_certificate
+                .get::<BasicConstraints>()
+                .map_err(|error| {
+                    format!("Invalid BasicConstraints on CA certificate {issuer_index}: {error}")
+                })?
+                .ok_or_else(|| format!("CA certificate {issuer_index} lacks BasicConstraints"))?
+                .1;
+            if !constraints.ca {
+                return Err(format!(
+                    "Certificate {issuer_index} is not authorized as a CA"
+                ));
+            }
+            if let Some((_, key_usage)) =
+                issuer
+                    .tbs_certificate
+                    .get::<X509KeyUsage>()
+                    .map_err(|error| {
+                        format!("Invalid KeyUsage on CA certificate {issuer_index}: {error}")
+                    })?
+            {
+                if !key_usage.key_cert_sign() {
+                    return Err(format!(
+                        "CA certificate {issuer_index} KeyUsage lacks keyCertSign"
+                    ));
+                }
+            }
+            if let Some(path_len) = constraints.path_len_constraint {
+                let subordinate_ca_count = chain[1..issuer_index]
+                    .iter()
+                    .filter(|certificate| {
+                        certificate.tbs_certificate.subject != certificate.tbs_certificate.issuer
+                    })
+                    .count();
+                if subordinate_ca_count > path_len as usize {
+                    return Err(format!(
+                        "CA certificate {issuer_index} pathLenConstraint {path_len} was exceeded"
+                    ));
+                }
             }
         }
 
@@ -401,18 +589,21 @@ impl ChainValidator {
         // Get the last certificate in the chain (closest to root)
         // Safe to unwrap since we checked for empty chain above
         let last_cert = chain.last().expect("chain is not empty");
-        let last_issuer = last_cert.tbs_certificate.issuer.to_string();
+        let last_issuer = &last_cert.tbs_certificate.issuer;
 
         // Check if it's self-signed (root CA)
-        let last_subject = last_cert.tbs_certificate.subject.to_string();
+        let last_subject = &last_cert.tbs_certificate.subject;
         if last_issuer == last_subject {
             // Self-signed, check if it's in our trust anchors
             for anchor in &self.trust_anchors {
-                let anchor_subject = anchor.tbs_certificate.subject.to_string();
-                if anchor_subject == last_subject {
+                if &anchor.tbs_certificate.subject == last_subject {
                     // Verify it's the same certificate
-                    let last_der = last_cert.to_der().unwrap_or_default();
-                    let anchor_der = anchor.to_der().unwrap_or_default();
+                    let last_der = last_cert
+                        .to_der()
+                        .map_err(|error| format!("Failed to encode chain root: {error}"))?;
+                    let anchor_der = anchor
+                        .to_der()
+                        .map_err(|error| format!("Failed to encode trust anchor: {error}"))?;
                     if last_der == anchor_der {
                         return Ok(());
                     }
@@ -422,8 +613,7 @@ impl ChainValidator {
 
         // Check if the chain's root is signed by a trust anchor
         for anchor in &self.trust_anchors {
-            let anchor_subject = anchor.tbs_certificate.subject.to_string();
-            if anchor_subject == last_issuer
+            if &anchor.tbs_certificate.subject == last_issuer
                 && verify_certificate_signature(last_cert, anchor).is_ok()
             {
                 return Ok(());
@@ -432,15 +622,13 @@ impl ChainValidator {
 
         // Check if any intermediate + trust anchor combination works
         for intermediate in &self.intermediates {
-            let int_subject = intermediate.tbs_certificate.subject.to_string();
-            if int_subject == last_issuer
+            if &intermediate.tbs_certificate.subject == last_issuer
                 && verify_certificate_signature(last_cert, intermediate).is_ok()
             {
                 // Now check if intermediate chains to a trust anchor
-                let int_issuer = intermediate.tbs_certificate.issuer.to_string();
+                let int_issuer = &intermediate.tbs_certificate.issuer;
                 for anchor in &self.trust_anchors {
-                    let anchor_subject = anchor.tbs_certificate.subject.to_string();
-                    if anchor_subject == int_issuer
+                    if &anchor.tbs_certificate.subject == int_issuer
                         && verify_certificate_signature(intermediate, anchor).is_ok()
                     {
                         return Ok(());
@@ -449,7 +637,7 @@ impl ChainValidator {
             }
         }
 
-        Err(format!("No trust anchor found for issuer: {}", last_issuer))
+        Err(format!("No trust anchor found for issuer: {last_issuer}"))
     }
 
     fn check_key_usage(&self, cert: &Certificate) -> Result<(), String> {
@@ -509,22 +697,113 @@ impl ChainValidator {
         Ok(())
     }
 
-    fn check_revocation(&self, cert: &Certificate) -> Result<bool, String> {
-        let serial = format_serial(&cert.tbs_certificate.serial_number);
-        let issuer = cert.tbs_certificate.issuer.to_string();
+    fn check_revocation(&self, cert: &Certificate, chain: &[Certificate]) -> Result<bool, String> {
+        let cert_der = cert
+            .to_der()
+            .map_err(|e| format!("Failed to encode certificate for revocation check: {e}"))?;
+        let issuer_name = &cert.tbs_certificate.issuer;
+        let issuers = self
+            .trust_anchors
+            .iter()
+            .chain(self.intermediates.iter())
+            .chain(chain.iter())
+            .filter(|candidate| &candidate.tbs_certificate.subject == issuer_name)
+            .collect::<Vec<_>>();
+        if issuers.is_empty() {
+            return Err("No issuer certificate is available for CRL authentication".to_string());
+        }
 
-        for crl in &self.crls {
-            // Simple issuer match
-            if crl.issuer.contains(&issuer) || issuer.contains(&crl.issuer) {
-                for revoked in &crl.revoked_certificates {
-                    if revoked.serial_number.to_uppercase() == serial.to_uppercase() {
-                        return Ok(true);
+        let mut valid_evidence = false;
+        let mut failures = Vec::new();
+        for crl_der in &self.crls {
+            for issuer in &issuers {
+                let issuer_der = issuer
+                    .to_der()
+                    .map_err(|e| format!("Failed to encode CRL issuer: {e}"))?;
+                match marty_crypto::crl::validate_crl_for_certificate(
+                    crl_der,
+                    &cert_der,
+                    &issuer_der,
+                ) {
+                    Ok(status) => {
+                        valid_evidence = true;
+                        if status.revoked {
+                            return Ok(true);
+                        }
                     }
+                    Err(error) => failures.push(error.to_string()),
                 }
             }
         }
+        if valid_evidence {
+            Ok(false)
+        } else {
+            Err(format!(
+                "No authenticated, current CRL matched the certificate: {}",
+                failures.join("; ")
+            ))
+        }
+    }
 
-        Ok(false)
+    fn check_ocsp_status(&self, cert: &Certificate, chain: &[Certificate]) -> Result<bool, String> {
+        let cert_der = cert
+            .to_der()
+            .map_err(|error| format!("Failed to encode certificate for OCSP: {error}"))?;
+        let issuer_name = &cert.tbs_certificate.issuer;
+        let issuers = self
+            .trust_anchors
+            .iter()
+            .chain(self.intermediates.iter())
+            .chain(chain.iter())
+            .filter(|candidate| &candidate.tbs_certificate.subject == issuer_name)
+            .collect::<Vec<_>>();
+        if issuers.is_empty() {
+            return Err("No issuer certificate is available for OCSP authentication".to_string());
+        }
+
+        let mut valid_good_evidence = false;
+        let mut failures = Vec::new();
+        for response_der in &self.ocsp_responses {
+            for issuer in &issuers {
+                let issuer_der = issuer
+                    .to_der()
+                    .map_err(|error| format!("Failed to encode OCSP issuer: {error}"))?;
+                match marty_crypto::ocsp::validate_ocsp_response(
+                    response_der,
+                    &cert_der,
+                    &issuer_der,
+                ) {
+                    Ok(response) => match response.cert_status {
+                        marty_crypto::ocsp::OcspCertStatus::Good => valid_good_evidence = true,
+                        marty_crypto::ocsp::OcspCertStatus::Revoked { .. } => return Ok(true),
+                        marty_crypto::ocsp::OcspCertStatus::Unknown => failures.push(
+                            "authenticated responder returned unknown certificate status"
+                                .to_string(),
+                        ),
+                    },
+                    Err(error) => failures.push(error.to_string()),
+                }
+            }
+        }
+        if valid_good_evidence {
+            Ok(false)
+        } else {
+            Err(format!(
+                "No authenticated, current OCSP response matched the certificate: {}",
+                failures.join("; ")
+            ))
+        }
+    }
+
+    fn is_configured_trust_anchor(&self, cert: &Certificate) -> bool {
+        let Ok(cert_der) = cert.to_der() else {
+            return false;
+        };
+        self.trust_anchors.iter().any(|anchor| {
+            anchor
+                .to_der()
+                .is_ok_and(|anchor_der| anchor_der == cert_der)
+        })
     }
 }
 
@@ -570,15 +849,6 @@ fn verify_certificate_signature(
             "Certificate signature verification failed".to_string(),
         ))
     }
-}
-
-/// Format a serial number as a hex string.
-fn format_serial(serial: &x509_cert::serial_number::SerialNumber) -> String {
-    serial
-        .as_bytes()
-        .iter()
-        .map(|b| format!("{:02X}", b))
-        .collect()
 }
 
 #[cfg(test)]
@@ -1003,5 +1273,111 @@ mod tests {
             "Soft fail mode should pass without CRLs: {:?}",
             result.errors
         );
+    }
+
+    #[test]
+    fn hard_fail_revocation_uses_authenticated_fresh_crl_evidence() {
+        use marty_crypto::cert_builder::{create_ca_certificate, create_signed_certificate};
+        use marty_crypto::crl::{CrlBuilder, RevocationReason};
+        use marty_crypto::keygen::KeyType;
+
+        let (ca_der, ca_key) =
+            create_ca_certificate("Chain CRL CA", None, 365, KeyType::EcdsaP256).unwrap();
+        let (leaf_der, _) = create_signed_certificate(
+            "Revoked Chain Leaf",
+            &ca_der,
+            &ca_key,
+            365,
+            false,
+            KeyType::EcdsaP256,
+        )
+        .unwrap();
+        let leaf = Certificate::from_der(&leaf_der).unwrap();
+        let serial = hex::encode(leaf.tbs_certificate.serial_number.as_bytes());
+        let crl_der = CrlBuilder::new()
+            .issuer_cn("Chain CRL CA")
+            .add_revoked(&serial, Some(RevocationReason::KeyCompromise))
+            .build(&ca_key)
+            .unwrap();
+        let leaf_pem =
+            pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &leaf_der)
+                .unwrap();
+        let ca_pem =
+            pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &ca_der)
+                .unwrap();
+        let config = ChainValidatorConfig {
+            check_crl: true,
+            revocation_mode: "hard_fail".to_string(),
+            ..Default::default()
+        };
+        let mut validator = ChainValidator::with_config(config);
+        validator.add_trust_anchor_der(&ca_der).unwrap();
+        validator.add_crl_der(&crl_der).unwrap();
+
+        let result = validator.validate_chain(&[leaf_pem, ca_pem]).unwrap();
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("revoked")));
+    }
+
+    #[test]
+    fn authenticated_ocsp_evidence_controls_hard_fail_validation() {
+        use marty_crypto::cert_builder::{create_ca_certificate, create_signed_certificate};
+        use marty_crypto::keygen::KeyType;
+        use marty_crypto::ocsp::OcspResponseBuilder;
+
+        let (ca_der, ca_key) =
+            create_ca_certificate("OCSP Chain CA", None, 365, KeyType::EcdsaP256).unwrap();
+        let (leaf_der, _) = create_signed_certificate(
+            "OCSP Chain Leaf",
+            &ca_der,
+            &ca_key,
+            365,
+            false,
+            KeyType::EcdsaP256,
+        )
+        .unwrap();
+        let config = ChainValidatorConfig {
+            check_ocsp: true,
+            revocation_mode: "hard_fail".to_string(),
+            ..Default::default()
+        };
+
+        let good_response = OcspResponseBuilder::new()
+            .certificate(&leaf_der, &ca_der)
+            .status_good()
+            .build(&ca_key)
+            .unwrap();
+        let mut good_validator = ChainValidator::with_config(config.clone());
+        good_validator.add_trust_anchor_der(&ca_der).unwrap();
+        good_validator
+            .add_ocsp_response_der(&good_response)
+            .unwrap();
+        let good = good_validator
+            .validate_chain_der(&[leaf_der.clone(), ca_der.clone()])
+            .unwrap();
+        assert!(
+            good.valid,
+            "authenticated good OCSP should pass: {:?}",
+            good.errors
+        );
+
+        let revoked_response = OcspResponseBuilder::new()
+            .certificate(&leaf_der, &ca_der)
+            .status_revoked(Some("keyCompromise"))
+            .build(&ca_key)
+            .unwrap();
+        let mut revoked_validator = ChainValidator::with_config(config);
+        revoked_validator.add_trust_anchor_der(&ca_der).unwrap();
+        revoked_validator
+            .add_ocsp_response_der(&revoked_response)
+            .unwrap();
+        let revoked = revoked_validator
+            .validate_chain_der(&[leaf_der, ca_der])
+            .unwrap();
+        assert!(!revoked.valid);
+        assert!(revoked
+            .errors
+            .iter()
+            .any(|error| error.contains("revoked by OCSP")));
     }
 }

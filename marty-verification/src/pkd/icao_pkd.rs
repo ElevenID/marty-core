@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use der::Decode;
 use x509_cert::Certificate;
 
 use crate::error::{VerificationError, VerificationResult};
@@ -107,16 +108,7 @@ impl IcaoPkdClient {
     ///
     /// The Master List contains all trusted CSCA certificates.
     pub async fn fetch_master_list(&self) -> VerificationResult<Vec<MasterListEntry>> {
-        #[cfg(not(feature = "icao-client"))]
-        {
-            tracing::warn!("ICAO PKD client feature not enabled");
-            return Ok(Vec::new());
-        }
-
-        #[cfg(feature = "icao-client")]
-        {
-            self.fetch_master_list_ldap().await
-        }
+        self.fetch_master_list_ldap().await
     }
 
     #[cfg(feature = "icao-client")]
@@ -294,28 +286,17 @@ impl IcaoPkdClient {
 
     /// Fetch DSC certificates for a specific country.
     ///
-    /// When the `icao-client` feature is enabled (LDAP), uses the ICAO PKD
-    /// LDAP directory.  Falls back to a no-op warning when LDAP is unavailable.
+    /// Uses the ICAO PKD LDAP directory. This module is compiled only when the
+    /// `icao-client` feature is enabled.
     pub async fn fetch_country_dsc(&self, country: &str) -> VerificationResult<Vec<DscEntry>> {
-        #[cfg(feature = "icao-client")]
-        {
-            return self.fetch_country_dsc_ldap(country).await;
-        }
-
-        #[allow(unreachable_code)]
-        {
-            tracing::warn!(
-                "icao-client feature not enabled; cannot fetch DSC for country {}",
-                country
-            );
-            Ok(Vec::new())
-        }
+        self.fetch_country_dsc_ldap(country).await
     }
 
     /// Fetch CRL for a specific country and parse it into a [`CrlEntry`].
     ///
-    /// Returns `Ok(None)` when no CRL is published for the country (HTTP 404)
-    /// or when the payload cannot be parsed (a warning is logged).
+    /// Returns `Ok(None)` only when no CRL is published for the country (HTTP
+    /// 404). A malformed successful response is an error and must never be
+    /// interpreted as an authoritative absence of revocation evidence.
     pub async fn fetch_country_crl(&self, country: &str) -> VerificationResult<Option<CrlEntry>> {
         let endpoint = format!("{}/crl/{}", self.config.base_url, country);
 
@@ -338,25 +319,7 @@ impl IcaoPkdClient {
                 })?
                 .to_vec();
 
-            match crate::asn1::crl::parse_crl(&crl_der) {
-                Ok(info) => {
-                    let next_update = info.next_update.map(|dt| dt.to_rfc3339());
-                    tracing::info!(
-                        "Fetched and parsed CRL for country {} (next update: {:?})",
-                        country,
-                        next_update
-                    );
-                    Ok(Some(CrlEntry {
-                        country: country.to_string(),
-                        crl_der,
-                        next_update,
-                    }))
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse CRL for {}: {}", country, e);
-                    Ok(None)
-                }
-            }
+            Ok(Some(parse_crl_entry(country, &endpoint, crl_der)?))
         } else if response.status().as_u16() == 404 {
             // No CRL available for this country
             Ok(None)
@@ -372,8 +335,6 @@ impl IcaoPkdClient {
     ///
     /// Returns the number of certificates added/updated.
     pub async fn sync_registry(&self, registry: &mut CscaRegistry) -> VerificationResult<usize> {
-        use der::Decode;
-
         // First, prefer local/offline PKD cache when configured (existing pattern).
         if let Some(dir) = &self.config.offline_dir {
             if dir.exists() {
@@ -394,24 +355,58 @@ impl IcaoPkdClient {
         }
 
         let master_list = self.fetch_master_list().await?;
-        let mut count = 0;
-
-        for entry in master_list {
-            match Certificate::from_der(&entry.certificate_der) {
-                Ok(cert) => {
-                    registry.add_country_csca(&entry.country, cert)?;
-                    count += 1;
-
-                    tracing::info!("Added/updated CSCA for country: {}", entry.country);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse CSCA for {}: {}", entry.country, e);
-                }
-            }
-        }
-
-        Ok(count)
+        merge_master_list_entries(registry, master_list, &self.config.base_url)
     }
+}
+
+fn parse_crl_entry(
+    country: &str,
+    endpoint: &str,
+    crl_der: Vec<u8>,
+) -> VerificationResult<CrlEntry> {
+    let info = crate::asn1::crl::parse_crl(&crl_der).map_err(|e| {
+        VerificationError::pkd_fetch(endpoint, format!("Failed to parse CRL for {country}: {e}"))
+    })?;
+    let next_update = info.next_update.map(|dt| dt.to_rfc3339());
+    tracing::info!(
+        "Fetched and parsed CRL for country {} (next update: {:?})",
+        country,
+        next_update
+    );
+    Ok(CrlEntry {
+        country: country.to_string(),
+        crl_der,
+        next_update,
+    })
+}
+
+fn merge_master_list_entries(
+    registry: &mut CscaRegistry,
+    master_list: Vec<MasterListEntry>,
+    endpoint: &str,
+) -> VerificationResult<usize> {
+    if master_list.is_empty() {
+        return Err(VerificationError::pkd_fetch(
+            endpoint,
+            "ICAO PKD Master List contained no CSCA certificates",
+        ));
+    }
+    let mut count = 0;
+
+    for entry in master_list {
+        let cert = Certificate::from_der(&entry.certificate_der).map_err(|e| {
+            VerificationError::pkd_fetch(
+                endpoint,
+                format!("Failed to parse CSCA for {}: {e}", entry.country),
+            )
+        })?;
+        registry.add_country_csca(&entry.country, cert)?;
+        count += 1;
+
+        tracing::info!("Added/updated CSCA for country: {}", entry.country);
+    }
+
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -422,5 +417,24 @@ mod tests {
     fn test_default_config() {
         let config = IcaoPkdConfig::default();
         assert!(!config.base_url.is_empty());
+    }
+
+    #[test]
+    fn malformed_crl_payload_is_an_error_not_missing_evidence() {
+        let result = parse_crl_entry("TST", "https://pkd.invalid/crl/TST", b"not a CRL".to_vec());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_or_malformed_master_list_fails_closed() {
+        let mut registry = CscaRegistry::new();
+        assert!(merge_master_list_entries(&mut registry, Vec::new(), "test").is_err());
+
+        let malformed = MasterListEntry {
+            country: "TST".to_string(),
+            certificate_der: b"not a certificate".to_vec(),
+            serial_number: "1".to_string(),
+        };
+        assert!(merge_master_list_entries(&mut registry, vec![malformed], "test").is_err());
     }
 }

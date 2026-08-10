@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 #[cfg(feature = "ble")]
 /// MDL BLE service UUID as per ISO 18013-5
-const MDL_SERVICE_UUID: &str = "0000FFF0-0000-1000-8000-00805F9B34FB";
+const MDL_SERVICE_UUID: u128 = 0x0000fff0_0000_1000_8000_00805f9b34fb;
 
 #[cfg(feature = "ble")]
 #[allow(dead_code)]
@@ -30,11 +30,11 @@ const CHAR_STATE: &str = "0000FFF1-0000-1000-8000-00805F9B34FB";
 
 #[cfg(feature = "ble")]
 /// Client to Server characteristic UUID
-const CHAR_CLIENT2SERVER: &str = "0000FFF2-0000-1000-8000-00805F9B34FB";
+const CHAR_CLIENT2SERVER: u128 = 0x0000fff2_0000_1000_8000_00805f9b34fb;
 
 #[cfg(feature = "ble")]
 /// Server to Client characteristic UUID
-const CHAR_SERVER2CLIENT: &str = "0000FFF3-0000-1000-8000-00805F9B34FB";
+const CHAR_SERVER2CLIENT: u128 = 0x0000fff3_0000_1000_8000_00805f9b34fb;
 
 #[cfg(feature = "ble")]
 #[allow(dead_code)]
@@ -64,7 +64,7 @@ impl BleTransport {
     pub fn new() -> Self {
         Self {
             peripheral: None,
-            service_uuid: Uuid::parse_str(MDL_SERVICE_UUID).unwrap(),
+            service_uuid: Uuid::from_u128(MDL_SERVICE_UUID),
             client2server: None,
             server2client: None,
             connected: false,
@@ -135,8 +135,8 @@ impl BleTransport {
 
                     // Find characteristics
                     let characteristics = peripheral.characteristics();
-                    let c2s_uuid = Uuid::parse_str(CHAR_CLIENT2SERVER).unwrap();
-                    let s2c_uuid = Uuid::parse_str(CHAR_SERVER2CLIENT).unwrap();
+                    let c2s_uuid = Uuid::from_u128(CHAR_CLIENT2SERVER);
+                    let s2c_uuid = Uuid::from_u128(CHAR_SERVER2CLIENT);
 
                     self.client2server =
                         characteristics.iter().find(|c| c.uuid == c2s_uuid).cloned();

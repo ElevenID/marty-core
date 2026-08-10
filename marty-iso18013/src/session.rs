@@ -21,6 +21,10 @@ pub struct SessionEncryption {
 
     /// Message counter for decryption (validation)
     receive_counter: u32,
+
+    /// Direction identifiers used in ISO 18013-5 initialization vectors.
+    send_is_device: bool,
+    receive_is_device: bool,
 }
 
 impl SessionEncryption {
@@ -33,17 +37,22 @@ impl SessionEncryption {
             receive_key: device_key,
             send_counter: 0,
             receive_counter: 0,
+            send_is_device: true,
+            receive_is_device: true,
         })
     }
 
     /// Create directional encryption state for one protocol peer.
+    ///
+    /// `send_as_device` selects the ISO 18013-5 direction: a device sends
+    /// with SKDevice and receives with SKReader; a reader does the reverse.
     pub fn new_directional(
         shared_secret: &[u8],
         session_transcript: &[u8],
-        our_key_is_lower: bool,
+        send_as_device: bool,
     ) -> Result<Self> {
         let (device_key, reader_key) = derive_mdl_session_keys(shared_secret, session_transcript)?;
-        let (send_key, receive_key) = if our_key_is_lower {
+        let (send_key, receive_key) = if send_as_device {
             (device_key, reader_key)
         } else {
             (reader_key, device_key)
@@ -54,6 +63,8 @@ impl SessionEncryption {
             receive_key,
             send_counter: 0,
             receive_counter: 0,
+            send_is_device: send_as_device,
+            receive_is_device: !send_as_device,
         })
     }
 
@@ -64,9 +75,11 @@ impl SessionEncryption {
             .checked_add(1)
             .ok_or_else(|| Error::Encryption("message counter exhausted".to_string()))?;
 
-        // Construct IV from counter
-        let mut iv = vec![0u8; 12];
-        iv[8..].copy_from_slice(&self.send_counter.to_be_bytes());
+        // ISO 18013-5 starts message counters at one. `new()` is the
+        // symmetric compatibility constructor and uses the device direction.
+        let mut iv = [0u8; 12];
+        iv[7] = u8::from(self.send_is_device);
+        iv[8..].copy_from_slice(&next_counter.to_be_bytes());
 
         let ciphertext = aes_256_gcm_encrypt(&self.send_key, &iv, plaintext, &[])?;
 
@@ -81,9 +94,9 @@ impl SessionEncryption {
             .checked_add(1)
             .ok_or_else(|| Error::Decryption("message counter exhausted".to_string()))?;
 
-        // Construct IV from counter
-        let mut iv = vec![0u8; 12];
-        iv[8..].copy_from_slice(&self.receive_counter.to_be_bytes());
+        let mut iv = [0u8; 12];
+        iv[7] = u8::from(self.receive_is_device);
+        iv[8..].copy_from_slice(&next_counter.to_be_bytes());
 
         let plaintext = aes_256_gcm_decrypt(&self.receive_key, &iv, ciphertext, &[])?;
 
@@ -118,6 +131,14 @@ impl SessionKeyAgreement {
 
         Ok(Self {
             key_pair,
+            peer_public_key: None,
+        })
+    }
+
+    /// Restore a locally generated ephemeral key for holder-side engagement.
+    pub fn from_secret_key(secret_key: &[u8]) -> Result<Self> {
+        Ok(Self {
+            key_pair: P256KeyPair::from_secret_key(secret_key)?,
             peer_public_key: None,
         })
     }

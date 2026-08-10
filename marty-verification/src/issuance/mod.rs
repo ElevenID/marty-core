@@ -460,6 +460,36 @@ mod tests {
             crate::verification::emrtd::SignatureStatus::Valid
         );
 
+        // Signed attributes must bind the signature to the encapsulated LDS
+        // Security Object. Changing eContent while preserving the signed
+        // attributes must therefore fail even though the CMS signature bytes
+        // themselves are untouched.
+        {
+            use cms::content_info::ContentInfo;
+            use cms::signed_data::SignedData;
+
+            let content_info = ContentInfo::from_der(&passport.sod_der).unwrap();
+            let signed_data = content_info.content.decode_as::<SignedData>().unwrap();
+            let content = signed_data
+                .encap_content_info
+                .econtent
+                .as_ref()
+                .unwrap()
+                .value()
+                .to_vec();
+            let offset = passport
+                .sod_der
+                .windows(content.len())
+                .position(|window| window == content)
+                .expect("encapsulated LDS object must occur in encoded SOD");
+            let mut altered_content_sod = passport.sod_der.clone();
+            altered_content_sod[offset + content.len() - 1] ^= 0x01;
+            assert_eq!(
+                crate::asn1::sod::verify_sod_signature(&altered_content_sod).unwrap(),
+                false
+            );
+        }
+
         // Chain validation and DG hashes alone must not authenticate a document
         // when the raw SOD needed for signature verification is unavailable.
         let mut missing_raw_sod = sod.clone();
