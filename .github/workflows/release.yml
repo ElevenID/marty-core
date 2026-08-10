@@ -135,7 +135,8 @@ jobs:
         exclude:
           - os: windows-latest
             target: aarch64
-    runs-on: ${{ matrix.os }}
+    # Native ARM avoids mixing host libraries with an aarch64 cross sysroot.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64' && 'ubuntu-24.04-arm' || matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
@@ -146,7 +147,9 @@ jobs:
           command: build
           args: --release --out dist
           target: ${{ matrix.target }}
-          manylinux: auto
+          # Keep Linux compatibility explicit. Native ARM builds use PyPA's
+          # manylinux 2.28 aarch64 image instead of a cross image.
+          manylinux: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64' && '2_28' || matrix.os == 'ubuntu-latest' && '2_17' || 'auto' }}
           before-script-linux: |
             set -eu
             if command -v apt-get >/dev/null 2>&1; then
