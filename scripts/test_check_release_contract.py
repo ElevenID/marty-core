@@ -68,6 +68,14 @@ class ReleaseChecksumPolicyTests(unittest.TestCase):
         )
         self.assertTrue(any("includes the manifest" in error for error in errors))
 
+    def test_release_assets_must_be_flattened_before_checksumming(self) -> None:
+        errors = check_release_contract.check_release_checksum_policy(
+            "find . -type f ! -name SHA256SUMS -print0 | "
+            "xargs -0 sha256sum > SHA256SUMS\n"
+            "sha256sum --check --strict SHA256SUMS\n"
+        )
+        self.assertTrue(any("must be flattened" in error for error in errors))
+
     def test_checksum_manifest_must_be_verified_before_publication(self) -> None:
         errors = check_release_contract.check_release_checksum_policy(
             "find . -type f ! -name SHA256SUMS -print0 | "

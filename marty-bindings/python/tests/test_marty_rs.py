@@ -296,3 +296,72 @@ class TestOID4VP:
         result = json.loads(result_json)
         assert result["valid"] is False
         assert len(result["errors"]) > 0
+
+    def test_verify_presentation_structure_is_scoped_low_level_evidence(self):
+        definition = {
+            "id": "definition-1",
+            "input_descriptors": [
+                {
+                    "id": "credential-1",
+                    "format": {"jwt_vc_json": {}},
+                    "constraints": {},
+                }
+            ],
+        }
+        submission = {
+            "id": "submission-1",
+            "definition_id": "definition-1",
+            "descriptor_map": [
+                {
+                    "id": "credential-1",
+                    "format": "jwt_vc_json",
+                    "path": "$",
+                }
+            ],
+        }
+
+        result = json.loads(
+            _marty_rs.verify_presentation_structure(
+                "verifier-1",
+                "https://verifier.example/response",
+                json.dumps(definition),
+                json.dumps(submission),
+            )
+        )
+
+        assert result["valid"] is False
+        assert result["decision_ready"] is False
+        assert result["check_valid"] is True
+        assert result["scope"] == "presentation_structure"
+        assert result["evidence"]["presentation_structure"] == "passed"
+
+    def test_verify_presentation_structure_rejects_definition_mismatch(self):
+        definition = {
+            "id": "definition-1",
+            "input_descriptors": [{"id": "credential-1", "constraints": {}}],
+        }
+        submission = {
+            "id": "submission-1",
+            "definition_id": "different-definition",
+            "descriptor_map": [
+                {
+                    "id": "credential-1",
+                    "format": "jwt_vc_json",
+                    "path": "$",
+                }
+            ],
+        }
+
+        result = json.loads(
+            _marty_rs.verify_presentation_structure(
+                "verifier-1",
+                "https://verifier.example/response",
+                json.dumps(definition),
+                json.dumps(submission),
+            )
+        )
+
+        assert result["valid"] is False
+        assert result["check_valid"] is False
+        assert result["scope"] == "presentation_structure"
+        assert result["errors"]

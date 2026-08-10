@@ -3554,7 +3554,7 @@ checksum = "e20f57f9918e5bd7bc58c22cdd70a6afc7375d4dd9683af5f2b34bd3d2bba619"
 
 [[package]]
 name = "marty-bindings"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3579,7 +3579,7 @@ dependencies = [
 
 [[package]]
 name = "marty-biometrics"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3604,7 +3604,7 @@ dependencies = [
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3651,7 +3651,7 @@ dependencies = [
 
 [[package]]
 name = "marty-didcomm"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -3671,7 +3671,7 @@ dependencies = [
 
 [[package]]
 name = "marty-iso18013"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3702,7 +3702,7 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3732,7 +3732,7 @@ dependencies = [
 
 [[package]]
 name = "marty-secure-storage"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -3755,7 +3755,7 @@ dependencies = [
 
 [[package]]
 name = "marty-test-wallet"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3771,7 +3771,7 @@ dependencies = [
 
 [[package]]
 name = "marty-types"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "chrono",
  "pyo3",
@@ -3782,7 +3782,7 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3844,7 +3844,7 @@ dependencies = [
 
 [[package]]
 name = "marty-zkp"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
  "bindgen",
  "cc",

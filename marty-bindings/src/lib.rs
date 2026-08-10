@@ -1226,6 +1226,43 @@ fn oid4vp_verify_vp_token(
     })
 }
 
+/// Validate an OID4VP presentation submission against its definition.
+///
+/// This is a low-level structural check. A successful result reports
+/// `check_valid: true` and `scope: "presentation_structure"`; `valid` and
+/// `decision_ready` remain false because this operation does not authenticate
+/// the presentation proof or any embedded credential.
+#[pyfunction]
+fn verify_presentation_structure(
+    verifier_id: &str,
+    response_uri: &str,
+    definition_json: &str,
+    submission_json: &str,
+) -> PyResult<String> {
+    use marty_oid4vci::verifier::{
+        PresentationDefinition, PresentationSubmission, VerificationEngine,
+    };
+
+    let definition: PresentationDefinition =
+        serde_json::from_str(definition_json).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid presentation definition: {e}"
+            ))
+        })?;
+    let submission: PresentationSubmission =
+        serde_json::from_str(submission_json).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid presentation submission: {e}"
+            ))
+        })?;
+
+    let engine = VerificationEngine::new(verifier_id, response_uri);
+    let result = engine.verify_presentation_structure(&definition, &submission);
+    serde_json::to_string(&result).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Serialization error: {e}"))
+    })
+}
+
 // ============================================================================
 // Symmetric Crypto (AES-CBC, HMAC, SHA-256) — EAC secure messaging support
 // ============================================================================
@@ -1537,6 +1574,7 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // OID4VP Protocol
     m.add_function(wrap_pyfunction!(oid4vp_verify_vp_token, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_presentation_structure, m)?)?;
 
     // Symmetric Crypto (EAC secure messaging)
     m.add_function(wrap_pyfunction!(aes_256_cbc_encrypt, m)?)?;
