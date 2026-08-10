@@ -131,6 +131,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         package: [marty-bindings, marty-verification, marty-biometrics, marty-iso18013]
+        target: [x86_64, aarch64]
+        exclude:
+          - os: windows-latest
+            target: aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -140,12 +144,13 @@ jobs:
           maturin-version: v1.14.1
           working-directory: ${{ matrix.package }}
           command: build
-          args: --release --out dist --find-interpreter
+          args: --release --out dist
+          target: ${{ matrix.target }}
           manylinux: auto
           before-script-linux: yum install -y openssl-devel perl-IPC-Cmd perl-Time-Piece
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: wheels-${{ matrix.package }}-${{ matrix.os }}
+          name: wheels-${{ matrix.package }}-${{ matrix.os }}-${{ matrix.target }}
           path: ${{ matrix.package }}/dist/*
           retention-days: 7
           if-no-files-found: error
