@@ -1005,6 +1005,36 @@ fn verify_sod_data_group_hash(
     .map_err(to_pyerr)
 }
 
+/// Parse an ICAO CSCA Master List with the native CMS/X.509 implementation.
+#[pyfunction]
+fn parse_master_list<'py>(py: Python<'py>, cms_der: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    let master_list = crate::asn1::master_list::parse_master_list(cms_der).map_err(to_pyerr)?;
+    let result = PyDict::new(py);
+    result.set_item("version", master_list.version)?;
+    result.set_item("signer_certificate", master_list.signer_certificate)?;
+    let certificates = PyList::empty(py);
+    for certificate in master_list.certificates {
+        let item = PyDict::new(py);
+        item.set_item("subject", certificate.subject)?;
+        item.set_item("issuer", certificate.issuer)?;
+        item.set_item("serial_number", certificate.serial_number)?;
+        item.set_item("country", certificate.country)?;
+        item.set_item("not_before", certificate.not_before)?;
+        item.set_item("not_after", certificate.not_after)?;
+        item.set_item("der_bytes", PyBytes::new(py, &certificate.der_bytes))?;
+        certificates.append(item)?;
+    }
+    result.set_item("certificates", certificates)?;
+    Ok(result)
+}
+
+/// Verify an ICAO CSCA Master List CMS signature against a pinned signer certificate.
+#[pyfunction]
+fn verify_master_list_signature(cms_der: &[u8], signer_cert_der: &[u8]) -> PyResult<bool> {
+    crate::asn1::master_list::verify_master_list_signature(cms_der, signer_cert_der)
+        .map_err(to_pyerr)
+}
+
 // ============================================================================
 // mDL Document Parsing Bindings
 // ============================================================================
@@ -3185,6 +3215,8 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
     m.add_function(wrap_pyfunction!(parse_sod, m)?)?;
     m.add_function(wrap_pyfunction!(verify_sod_data_group_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_master_list, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
@@ -3380,6 +3412,8 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
     m.add_function(wrap_pyfunction!(parse_sod, m)?)?;
     m.add_function(wrap_pyfunction!(verify_sod_data_group_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_master_list, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;

@@ -150,7 +150,9 @@ mod tests {
     fn https_transport_connection_lifecycle() {
         let mut transport = PyHttpsTransport::new("https://example.invalid/mdl".to_string());
         assert!(!transport.is_connected());
-        transport.connect().expect("connect should initialize state");
+        transport
+            .connect()
+            .expect("connect should initialize state");
         assert!(transport.is_connected());
         transport.close().expect("close should clear state");
         assert!(!transport.is_connected());
