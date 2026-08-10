@@ -21,6 +21,12 @@ import pytest
 _marty_rs = pytest.importorskip("marty_rs._marty_rs", reason="native extension not built")
 
 
+def test_canonical_top_level_import_exposes_native_bindings():
+    import _marty_rs as canonical
+
+    assert canonical.generate_p256_key is _marty_rs.generate_p256_key
+
+
 # =========================================================================
 # Key generation
 # =========================================================================

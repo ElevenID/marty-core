@@ -36,4 +36,5 @@ Documentation = "https://docs.marty.dev"
 [tool.maturin]
 python-source = "python"
 module-name = "marty_verification_py._marty_verification"
+python-packages = ["marty_verification_py", "marty_verification"]
 features = ["pyo3/extension-module", "python", "csca", "eudi", "cert-builder"]
