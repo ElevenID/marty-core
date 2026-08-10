@@ -574,6 +574,42 @@ impl VerificationError {
         })
     }
 
+    /// Create an Open Badges untrusted status-authority error.
+    pub fn open_badges_status_authority_untrusted(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::OpenBadgesError {
+            reason: reason.into(),
+            code: codes::OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create an Open Badges asserted-status error.
+    pub fn open_badges_status_asserted(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::OpenBadgesError {
+            reason: reason.into(),
+            code: codes::OPEN_BADGES_STATUS_ASSERTED,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
+    /// Create an Open Badges issuer authorization error.
+    pub fn open_badges_issuer_unauthorized(reason: impl Into<String>) -> Box<Self> {
+        Box::new(Self::OpenBadgesError {
+            reason: reason.into(),
+            code: codes::OPEN_BADGES_ISSUER_UNAUTHORIZED,
+            context: ErrorContext::default(),
+            source: None,
+            bt: CapturedBacktrace::capture(),
+            span_trace: SpanTrace::capture(),
+        })
+    }
+
     /// Create a not-implemented error.
     pub fn not_implemented(feature: impl Into<String>) -> Box<Self> {
         Box::new(Self::Internal {

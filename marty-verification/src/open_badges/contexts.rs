@@ -12,6 +12,7 @@ const CONTEXT_OPENBADGES_V3_ALIAS: &str = "https://w3id.org/openbadges/v3";
 const CONTEXT_VC_V1: &str = "https://www.w3.org/2018/credentials/v1";
 const CONTEXT_VC_V2: &str = "https://www.w3.org/ns/credentials/v2";
 const CONTEXT_VC_EXAMPLES_V2: &str = "https://www.w3.org/ns/credentials/examples/v2";
+const CONTEXT_BITSTRING_STATUS_V1: &str = "https://www.w3.org/ns/credentials/status/v1";
 const CONTEXT_DATA_INTEGRITY_V2: &str = "https://w3id.org/security/data-integrity/v2";
 const CONTEXT_SECURITY_V1: &str = "https://w3id.org/security/v1";
 const CONTEXT_SECURITY_V2: &str = "https://w3id.org/security/v2";
@@ -24,6 +25,7 @@ const CONTEXT_FILE_VC_V1: &str = include_str!("contexts/credentials-v1.jsonld");
 const CONTEXT_FILE_VC_V2: &str = include_str!("contexts/credentials-v2.jsonld");
 const CONTEXT_FILE_VC_EXAMPLES_V2: &str =
     r#"{"@context":{"@vocab":"https://www.w3.org/ns/credentials/examples#"}}"#;
+const CONTEXT_FILE_BITSTRING_STATUS_V1: &str = include_str!("contexts/bitstring-status-v1.jsonld");
 const CONTEXT_FILE_DATA_INTEGRITY_V2: &str =
     include_str!("contexts/security-data-integrity-v2.jsonld");
 const CONTEXT_FILE_SECURITY_V1: &str = include_str!("contexts/security-v1.jsonld");
@@ -56,6 +58,10 @@ pub fn open_badges_context_loader() -> VerificationResult<ContextLoader> {
     context_map.insert(
         CONTEXT_VC_EXAMPLES_V2.to_string(),
         CONTEXT_FILE_VC_EXAMPLES_V2.to_string(),
+    );
+    context_map.insert(
+        CONTEXT_BITSTRING_STATUS_V1.to_string(),
+        CONTEXT_FILE_BITSTRING_STATUS_V1.to_string(),
     );
     context_map.insert(
         CONTEXT_DATA_INTEGRITY_V2.to_string(),
@@ -102,6 +108,7 @@ pub fn security_v2_context_uri() -> &'static str {
 mod tests {
     use super::*;
     use serde_json::Value;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn vendored_vcdm_v2_context_preserves_protected_term_boundaries() {
@@ -111,6 +118,14 @@ mod tests {
         assert_eq!(
             context["@context"]["VerifiableCredential"]["@context"]["@protected"],
             true
+        );
+    }
+
+    #[test]
+    fn vendored_bitstring_status_context_matches_w3c_recommendation_digest() {
+        assert_eq!(
+            hex::encode(Sha256::digest(CONTEXT_FILE_BITSTRING_STATUS_V1.as_bytes())),
+            "fda5add353231e6a6884a46b12e6c75464281900cb348284d9c360f62381d9f7"
         );
     }
 }
