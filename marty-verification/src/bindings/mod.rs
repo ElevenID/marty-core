@@ -956,6 +956,18 @@ fn verify_signature(
         "rsa_pss_sha256" | "ps256" => SignatureAlgorithm::RsaPssSha256,
         "rsa_pss_sha384" | "ps384" => SignatureAlgorithm::RsaPssSha384,
         "rsa_pss_sha512" | "ps512" => SignatureAlgorithm::RsaPssSha512,
+        "eddsa" => match marty_crypto::serialization::detect_public_key_type(public_key_der)
+            .map_err(to_pyerr)?
+            .as_str()
+        {
+            "Ed25519" => SignatureAlgorithm::Ed25519,
+            "Ed448" => SignatureAlgorithm::Ed448,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "EdDSA signature requires an Ed25519 or Ed448 public key",
+                ));
+            }
+        },
         other => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Unknown signature algorithm: {}",

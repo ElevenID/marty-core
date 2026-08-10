@@ -49,6 +49,7 @@
 pub mod error;
 pub mod formats;
 pub mod issuer;
+pub mod jose;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;

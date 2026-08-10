@@ -642,6 +642,32 @@ fn oid4vci_verify_key_attestation_bound_proof_jwt(
     Ok((verified.holder_id, verified.nonce, holder_jwk_json))
 }
 
+/// Verify a compact JWT with one explicitly selected public JWK.
+///
+/// This binding performs JOSE parsing, duplicate-member rejection, algorithm
+/// binding, public-key validation, and cryptographic signature verification.
+/// Protocol-specific claim policy remains with the Python orchestration layer.
+#[pyfunction]
+fn oid4vci_verify_compact_jwt(
+    compact_jwt: &str,
+    public_jwk_json: &str,
+    expected_algorithm: &str,
+) -> PyResult<(String, String)> {
+    let verified = marty_oid4vci::jose::verify_compact_jwt_with_public_jwk(
+        compact_jwt,
+        public_jwk_json,
+        expected_algorithm,
+    )
+    .map_err(|error| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Compact JWT verification failed: {error}"
+        ))
+    })?;
+    let header = serde_json::to_string(&verified.header).map_err(to_pyerr)?;
+    let claims = serde_json::to_string(&verified.claims).map_err(to_pyerr)?;
+    Ok((header, claims))
+}
+
 /// Verify an SD-JWT VC presentation using Marty Core's RFC 9449 engine.
 ///
 /// The issuer JWK must contain public material only. When both expected
@@ -1650,6 +1676,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_verify_compact_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(
         oid4vci_verify_key_attestation_bound_proof_jwt,
         m
