@@ -25,6 +25,42 @@ def test_canonical_top_level_import_exposes_native_bindings():
     import _marty_rs as canonical
 
     assert canonical.generate_p256_key is _marty_rs.generate_p256_key
+    assert canonical.TokenStatusList is _marty_rs.TokenStatusList
+
+
+class TestStatusLists:
+    """Status-list bindings follow their standards and fail closed."""
+
+    def test_ietf_golden_vector_and_roundtrip(self):
+        values = [1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1]
+        status_list = _marty_rs.TokenStatusList(len(values), 1)
+        for index, value in enumerate(values):
+            status_list.set(index, value)
+
+        assert bytes(status_list.to_bytes()) == bytes.fromhex("b9a3")
+        assert bytes(status_list.compress()) == bytes.fromhex("78dadbb918000217015d")
+        restored = _marty_rs.TokenStatusList.from_base64url(
+            status_list.to_base64url(), len(values), 1
+        )
+        assert [restored.get(index) for index in range(len(values))] == values
+
+    def test_w3c_multibase_roundtrip(self):
+        status_list = _marty_rs.BitstringStatusList(131_072)
+        status_list.revoke(0)
+        status_list.revoke(131_071)
+
+        encoded = status_list.to_base64url()
+        assert encoded.startswith("u")
+        restored = _marty_rs.BitstringStatusList.from_base64url(encoded, 131_072)
+        assert restored.is_revoked(0)
+        assert restored.is_revoked(131_071)
+        assert restored.count_revoked() == 2
+
+    def test_malformed_payloads_are_rejected(self):
+        with pytest.raises(ValueError):
+            _marty_rs.TokenStatusList.from_compressed(b"not-zlib", 100, 8)
+        with pytest.raises(ValueError, match="multibase"):
+            _marty_rs.BitstringStatusList.from_base64url("not-multibase", 131_072)
 
 
 # =========================================================================
