@@ -1,5 +1,17 @@
 version: 1
 dependencies:
+  - package: RustCrypto certificate and signature ecosystem
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/RustCrypto
+    current: x509-cert-0.2/der-0.7/signature-2/elliptic-curve-0.13/rsa-0.9
+    target: stable-coordinated-signature-3-certificate-stack
+    status: watch
+    decision: retain
+    advisories: []
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/99
+    review-after: 2026-09-07
+    rationale: The certificate, SPKI, signature, elliptic-curve, and RSA crates must move as one compatibility set. Updating their major versions independently creates duplicate, incompatible signature, SPKI, and rand trait implementations and breaks certificate and signing paths. The latest RSA compatible direction is still a release candidate, so ElevenID retains the current stable set and will adopt the coordinated stable stack after it passes the existing RSA, certificate, JOSE, passport, mdoc, and Python conformance tests. No RSA functionality is being removed.
   - package: affinidi-messaging-didcomm
     ecosystem: rust
     owner: ElevenID
