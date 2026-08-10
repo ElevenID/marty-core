@@ -104,7 +104,6 @@ pub struct Session {
     key_agreement: Arc<RwLock<SessionKeyAgreement>>,
 
     /// Configuration
-    #[allow(dead_code)]
     config: SessionConfig,
 }
 
@@ -214,6 +213,17 @@ impl Session {
 
     /// Encrypt and send a message
     pub async fn send_encrypted(&self, message: &[u8]) -> Result<Vec<u8>> {
+        if *self.state.read().await != SessionState::Established {
+            return Err(Error::InvalidState(
+                "Cannot send outside an established session".to_string(),
+            ));
+        }
+        if message.len() > self.config.max_message_size {
+            return Err(Error::InvalidRequest(format!(
+                "Message exceeds {} byte session limit",
+                self.config.max_message_size
+            )));
+        }
         let mut encryption = self.encryption.write().await;
         let encryption = encryption
             .as_mut()
@@ -224,6 +234,17 @@ impl Session {
 
     /// Receive and decrypt a message
     pub async fn receive_encrypted(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        if *self.state.read().await != SessionState::Established {
+            return Err(Error::InvalidState(
+                "Cannot receive outside an established session".to_string(),
+            ));
+        }
+        let maximum_ciphertext_size = self.config.max_message_size.saturating_add(16);
+        if ciphertext.len() > maximum_ciphertext_size {
+            return Err(Error::InvalidResponse(format!(
+                "Encrypted message exceeds {maximum_ciphertext_size} byte session limit"
+            )));
+        }
         let mut encryption = self.encryption.write().await;
         let encryption = encryption
             .as_mut()
@@ -236,6 +257,7 @@ impl Session {
     pub async fn terminate(&self) -> Result<()> {
         let mut state = self.state.write().await;
         *state = SessionState::Terminated;
+        *self.encryption.write().await = None;
         Ok(())
     }
 
