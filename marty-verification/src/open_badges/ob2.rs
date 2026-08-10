@@ -348,7 +348,7 @@ fn extract_public_jwk(value: &Value) -> VerificationResult<Jwk> {
     ))
 }
 
-fn jwk_from_pem(pem: &str) -> VerificationResult<Jwk> {
+pub(crate) fn jwk_from_pem(pem: &str) -> VerificationResult<Jwk> {
     let spki = load_public_key_pem(pem)?;
     jwk_from_spki(&spki)
 }

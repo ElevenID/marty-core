@@ -486,6 +486,125 @@ pub fn verify_sd_jwt(
     Ok(verifier.verified_claims)
 }
 
+/// Select disclosures from an issuer-signed SD-JWT for presentation.
+///
+/// This helper intentionally does not create a Key Binding JWT. Callers that
+/// require verifier nonce or audience binding must use a holder-key-aware
+/// OID4VP flow instead of presenting an unbound credential.
+pub fn create_sd_jwt_presentation(
+    sd_jwt_compact: &str,
+    disclosed_fields: &[String],
+) -> Oid4vciResult<String> {
+    use std::collections::{HashMap, HashSet};
+
+    let mut segments = sd_jwt_compact.split('~').collect::<Vec<_>>();
+    while matches!(segments.last(), Some(segment) if segment.is_empty()) {
+        segments.pop();
+    }
+    let issuer_jwt = segments.first().copied().ok_or_else(|| {
+        Oid4vciError::SdJwtError("SD-JWT is missing its issuer-signed JWT".into())
+    })?;
+    if issuer_jwt.split('.').count() != 3 {
+        return Err(Oid4vciError::SdJwtError(
+            "Issuer-signed SD-JWT is not compact JWS".into(),
+        ));
+    }
+    if segments
+        .get(1..)
+        .unwrap_or_default()
+        .iter()
+        .any(|segment| segment.split('.').count() == 3)
+    {
+        return Err(Oid4vciError::SdJwtError(
+            "An existing Key Binding JWT cannot be reused in a new presentation".into(),
+        ));
+    }
+
+    let payload_segment = issuer_jwt.split('.').nth(1).expect("three JWS segments");
+    let payload: serde_json::Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload_segment).map_err(|error| {
+            Oid4vciError::SdJwtError(format!("Issuer JWT payload decode failed: {error}"))
+        })?)
+        .map_err(|error| {
+            Oid4vciError::SdJwtError(format!("Issuer JWT payload is not JSON: {error}"))
+        })?;
+
+    fn collect_hashes(value: &serde_json::Value, hashes: &mut HashSet<String>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let Some(serde_json::Value::Array(values)) = object.get("_sd") {
+                    hashes.extend(
+                        values
+                            .iter()
+                            .filter_map(|value| value.as_str().map(str::to_owned)),
+                    );
+                }
+                object
+                    .values()
+                    .for_each(|value| collect_hashes(value, hashes));
+            }
+            serde_json::Value::Array(values) => values
+                .iter()
+                .for_each(|value| collect_hashes(value, hashes)),
+            _ => {}
+        }
+    }
+
+    let mut signed_hashes = HashSet::new();
+    collect_hashes(&payload, &mut signed_hashes);
+    let mut available: HashMap<String, &str> = HashMap::new();
+    for disclosure in segments.get(1..).unwrap_or_default() {
+        let disclosure_value: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(disclosure).map_err(|error| {
+                Oid4vciError::SdJwtError(format!("Disclosure decode failed: {error}"))
+            })?)
+            .map_err(|error| {
+                Oid4vciError::SdJwtError(format!("Disclosure is not JSON: {error}"))
+            })?;
+        let disclosure_array = disclosure_value
+            .as_array()
+            .ok_or_else(|| Oid4vciError::SdJwtError("Disclosure must be a JSON array".into()))?;
+        if disclosure_array.len() != 3 {
+            return Err(Oid4vciError::SdJwtError(
+                "Object-property disclosure must contain salt, name, and value".into(),
+            ));
+        }
+        let field = disclosure_array[1].as_str().ok_or_else(|| {
+            Oid4vciError::SdJwtError("Disclosure claim name must be a string".into())
+        })?;
+        let disclosure_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
+        if !signed_hashes.contains(&disclosure_hash) {
+            return Err(Oid4vciError::SdJwtError(format!(
+                "Disclosure for `{field}` is not bound by the issuer-signed payload"
+            )));
+        }
+        if available.insert(field.to_string(), disclosure).is_some() {
+            return Err(Oid4vciError::SdJwtError(format!(
+                "Disclosure name `{field}` is ambiguous"
+            )));
+        }
+    }
+
+    let mut requested = HashSet::new();
+    let mut selected = Vec::with_capacity(disclosed_fields.len());
+    for field in disclosed_fields {
+        if !requested.insert(field) {
+            return Err(Oid4vciError::SdJwtError(format!(
+                "Disclosure `{field}` was requested more than once"
+            )));
+        }
+        selected.push(*available.get(field).ok_or_else(|| {
+            Oid4vciError::SdJwtError(format!("SD-JWT has no disclosure named `{field}`"))
+        })?);
+    }
+
+    if selected.is_empty() {
+        Ok(format!("{issuer_jwt}~"))
+    } else {
+        Ok(format!("{issuer_jwt}~{}~", selected.join("~")))
+    }
+}
+
 /// Validate the SD-JWT Key Binding JWT (RFC 9449 §8).
 ///
 /// The holder key is bound by the issuer-signed credential's `cnf.jwk`.  We
@@ -817,6 +936,46 @@ mod tests {
             }
             _ => panic!("Expected SdJwt"),
         }
+    }
+
+    #[test]
+    fn test_create_sd_jwt_presentation_selects_only_requested_disclosures() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "IdentityCredential".into(),
+            claims: [
+                ("name".into(), serde_json::json!("Alice")),
+                ("email".into(), serde_json::json!("alice@example.com")),
+            ]
+            .into(),
+            expiration_seconds: Some(3600),
+            selective_disclosure_claims: vec!["name".into(), "email".into()],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let compact = match sign_sd_jwt(&key, &claims).unwrap() {
+            SignedCredential::SdJwt { compact, .. } => compact,
+            _ => panic!("Expected SdJwt"),
+        };
+
+        let presentation = create_sd_jwt_presentation(&compact, &["name".into()]).unwrap();
+        let disclosures = presentation
+            .split('~')
+            .skip(1)
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(disclosures.len(), 1);
+        let disclosure: serde_json::Value =
+            serde_json::from_slice(&B64.decode(disclosures[0]).unwrap()).unwrap();
+        assert_eq!(disclosure[1], "name");
+
+        let error = create_sd_jwt_presentation(&compact, &["missing".into()]).unwrap_err();
+        assert!(error.to_string().contains("no disclosure named `missing`"));
     }
 
     /// SD-JWT VC RFC 9596 §3.2.1 conformance: the JWT `typ` header MUST be "vc+sd-jwt".

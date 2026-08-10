@@ -57,6 +57,18 @@ fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bou
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
+/// Generate a P-256 private JWK and its public-only JWK.
+#[pyfunction]
+fn generate_p256_jwk() -> PyResult<(String, String)> {
+    marty_oid4vci::issuer::generate_p256_jwk_pair().map_err(to_pyerr)
+}
+
+/// Generate a did:jwk identifier and P-256 private signing JWK.
+#[pyfunction]
+fn generate_p256_did_jwk() -> PyResult<(String, String)> {
+    marty_oid4vci::issuer::generate_p256_did_jwk().map_err(to_pyerr)
+}
+
 /// Generate a P-384 ECDSA key pair for signing credentials.
 ///
 /// Returns:
@@ -227,57 +239,8 @@ fn complete_vcdm_data_integrity_credential(request_json: &str) -> PyResult<Strin
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
-// ============================================================================
-// Verifiable Credentials (Simplified)
-// ============================================================================
-
-/// Create a simple signed verifiable credential.
-///
-/// Args:
-///     credential_json: JSON string of the credential (without proof)
-///     secret_key: 32-byte P-256 private key
-///     key_id: Key identifier (e.g., "did:example:123#key-1")
-///
-/// Returns:
-///     JSON string of the credential with embedded proof
-///
-/// Note: This is a simplified implementation. For production, use full
-///       VC-JWT or VC-LD proofs with proper DID resolution.
-#[pyfunction]
-fn create_verifiable_credential(
-    credential_json: &str,
-    secret_key: &[u8],
-    key_id: &str,
-) -> PyResult<String> {
-    use serde_json::{json, Value};
-
-    // Parse the credential
-    let mut credential: Value = serde_json::from_str(credential_json).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JSON: {}", e))
-    })?;
-
-    // Sign the credential (simplified - just sign the JSON bytes)
-    let message = credential_json.as_bytes();
-    let signature = marty_crypto::ecdsa::sign_p256_sha256(secret_key, message).map_err(to_pyerr)?;
-
-    // Encode signature as base64url
-    let signature_b64 = base64_url_encode(&signature);
-
-    // Add proof to credential
-    credential["proof"] = json!({
-        "type": "EcdsaSecp256r1Signature2019",
-        "created": chrono::Utc::now().to_rfc3339(),
-        "verificationMethod": key_id,
-        "proofPurpose": "assertionMethod",
-        "jws": signature_b64
-    });
-
-    serde_json::to_string_pretty(&credential).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!("JSON serialization failed: {e}"))
-    })
-}
-
 /// Helper function to encode bytes as base64url (no padding)
+#[cfg(test)]
 fn base64_url_encode(data: &[u8]) -> String {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     URL_SAFE_NO_PAD.encode(data)
@@ -404,6 +367,46 @@ fn oid4vci_create_credential_offer(
     .map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Offer creation error: {e}"))
     })
+}
+
+/// Backward-compatible alias for the canonical OID4VCI offer builder.
+#[pyfunction]
+#[pyo3(signature = (issuer_url, credential_types, pre_authorized_code=None, user_pin_required=false))]
+fn create_credential_offer(
+    issuer_url: &str,
+    credential_types: Vec<String>,
+    pre_authorized_code: Option<String>,
+    user_pin_required: bool,
+) -> PyResult<String> {
+    oid4vci_create_credential_offer(
+        issuer_url,
+        credential_types,
+        pre_authorized_code,
+        user_pin_required,
+    )
+}
+
+/// Build the legacy offer URI shape through the Rust protocol implementation.
+#[pyfunction]
+fn generate_offer_uri(issuer_url: &str, offer_id: &str, format: &str) -> String {
+    marty_oid4vci::issuer::generate_offer_uri(issuer_url, offer_id, format)
+}
+
+/// Backward-compatible metadata entry point using canonical Rust types.
+#[pyfunction]
+fn generate_issuer_metadata(
+    issuer_url: &str,
+    issuer_name: &str,
+    credential_types_json: &str,
+) -> PyResult<String> {
+    let credential_types: Vec<marty_oid4vci::types::CredentialTypeConfig> =
+        serde_json::from_str(credential_types_json).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid credential type configuration JSON: {error}"
+            ))
+        })?;
+    marty_oid4vci::metadata::generate_issuer_metadata(issuer_url, issuer_name, &credential_types)
+        .map_err(to_pyerr)
 }
 
 /// Create a token response for a pre-authorized code exchange.
@@ -671,6 +674,27 @@ fn verify_sd_jwt(
     serde_json::to_string(&verified).map_err(to_pyerr)
 }
 
+/// Select issuer-bound SD-JWT disclosures for an unbound presentation.
+///
+/// A nonce or audience requires a holder-key-aware OID4VP flow and therefore
+/// fails closed at this compatibility boundary.
+#[pyfunction]
+#[pyo3(signature = (sd_jwt_compact, disclosed_fields, nonce=None, audience=None))]
+fn sd_jwt_create_presentation(
+    sd_jwt_compact: &str,
+    disclosed_fields: Vec<String>,
+    nonce: Option<&str>,
+    audience: Option<&str>,
+) -> PyResult<String> {
+    if nonce.is_some() || audience.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "SD-JWT nonce or audience binding requires a holder-key-aware OID4VP flow",
+        ));
+    }
+    marty_oid4vci::formats::sd_jwt::create_sd_jwt_presentation(sd_jwt_compact, &disclosed_fields)
+        .map_err(to_pyerr)
+}
+
 /// Create an OID4VCI format-aware verifiable credential via the Rust signing engine.
 ///
 /// Supports all credential formats: jwt_vc_json, vc+sd-jwt, mso_mdoc, zk_mdoc, vds_nc.
@@ -694,7 +718,7 @@ fn verify_sd_jwt(
 ///     (credential_string, credential_id)
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (issuer_id, jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
+#[pyo3(signature = (issuer_id, jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![], mdoc_namespace=None, mdoc_doctype=None))]
 fn oid4vci_sign_credential(
     issuer_id: &str,
     jwk_json: &str,
@@ -708,6 +732,8 @@ fn oid4vci_sign_credential(
     credential_payload_format: &str,
     w3c_context: Vec<String>,
     w3c_types: Vec<String>,
+    mdoc_namespace: Option<String>,
+    mdoc_doctype: Option<String>,
 ) -> PyResult<(String, String)> {
     use marty_oid4vci::formats;
     use marty_oid4vci::types::{
@@ -730,24 +756,34 @@ fn oid4vci_sign_credential(
 
     let zk_predicate_bindings = normalize_zk_predicate_claims(&claims, zk_predicate_claims);
 
+    let payload_format = match credential_payload_format {
+        "ietf_sd_jwt" | "ietf" | "flat" => CredentialPayloadFormat::IetfSdJwt,
+        "w3c_vcdm_v2_sd_jwt" => CredentialPayloadFormat::W3cVcdmV2SdJwt,
+        "w3c_vcdm_v2_jwt_vc" => CredentialPayloadFormat::W3cVcdmV2JwtVc,
+        unsupported => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unsupported credential payload format: {unsupported}"
+            )))
+        }
+    };
+
     let cred_claims = CredentialClaims {
         subject_id: subject_id.map(String::from),
         credential_type: credential_type.to_string(),
         claims,
         expiration_seconds,
         selective_disclosure_claims,
-        mdoc_namespace: None,
-        mdoc_doctype: None,
+        mdoc_namespace,
+        mdoc_doctype,
         zk_predicate_claims: zk_predicate_bindings,
-        credential_payload_format: CredentialPayloadFormat::from_str_loose(
-            credential_payload_format,
-        ),
+        credential_payload_format: payload_format,
         w3c_context,
         w3c_types,
     };
 
-    let cred_format =
-        CredentialFormat::from_str_loose(format).unwrap_or(CredentialFormat::JwtVcJson);
+    let cred_format = CredentialFormat::from_str_loose(format).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("Unsupported credential format: {format}"))
+    })?;
 
     let signed =
         formats::sign_credential(&cred_format, &issuer_key, &cred_claims).map_err(|e| {
@@ -766,6 +802,47 @@ fn oid4vci_sign_credential(
     };
 
     Ok((credential_str, signed.credential_id().to_string()))
+}
+
+/// Backward-compatible name for the standards-aware OID4VCI issuance kernel.
+///
+/// The former ad-hoc JSON proof helper was removed; every supported format now
+/// passes through the same Rust credential engine.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (issuer_did, issuer_jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], mdoc_namespace=None, mdoc_doctype=None, zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
+fn create_verifiable_credential(
+    issuer_did: &str,
+    issuer_jwk_json: &str,
+    subject_id: Option<&str>,
+    credential_type: &str,
+    claims_json: &str,
+    expiration_seconds: Option<i64>,
+    format: &str,
+    selective_disclosure_claims: Vec<String>,
+    mdoc_namespace: Option<String>,
+    mdoc_doctype: Option<String>,
+    zk_predicate_claims: Vec<String>,
+    credential_payload_format: &str,
+    w3c_context: Vec<String>,
+    w3c_types: Vec<String>,
+) -> PyResult<(String, String)> {
+    oid4vci_sign_credential(
+        issuer_did,
+        issuer_jwk_json,
+        subject_id,
+        credential_type,
+        claims_json,
+        expiration_seconds,
+        format,
+        selective_disclosure_claims,
+        zk_predicate_claims,
+        credential_payload_format,
+        w3c_context,
+        w3c_types,
+        mdoc_namespace,
+        mdoc_doctype,
+    )
 }
 
 /// Prepare a credential for external signing (BYOK).
@@ -1523,6 +1600,8 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Key Generation
     m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_p256_did_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
     m.add_function(wrap_pyfunction!(generate_ed25519_key, m)?)?;
 
@@ -1545,9 +1624,11 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
     m.add_class::<mdoc::MdocDocumentVerificationEvidence>()?;
+    m.add_class::<mdoc::MdocIssuerVerificationResult>()?;
     m.add_class::<mdoc::MdocPresentationVerificationResult>()?;
     m.add_function(wrap_pyfunction!(mdoc::parse_device_response, m)?)?;
     m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_cbor, m)?)?;
+    m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_issuer, m)?)?;
     m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_presentation, m)?)?;
 
     // Verifiable Credentials
@@ -1560,6 +1641,9 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // OID4VCI Protocol
     m.add_function(wrap_pyfunction!(oid4vci_create_credential_offer, m)?)?;
+    m.add_function(wrap_pyfunction!(create_credential_offer, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_offer_uri, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_issuer_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_create_token_response, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_create_authorization_response, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_exchange_auth_code_for_token, m)?)?;
@@ -1571,6 +1655,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(verify_sd_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(sd_jwt_create_presentation, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
