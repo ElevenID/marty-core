@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Build Linux aarch64 wheels against the supported manylinux 2.28 ABI and
-  provide the ARM architecture macro required by native cryptography assembly.
+- Build Linux aarch64 wheels natively on ARM against the supported manylinux
+  2.28 ABI so compilers, system libraries, and package architecture agree.
 
 ### Changed
 
