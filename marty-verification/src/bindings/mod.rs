@@ -1571,6 +1571,10 @@ fn get_certificate_info<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound
     dict.set_item("is_ca", info.is_ca)?;
     dict.set_item("key_usage", info.key_usage)?;
     dict.set_item("subject_alt_names", info.subject_alt_names)?;
+    dict.set_item("signature_algorithm", &info.signature_algorithm)?;
+    dict.set_item("subject_key_identifier", &info.subject_key_identifier)?;
+    dict.set_item("authority_key_identifier", &info.authority_key_identifier)?;
+    dict.set_item("fingerprint_sha1", &info.fingerprint_sha1)?;
     dict.set_item("fingerprint_sha256", &info.fingerprint_sha256)?;
     Ok(dict)
 }

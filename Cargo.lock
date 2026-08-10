@@ -3623,6 +3623,7 @@ version = "0.1.39"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "bs58 0.5.1",
  "chrono",
  "ciborium",
  "coset",
