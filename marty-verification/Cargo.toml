@@ -79,6 +79,7 @@ tracing-error = { workspace = true }
 
 # Time
 chrono = { workspace = true }
+uuid = { workspace = true }
 
 # Optional async dependencies
 tokio = { workspace = true, optional = true }
