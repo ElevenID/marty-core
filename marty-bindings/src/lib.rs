@@ -407,9 +407,9 @@ fn oid4vci_create_credential_offer(
 
 /// Create a token response for a pre-authorized code exchange.
 ///
-/// Generates a fresh access_token + c_nonce without performing DB lookups.
+/// Generates a fresh access token without performing DB lookups.
 /// The caller is responsible for validating the pre-auth code, checking
-/// expiry, and persisting the returned token/nonce.
+/// expiry, and persisting the returned token.
 ///
 /// Args:
 ///     pre_authorized_code: The pre-authorized code being exchanged

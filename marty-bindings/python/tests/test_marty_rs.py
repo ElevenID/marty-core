@@ -224,7 +224,7 @@ class TestOID4VCI:
         resp = json.loads(resp_json)
         assert resp["token_type"] == "Bearer"
         assert "access_token" in resp
-        assert "nonce" in resp
+        assert "nonce" not in resp
 
     def test_pkce_s256_valid(self):
         verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
@@ -240,11 +240,12 @@ class TestOID4VCI:
         jwt = _marty_rs.oid4vci_create_proof_jwt(self.ISSUER_URL, "nonce-xyz")
         assert jwt.count(".") == 2, "JWT must have 3 parts"
 
-        holder_did, nonce = _marty_rs.oid4vci_verify_proof_jwt(
+        holder_did, nonce, holder_public_jwk = _marty_rs.oid4vci_verify_proof_jwt(
             jwt, "nonce-xyz", self.ISSUER_URL
         )
         assert holder_did.startswith("did:key:")
         assert nonce == "nonce-xyz"
+        assert json.loads(holder_public_jwk)["kty"] == "OKP"
 
     def test_proof_jwt_bad_nonce_fails(self):
         jwt = _marty_rs.oid4vci_create_proof_jwt(self.ISSUER_URL, "nonce-a")
