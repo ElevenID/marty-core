@@ -411,7 +411,11 @@ fn extract_key_attestation_holder_key(
                 "Key-attestation-bound proof must contain either 'kid' or 'jwk'".into(),
             ));
         }
-        (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
+        (Some(_), Some(_)) => {
+            return Err(Oid4vciError::ProofVerificationFailed(
+                "Key-attestation-bound proof cannot contain both 'kid' and 'jwk'".into(),
+            ));
+        }
     };
     Ok((public_jwk_holder_id(&jwk)?, Some(jwk)))
 }

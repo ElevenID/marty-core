@@ -14,7 +14,9 @@ struct MetadataSigner {
 
 impl CredentialSigner for MetadataSigner {
     fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-        unreachable!("metadata-only remote signer cannot sign")
+        Err(marty_oid4vci::Oid4vciError::SigningError(
+            "metadata-only remote signer cannot sign".to_string(),
+        ))
     }
 
     fn algorithm(&self) -> SigningAlgorithm {
@@ -256,7 +258,9 @@ fn oid4vci_assemble_sd_jwt(
             compact,
             credential_id,
         } => Ok((compact, credential_id)),
-        _ => unreachable!(),
+        _ => Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "SD-JWT assembler returned an unexpected credential format",
+        )),
     }
 }
 
@@ -390,7 +394,9 @@ fn oid4vci_assemble_jwt_vc(
     };
     match marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(state, &signature) {
         SignedCredential::JwtVcJson { jwt, credential_id } => Ok((jwt, credential_id)),
-        _ => unreachable!(),
+        _ => Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "JWT-VC assembler returned an unexpected credential format",
+        )),
     }
 }
 
