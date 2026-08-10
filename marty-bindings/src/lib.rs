@@ -8,6 +8,7 @@
 #![allow(clippy::useless_conversion)]
 
 mod mdoc;
+mod status_list;
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -1518,6 +1519,8 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
 /// Downstream extension crates use this entry point to extend ``_marty_rs``
 /// without copying bindings or publishing a second, incompatible module.
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    status_list::register_status_list_bindings(m)?;
+
     // Key Generation
     m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
     m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
