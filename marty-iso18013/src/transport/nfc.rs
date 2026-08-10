@@ -159,11 +159,11 @@ impl NfcTransport {
         let mut response_buf = [0; 512];
         let command = apdu.to_bytes();
 
-        let response_len = card
+        let response = card
             .transmit(&command, &mut response_buf)
             .map_err(|e| crate::error::Error::Transport(format!("APDU transmit failed: {}", e)))?;
 
-        Ok(response_buf[..response_len].to_vec())
+        Ok(response.to_vec())
     }
 
     /// Extract data from APDU response (excluding SW1SW2)

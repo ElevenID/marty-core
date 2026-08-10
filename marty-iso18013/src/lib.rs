@@ -52,6 +52,8 @@ pub mod session;
 
 // Transport layers
 pub mod transport;
+#[cfg(feature = "python")]
+mod transport_bindings;
 
 // Applications
 pub mod apps;
@@ -88,6 +90,8 @@ fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Submodules
     let transport_module = PyModule::new(m.py(), "transport")?;
+    transport_bindings::register(m)?;
+    transport_bindings::register(&transport_module)?;
     m.add_submodule(&transport_module)?;
 
     Ok(())

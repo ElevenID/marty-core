@@ -11,7 +11,7 @@ use btleplug::api::{
     Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
 };
 #[cfg(feature = "ble")]
-use btleplug::platform::{Adapter, Manager, Peripheral};
+use btleplug::platform::{Manager, Peripheral};
 #[cfg(feature = "ble")]
 use std::time::Duration;
 #[cfg(feature = "ble")]
