@@ -11,6 +11,65 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELCpUiUlCiLWZRbygCZ42aG90Oq/f
 LX2CB+n6Gt+98LB0h5LXaQ2Zm+33tBNzBXN0761pQoP5zzJUDTFONca+DA==
 -----END PUBLIC KEY-----"#;
 
+const DTC_SIGNER_EKU_OID: &str = "2.23.136.1.1.12.1";
+
+fn add_test_trust_material(
+    verify_env: &mut serde_json::Value,
+    signing_key_pem: &str,
+    dtc_signer_eku: Option<(&str, bool)>,
+) {
+    use const_oid::ObjectIdentifier;
+    use der::Encode;
+    use rcgen::{BasicConstraints, CertificateParams, CustomExtension, DnType, IsCa, KeyPair};
+    use x509_cert::ext::pkix::ExtendedKeyUsage;
+
+    let signer_key = KeyPair::from_pem(signing_key_pem).expect("failed to parse signer key");
+    let signer_public_pem = signer_key.public_key_pem();
+
+    let mut ca_params = CertificateParams::default();
+    ca_params
+        .distinguished_name
+        .push(DnType::CommonName, "DTC Test CSCA");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_key = KeyPair::generate().expect("failed to generate CSCA key");
+    let ca_cert = ca_params
+        .self_signed(&ca_key)
+        .expect("failed to generate CSCA certificate");
+    let ca_pem = ca_cert.pem();
+
+    let mut signer_params = CertificateParams::default();
+    signer_params
+        .distinguished_name
+        .push(DnType::CommonName, "DTC Test Signer");
+    signer_params.is_ca = IsCa::NoCa;
+    if let Some((oid, critical)) = dtc_signer_eku {
+        let eku = ExtendedKeyUsage(vec![ObjectIdentifier::new_unwrap(oid)]);
+        let mut extension = CustomExtension::from_oid_content(
+            &[2, 5, 29, 37],
+            eku.to_der().expect("failed to encode DTC Signer EKU"),
+        );
+        extension.set_criticality(critical);
+        signer_params.custom_extensions.push(extension);
+    }
+    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
+    let signer_cert = signer_params
+        .signed_by(&signer_key, &ca_issuer)
+        .expect("failed to generate DTC Signer certificate");
+
+    let object = verify_env
+        .as_object_mut()
+        .expect("DTC verification envelope must be an object");
+    object.insert(
+        "signer_public_key_pem".to_string(),
+        signer_public_pem.into(),
+    );
+    object.insert("trust_anchors_pem".to_string(), serde_json::json!([ca_pem]));
+    object.insert(
+        "certificate_chain_pem".to_string(),
+        serde_json::json!([signer_cert.pem()]),
+    );
+}
+
 fn sample_create_request() -> String {
     serde_json::json!({
         "passport_number": "P1234567",
@@ -55,7 +114,7 @@ fn create_normalizes_and_fills_sod_hash() {
 }
 
 #[test]
-fn sign_and_verify_round_trip() {
+fn verify_rejects_signature_without_governed_trust_material() {
     let req = sample_create_request();
     let created = create_dtc_json(&req).expect("create failed");
     let with_key = serde_json::json!({
@@ -94,22 +153,34 @@ fn sign_and_verify_round_trip() {
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
-    assert!(
-        v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(false),
-        "verification failed: {:?}",
-        v
+    assert!(!v.get("is_valid").and_then(|b| b.as_bool()).unwrap_or(true));
+    let trust_check = v
+        .get("verification_results")
+        .and_then(|checks| checks.as_array())
+        .and_then(|checks| {
+            checks.iter().find(|check| {
+                check.get("check_name").and_then(|name| name.as_str()) == Some("TrustChain")
+            })
+        })
+        .expect("missing TrustChain check");
+    assert_eq!(
+        trust_check.get("passed").and_then(|v| v.as_bool()),
+        Some(false)
     );
+    assert!(v
+        .get("error_codes")
+        .and_then(|codes| codes.as_array())
+        .is_some_and(|codes| codes.iter().any(|code| code.as_str() == Some("E806"))));
 }
 
 #[test]
 fn verify_respects_trust_chain() {
-    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+    use rcgen::KeyPair;
 
     let req = sample_create_request();
     let created = create_dtc_json(&req).expect("create failed");
     let signer_key = KeyPair::generate().expect("failed to generate signer key");
     let signer_private_pem = signer_key.serialize_pem();
-    let signer_public_pem = signer_key.public_key_pem();
     let mut signed_env = serde_json::from_str::<serde_json::Value>(&created).unwrap();
     if let Some(obj) = signed_env.as_object_mut() {
         obj.insert(
@@ -120,41 +191,13 @@ fn verify_respects_trust_chain() {
     }
     let signed = sign_dtc_json(&signed_env.to_string()).expect("sign failed");
 
-    let mut ca_params = CertificateParams::default();
-    ca_params
-        .distinguished_name
-        .push(DnType::CommonName, "DTC Test Root CA");
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let ca_key = KeyPair::generate().expect("failed to generate CA key");
-    let ca_cert = ca_params
-        .self_signed(&ca_key)
-        .expect("failed to generate CA cert");
-    let ca_pem = ca_cert.pem();
-
-    let mut ee_params = CertificateParams::default();
-    ee_params
-        .distinguished_name
-        .push(DnType::CommonName, "DTC Test Leaf");
-    ee_params.is_ca = IsCa::NoCa;
-    let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
-    let ee_cert = ee_params
-        .signed_by(&signer_key, &ca_issuer)
-        .expect("failed to generate EE cert");
-    let ee_pem = ee_cert.pem();
-
-    // Supply trust anchors and chain; expect signature to pass and trust check to succeed
+    // Supply a governed CSCA separately from the leaf-only signer chain.
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            signer_public_pem.into(),
-        );
-        obj.insert("trust_anchors_pem".to_string(), serde_json::json!([ca_pem]));
-        obj.insert(
-            "certificate_chain_pem".to_string(),
-            serde_json::json!([ee_pem, ca_pem]),
-        );
-    }
+    add_test_trust_material(
+        &mut verify_env,
+        &signer_private_pem,
+        Some((DTC_SIGNER_EKU_OID, true)),
+    );
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
     assert!(
@@ -162,6 +205,138 @@ fn verify_respects_trust_chain() {
         "verification failed: {:?}",
         v
     );
+}
+
+#[test]
+fn verify_rejects_partial_trust_material() {
+    let created = create_dtc_json(&sample_create_request()).expect("create failed");
+    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
+    let object = signing_envelope.as_object_mut().unwrap();
+    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
+    object.insert("signer_id".to_string(), "rust-dtc".into());
+    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+
+    for missing_field in ["trust_anchors_pem", "certificate_chain_pem"] {
+        let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
+        add_test_trust_material(
+            &mut verify_envelope,
+            SIGNING_KEY_PEM,
+            Some((DTC_SIGNER_EKU_OID, true)),
+        );
+        verify_envelope
+            .as_object_mut()
+            .unwrap()
+            .remove(missing_field);
+
+        let verified = verify_dtc_json(&verify_envelope.to_string()).expect("verify failed");
+        let result: serde_json::Value = serde_json::from_str(&verified).unwrap();
+        assert_eq!(
+            result.get("is_valid").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert!(result
+            .get("error_codes")
+            .and_then(|codes| codes.as_array())
+            .is_some_and(|codes| codes.iter().any(|code| code.as_str() == Some("E806"))));
+    }
+}
+
+#[test]
+fn verify_rejects_signer_certificate_without_dtc_signer_eku() {
+    let created = create_dtc_json(&sample_create_request()).expect("create failed");
+    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
+    let object = signing_envelope.as_object_mut().unwrap();
+    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
+    object.insert("signer_id".to_string(), "rust-dtc".into());
+    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+
+    let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
+    add_test_trust_material(&mut verify_envelope, SIGNING_KEY_PEM, None);
+    let verified = verify_dtc_json(&verify_envelope.to_string()).expect("verify failed");
+    let result: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(
+        result.get("is_valid").and_then(|value| value.as_bool()),
+        Some(false)
+    );
+    assert!(result
+        .get("errors")
+        .and_then(|errors| errors.as_array())
+        .is_some_and(|errors| errors.iter().any(|error| error
+            .as_str()
+            .is_some_and(|message| message.contains("missing extended key usage")))));
+    assert!(result
+        .get("error_codes")
+        .and_then(|codes| codes.as_array())
+        .is_some_and(|codes| codes.iter().any(|code| code.as_str() == Some("E806"))));
+}
+
+#[test]
+fn verify_rejects_noncritical_dtc_signer_eku() {
+    let created = create_dtc_json(&sample_create_request()).expect("create failed");
+    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
+    let object = signing_envelope.as_object_mut().unwrap();
+    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
+    object.insert("signer_id".to_string(), "rust-dtc".into());
+    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+
+    let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
+    add_test_trust_material(
+        &mut verify_envelope,
+        SIGNING_KEY_PEM,
+        Some((DTC_SIGNER_EKU_OID, false)),
+    );
+    let verified = verify_dtc_json(&verify_envelope.to_string()).expect("verify failed");
+    let result: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(
+        result.get("is_valid").and_then(|value| value.as_bool()),
+        Some(false)
+    );
+    assert!(result
+        .get("errors")
+        .and_then(|errors| errors.as_array())
+        .is_some_and(|errors| errors.iter().any(|error| error
+            .as_str()
+            .is_some_and(|message| message.contains("must be marked critical")))));
+    assert!(result
+        .get("error_codes")
+        .and_then(|codes| codes.as_array())
+        .is_some_and(|codes| codes.iter().any(|code| code.as_str() == Some("E806"))));
+}
+
+#[test]
+fn verify_rejects_wrong_dtc_signer_eku() {
+    let created = create_dtc_json(&sample_create_request()).expect("create failed");
+    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
+    let object = signing_envelope.as_object_mut().unwrap();
+    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
+    object.insert("signer_id".to_string(), "rust-dtc".into());
+    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+
+    let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
+    add_test_trust_material(
+        &mut verify_envelope,
+        SIGNING_KEY_PEM,
+        Some(("1.3.6.1.5.5.7.3.3", true)),
+    );
+    let verified = verify_dtc_json(&verify_envelope.to_string()).expect("verify failed");
+    let result: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(
+        result.get("is_valid").and_then(|value| value.as_bool()),
+        Some(false)
+    );
+    assert!(result
+        .get("errors")
+        .and_then(|errors| errors.as_array())
+        .is_some_and(|errors| errors.iter().any(|error| error
+            .as_str()
+            .is_some_and(|message| message.contains("not authorized for DTC signing")))));
+    assert!(result
+        .get("error_codes")
+        .and_then(|codes| codes.as_array())
+        .is_some_and(|codes| codes.iter().any(|code| code.as_str() == Some("E806"))));
 }
 
 #[test]
@@ -355,12 +530,11 @@ fn verify_rejects_expired_dtc() {
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
-    }
+    add_test_trust_material(
+        &mut verify_env,
+        SIGNING_KEY_PEM,
+        Some((DTC_SIGNER_EKU_OID, true)),
+    );
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -428,12 +602,11 @@ fn verify_rejects_not_yet_valid_dtc() {
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
-    }
+    add_test_trust_material(
+        &mut verify_env,
+        SIGNING_KEY_PEM,
+        Some((DTC_SIGNER_EKU_OID, true)),
+    );
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -572,12 +745,11 @@ fn verify_type2_profile_validates_required_fields() {
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
-    }
+    add_test_trust_material(
+        &mut verify_env,
+        SIGNING_KEY_PEM,
+        Some((DTC_SIGNER_EKU_OID, true)),
+    );
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -698,12 +870,11 @@ fn verify_type3_profile_validates_required_fields() {
     let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
-    }
+    add_test_trust_material(
+        &mut verify_env,
+        SIGNING_KEY_PEM,
+        Some((DTC_SIGNER_EKU_OID, true)),
+    );
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
