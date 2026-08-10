@@ -10,12 +10,11 @@ use marty_crypto::symmetric::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
 
 /// Session encryption and decryption state
 pub struct SessionEncryption {
-    /// Session encryption key (derived from ECDH)
-    sk_encryption: Vec<u8>,
+    /// Key used for messages sent by this party.
+    send_key: Vec<u8>,
 
-    /// Session MAC key (derived from ECDH)
-    #[allow(dead_code)]
-    sk_mac: Vec<u8>,
+    /// Key used for messages received by this party.
+    receive_key: Vec<u8>,
 
     /// Message counter for encryption
     send_counter: u32,
@@ -27,11 +26,32 @@ pub struct SessionEncryption {
 impl SessionEncryption {
     /// Create new session encryption from ECDH shared secret
     pub fn new(shared_secret: &[u8], session_transcript: &[u8]) -> Result<Self> {
-        let (sk_encryption, sk_mac) = derive_mdl_session_keys(shared_secret, session_transcript)?;
+        let (device_key, _) = derive_mdl_session_keys(shared_secret, session_transcript)?;
 
         Ok(Self {
-            sk_encryption,
-            sk_mac,
+            send_key: device_key.clone(),
+            receive_key: device_key,
+            send_counter: 0,
+            receive_counter: 0,
+        })
+    }
+
+    /// Create directional encryption state for one protocol peer.
+    pub fn new_directional(
+        shared_secret: &[u8],
+        session_transcript: &[u8],
+        our_key_is_lower: bool,
+    ) -> Result<Self> {
+        let (device_key, reader_key) = derive_mdl_session_keys(shared_secret, session_transcript)?;
+        let (send_key, receive_key) = if our_key_is_lower {
+            (device_key, reader_key)
+        } else {
+            (reader_key, device_key)
+        };
+
+        Ok(Self {
+            send_key,
+            receive_key,
             send_counter: 0,
             receive_counter: 0,
         })
@@ -48,7 +68,7 @@ impl SessionEncryption {
         let mut iv = vec![0u8; 12];
         iv[8..].copy_from_slice(&self.send_counter.to_be_bytes());
 
-        let ciphertext = aes_256_gcm_encrypt(&self.sk_encryption, &iv, plaintext, &[])?;
+        let ciphertext = aes_256_gcm_encrypt(&self.send_key, &iv, plaintext, &[])?;
 
         self.send_counter = next_counter;
         Ok(ciphertext)
@@ -65,7 +85,7 @@ impl SessionEncryption {
         let mut iv = vec![0u8; 12];
         iv[8..].copy_from_slice(&self.receive_counter.to_be_bytes());
 
-        let plaintext = aes_256_gcm_decrypt(&self.sk_encryption, &iv, ciphertext, &[])?;
+        let plaintext = aes_256_gcm_decrypt(&self.receive_key, &iv, ciphertext, &[])?;
 
         self.receive_counter = next_counter;
         Ok(plaintext)

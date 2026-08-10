@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 
 /// Transport method for ISO 18013-5 communication
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(skip_from_py_object))]
 pub enum TransportMethod {
     /// Bluetooth Low Energy
     BLE,
@@ -26,7 +26,7 @@ pub enum TransportMethod {
 
 /// Engagement method for initiating communication
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(skip_from_py_object))]
 pub enum EngagementMethod {
     /// QR code scanning
     QR,
@@ -39,7 +39,7 @@ pub enum EngagementMethod {
 /// The DeviceEngagement structure is used by the mdoc/mDL holder to advertise
 /// its availability and provide connection parameters to potential readers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(skip_from_py_object))]
 pub struct DeviceEngagement {
     /// Protocol version (currently "1.0")
     pub version: String,
@@ -89,6 +89,16 @@ impl DeviceEngagement {
         self.transports.push(TransportInfo {
             method: TransportMethod::BLE,
             parameters: params,
+        });
+
+        Ok(())
+    }
+
+    /// Add an NFC data-retrieval transport.
+    pub fn add_nfc_transport(&mut self) -> Result<()> {
+        self.transports.push(TransportInfo {
+            method: TransportMethod::NFC,
+            parameters: HashMap::new(),
         });
 
         Ok(())
@@ -160,6 +170,10 @@ impl DeviceEngagement {
         self.add_ble_transport(service_uuid).map_err(|e| e.into())
     }
 
+    fn add_nfc(&mut self) -> PyResult<()> {
+        self.add_nfc_transport().map_err(|e| e.into())
+    }
+
     fn add_https(&mut self, url: &str) -> PyResult<()> {
         self.add_https_transport(url).map_err(|e| e.into())
     }
@@ -197,13 +211,15 @@ mod tests {
         engagement
             .add_ble_transport("0000FFF0-0000-1000-8000-00805F9B34FB")
             .unwrap();
+        engagement.add_nfc_transport().unwrap();
         engagement
             .add_https_transport("https://example.com/mdl")
             .unwrap();
 
-        assert_eq!(engagement.transports.len(), 2);
+        assert_eq!(engagement.transports.len(), 3);
         assert_eq!(engagement.transports[0].method, TransportMethod::BLE);
-        assert_eq!(engagement.transports[1].method, TransportMethod::HTTPS);
+        assert_eq!(engagement.transports[1].method, TransportMethod::NFC);
+        assert_eq!(engagement.transports[2].method, TransportMethod::HTTPS);
     }
 
     #[test]
