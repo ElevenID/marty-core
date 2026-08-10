@@ -255,10 +255,10 @@ fn find_embedded_signer_certificate<'a>(
     })
 }
 
-fn single_signed_attribute_value<'a>(
-    attributes: &'a x509_cert::attr::Attributes,
+fn single_signed_attribute_value(
+    attributes: &x509_cert::attr::Attributes,
     oid: der::asn1::ObjectIdentifier,
-) -> VerificationResult<&'a der::Any> {
+) -> VerificationResult<&der::Any> {
     let mut matching = attributes.iter().filter(|attribute| attribute.oid == oid);
     let attribute = matching.next().ok_or_else(|| {
         VerificationError::der_error(format!("Missing required CMS signed attribute {oid}"))
