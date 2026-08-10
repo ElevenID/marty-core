@@ -153,7 +153,7 @@ jobs:
               apt-get update
               apt-get install --no-install-recommends -y \
                 libdbus-1-dev libssl-dev libpcsclite-dev \
-                libipc-cmd-perl libtime-piece-perl
+                perl
             elif command -v dnf >/dev/null 2>&1; then
               dnf install -y \
                 dbus-devel openssl-devel pcsc-lite-devel \
@@ -166,6 +166,7 @@ jobs:
               echo "Unsupported Linux wheel-build package manager" >&2
               exit 1
             fi
+            perl -MIPC::Cmd -MTime::Piece -e 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}-${{ matrix.target }}
