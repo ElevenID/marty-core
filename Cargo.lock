@@ -3634,6 +3634,7 @@ dependencies = [
  "pkcs8",
  "rand 0.8.7",
  "rand_core 0.10.1",
+ "rcgen",
  "rsa",
  "serde",
  "sha1",
