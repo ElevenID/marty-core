@@ -93,6 +93,29 @@ fn generate_ed25519_key<'py>(
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
 }
 
+/// Generate an Ed25519 `did:key` and its private JWK.
+///
+/// This preserves the established credential binding contract while keeping
+/// key generation and DID derivation in the canonical Rust extension.
+#[pyfunction]
+fn generate_did_key() -> PyResult<(String, String)> {
+    use base64::Engine;
+
+    let (secret, public) = marty_crypto::ed25519::generate_keypair();
+    let mut multicodec = Vec::with_capacity(34);
+    multicodec.extend_from_slice(&[0xed, 0x01]);
+    multicodec.extend_from_slice(&public);
+    let did = format!("did:key:z{}", bs58::encode(multicodec).into_string());
+    let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let jwk = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": encoder.encode(public),
+        "d": encoder.encode(secret),
+    });
+    Ok((did, serde_json::to_string(&jwk).map_err(to_pyerr)?))
+}
+
 // ============================================================================
 // Signing
 // ============================================================================
@@ -666,6 +689,36 @@ fn oid4vci_verify_compact_jwt(
     let header = serde_json::to_string(&verified.header).map_err(to_pyerr)?;
     let claims = serde_json::to_string(&verified.claims).map_err(to_pyerr)?;
     Ok((header, claims))
+}
+
+/// Verify a detached provider/KMS signature using a public JWK.
+#[pyfunction]
+fn oid4vci_verify_detached_signature(
+    message: &[u8],
+    signature: &[u8],
+    public_jwk_json: &str,
+    expected_algorithm: &str,
+) -> PyResult<bool> {
+    marty_oid4vci::jose::verify_detached_signature_with_public_jwk(
+        message,
+        signature,
+        public_jwk_json,
+        expected_algorithm,
+    )
+    .map_err(|error| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Detached signature verification failed: {error}"
+        ))
+    })
+}
+
+/// Normalize a DER or raw ECDSA signature to fixed-width P1363/JOSE bytes.
+#[pyfunction]
+fn oid4vci_normalize_ecdsa_signature(
+    signature: &[u8],
+    expected_algorithm: &str,
+) -> PyResult<Vec<u8>> {
+    marty_oid4vci::jose::normalize_ecdsa_signature(signature, expected_algorithm).map_err(to_pyerr)
 }
 
 /// Verify an SD-JWT VC presentation using Marty Core's RFC 9449 engine.
@@ -1630,6 +1683,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_p256_did_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
     m.add_function(wrap_pyfunction!(generate_ed25519_key, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
 
     // Signing
     m.add_function(wrap_pyfunction!(sign_p256, m)?)?;
@@ -1677,6 +1731,8 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_compact_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;
     m.add_function(wrap_pyfunction!(
         oid4vci_verify_key_attestation_bound_proof_jwt,
         m

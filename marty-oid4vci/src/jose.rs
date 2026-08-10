@@ -4,7 +4,10 @@
 //! module owns JOSE parsing, public-key validation, and signature verification.
 
 use base64::Engine;
-use jsonwebtoken::{decode, decode_header, jwk::Jwk, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{
+    crypto::verify as verify_jws_signature, decode, decode_header, jwk::Jwk, Algorithm,
+    DecodingKey, Validation,
+};
 use serde::de::{Error as DeError, MapAccess, Visitor};
 use serde::Deserializer;
 use serde_json::{Map, Value};
@@ -177,6 +180,66 @@ pub fn verify_compact_jwt_with_public_jwk(
     })
 }
 
+/// Verify a detached signature with an explicitly trusted public JWK.
+///
+/// This is the native boundary used for provider/KMS sign-and-verify health
+/// challenges. Public-key policy is identical to compact JWT verification:
+/// private fields, algorithm confusion, non-signing use, and unexpected
+/// `key_ops` fail closed. ECDSA signatures may use JOSE raw or ASN.1 DER form.
+pub fn verify_detached_signature_with_public_jwk(
+    message: &[u8],
+    signature: &[u8],
+    public_jwk_json: &str,
+    expected_algorithm: &str,
+) -> Oid4vciResult<bool> {
+    let expected = algorithm(expected_algorithm)?;
+    let public_jwk_value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
+    let public_jwk = validate_public_jwk(&public_jwk_value, expected_algorithm)?;
+    let decoding_key = DecodingKey::from_jwk(&public_jwk).map_err(|error| {
+        Oid4vciError::KeyError(format!(
+            "Could not construct signature verification key: {error}"
+        ))
+    })?;
+
+    let normalized_signature = match expected_algorithm {
+        "ES256" | "ES384" => normalize_ecdsa_signature(signature, expected_algorithm)?,
+        _ => signature.to_vec(),
+    };
+    let encoded_signature = B64.encode(normalized_signature);
+    verify_jws_signature(&encoded_signature, message, &decoding_key, expected).map_err(|error| {
+        Oid4vciError::JwtError(format!("Detached signature verification failed: {error}"))
+    })
+}
+
+/// Normalize an ES256 or ES384 signature to IEEE P1363/JOSE encoding.
+///
+/// Remote signers commonly return ASN.1 DER while COSE and JWS carry the fixed
+/// width `r || s` form. Raw signatures are length-checked and DER integers are
+/// decoded in Rust so application adapters never perform cryptographic
+/// encoding transformations.
+pub fn normalize_ecdsa_signature(
+    signature: &[u8],
+    expected_algorithm: &str,
+) -> Oid4vciResult<Vec<u8>> {
+    match expected_algorithm {
+        "ES256" if signature.len() == 64 => Ok(signature.to_vec()),
+        "ES256" => p256::ecdsa::Signature::from_der(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                Oid4vciError::JwtError(format!("Invalid ES256 signature encoding: {error}"))
+            }),
+        "ES384" if signature.len() == 96 => Ok(signature.to_vec()),
+        "ES384" => p384::ecdsa::Signature::from_der(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                Oid4vciError::JwtError(format!("Invalid ES384 signature encoding: {error}"))
+            }),
+        _ => Err(Oid4vciError::JwtError(format!(
+            "Unsupported ECDSA signature algorithm: {expected_algorithm}"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +293,48 @@ mod tests {
         )
         .is_err());
         assert!(verify_compact_jwt_with_public_jwk(&signed_token().0, &jwk, "PS256").is_err());
+    }
+
+    #[test]
+    fn verifies_detached_raw_and_der_ecdsa_signatures() {
+        let (token, jwk) = signed_token();
+        let parts: Vec<&str> = token.split('.').collect();
+        let message = format!("{}.{}", parts[0], parts[1]);
+        let raw_signature = URL_SAFE_NO_PAD
+            .decode(parts[2])
+            .expect("JWT signature encoding");
+
+        assert!(verify_detached_signature_with_public_jwk(
+            message.as_bytes(),
+            &raw_signature,
+            &jwk,
+            "ES256"
+        )
+        .expect("raw signature verification"));
+
+        let signature =
+            p256::ecdsa::Signature::from_slice(&raw_signature).expect("raw P-256 signature");
+        assert!(verify_detached_signature_with_public_jwk(
+            message.as_bytes(),
+            signature.to_der().as_bytes(),
+            &jwk,
+            "ES256"
+        )
+        .expect("DER signature verification"));
+
+        assert!(!verify_detached_signature_with_public_jwk(
+            b"tampered",
+            &raw_signature,
+            &jwk,
+            "ES256"
+        )
+        .expect("invalid signature result"));
+
+        assert_eq!(
+            normalize_ecdsa_signature(signature.to_der().as_bytes(), "ES256")
+                .expect("DER normalization"),
+            raw_signature
+        );
+        assert!(normalize_ecdsa_signature(&raw_signature, "RS256").is_err());
     }
 }

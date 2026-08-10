@@ -18,6 +18,14 @@ pub struct CertificateInfo {
     pub is_ca: bool,
     pub key_usage: Vec<String>,
     pub subject_alt_names: Vec<String>,
+    /// Signature algorithm object identifier.
+    pub signature_algorithm: String,
+    /// Subject key identifier as lowercase hex, when present.
+    pub subject_key_identifier: Option<String>,
+    /// Authority key identifier as lowercase hex, when present.
+    pub authority_key_identifier: Option<String>,
+    /// SHA-1 fingerprint as lowercase hex for legacy PKD interoperability.
+    pub fingerprint_sha1: String,
     /// SHA-256 fingerprint as lowercase hex string
     pub fingerprint_sha256: String,
 }
@@ -63,7 +71,12 @@ pub fn get_certificate_info(der_data: &[u8]) -> CryptoResult<CertificateInfo> {
     // Parse subject alternative names
     let subject_alt_names = parse_san(&cert);
 
-    // Calculate SHA-256 fingerprint as hex string
+    let signature_algorithm = cert.signature_algorithm.oid.to_string();
+    let subject_key_identifier = parse_subject_key_identifier(&cert);
+    let authority_key_identifier = parse_authority_key_identifier(&cert);
+
+    // Calculate fingerprints in the native certificate kernel.
+    let fingerprint_sha1 = hex::encode(crate::hashing::hash_sha1(der_data));
     let fingerprint_bytes = crate::hashing::hash_sha256(der_data);
     let fingerprint_sha256 = hex::encode(&fingerprint_bytes);
 
@@ -76,8 +89,47 @@ pub fn get_certificate_info(der_data: &[u8]) -> CryptoResult<CertificateInfo> {
         is_ca,
         key_usage,
         subject_alt_names,
+        signature_algorithm,
+        subject_key_identifier,
+        authority_key_identifier,
+        fingerprint_sha1,
         fingerprint_sha256,
     })
+}
+
+fn parse_subject_key_identifier(cert: &Certificate) -> Option<String> {
+    use const_oid::db::rfc5280::ID_CE_SUBJECT_KEY_IDENTIFIER;
+    use x509_cert::ext::pkix::SubjectKeyIdentifier;
+
+    cert.tbs_certificate
+        .extensions
+        .as_ref()
+        .and_then(|extensions| {
+            extensions.iter().find_map(|extension| {
+                (extension.extn_id == ID_CE_SUBJECT_KEY_IDENTIFIER)
+                    .then(|| SubjectKeyIdentifier::from_der(extension.extn_value.as_bytes()).ok())
+                    .flatten()
+                    .map(|identifier| hex::encode(identifier.0.as_bytes()))
+            })
+        })
+}
+
+fn parse_authority_key_identifier(cert: &Certificate) -> Option<String> {
+    use const_oid::db::rfc5280::ID_CE_AUTHORITY_KEY_IDENTIFIER;
+    use x509_cert::ext::pkix::AuthorityKeyIdentifier;
+
+    cert.tbs_certificate
+        .extensions
+        .as_ref()
+        .and_then(|extensions| {
+            extensions.iter().find_map(|extension| {
+                (extension.extn_id == ID_CE_AUTHORITY_KEY_IDENTIFIER)
+                    .then(|| AuthorityKeyIdentifier::from_der(extension.extn_value.as_bytes()).ok())
+                    .flatten()
+                    .and_then(|identifier| identifier.key_identifier)
+                    .map(|identifier| hex::encode(identifier.as_bytes()))
+            })
+        })
 }
 
 /// Check if certificate is a CA certificate.
@@ -377,5 +429,17 @@ mod tests {
     #[test]
     fn test_crl_distribution_points_reject_malformed_certificate() {
         assert!(get_crl_distribution_points(b"not a certificate").is_err());
+    }
+
+    #[test]
+    fn test_certificate_info_includes_native_pkd_metadata() {
+        let params = rcgen::CertificateParams::new(vec!["pkd.example".to_string()]).unwrap();
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let certificate = params.self_signed(&key_pair).unwrap();
+        let info = get_certificate_info(certificate.der()).unwrap();
+
+        assert!(!info.signature_algorithm.is_empty());
+        assert_eq!(info.fingerprint_sha1.len(), 40);
+        assert_eq!(info.fingerprint_sha256.len(), 64);
     }
 }

@@ -33,6 +33,7 @@ pem-rfc7468 = { workspace = true }
 
 # Base64 encoding
 base64 = { workspace = true }
+bs58 = "0.5"
 
 # DateTime for credential timestamps
 chrono = { version = "0.4", features = ["serde"] }

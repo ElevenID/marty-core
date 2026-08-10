@@ -36,6 +36,15 @@ def test_canonical_top_level_import_exposes_native_bindings():
 
     assert canonical.generate_p256_key is _marty_rs.generate_p256_key
     assert canonical.TokenStatusList is _marty_rs.TokenStatusList
+    assert canonical.generate_did_key is _marty_rs.generate_did_key
+    assert (
+        canonical.oid4vci_verify_detached_signature
+        is _marty_rs.oid4vci_verify_detached_signature
+    )
+    assert (
+        canonical.oid4vci_normalize_ecdsa_signature
+        is _marty_rs.oid4vci_normalize_ecdsa_signature
+    )
 
 
 class TestStatusLists:
@@ -85,6 +94,16 @@ class TestKeyGeneration:
         secret, public = _marty_rs.generate_p256_key()
         assert isinstance(secret, bytes)
         assert isinstance(public, bytes)
+
+    def test_generate_did_key_returns_ed25519_private_jwk(self):
+        did, private_jwk_json = _marty_rs.generate_did_key()
+        private_jwk = json.loads(private_jwk_json)
+
+        assert did.startswith("did:key:z6Mk")
+        assert private_jwk["kty"] == "OKP"
+        assert private_jwk["crv"] == "Ed25519"
+        assert private_jwk["x"]
+        assert private_jwk["d"]
 
     def test_generate_p256_key_lengths(self):
         secret, public = _marty_rs.generate_p256_key()
