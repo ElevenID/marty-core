@@ -214,6 +214,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # GitHub release assets are flat. Flatten the downloaded artifact tree
+          # before signing so SHA256SUMS paths work after release download.
+          find release-assets -mindepth 2 -type f -print0 | while IFS= read -r -d '' file; do
+            destination="release-assets/$(basename "$file")"
+            if [ -e "$destination" ]; then
+              echo "Duplicate release asset basename: $destination" >&2
+              exit 1
+            fi
+            mv "$file" "$destination"
+          done
+          find release-assets -mindepth 1 -type d -empty -delete
+          if find release-assets -mindepth 2 -type f -print -quit | grep -q .; then
+            echo "Release artifact tree still contains nested files" >&2
+            exit 1
+          fi
           find release-assets -type f ! -name '*.sigstore.json' -print0 | while IFS= read -r -d '' file; do
             cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"
           done

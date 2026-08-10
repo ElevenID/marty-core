@@ -139,6 +139,13 @@ def check_release_checksum_policy(workflow_text: str | None = None) -> list[str]
         else RELEASE_WORKFLOW.read_text(encoding="utf-8")
     )
     errors: list[str] = []
+    if "find release-assets -mindepth 2 -type f -print0" not in contents or (
+        'destination="release-assets/$(basename "$file")"' not in contents
+    ):
+        errors.append(
+            ".github/workflows/release.yml: release assets must be flattened before "
+            "checksumming so downloaded manifest paths resolve"
+        )
     if "find . -type f ! -name SHA256SUMS -print0" not in contents:
         errors.append(
             ".github/workflows/release.yml: checksum manifest must exclude itself"
