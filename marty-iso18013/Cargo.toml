@@ -69,3 +69,8 @@ all-transports = ["ble", "nfc"]
 [dev-dependencies]
 tempfile = "3.14"
 proptest = "1.5"
+criterion = { workspace = true }
+
+[[bench]]
+name = "session_processing"
+harness = false

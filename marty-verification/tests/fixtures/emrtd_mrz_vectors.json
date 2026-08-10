@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "icao_td1_valid",
+      "lines": [
+        "I<UTOD231458907<<<<<<<<<<<<<<<",
+        "7408122F1204159UTO<<<<<<<<<<<6",
+        "ERIKSSON<<ANNA<MARIA<<<<<<<<<<"
+      ],
+      "valid_check_digits": true,
+      "expected": {
+        "format": "TD1",
+        "document_type": "I",
+        "issuing_country": "UTO",
+        "document_number": "D23145890",
+        "surname": "ERIKSSON",
+        "given_names": "ANNA MARIA",
+        "nationality": "UTO",
+        "date_of_birth": "740812",
+        "sex": "F",
+        "date_of_expiry": "120415"
+      }
+    },
+    {
+      "id": "icao_td2_valid",
+      "lines": [
+        "I<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<",
+        "D231458907UTO7408122F1204159<<<<<<<6"
+      ],
+      "valid_check_digits": true,
+      "expected": {
+        "format": "TD2",
+        "document_type": "I",
+        "issuing_country": "UTO",
+        "document_number": "D23145890",
+        "surname": "ERIKSSON",
+        "given_names": "ANNA MARIA",
+        "nationality": "UTO",
+        "date_of_birth": "740812",
+        "sex": "F",
+        "date_of_expiry": "120415"
+      }
+    },
+    {
+      "id": "icao_td3_valid",
+      "lines": [
+        "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<",
+        "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
+      ],
+      "valid_check_digits": true,
+      "expected": {
+        "format": "TD3",
+        "document_type": "P",
+        "issuing_country": "UTO",
+        "document_number": "L898902C3",
+        "surname": "ERIKSSON",
+        "given_names": "ANNA MARIA",
+        "nationality": "UTO",
+        "date_of_birth": "740812",
+        "sex": "F",
+        "date_of_expiry": "120415"
+      }
+    },
+    {
+      "id": "td3_invalid_document_number_check_digit",
+      "lines": [
+        "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<",
+        "L898902C35UTO7408122F1204159ZE184226B<<<<<10"
+      ],
+      "valid_check_digits": false,
+      "expected": {
+        "format": "TD3",
+        "document_type": "P",
+        "issuing_country": "UTO",
+        "document_number": "L898902C3",
+        "surname": "ERIKSSON",
+        "given_names": "ANNA MARIA",
+        "nationality": "UTO",
+        "date_of_birth": "740812",
+        "sex": "F",
+        "date_of_expiry": "120415"
+      }
+    },
+    {
+      "id": "malformed_wrong_line_length",
+      "lines": ["P<UTOERIKSSON", "L898902C36"],
+      "expect_parse_error": true
+    },
+    {
+      "id": "malformed_non_ascii",
+      "lines": [
+        "P<UTÖERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<",
+        "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
+      ],
+      "expect_parse_error": true
+    }
+  ]
+}

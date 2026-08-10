@@ -497,12 +497,24 @@ fn verify_issuer_trust(
         // above is intentionally mandatory for both pin and root trust modes.
         // This validator additionally enforces validity and embedded chain
         // signatures without imposing generic X.509 usages on other profiles.
-        let direct_pin_validator = marty_verification::verification::ChainValidator::with_config(
-            marty_verification::verification::ChainValidatorConfig {
-                required_key_usage: Vec::new(),
-                ..Default::default()
-            },
-        );
+        let mut direct_pin_validator =
+            marty_verification::verification::ChainValidator::with_config(
+                marty_verification::verification::ChainValidatorConfig {
+                    required_key_usage: Vec::new(),
+                    ..Default::default()
+                },
+            );
+        // The exact leaf match above is the trust decision. Register the
+        // supplied chain terminus only so the generic validator can enforce
+        // validity and every embedded signature without treating an arbitrary
+        // caller-provided root as trusted outside this direct-pin operation.
+        direct_pin_validator
+            .add_trust_anchor_der(
+                certificate_chain
+                    .last()
+                    .expect("non-empty certificate chain checked above"),
+            )
+            .map_err(|error| format!("invalid direct-pin chain terminus: {error}"))?;
         return match direct_pin_validator.validate_chain_der(certificate_chain) {
             Ok(validation) if validation.valid => Ok(()),
             Ok(validation) => Err(format!(

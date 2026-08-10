@@ -327,6 +327,31 @@ jobs:
           pytest python\tests\
         shell: cmd
 
+  verification-python-test:
+    name: Python/Rust Conformance (marty-verification)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marty-verification
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+      - name: Build native verification bindings
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install 'maturin[patchelf]==1.14.1' pytest
+          maturin develop
+      - name: Run shared golden-vector tests
+        run: |
+          source .venv/bin/activate
+          pytest python/tests/
+
   wasm-test:
     name: WASM Tests (marty-biometrics)
     runs-on: ubuntu-latest

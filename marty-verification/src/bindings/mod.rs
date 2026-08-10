@@ -654,10 +654,13 @@ pub struct PyMrzData {
     pub optional_data: String,
     #[pyo3(get)]
     pub raw_lines: Vec<String>,
+    #[pyo3(get)]
+    pub check_digits_valid: bool,
 }
 
 impl From<crate::mrz::Mrz> for PyMrzData {
     fn from(mrz: crate::mrz::Mrz) -> Self {
+        let check_digits_valid = mrz.validate_check_digits();
         let format = match mrz.format {
             crate::mrz::MrzFormat::TD1 => "TD1",
             crate::mrz::MrzFormat::TD2 => "TD2",
@@ -677,6 +680,7 @@ impl From<crate::mrz::Mrz> for PyMrzData {
             date_of_expiry: mrz.date_of_expiry,
             optional_data: mrz.optional_data,
             raw_lines: mrz.raw_lines,
+            check_digits_valid,
         }
     }
 }
@@ -721,6 +725,7 @@ impl PyMrzData {
         dict.set_item("sex", self.sex.clone())?;
         dict.set_item("date_of_expiry", self.date_of_expiry.clone())?;
         dict.set_item("optional_data", self.optional_data.clone())?;
+        dict.set_item("check_digits_valid", self.check_digits_valid)?;
         Ok(dict.into())
     }
 }
@@ -1491,13 +1496,8 @@ impl PyChainValidator {
         chain_pem: Vec<String>,
         config: &PyValidationConfig,
     ) -> PyResult<PyChainValidationResult> {
-        // Create a new validator with the provided config
         let rust_config = config.to_chain_validator_config();
-        let validator = crate::verification::ChainValidator::with_config(rust_config);
-
-        // Copy trust anchors and intermediates from self
-        // Note: This is a workaround since we can't directly access internals
-        // The validator should be pre-configured with trust anchors
+        let validator = self.inner.configured(rust_config);
 
         let result = validator.validate_chain(&chain_pem).map_err(to_pyerr)?;
         Ok(result.into())

@@ -148,6 +148,16 @@ impl ChainValidator {
         }
     }
 
+    /// Copy this validator's trust material while applying a different policy.
+    pub fn configured(&self, config: ChainValidatorConfig) -> Self {
+        Self {
+            trust_anchors: self.trust_anchors.clone(),
+            intermediates: self.intermediates.clone(),
+            config,
+            crls: self.crls.clone(),
+        }
+    }
+
     /// Add a trust anchor from PEM.
     pub fn add_trust_anchor_pem(&mut self, pem: &str) -> VerificationResult<()> {
         let cert = Certificate::from_pem(pem).map_err(|e| {
@@ -380,7 +390,7 @@ impl ChainValidator {
 
     fn verify_trust_anchor(&self, chain: &[Certificate]) -> Result<(), String> {
         if self.trust_anchors.is_empty() {
-            return Ok(()); // No trust anchors configured, skip check
+            return Err("No trust anchors configured".to_string());
         }
 
         // Guard against empty chain
