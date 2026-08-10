@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-08-10
+
 ### Security
 
 - Persist and atomically enforce monotonic Open Badge trust-package provenance so replayed, conflicting, or cross-domain key sets cannot replace active trust state.

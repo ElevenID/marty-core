@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.40] - 2026-08-10
+
+### Fixed
+
+- Make Linux release-wheel dependency installation portable across the current
+  Debian-family cross images and RPM-family manylinux images.
+
+### Security
+
+- Require verifier-governed CSCA trust anchors and a validated DTC Signer
+  certificate chain before a Digital Travel Credential can be accepted.
+- Require the critical ICAO DTC-signing extended key usage and reject missing,
+  partial, malformed, mismatched, or wrong-purpose trust material with a stable
+  trust-chain failure.
+
 ## [0.1.36] - 2026-08-09
 
 ### Added

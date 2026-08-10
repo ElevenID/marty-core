@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-08-10
+
 ### Added
 
 - Add the framework-neutral canonical required-check reducer and explicit
@@ -19,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Require verifier-governed CSCA trust anchors and a validated DTC Signer
+  certificate chain before a Digital Travel Credential can be accepted.
+- Require the critical ICAO DTC Signer EKU `2.23.136.1.1.12.1` and fail closed
+  on missing, partial, malformed, mismatched, or wrong-purpose trust material.
 - Fail closed when an Open Badge declares unavailable, unsupported, malformed, or undecodable credential status evidence.
 - Require Open Badge issuer proofs to use assertion authorization and reject wrong-controller, unlinked, or ambiguously resolved methods.
 - Require separately authenticated status-authority provenance, secured status-list credentials, signed/cache freshness, exact issuer/URL/purpose bindings, and bounded normative Bitstring Status List processing before a positive Open Badge status result.
