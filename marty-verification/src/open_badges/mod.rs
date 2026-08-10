@@ -17,6 +17,8 @@
 //! For WASM targets, use the async versions:
 //! - [`issue_ob3_json_async`] - Async OB3 credential issuance
 //! - [`verify_ob3_json_async`] - Async OB3 credential verification
+//! - [`verify_ob3_json_with_status_lists_async`] - Async OB3 verification with
+//!   separately authenticated status-list inputs
 //!
 //! These async functions work in all environments when driven by an appropriate async runtime
 //! (e.g., `wasm-bindgen-futures` for browser environments).
@@ -28,13 +30,14 @@
 //! | JWS Signatures | ✓ (ES256, ES384, EdDSA) | — |
 //! | Data Integrity Proofs | — | ✓ (JsonWebSignature2020, Ed25519Signature2018/2020) |
 //! | Recipient Hashing | ✓ (SHA1, SHA256, SHA512) | — |
-//! | Credential Status / Revocation | — | ✓ (StatusList2021, BitstringStatusListEntry, RevocationList2020) |
+//! | Credential Status / Revocation | — | ✓ (authenticated W3C Bitstring Status List v1.0) |
 //! | Offline JSON-LD Contexts | ✓ | ✓ |
 
 mod contexts;
 mod method_wrapper;
 mod ob2;
 mod ob3;
+mod status;
 mod suite_wrapper;
 mod types;
 mod x509_suite;
@@ -46,11 +49,15 @@ pub use contexts::{ob2_context_uri, ob3_context_uri, open_badges_context_loader}
 pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
 pub use ob2::{issue_ob2_json, verify_ob2_json};
 #[cfg(not(target_arch = "wasm32"))]
-pub use ob3::{issue_ob3_json, verify_ob3_json};
-pub use ob3::{issue_ob3_json_async, verify_ob3_json_async};
+pub use ob3::{issue_ob3_json, verify_ob3_json, verify_ob3_json_with_status_lists};
+pub use ob3::{
+    issue_ob3_json_async, verify_ob3_json_async, verify_ob3_json_with_status_lists_async,
+};
 pub use suite_wrapper::OpenBadgeSuite;
 pub use types::{
-    DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult, OpenBadgesVersion,
+    ArtifactProvenance, AuthenticatedStatusList, DocumentStore, OpenBadgeStatusCheck,
+    OpenBadgeStatusOutcome, OpenBadgesIssueResult, OpenBadgesVerificationResult, OpenBadgesVersion,
+    StatusAuthorityProvenance,
 };
 pub use x509_suite::X509Signature2021;
 pub use x509_verification_method::X509VerificationKey2021;

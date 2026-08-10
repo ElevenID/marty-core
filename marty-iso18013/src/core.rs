@@ -168,6 +168,11 @@ impl DeviceEngagement {
         self.to_cbor().map_err(|e| e.into())
     }
 
+    #[pyo3(name = "to_qr_code")]
+    fn to_qr_code_py(&self) -> PyResult<Vec<u8>> {
+        self.to_qr_code().map_err(|e| e.into())
+    }
+
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> {
         Self::from_cbor(data).map_err(|e| e.into())

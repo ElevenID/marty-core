@@ -134,7 +134,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
           # Keep release builds independent of GitHub's latest-release API.
           maturin-version: v1.14.1
@@ -158,7 +158,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
           # Keep release builds independent of GitHub's latest-release API.
           maturin-version: v1.14.1
@@ -180,12 +180,12 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: "wheels-*"
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: "sdist-*"
           path: dist
@@ -205,11 +205,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: release-assets
           merge-multiple: true
-      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign and checksum release assets
         shell: bash
         run: |
