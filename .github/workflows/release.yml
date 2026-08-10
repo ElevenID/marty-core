@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "*/Cargo.toml"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -17,6 +23,7 @@ env:
 
 jobs:
   test:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -146,9 +153,14 @@ jobs:
           command: build
           args: --release --out dist
           target: ${{ matrix.target }}
-          manylinux: auto
+          # Keep Linux compatibility explicit. The 2.28 aarch64 cross image
+          # supplies headers new enough for the native cryptography crates.
+          manylinux: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64' && '2_28' || matrix.os == 'ubuntu-latest' && '2_17' || 'auto' }}
           before-script-linux: |
             set -eu
+            if [ "${{ matrix.target }}" = "aarch64" ]; then
+              export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
+            fi
             if command -v apt-get >/dev/null 2>&1; then
               apt-get update
               apt-get install --no-install-recommends -y \
@@ -173,6 +185,45 @@ jobs:
           path: ${{ matrix.package }}/dist/*
           retention-days: 7
           if-no-files-found: error
+
+  preflight-python-aarch64:
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [marty-bindings, marty-verification, marty-iso18013]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          maturin-version: v1.14.1
+          working-directory: ${{ matrix.package }}
+          command: build
+          args: --release --out dist
+          target: aarch64
+          manylinux: 2_28
+          before-script-linux: |
+            set -eu
+            export CFLAGS_aarch64_unknown_linux_gnu="-D__ARM_ARCH=8"
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              apt-get install --no-install-recommends -y \
+                libdbus-1-dev libssl-dev libpcsclite-dev \
+                perl
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y \
+                dbus-devel openssl-devel pcsc-lite-devel \
+                perl-IPC-Cmd perl-Time-Piece
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y \
+                dbus-devel openssl-devel pcsc-lite-devel \
+                perl-IPC-Cmd perl-Time-Piece
+            else
+              echo "Unsupported Linux wheel-build package manager" >&2
+              exit 1
+            fi
+            perl -MIPC::Cmd -MTime::Piece -e 1
 
   build-python-sdists:
     needs: build-crates
