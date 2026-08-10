@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 use crate::verification::ChainValidator;
 use base64::{engine::general_purpose, Engine as _};
-use const_oid::ObjectIdentifier;
+use const_oid::{db::rfc5280::ID_CE_EXT_KEY_USAGE, ObjectIdentifier};
 use der::Decode;
 use p256::ecdsa::{
     signature::Signer, signature::Verifier, Signature as P256Signature,
@@ -26,7 +26,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use spki::SubjectPublicKeyInfoRef;
-use x509_cert::Certificate;
+use x509_cert::{ext::pkix::ExtendedKeyUsage, Certificate};
+
+const DTC_SIGNER_EKU_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.23.136.1.1.12.1");
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DataGroup {
@@ -511,28 +513,74 @@ fn public_key_bytes_from_cert_pem(pem: &str) -> VerificationResult<Vec<u8>> {
         .to_vec())
 }
 
-fn validate_chain(trust_anchors: &[String], chain: &[String]) -> VerificationResult<bool> {
-    if trust_anchors.is_empty() || chain.is_empty() {
-        return Ok(true); // nothing to validate
+fn validate_dtc_signer_eku(pem: &str) -> VerificationResult<()> {
+    let der = decode_pem_body(pem).map_err(|error| {
+        VerificationError::dtc_trust_chain_invalid(format!(
+            "Invalid DTC Signer certificate PEM: {error}"
+        ))
+    })?;
+    let cert = Certificate::from_der(&der).map_err(|error| {
+        VerificationError::dtc_trust_chain_invalid(format!(
+            "Invalid DTC Signer certificate: {error}"
+        ))
+    })?;
+    let extension = cert
+        .tbs_certificate
+        .extensions
+        .as_ref()
+        .and_then(|extensions| {
+            extensions
+                .iter()
+                .find(|extension| extension.extn_id == ID_CE_EXT_KEY_USAGE)
+        })
+        .ok_or_else(|| {
+            VerificationError::dtc_trust_chain_invalid(
+                "DTC Signer certificate is missing extended key usage",
+            )
+        })?;
+    if !extension.critical {
+        return Err(VerificationError::dtc_trust_chain_invalid(
+            "DTC Signer extended key usage must be marked critical",
+        ));
     }
+    let usages = ExtendedKeyUsage::from_der(extension.extn_value.as_bytes()).map_err(|error| {
+        VerificationError::dtc_trust_chain_invalid(format!(
+            "DTC Signer certificate has invalid extended key usage: {error}"
+        ))
+    })?;
+    if !usages.0.contains(&DTC_SIGNER_EKU_OID) {
+        return Err(VerificationError::dtc_trust_chain_invalid(
+            "DTC Signer certificate is not authorized for DTC signing",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_chain(trust_anchors: &[String], chain: &[String]) -> VerificationResult<bool> {
+    if trust_anchors.is_empty() {
+        return Err(VerificationError::dtc_trust_chain_invalid(
+            "DTC verification requires at least one governed CSCA trust anchor",
+        ));
+    }
+    let signer_certificate = chain.first().ok_or_else(|| {
+        VerificationError::dtc_trust_chain_invalid(
+            "DTC verification requires a DTC Signer certificate chain",
+        )
+    })?;
+    validate_dtc_signer_eku(signer_certificate)?;
     let mut validator = ChainValidator::new();
     for ta in trust_anchors {
-        validator
-            .add_trust_anchor_pem(ta)
-            .map_err(|e| VerificationError::dtc_trust_chain_invalid(e.to_string()))?;
+        validator.add_trust_anchor_pem(ta).map_err(|error| {
+            VerificationError::dtc_trust_chain_invalid(format!(
+                "Invalid governed CSCA trust anchor: {error}"
+            ))
+        })?;
     }
-    for (idx, cert) in chain.iter().enumerate() {
-        if idx == chain.len() - 1 {
-            // last element assumed root, already added above
-            continue;
-        }
-        validator
-            .add_intermediate_pem(cert)
-            .map_err(|e| VerificationError::dtc_trust_chain_invalid(e.to_string()))?;
-    }
-    let result = validator
-        .validate_chain(chain)
-        .map_err(|e| VerificationError::dtc_trust_chain_invalid(e.to_string()))?;
+    let result = validator.validate_chain(chain).map_err(|error| {
+        VerificationError::dtc_trust_chain_invalid(format!(
+            "DTC certificate chain validation failed: {error}"
+        ))
+    })?;
     Ok(result.valid)
 }
 
@@ -612,6 +660,13 @@ pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
     })
 }
 
+/// Verify a DTC using verifier-selected PKI trust material.
+///
+/// `trust_anchors_pem` is policy input and MUST come from the verifier's
+/// governed CSCA store; it must never be copied from the presented credential.
+/// `certificate_chain_pem` must begin with the DTC Signer certificate, whose
+/// key must match `signer_public_key_pem` and whose EKU must authorize DTC
+/// signing. Missing or partial trust material fails the final decision.
 pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
     let value: Value = serde_json::from_str(input)
         .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
@@ -963,7 +1018,9 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
         _ => {}
     }
 
-    // Optional PKI trust chain validation
+    // DTC authenticity requires a DTC Signer certificate that chains to a
+    // governed CSCA trust anchor. A bare key proves only that the payload and
+    // signature were produced together; it does not establish issuer trust.
     let trust_anchors: Vec<String> = value
         .get("trust_anchors_pem")
         .and_then(|v| v.as_array())
@@ -1023,40 +1080,38 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
             }
         }
     }
-    if !trust_anchors.is_empty() && !cert_chain.is_empty() {
-        match validate_chain(&trust_anchors, &cert_chain) {
-            Ok(chain_ok) => {
-                is_valid &= chain_ok;
-                record_check(
-                    &mut checks,
-                    &mut errors,
-                    &mut error_codes_out,
-                    "TrustChain",
-                    chain_ok,
-                    if chain_ok {
-                        None
-                    } else {
-                        Some("trust chain validation failed".to_string())
-                    },
-                    if chain_ok {
-                        None
-                    } else {
-                        Some(error_codes::DTC_TRUST_CHAIN_INVALID)
-                    },
-                );
-            }
-            Err(err) => {
-                is_valid = false;
-                record_check(
-                    &mut checks,
-                    &mut errors,
-                    &mut error_codes_out,
-                    "TrustChain",
-                    false,
-                    Some(err.to_string()),
-                    Some(err.code()),
-                );
-            }
+    match validate_chain(&trust_anchors, &cert_chain) {
+        Ok(chain_ok) => {
+            is_valid &= chain_ok;
+            record_check(
+                &mut checks,
+                &mut errors,
+                &mut error_codes_out,
+                "TrustChain",
+                chain_ok,
+                if chain_ok {
+                    None
+                } else {
+                    Some("trust chain validation failed".to_string())
+                },
+                if chain_ok {
+                    None
+                } else {
+                    Some(error_codes::DTC_TRUST_CHAIN_INVALID)
+                },
+            );
+        }
+        Err(err) => {
+            is_valid = false;
+            record_check(
+                &mut checks,
+                &mut errors,
+                &mut error_codes_out,
+                "TrustChain",
+                false,
+                Some(err.to_string()),
+                Some(err.code()),
+            );
         }
     }
 
