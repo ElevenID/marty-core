@@ -2,7 +2,7 @@
 //!
 //! Per ICAO 9303 Part 3.
 
-use super::checksum::{compute_composite_check_digit, validate_check_digit};
+use super::checksum::{compute_check_digit, validate_check_digit};
 use crate::{VerificationError, VerificationResult};
 use serde::{Deserialize, Serialize};
 
@@ -76,36 +76,11 @@ pub struct Mrz {
 impl Mrz {
     /// Validate all check digits in the MRZ.
     pub fn validate_check_digits(&self) -> bool {
-        // Document number
-        if !validate_check_digit(&self.document_number, self.document_number_check) {
-            return false;
+        match self.format {
+            MrzFormat::TD1 => validate_td1_check_digits(&self.raw_lines),
+            MrzFormat::TD2 => validate_td2_check_digits(&self.raw_lines),
+            MrzFormat::TD3 => validate_td3_check_digits(&self.raw_lines),
         }
-
-        // Date of birth
-        if !validate_check_digit(&self.date_of_birth, self.date_of_birth_check) {
-            return false;
-        }
-
-        // Date of expiry
-        if !validate_check_digit(&self.date_of_expiry, self.date_of_expiry_check) {
-            return false;
-        }
-
-        // Composite check (TD3)
-        if let Some(composite) = self.composite_check {
-            let fields = [
-                (self.document_number.as_str(), self.document_number_check),
-                (self.date_of_birth.as_str(), self.date_of_birth_check),
-                (self.date_of_expiry.as_str(), self.date_of_expiry_check),
-            ];
-
-            let expected = compute_composite_check_digit(&fields);
-            if expected != composite {
-                return false;
-            }
-        }
-
-        true
     }
 
     /// Get the MRZ information string for BAC key derivation.
@@ -139,19 +114,108 @@ pub fn parse_mrz(lines: &[&str]) -> VerificationResult<Mrz> {
         .collect();
 
     if lines.is_empty() {
-        return Err(VerificationError::internal(
+        return Err(VerificationError::encoding_error(
             "No MRZ lines provided".to_string(),
         ));
     }
 
     // Detect format
     let format = detect_format(&lines)?;
+    validate_line_structure(&lines, format)?;
 
     match format {
         MrzFormat::TD1 => parse_td1(&lines),
         MrzFormat::TD2 => parse_td2(&lines),
         MrzFormat::TD3 => parse_td3(&lines),
     }
+}
+
+fn validate_line_structure(lines: &[String], format: MrzFormat) -> VerificationResult<()> {
+    if lines.len() != format.line_count() {
+        return Err(VerificationError::encoding_error(format!(
+            "{} requires exactly {} lines",
+            format_name(format),
+            format.line_count()
+        )));
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        if !line.is_ascii()
+            || !line
+                .bytes()
+                .all(|byte| byte == b'<' || byte.is_ascii_alphanumeric())
+        {
+            return Err(VerificationError::encoding_error(format!(
+                "MRZ line {} contains invalid characters",
+                index + 1
+            )));
+        }
+        if line.len() != format.line_length() {
+            return Err(VerificationError::encoding_error(format!(
+                "{} line {} must be exactly {} characters",
+                format_name(format),
+                index + 1,
+                format.line_length()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn format_name(format: MrzFormat) -> &'static str {
+    match format {
+        MrzFormat::TD1 => "TD1",
+        MrzFormat::TD2 => "TD2",
+        MrzFormat::TD3 => "TD3",
+    }
+}
+
+fn check_digit_at(line: &str, index: usize) -> Option<char> {
+    line.as_bytes().get(index).copied().map(char::from)
+}
+
+fn validate_td1_check_digits(lines: &[String]) -> bool {
+    let [line1, line2, _line3] = lines else {
+        return false;
+    };
+    let composite_data = format!(
+        "{}{}{}{}",
+        &line1[5..30],
+        &line2[0..7],
+        &line2[8..15],
+        &line2[18..29]
+    );
+
+    validate_check_digit(&line1[5..14], check_digit_at(line1, 14).unwrap_or('<'))
+        && validate_check_digit(&line2[0..6], check_digit_at(line2, 6).unwrap_or('<'))
+        && validate_check_digit(&line2[8..14], check_digit_at(line2, 14).unwrap_or('<'))
+        && compute_check_digit(&composite_data) == check_digit_at(line2, 29).unwrap_or('<')
+}
+
+fn validate_td2_check_digits(lines: &[String]) -> bool {
+    let [_line1, line2] = lines else {
+        return false;
+    };
+    let composite_data = format!("{}{}{}", &line2[0..10], &line2[13..20], &line2[21..35]);
+
+    validate_check_digit(&line2[0..9], check_digit_at(line2, 9).unwrap_or('<'))
+        && validate_check_digit(&line2[13..19], check_digit_at(line2, 19).unwrap_or('<'))
+        && validate_check_digit(&line2[21..27], check_digit_at(line2, 27).unwrap_or('<'))
+        && compute_check_digit(&composite_data) == check_digit_at(line2, 35).unwrap_or('<')
+}
+
+fn validate_td3_check_digits(lines: &[String]) -> bool {
+    let [_line1, line2] = lines else {
+        return false;
+    };
+    let composite_data = format!("{}{}{}", &line2[0..10], &line2[13..20], &line2[21..43]);
+
+    validate_check_digit(&line2[0..9], check_digit_at(line2, 9).unwrap_or('<'))
+        && validate_check_digit(&line2[13..19], check_digit_at(line2, 19).unwrap_or('<'))
+        && validate_check_digit(&line2[21..27], check_digit_at(line2, 27).unwrap_or('<'))
+        && validate_check_digit(&line2[28..42], check_digit_at(line2, 42).unwrap_or('<'))
+        && compute_check_digit(&composite_data) == check_digit_at(line2, 43).unwrap_or('<')
 }
 
 /// Parse MRZ from a single string with newlines.
@@ -178,7 +242,7 @@ fn detect_format(lines: &[String]) -> VerificationResult<MrzFormat> {
             } else if first_line_len == 30 {
                 Ok(MrzFormat::TD1)
             } else {
-                Err(VerificationError::internal(format!(
+                Err(VerificationError::encoding_error(format!(
                     "Unknown MRZ format: {} lines, {} chars",
                     line_count, first_line_len
                 )))
@@ -190,14 +254,14 @@ fn detect_format(lines: &[String]) -> VerificationResult<MrzFormat> {
 /// Parse TD1 format (ID cards).
 fn parse_td1(lines: &[String]) -> VerificationResult<Mrz> {
     if lines.len() < 3 {
-        return Err(VerificationError::internal(
+        return Err(VerificationError::encoding_error(
             "TD1 requires 3 lines".to_string(),
         ));
     }
 
-    let line1 = pad_line(&lines[0], 30);
-    let line2 = pad_line(&lines[1], 30);
-    let line3 = pad_line(&lines[2], 30);
+    let line1 = &lines[0];
+    let line2 = &lines[1];
+    let line3 = &lines[2];
 
     // Line 1: Document type (2) + Country (3) + Doc number (9) + Check (1) + Optional (15)
     let document_type = line1[0..2].trim_end_matches('<').to_string();
@@ -217,7 +281,7 @@ fn parse_td1(lines: &[String]) -> VerificationResult<Mrz> {
     let composite_check = line2.chars().nth(29);
 
     // Line 3: Name
-    let (surname, given_names) = parse_name(&line3);
+    let (surname, given_names) = parse_name(line3);
 
     // Combine optional data
     let optional_data = format!(
@@ -249,13 +313,13 @@ fn parse_td1(lines: &[String]) -> VerificationResult<Mrz> {
 /// Parse TD2 format (ID cards, some visas).
 fn parse_td2(lines: &[String]) -> VerificationResult<Mrz> {
     if lines.len() < 2 {
-        return Err(VerificationError::internal(
+        return Err(VerificationError::encoding_error(
             "TD2 requires 2 lines".to_string(),
         ));
     }
 
-    let line1 = pad_line(&lines[0], 36);
-    let line2 = pad_line(&lines[1], 36);
+    let line1 = &lines[0];
+    let line2 = &lines[1];
 
     // Line 1: Document type (2) + Country (3) + Name (31)
     let document_type = line1[0..2].trim_end_matches('<').to_string();
@@ -298,13 +362,13 @@ fn parse_td2(lines: &[String]) -> VerificationResult<Mrz> {
 /// Parse TD3 format (passports).
 fn parse_td3(lines: &[String]) -> VerificationResult<Mrz> {
     if lines.len() < 2 {
-        return Err(VerificationError::internal(
+        return Err(VerificationError::encoding_error(
             "TD3 requires 2 lines".to_string(),
         ));
     }
 
-    let line1 = pad_line(&lines[0], 44);
-    let line2 = pad_line(&lines[1], 44);
+    let line1 = &lines[0];
+    let line2 = &lines[1];
 
     // Line 1: Document type (2) + Country (3) + Name (39)
     let document_type = line1[0..2].trim_end_matches('<').to_string();
@@ -368,15 +432,6 @@ fn parse_name(name_field: &str) -> (String, String) {
     (surname, given_names)
 }
 
-/// Pad line to expected length.
-fn pad_line(line: &str, length: usize) -> String {
-    if line.len() >= length {
-        line[..length].to_string()
-    } else {
-        format!("{:<width$}", line, width = length).replace(' ', "<")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +468,16 @@ mod tests {
             parse_name("SMITH<<JOHN<<<<<<<<<<<<<<<<<<"),
             ("SMITH".to_string(), "JOHN".to_string())
         );
+    }
+
+    #[test]
+    fn test_rejects_non_ascii_and_wrong_line_lengths() {
+        assert!(parse_mrz(&["P<UTÖERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<", "short"]).is_err());
+        assert!(parse_mrz(&[
+            "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<",
+            "L898902C36UTO7408122F1204159ZE184226B<<<<<1",
+        ])
+        .is_err());
     }
 
     #[test]

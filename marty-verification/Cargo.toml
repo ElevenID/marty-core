@@ -103,6 +103,11 @@ rcgen = { workspace = true }
 time = "0.3"
 proptest = { workspace = true }
 coset = "0.3.8"
+criterion = { workspace = true }
+
+[[bench]]
+name = "verification_kernels"
+harness = false
 
 [target.'cfg(unix)'.dev-dependencies]
 openssl = { version = "0.10", features = ["vendored"] }

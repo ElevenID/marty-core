@@ -6,7 +6,11 @@
 use crate::error::{Error, Result};
 use std::collections::{HashMap, HashSet};
 
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
 /// Selective disclosure manager
+#[cfg_attr(feature = "python", pyclass)]
 pub struct SelectiveDisclosure {
     /// Available data elements by namespace
     available: HashMap<String, HashSet<String>>,
@@ -90,6 +94,35 @@ impl SelectiveDisclosure {
 impl Default for SelectiveDisclosure {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl SelectiveDisclosure {
+    #[new]
+    fn py_new() -> Self {
+        Self::new()
+    }
+
+    #[pyo3(name = "add_namespace")]
+    fn add_namespace_py(&mut self, namespace: String, elements: Vec<String>) {
+        self.add_namespace(namespace, elements);
+    }
+
+    #[pyo3(name = "add_mandatory")]
+    fn add_mandatory_py(&mut self, element: String) {
+        self.add_mandatory(element);
+    }
+
+    #[pyo3(name = "filter_request")]
+    fn filter_request_py(
+        &self,
+        requested: HashMap<String, Vec<String>>,
+        user_approved: HashMap<String, Vec<String>>,
+    ) -> PyResult<HashMap<String, Vec<String>>> {
+        self.filter_request(&requested, &user_approved)
+            .map_err(Into::into)
     }
 }
 

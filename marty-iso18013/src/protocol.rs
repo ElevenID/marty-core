@@ -15,7 +15,7 @@ use pyo3::prelude::*;
 
 /// Session state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(skip_from_py_object))]
 pub enum SessionState {
     /// Initial state - not yet engaged
     Idle,
@@ -35,7 +35,7 @@ pub enum SessionState {
 
 /// Session configuration
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(from_py_object))]
 pub struct SessionConfig {
     /// Session timeout in seconds
     pub timeout_secs: u64,
@@ -131,6 +131,12 @@ impl Session {
         Ok(runtime.block_on(self.state()))
     }
 
+    fn public_key_py(&self) -> PyResult<Vec<u8>> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        Ok(runtime.block_on(self.public_key()))
+    }
+
     fn establish_py(&self, peer_public_key: &[u8]) -> PyResult<()> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
@@ -183,6 +189,11 @@ impl Session {
         *self.state.read().await
     }
 
+    /// Return this session's ephemeral public key for peer establishment.
+    pub async fn public_key(&self) -> Vec<u8> {
+        self.key_agreement.read().await.public_key()
+    }
+
     /// Establish secure session
     pub async fn establish(&self, peer_public_key: &[u8]) -> Result<()> {
         let mut state = self.state.write().await;
@@ -202,8 +213,13 @@ impl Session {
         // SessionTranscript = [DeviceEngagementBytes, EReaderKeyBytes, Handover]
         // We bind the transcript to both parties' public keys to prevent replay.
         let our_public_key = ka.public_key();
+        let our_key_is_lower = our_public_key.as_slice() < peer_public_key;
         let session_transcript = Self::build_session_transcript(&our_public_key, peer_public_key);
-        let encryption = SessionEncryption::new(&shared_secret, &session_transcript)?;
+        let encryption = SessionEncryption::new_directional(
+            &shared_secret,
+            &session_transcript,
+            our_key_is_lower,
+        )?;
 
         *self.encryption.write().await = Some(encryption);
         *state = SessionState::Established;
@@ -273,15 +289,20 @@ impl Session {
     fn build_session_transcript(our_public_key: &[u8], peer_public_key: &[u8]) -> Vec<u8> {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
-        hasher.update(our_public_key);
-        hasher.update(peer_public_key);
+        let (first, second) = if our_public_key < peer_public_key {
+            (our_public_key, peer_public_key)
+        } else {
+            (peer_public_key, our_public_key)
+        };
+        hasher.update(first);
+        hasher.update(second);
         hasher.finalize().to_vec()
     }
 }
 
 /// mDL request structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(skip_from_py_object))]
 pub struct MdlRequest {
     /// Document type being requested
     pub doc_type: String,
@@ -295,7 +316,7 @@ pub struct MdlRequest {
 
 /// mDL response structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(skip_from_py_object))]
 pub struct MdlResponse {
     /// Document type
     pub doc_type: String,
@@ -309,7 +330,7 @@ pub struct MdlResponse {
 
 /// Response status codes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "python", pyclass)]
+#[cfg_attr(feature = "python", pyclass(from_py_object))]
 pub enum ResponseStatus {
     /// Success
     Ok,
@@ -319,6 +340,100 @@ pub enum ResponseStatus {
     DataNotAvailable,
     /// Internal error
     Error,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl MdlRequest {
+    #[new]
+    #[pyo3(signature = (doc_type, data_elements, nonce=None))]
+    fn py_new(
+        doc_type: String,
+        data_elements: std::collections::HashMap<String, Vec<String>>,
+        nonce: Option<Vec<u8>>,
+    ) -> Self {
+        use rand::RngCore;
+        let nonce = nonce.unwrap_or_else(|| {
+            let mut generated = vec![0_u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut generated);
+            generated
+        });
+        Self {
+            doc_type,
+            data_elements,
+            nonce,
+        }
+    }
+
+    #[getter]
+    fn doc_type(&self) -> String {
+        self.doc_type.clone()
+    }
+
+    #[getter]
+    fn data_elements(&self) -> std::collections::HashMap<String, Vec<String>> {
+        self.data_elements.clone()
+    }
+
+    #[getter]
+    fn nonce(&self) -> Vec<u8> {
+        self.nonce.clone()
+    }
+
+    fn to_bytes(&self) -> PyResult<Vec<u8>> {
+        let mut encoded = Vec::new();
+        ciborium::ser::into_writer(self, &mut encoded)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(encoded)
+    }
+
+    #[staticmethod]
+    fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        ciborium::de::from_reader(data)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl MdlResponse {
+    #[new]
+    #[pyo3(signature = (doc_type, data, status=None))]
+    fn py_new(doc_type: String, data: Vec<u8>, status: Option<ResponseStatus>) -> Self {
+        Self {
+            doc_type,
+            data,
+            status: status.unwrap_or(ResponseStatus::Ok),
+        }
+    }
+
+    #[getter]
+    fn doc_type(&self) -> String {
+        self.doc_type.clone()
+    }
+
+    #[getter]
+    fn data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
+
+    #[getter]
+    fn status(&self) -> ResponseStatus {
+        self.status
+    }
+
+    fn to_bytes(&self) -> PyResult<Vec<u8>> {
+        let mut encoded = Vec::new();
+        ciborium::ser::into_writer(self, &mut encoded)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(encoded)
+    }
+
+    #[staticmethod]
+    fn from_bytes(data: &[u8]) -> PyResult<Self> {
+        ciborium::de::from_reader(data)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -437,6 +552,11 @@ mod tests {
             vec!["family_name", "birth_date"]
         );
         assert_eq!(deserialized.nonce, vec![1, 2, 3, 4]);
+
+        let mut cbor = Vec::new();
+        ciborium::ser::into_writer(&request, &mut cbor).unwrap();
+        let cbor_deserialized: MdlRequest = ciborium::de::from_reader(cbor.as_slice()).unwrap();
+        assert_eq!(cbor_deserialized.doc_type, request.doc_type);
     }
 
     // ====================================================================
@@ -493,5 +613,33 @@ mod tests {
 
         let result = session.receive_encrypted(b"cipher").await;
         assert!(result.is_err(), "should fail when session not established");
+    }
+
+    #[tokio::test]
+    async fn test_two_sessions_exchange_directional_messages() {
+        let engagement = DeviceEngagement::new_qr().unwrap();
+        let alice = Session::from_engagement(&engagement, SessionConfig::default())
+            .await
+            .unwrap();
+        let bob = Session::from_engagement(&engagement, SessionConfig::default())
+            .await
+            .unwrap();
+        let alice_key = alice.public_key().await;
+        let bob_key = bob.public_key().await;
+
+        alice.establish(&bob_key).await.unwrap();
+        bob.establish(&alice_key).await.unwrap();
+
+        let alice_message = alice.send_encrypted(b"alice to bob").await.unwrap();
+        assert_eq!(
+            bob.receive_encrypted(&alice_message).await.unwrap(),
+            b"alice to bob"
+        );
+
+        let bob_message = bob.send_encrypted(b"bob to alice").await.unwrap();
+        assert_eq!(
+            alice.receive_encrypted(&bob_message).await.unwrap(),
+            b"bob to alice"
+        );
     }
 }

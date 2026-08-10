@@ -114,6 +114,7 @@ marty-biometrics = { version = "0.1.5", path = "marty-biometrics" }
 rcgen = "0.14"
 tempfile = "3.14"
 proptest = "1.5"
+criterion = "0.8.2"
 
 [profile.release]
 lto = true

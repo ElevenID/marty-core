@@ -87,6 +87,7 @@ fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MdlRequest>()?;
     m.add_class::<MdlResponse>()?;
     m.add_class::<protocol::ResponseStatus>()?;
+    m.add_class::<SelectiveDisclosure>()?;
 
     // Submodules
     let transport_module = PyModule::new(m.py(), "transport")?;

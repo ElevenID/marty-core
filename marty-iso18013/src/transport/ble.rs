@@ -24,6 +24,7 @@ use uuid::Uuid;
 const MDL_SERVICE_UUID: &str = "0000FFF0-0000-1000-8000-00805F9B34FB";
 
 #[cfg(feature = "ble")]
+#[allow(dead_code)]
 /// State characteristic UUID
 const CHAR_STATE: &str = "0000FFF1-0000-1000-8000-00805F9B34FB";
 
@@ -36,10 +37,12 @@ const CHAR_CLIENT2SERVER: &str = "0000FFF2-0000-1000-8000-00805F9B34FB";
 const CHAR_SERVER2CLIENT: &str = "0000FFF3-0000-1000-8000-00805F9B34FB";
 
 #[cfg(feature = "ble")]
+#[allow(dead_code)]
 /// Ident characteristic UUID
 const CHAR_IDENT: &str = "0000FFF4-0000-1000-8000-00805F9B34FB";
 
 #[cfg(feature = "ble")]
+#[allow(dead_code)]
 /// L2CAP characteristic UUID
 const CHAR_L2CAP: &str = "0000FFF5-0000-1000-8000-00805F9B34FB";
 
@@ -174,6 +177,7 @@ impl BleTransport {
     }
 
     /// Reassemble fragmented messages
+    #[allow(dead_code)]
     fn reassemble_fragments(&self, fragments: Vec<Vec<u8>>) -> Vec<u8> {
         fragments.into_iter().flatten().collect()
     }
