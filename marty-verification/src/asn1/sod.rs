@@ -9,11 +9,14 @@
 
 use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
-use der::{Decode, Encode};
+use der::{Decode, Encode, Sequence};
 use serde::{Deserialize, Serialize};
 
 use crate::{VerificationError, VerificationResult};
 use marty_crypto::HashAlgorithm;
+
+const ID_ICAO_LDS_SECURITY_OBJECT: der::asn1::ObjectIdentifier =
+    der::asn1::ObjectIdentifier::new_unwrap("2.23.136.1.1.1");
 
 /// Parsed Document Security Object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +63,26 @@ pub struct LdsVersionInfo {
     pub lds_version: String,
     /// Unicode version (e.g., "040000")
     pub unicode_version: String,
+}
+
+#[derive(Clone, Debug, Sequence)]
+struct Asn1LdsSecurityObject {
+    version: u8,
+    hash_algorithm: spki::AlgorithmIdentifierOwned,
+    data_group_hash_values: Vec<Asn1DataGroupHash>,
+    lds_version_info: Option<Asn1LdsVersionInfo>,
+}
+
+#[derive(Clone, Debug, Sequence)]
+struct Asn1DataGroupHash {
+    data_group_number: u8,
+    data_group_hash_value: der::asn1::OctetString,
+}
+
+#[derive(Clone, Debug, Sequence)]
+struct Asn1LdsVersionInfo {
+    lds_version: der::asn1::PrintableString,
+    unicode_version: der::asn1::PrintableString,
 }
 
 /// Parse a Document Security Object from DER bytes.
@@ -110,6 +133,12 @@ pub fn parse_sod(der_bytes: &[u8]) -> VerificationResult<DocumentSecurityObject>
 
 /// Extract and parse LDSSecurityObject from SignedData.
 fn extract_lds_security_object(signed_data: &SignedData) -> VerificationResult<LdsSecurityObject> {
+    if signed_data.encap_content_info.econtent_type != ID_ICAO_LDS_SECURITY_OBJECT {
+        return Err(VerificationError::der_error(format!(
+            "Unexpected SOD encapsulated content type: {}",
+            signed_data.encap_content_info.econtent_type
+        )));
+    }
     let econtent = signed_data
         .encap_content_info
         .econtent
@@ -137,137 +166,77 @@ fn extract_lds_security_object(signed_data: &SignedData) -> VerificationResult<L
 ///   dataGroupHashValue OCTET STRING
 /// }
 /// ```
+#[allow(deprecated)] // SHA-1 remains necessary for legacy ICAO documents.
 pub fn parse_lds_security_object(der_bytes: &[u8]) -> VerificationResult<LdsSecurityObject> {
-    use der::{Reader, SliceReader, Tag};
-
-    let reader = SliceReader::new(der_bytes)
-        .map_err(|e| VerificationError::der_error(format!("Invalid DER: {}", e)))?;
-
-    // Read outer SEQUENCE
-    let header = reader
-        .peek_header()
-        .map_err(|e| VerificationError::der_error(format!("Invalid header: {}", e)))?;
-
-    if header.tag != Tag::Sequence {
+    let parsed = Asn1LdsSecurityObject::from_der(der_bytes).map_err(|e| {
+        VerificationError::der_error(format!("Invalid LDSSecurityObject ASN.1: {e}"))
+    })?;
+    if parsed.version > 1 {
+        return Err(VerificationError::der_error(format!(
+            "Unsupported LDSSecurityObject version: {}",
+            parsed.version
+        )));
+    }
+    if parsed.version == 1 && parsed.lds_version_info.is_none() {
         return Err(VerificationError::der_error(
-            "Expected SEQUENCE for LDSSecurityObject".to_string(),
+            "LDSSecurityObject version 1 is missing LDSVersionInfo".to_string(),
+        ));
+    }
+    if parsed.data_group_hash_values.is_empty() {
+        return Err(VerificationError::der_error(
+            "LDSSecurityObject contains no data-group hashes".to_string(),
         ));
     }
 
-    // For now, use a simplified parser
-    // In production, define proper ASN.1 types with der derive macros
-    parse_lds_security_object_simple(der_bytes)
-}
+    let hash_algorithm = parsed.hash_algorithm.oid.to_string();
+    let algorithm = HashAlgorithm::from_oid(&hash_algorithm)?;
+    let expected_hash_len = match algorithm {
+        HashAlgorithm::Sha1 => 20,
+        HashAlgorithm::Sha256 => 32,
+        HashAlgorithm::Sha384 => 48,
+        HashAlgorithm::Sha512 => 64,
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut data_group_hashes = Vec::with_capacity(parsed.data_group_hash_values.len());
+    for entry in parsed.data_group_hash_values {
+        if !(1..=16).contains(&entry.data_group_number) {
+            return Err(VerificationError::der_error(format!(
+                "Invalid data-group number: {}",
+                entry.data_group_number
+            )));
+        }
+        if !seen.insert(entry.data_group_number) {
+            return Err(VerificationError::der_error(format!(
+                "Duplicate data-group hash for DG{}",
+                entry.data_group_number
+            )));
+        }
+        let hash_bytes = entry.data_group_hash_value.as_bytes().to_vec();
+        if hash_bytes.len() != expected_hash_len {
+            return Err(VerificationError::der_error(format!(
+                "DG{} hash length {} does not match algorithm {}",
+                entry.data_group_number,
+                hash_bytes.len(),
+                hash_algorithm
+            )));
+        }
+        data_group_hashes.push(DataGroupHash {
+            data_group_number: entry.data_group_number,
+            hash_value: hex::encode(&hash_bytes),
+            hash_bytes,
+        });
+    }
 
-/// Simplified LDSSecurityObject parser.
-fn parse_lds_security_object_simple(der_bytes: &[u8]) -> VerificationResult<LdsSecurityObject> {
-    // This is a simplified implementation
-    // Real implementation would use proper ASN.1 decoding
-
-    // Look for common hash algorithm OIDs in the bytes
-    let hash_algorithm = detect_hash_algorithm(der_bytes);
-
-    // Extract data group hashes
-    let data_group_hashes = extract_data_group_hashes(der_bytes)?;
-
+    let lds_version_info = parsed.lds_version_info.map(|info| LdsVersionInfo {
+        lds_version: info.lds_version.as_str().to_string(),
+        unicode_version: info.unicode_version.as_str().to_string(),
+    });
     Ok(LdsSecurityObject {
-        version: 0,
+        version: i32::from(parsed.version),
         hash_algorithm,
         data_group_hashes,
-        lds_version_info: None,
+        lds_version_info,
     })
-}
-
-/// Detect hash algorithm from DER bytes by looking for OIDs.
-fn detect_hash_algorithm(der_bytes: &[u8]) -> String {
-    // SHA-256 OID: 2.16.840.1.101.3.4.2.1
-    let sha256_oid = [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
-    // SHA-384 OID: 2.16.840.1.101.3.4.2.2
-    let sha384_oid = [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
-    // SHA-512 OID: 2.16.840.1.101.3.4.2.3
-    let sha512_oid = [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03];
-    // SHA-1 OID: 1.3.14.3.2.26
-    let sha1_oid = [0x2b, 0x0e, 0x03, 0x02, 0x1a];
-
-    if contains_subsequence(der_bytes, &sha256_oid) {
-        "2.16.840.1.101.3.4.2.1".to_string()
-    } else if contains_subsequence(der_bytes, &sha384_oid) {
-        "2.16.840.1.101.3.4.2.2".to_string()
-    } else if contains_subsequence(der_bytes, &sha512_oid) {
-        "2.16.840.1.101.3.4.2.3".to_string()
-    } else if contains_subsequence(der_bytes, &sha1_oid) {
-        "1.3.14.3.2.26".to_string()
-    } else {
-        "unknown".to_string()
-    }
-}
-
-/// Check if bytes contain a subsequence.
-fn contains_subsequence(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
-}
-
-/// Extract data group hashes from SOD content.
-fn extract_data_group_hashes(der_bytes: &[u8]) -> VerificationResult<Vec<DataGroupHash>> {
-    // Simplified extraction - look for typical data group hash patterns
-    // Real implementation needs proper ASN.1 parsing
-
-    let mut hashes = Vec::new();
-
-    // Data group hashes are typically:
-    // SEQUENCE { INTEGER dg_number, OCTET STRING hash }
-    // Look for these patterns
-
-    let mut i = 0;
-    while i < der_bytes.len() {
-        // Look for SEQUENCE tag
-        if der_bytes[i] == 0x30 && i + 2 < der_bytes.len() {
-            let seq_len = der_bytes[i + 1] as usize;
-            if seq_len > 0 && seq_len < 100 && i + 2 + seq_len <= der_bytes.len() {
-                // Check for INTEGER tag for DG number
-                if der_bytes[i + 2] == 0x02 {
-                    let int_len = der_bytes[i + 3] as usize;
-                    if int_len == 1 && i + 4 < der_bytes.len() {
-                        let dg_num = der_bytes[i + 4];
-                        // Valid DG numbers are 1-16
-                        if (1..=16).contains(&dg_num) {
-                            // Look for OCTET STRING following
-                            let hash_offset = i + 5;
-                            if hash_offset < der_bytes.len() && der_bytes[hash_offset] == 0x04 {
-                                let hash_len = der_bytes[hash_offset + 1] as usize;
-                                // Valid hash lengths
-                                if (hash_len == 20
-                                    || hash_len == 32
-                                    || hash_len == 48
-                                    || hash_len == 64)
-                                    && hash_offset + 2 + hash_len <= der_bytes.len()
-                                {
-                                    let hash_bytes = der_bytes
-                                        [hash_offset + 2..hash_offset + 2 + hash_len]
-                                        .to_vec();
-                                    let hash_value = hash_bytes
-                                        .iter()
-                                        .map(|b| format!("{:02x}", b))
-                                        .collect::<String>();
-
-                                    hashes.push(DataGroupHash {
-                                        data_group_number: dg_num,
-                                        hash_value,
-                                        hash_bytes,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-
-    Ok(hashes)
 }
 
 /// Extract Document Signer Certificate from SignedData.
@@ -276,23 +245,96 @@ fn extract_document_signer_cert(signed_data: &SignedData) -> VerificationResult<
         Some(c) => c,
         None => return Ok(None),
     };
+    let signer_info = exactly_one_signer(signed_data)?;
+    let cert = find_signer_certificate(certs, &signer_info.sid)?;
+    let der = cert.to_der().map_err(|e| {
+        VerificationError::internal(format!("Failed to encode signer certificate: {e}"))
+    })?;
+    let pem = pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &der)
+        .map_err(|e| VerificationError::internal(format!("Failed to PEM encode: {e}")))?;
+    Ok(Some(pem))
+}
 
-    // Get first certificate
-    for cert_choice in certs.0.iter() {
-        if let cms::cert::CertificateChoices::Certificate(cert) = cert_choice {
-            // Encode to DER then PEM
-            let der = cert.to_der().map_err(|e| {
-                VerificationError::internal(format!("Failed to encode cert: {}", e))
-            })?;
+fn exactly_one_signer(
+    signed_data: &SignedData,
+) -> VerificationResult<&cms::signed_data::SignerInfo> {
+    let mut signers = signed_data.signer_infos.0.iter();
+    let signer = signers
+        .next()
+        .ok_or_else(|| VerificationError::der_error("SOD has no signer information".to_string()))?;
+    if signers.next().is_some() {
+        return Err(VerificationError::der_error(
+            "SOD must contain exactly one signer".to_string(),
+        ));
+    }
+    Ok(signer)
+}
 
-            let pem = pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &der)
-                .map_err(|e| VerificationError::internal(format!("Failed to PEM encode: {}", e)))?;
+fn find_signer_certificate<'a>(
+    certs: &'a cms::signed_data::CertificateSet,
+    signer_id: &cms::signed_data::SignerIdentifier,
+) -> VerificationResult<&'a x509_cert::Certificate> {
+    use cms::cert::CertificateChoices;
+    use cms::signed_data::SignerIdentifier;
+    use x509_cert::ext::pkix::SubjectKeyIdentifier;
 
-            return Ok(Some(pem));
+    let mut matched = None;
+    for choice in certs.0.iter() {
+        let CertificateChoices::Certificate(cert) = choice else {
+            continue;
+        };
+        let is_match = match signer_id {
+            SignerIdentifier::IssuerAndSerialNumber(id) => {
+                cert.tbs_certificate.issuer == id.issuer
+                    && cert.tbs_certificate.serial_number == id.serial_number
+            }
+            SignerIdentifier::SubjectKeyIdentifier(expected) => cert
+                .tbs_certificate
+                .get::<SubjectKeyIdentifier>()
+                .map_err(|e| {
+                    VerificationError::der_error(format!(
+                        "Invalid signer SubjectKeyIdentifier extension: {e}"
+                    ))
+                })?
+                .is_some_and(|(_, actual)| actual == *expected),
+        };
+        if is_match {
+            if matched.is_some() {
+                return Err(VerificationError::der_error(
+                    "Multiple certificates match the SOD signer identifier".to_string(),
+                ));
+            }
+            matched = Some(cert);
         }
     }
+    matched.ok_or_else(|| {
+        VerificationError::der_error("No certificate matches the SOD signer identifier".to_string())
+    })
+}
 
-    Ok(None)
+fn single_signed_attribute_value<'a>(
+    attributes: &'a x509_cert::attr::Attributes,
+    oid: der::asn1::ObjectIdentifier,
+) -> VerificationResult<&'a der::Any> {
+    let mut matching = attributes.iter().filter(|attribute| attribute.oid == oid);
+    let attribute = matching.next().ok_or_else(|| {
+        VerificationError::der_error(format!("Missing required CMS signed attribute {oid}"))
+    })?;
+    if matching.next().is_some() {
+        return Err(VerificationError::der_error(format!(
+            "Duplicate CMS signed attribute {oid}"
+        )));
+    }
+    let mut values = attribute.values.iter();
+    let value = values.next().ok_or_else(|| {
+        VerificationError::der_error(format!("CMS signed attribute {oid} has no value"))
+    })?;
+    if values.next().is_some() {
+        return Err(VerificationError::der_error(format!(
+            "CMS signed attribute {oid} has multiple values"
+        )));
+    }
+    Ok(value)
 }
 
 /// Verify SOD signature against Document Signer Certificate.
@@ -308,20 +350,12 @@ pub fn verify_sod_signature(sod_der: &[u8]) -> VerificationResult<bool> {
         .decode_as::<SignedData>()
         .map_err(|e| VerificationError::der_error(format!("Failed to parse SignedData: {}", e)))?;
 
-    // Get DSC
     let certs = signed_data
         .certificates
         .as_ref()
         .ok_or_else(|| VerificationError::der_error("SOD has no certificates".to_string()))?;
-
-    let dsc = certs
-        .0
-        .iter()
-        .find_map(|c| match c {
-            cms::cert::CertificateChoices::Certificate(cert) => Some(cert),
-            _ => None,
-        })
-        .ok_or_else(|| VerificationError::der_error("No X.509 certificate in SOD".to_string()))?;
+    let signer_info = exactly_one_signer(&signed_data)?;
+    let dsc = find_signer_certificate(certs, &signer_info.sid)?;
 
     // Get DSC public key
     let public_key_der = dsc
@@ -338,33 +372,52 @@ pub fn verify_sod_signature(sod_der: &[u8]) -> VerificationResult<bool> {
         .ok_or_else(|| VerificationError::der_error("SOD has no content".to_string()))?
         .value();
 
-    // Verify each signer info
-    for signer_info in signed_data.signer_infos.0.iter() {
-        let sig_alg_oid = signer_info.signature_algorithm.oid.to_string();
-        let algorithm = marty_crypto::SignatureAlgorithm::from_oid(&sig_alg_oid)?;
-
-        // Get data to verify (signed attributes or content)
-        let data_to_verify = if let Some(signed_attrs) = &signer_info.signed_attrs {
-            // When signed attrs present, we sign those (DER encoded)
-            signed_attrs.to_der().map_err(|e| {
-                VerificationError::internal(format!("Failed to encode signed attrs: {}", e))
-            })?
-        } else {
-            // Otherwise sign the content directly
-            content.to_vec()
-        };
-
-        let signature = signer_info.signature.as_bytes();
-
-        let valid =
-            marty_crypto::verify_signature(algorithm, &public_key_der, &data_to_verify, signature)?;
-
-        if valid {
-            return Ok(true);
-        }
+    if !signed_data
+        .digest_algorithms
+        .iter()
+        .any(|algorithm| algorithm.oid == signer_info.digest_alg.oid)
+    {
+        return Err(VerificationError::der_error(
+            "Signer digest algorithm is absent from SignedData digestAlgorithms".to_string(),
+        ));
     }
+    let digest_algorithm = HashAlgorithm::from_oid(&signer_info.digest_alg.oid.to_string())?;
+    let data_to_verify = if let Some(signed_attrs) = &signer_info.signed_attrs {
+        let content_type_value =
+            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_CONTENT_TYPE)?
+                .decode_as::<der::asn1::ObjectIdentifier>()
+                .map_err(|e| {
+                    VerificationError::der_error(format!("Invalid contentType attribute: {e}"))
+                })?;
+        if content_type_value != signed_data.encap_content_info.econtent_type {
+            return Ok(false);
+        }
+        let message_digest =
+            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_MESSAGE_DIGEST)?
+                .decode_as::<der::asn1::OctetString>()
+                .map_err(|e| {
+                    VerificationError::der_error(format!("Invalid messageDigest attribute: {e}"))
+                })?;
+        if marty_crypto::hashing::hash(digest_algorithm, content) != message_digest.as_bytes() {
+            return Ok(false);
+        }
+        signed_attrs.to_der().map_err(|e| {
+            VerificationError::internal(format!("Failed to encode signed attributes: {e}"))
+        })?
+    } else {
+        content.to_vec()
+    };
 
-    Ok(false)
+    let algorithm = marty_crypto::SignatureAlgorithm::from_oid(
+        &signer_info.signature_algorithm.oid.to_string(),
+    )?;
+    marty_crypto::verify_signature(
+        algorithm,
+        &public_key_der,
+        &data_to_verify,
+        signer_info.signature.as_bytes(),
+    )
+    .map_err(Into::into)
 }
 
 /// Verify data group hash matches the expected value.
@@ -420,20 +473,52 @@ pub fn verify_data_group_hash_from_sod(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_detect_hash_algorithm_sha256() {
-        // Contains SHA-256 OID bytes
-        let data = vec![
-            0x00, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x00,
-        ];
-        assert_eq!(detect_hash_algorithm(&data), "2.16.840.1.101.3.4.2.1");
+    fn encoded_lds(entries: &[(u8, Vec<u8>)]) -> Vec<u8> {
+        Asn1LdsSecurityObject {
+            version: 0,
+            hash_algorithm: spki::AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5912::ID_SHA_256,
+                parameters: None,
+            },
+            data_group_hash_values: entries
+                .iter()
+                .map(|(number, hash)| Asn1DataGroupHash {
+                    data_group_number: *number,
+                    data_group_hash_value: der::asn1::OctetString::new(hash.clone()).unwrap(),
+                })
+                .collect(),
+            lds_version_info: None,
+        }
+        .to_der()
+        .unwrap()
     }
 
     #[test]
-    fn test_detect_hash_algorithm_sha1() {
-        // Contains SHA-1 OID bytes
-        let data = vec![0x00, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x00];
-        assert_eq!(detect_hash_algorithm(&data), "1.3.14.3.2.26");
+    fn parses_strict_lds_security_object_asn1() {
+        let hash = vec![0x5a; 32];
+        let parsed = parse_lds_security_object(&encoded_lds(&[(1, hash.clone())])).unwrap();
+
+        assert_eq!(parsed.version, 0);
+        assert_eq!(parsed.hash_algorithm, "2.16.840.1.101.3.4.2.1");
+        assert_eq!(parsed.data_group_hashes.len(), 1);
+        assert_eq!(parsed.data_group_hashes[0].data_group_number, 1);
+        assert_eq!(parsed.data_group_hashes[0].hash_bytes, hash);
+    }
+
+    #[test]
+    fn rejects_duplicate_missing_and_malformed_data_group_hashes() {
+        assert!(parse_lds_security_object(&encoded_lds(&[])).is_err());
+        assert!(parse_lds_security_object(&encoded_lds(&[
+            (1, vec![0x11; 32]),
+            (1, vec![0x22; 32]),
+        ]))
+        .is_err());
+        assert!(parse_lds_security_object(&encoded_lds(&[(17, vec![0x11; 32])])).is_err());
+        assert!(parse_lds_security_object(&encoded_lds(&[(1, vec![0x11; 31])])).is_err());
+
+        let mut trailing = encoded_lds(&[(1, vec![0x11; 32])]);
+        trailing.push(0);
+        assert!(parse_lds_security_object(&trailing).is_err());
     }
 
     #[test]

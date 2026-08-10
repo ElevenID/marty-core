@@ -26,17 +26,17 @@ def test_request_response_cbor_round_trip() -> None:
 def test_two_native_sessions_exchange_directional_messages() -> None:
     async def exchange() -> None:
         engagement = native.DeviceEngagement.new()
-        alice = native.Session.from_engagement_py(engagement, None)
-        bob = native.Session.from_engagement_py(engagement, None)
-        alice_key = alice.public_key_py()
-        bob_key = bob.public_key_py()
-        alice.establish_py(bob_key)
-        bob.establish_py(alice_key)
+        device = native.Session.from_engagement_py(engagement, None)
+        reader = native.Session.reader_from_engagement_py(engagement, None)
+        device_key = device.public_key_py()
+        reader_key = reader.public_key_py()
+        device.establish_py(reader_key)
+        reader.establish_py(device_key)
 
-        ciphertext = alice.send_encrypted_py(b"alice-to-bob")
-        assert bytes(bob.receive_encrypted_py(ciphertext)) == b"alice-to-bob"
-        reverse = bob.send_encrypted_py(b"bob-to-alice")
-        assert bytes(alice.receive_encrypted_py(reverse)) == b"bob-to-alice"
+        ciphertext = device.send_encrypted_py(b"device-to-reader")
+        assert bytes(reader.receive_encrypted_py(ciphertext)) == b"device-to-reader"
+        reverse = reader.send_encrypted_py(b"reader-to-device")
+        assert bytes(device.receive_encrypted_py(reverse)) == b"reader-to-device"
 
     asyncio.run(exchange())
 

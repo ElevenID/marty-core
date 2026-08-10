@@ -15,6 +15,6 @@ pub mod crl;
 pub mod master_list;
 pub mod sod;
 
-pub use crl::{check_certificate_revocation, CrlInfo, RevokedCertificate};
+pub use crl::{CrlInfo, RevokedCertificate};
 pub use master_list::{parse_master_list, MasterList};
 pub use sod::{parse_sod, DataGroupHash, LdsSecurityObject};

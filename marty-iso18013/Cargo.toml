@@ -15,8 +15,6 @@ crate-type = ["rlib", "cdylib"]
 # Internal dependencies
 marty-types = { version = "0.1.5", path = "../marty-types" }
 marty-crypto = { version = "0.1.5", path = "../marty-crypto" }
-marty-verification = { version = "0.1.5", path = "../marty-verification" }
-marty-secure-storage = { version = "0.1.5", path = "../marty-secure-storage" }
 
 # CBOR and COSE
 ciborium = "0.2"
@@ -44,7 +42,7 @@ qrcode = "0.14"
 image = "0.25"
 
 # HTTP client
-reqwest = { version = "0.13", features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 # Logging
 tracing = "0.1"
@@ -70,6 +68,7 @@ all-transports = ["ble", "nfc"]
 tempfile = "3.14"
 proptest = "1.5"
 criterion = { workspace = true }
+marty-verification = { version = "0.1.5", path = "../marty-verification" }
 
 [[bench]]
 name = "session_processing"

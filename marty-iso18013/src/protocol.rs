@@ -6,6 +6,8 @@
 use crate::core::DeviceEngagement;
 use crate::error::{Error, Result};
 use crate::session::{SessionEncryption, SessionKeyAgreement};
+use isomdl::definitions::helpers::Tag24;
+use isomdl::definitions::session::{Handover, SessionTranscript180135};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -105,6 +107,16 @@ pub struct Session {
 
     /// Configuration
     config: SessionConfig,
+
+    role: SessionRole,
+    engagement_bytes: Vec<u8>,
+    engagement_device_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionRole {
+    Device,
+    Reader,
 }
 
 #[cfg(feature = "python")]
@@ -119,6 +131,21 @@ impl Session {
             .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
         runtime
             .block_on(Self::from_engagement(
+                engagement,
+                config.unwrap_or_default(),
+            ))
+            .map_err(Into::into)
+    }
+
+    #[staticmethod]
+    fn reader_from_engagement_py(
+        engagement: &DeviceEngagement,
+        config: Option<SessionConfig>,
+    ) -> PyResult<Self> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        runtime
+            .block_on(Self::reader_from_engagement(
                 engagement,
                 config.unwrap_or_default(),
             ))
@@ -171,16 +198,53 @@ impl Session {
 impl Session {
     /// Create a new session from device engagement
     pub async fn from_engagement(
-        _engagement: &DeviceEngagement,
+        engagement: &DeviceEngagement,
         config: SessionConfig,
     ) -> Result<Self> {
-        let key_agreement = SessionKeyAgreement::new()?;
+        let secret = engagement.ephemeral_secret().ok_or_else(|| {
+            Error::InvalidEngagement(
+                "holder session requires a locally generated DeviceEngagement private key"
+                    .to_string(),
+            )
+        })?;
+        let key_agreement = SessionKeyAgreement::from_secret_key(secret)?;
+        if key_agreement.public_key() != engagement.device_key {
+            return Err(Error::InvalidEngagement(
+                "DeviceEngagement public key does not match its private key".to_string(),
+            ));
+        }
+        Self::new_for_role(engagement, config, key_agreement, SessionRole::Device)
+    }
+
+    /// Create a reader-side session bound to the advertised EDeviceKey.
+    pub async fn reader_from_engagement(
+        engagement: &DeviceEngagement,
+        config: SessionConfig,
+    ) -> Result<Self> {
+        Self::new_for_role(
+            engagement,
+            config,
+            SessionKeyAgreement::new()?,
+            SessionRole::Reader,
+        )
+    }
+
+    fn new_for_role(
+        engagement: &DeviceEngagement,
+        config: SessionConfig,
+        key_agreement: SessionKeyAgreement,
+        role: SessionRole,
+    ) -> Result<Self> {
+        let engagement_bytes = engagement.to_cbor()?;
 
         Ok(Self {
             state: Arc::new(RwLock::new(SessionState::Engagement)),
             encryption: Arc::new(RwLock::new(None)),
             key_agreement: Arc::new(RwLock::new(key_agreement)),
             config,
+            role,
+            engagement_bytes,
+            engagement_device_key: engagement.device_key.clone(),
         })
     }
 
@@ -204,21 +268,28 @@ impl Session {
             ));
         }
 
-        // Set peer key and derive shared secret
+        if self.role == SessionRole::Reader && peer_public_key != self.engagement_device_key {
+            return Err(Error::SessionEstablishment(
+                "peer key does not match DeviceEngagement EDeviceKey".to_string(),
+            ));
+        }
+
+        // Set peer key and derive shared secret.
         let mut ka = self.key_agreement.write().await;
         ka.set_peer_key(peer_public_key.to_vec());
         let shared_secret = ka.derive_shared_secret()?;
 
-        // Build session transcript per ISO 18013-5 §9.1.5.1:
-        // SessionTranscript = [DeviceEngagementBytes, EReaderKeyBytes, Handover]
-        // We bind the transcript to both parties' public keys to prevent replay.
         let our_public_key = ka.public_key();
-        let our_key_is_lower = our_public_key.as_slice() < peer_public_key;
-        let session_transcript = Self::build_session_transcript(&our_public_key, peer_public_key);
+        let reader_public_key = match self.role {
+            SessionRole::Device => peer_public_key,
+            SessionRole::Reader => our_public_key.as_slice(),
+        };
+        let session_transcript =
+            Self::build_session_transcript(&self.engagement_bytes, reader_public_key)?;
         let encryption = SessionEncryption::new_directional(
             &shared_secret,
             &session_transcript,
-            our_key_is_lower,
+            self.role == SessionRole::Device,
         )?;
 
         *self.encryption.write().await = Some(encryption);
@@ -277,26 +348,25 @@ impl Session {
         Ok(())
     }
 
-    /// Build session transcript binding both parties' ephemeral keys.
-    ///
-    /// Per ISO 18013-5 §9.1.5.1 the SessionTranscript is a CBOR array:
-    ///   `[DeviceEngagementBytes, EReaderKeyBytes, Handover]`
-    ///
-    /// Until full CBOR DeviceEngagement serialisation is implemented we use a
-    /// SHA-256 hash of both public keys concatenated.  This is sufficient to
-    /// bind the session to the specific engagement and prevent replay — the
-    /// derived session keys will differ for any other key pair combination.
-    fn build_session_transcript(our_public_key: &[u8], peer_public_key: &[u8]) -> Vec<u8> {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        let (first, second) = if our_public_key < peer_public_key {
-            (our_public_key, peer_public_key)
-        } else {
-            (peer_public_key, our_public_key)
-        };
-        hasher.update(first);
-        hasher.update(second);
-        hasher.finalize().to_vec()
+    /// Build ISO 18013-5 `SessionTranscriptBytes`:
+    /// `#6.24(bstr .cbor [DeviceEngagementBytes, EReaderKeyBytes, null])`.
+    fn build_session_transcript(
+        engagement_bytes: &[u8],
+        reader_public_key: &[u8],
+    ) -> Result<Vec<u8>> {
+        let engagement =
+            Tag24::<isomdl::definitions::DeviceEngagement>::from_bytes(engagement_bytes.to_vec())
+                .map_err(|error| Error::InvalidEngagement(error.to_string()))?;
+        let reader_key = Tag24::new(DeviceEngagement::cose_key_from_sec1(reader_public_key)?)
+            .map_err(|error| Error::SessionEstablishment(error.to_string()))?;
+        let transcript = Tag24::new(SessionTranscript180135(
+            engagement,
+            reader_key,
+            Handover::QR,
+        ))
+        .map_err(|error| Error::SessionEstablishment(error.to_string()))?;
+        isomdl::cbor::to_vec(&transcript)
+            .map_err(|error| Error::SessionEstablishment(error.to_string()))
     }
 }
 
@@ -618,28 +688,60 @@ mod tests {
     #[tokio::test]
     async fn test_two_sessions_exchange_directional_messages() {
         let engagement = DeviceEngagement::new_qr().unwrap();
-        let alice = Session::from_engagement(&engagement, SessionConfig::default())
+        let device = Session::from_engagement(&engagement, SessionConfig::default())
             .await
             .unwrap();
-        let bob = Session::from_engagement(&engagement, SessionConfig::default())
+        let reader = Session::reader_from_engagement(&engagement, SessionConfig::default())
             .await
             .unwrap();
-        let alice_key = alice.public_key().await;
-        let bob_key = bob.public_key().await;
+        let device_key = device.public_key().await;
+        let reader_key = reader.public_key().await;
 
-        alice.establish(&bob_key).await.unwrap();
-        bob.establish(&alice_key).await.unwrap();
+        device.establish(&reader_key).await.unwrap();
+        reader.establish(&device_key).await.unwrap();
 
-        let alice_message = alice.send_encrypted(b"alice to bob").await.unwrap();
+        let device_message = device.send_encrypted(b"device to reader").await.unwrap();
         assert_eq!(
-            bob.receive_encrypted(&alice_message).await.unwrap(),
-            b"alice to bob"
+            reader.receive_encrypted(&device_message).await.unwrap(),
+            b"device to reader"
         );
 
-        let bob_message = bob.send_encrypted(b"bob to alice").await.unwrap();
+        let reader_message = reader.send_encrypted(b"reader to device").await.unwrap();
         assert_eq!(
-            alice.receive_encrypted(&bob_message).await.unwrap(),
-            b"bob to alice"
+            device.receive_encrypted(&reader_message).await.unwrap(),
+            b"reader to device"
+        );
+    }
+
+    #[tokio::test]
+    async fn reader_rejects_a_peer_key_not_bound_to_engagement() {
+        let engagement = DeviceEngagement::new_qr().unwrap();
+        let reader = Session::reader_from_engagement(&engagement, SessionConfig::default())
+            .await
+            .unwrap();
+        let unrelated = SessionKeyAgreement::new().unwrap().public_key();
+
+        assert!(reader.establish(&unrelated).await.is_err());
+        assert_eq!(reader.state().await, SessionState::Engagement);
+    }
+
+    #[test]
+    fn session_transcript_is_tagged_and_binds_engagement_and_reader_key() {
+        let engagement_a = DeviceEngagement::new_qr().unwrap();
+        let engagement_b = DeviceEngagement::new_qr().unwrap();
+        let reader_a = SessionKeyAgreement::new().unwrap().public_key();
+        let reader_b = SessionKeyAgreement::new().unwrap().public_key();
+
+        let transcript =
+            Session::build_session_transcript(&engagement_a.to_cbor().unwrap(), &reader_a).unwrap();
+        assert_eq!(&transcript[..2], &[0xd8, 0x18]);
+        assert_ne!(
+            transcript,
+            Session::build_session_transcript(&engagement_b.to_cbor().unwrap(), &reader_a).unwrap()
+        );
+        assert_ne!(
+            transcript,
+            Session::build_session_transcript(&engagement_a.to_cbor().unwrap(), &reader_b).unwrap()
         );
     }
 }

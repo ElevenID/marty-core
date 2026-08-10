@@ -9,10 +9,12 @@ pub mod ble;
 pub mod https;
 pub mod mock;
 pub mod nfc;
+mod session_channel;
 
 // Re-export transport implementations
 pub use https::HttpsTransport;
 pub use mock::MockTransport;
+pub use session_channel::SessionChannel;
 
 #[cfg(feature = "ble")]
 pub use ble::BleTransport;

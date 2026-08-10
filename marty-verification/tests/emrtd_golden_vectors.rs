@@ -1,11 +1,17 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use der::Decode;
 use marty_verification::asn1::sod::{
     parse_sod, verify_data_group_hash_from_sod, verify_sod_signature,
+};
+use marty_verification::trust_anchor::CscaRegistry;
+use marty_verification::verification::emrtd::{
+    verify_emrtd, ChainStatus, HashStatus, SecurityObject, SignatureStatus,
 };
 use marty_verification::verification::ChainValidator;
 use serde::Deserialize;
 use std::collections::HashMap;
+use x509_cert::Certificate;
 
 #[derive(Deserialize)]
 struct EmrtdFixture {
@@ -43,9 +49,38 @@ fn rust_matches_shared_emrtd_golden_vector() {
     assert!(verify_data_group_hash_from_sod(&sod, 1, &dg1).expect("verify DG1 hash"));
     assert!(verify_data_group_hash_from_sod(&sod, 2, &dg2).expect("verify DG2 hash"));
 
-    let mut altered_dg1 = dg1;
+    let mut registry = CscaRegistry::new();
+    registry
+        .add_country_csca(
+            "TST",
+            Certificate::from_der(&csca).expect("parse golden CSCA"),
+        )
+        .expect("add golden CSCA to eMRTD registry");
+    let security_object =
+        SecurityObject::from_sod_der(&sod, Some("TST".to_string())).expect("load golden SOD");
+    let data_groups = HashMap::from([(1, dg1.clone()), (2, dg2.clone())]);
+    let result = verify_emrtd(&security_object, &data_groups, &registry);
+    assert!(result.verified);
+    assert_eq!(result.dsc_chain_status, ChainStatus::Valid);
+    assert_eq!(result.sod_signature_status, SignatureStatus::Valid);
+    assert_eq!(result.dg_hash_status, HashStatus::Valid);
+    assert!(result.error_codes.is_empty());
+    assert!(result.trust_anchor_subject.is_some());
+    assert_eq!(result.certificate_chain.len(), 2);
+
+    let mut altered_dg1 = dg1.clone();
     altered_dg1[0] ^= 1;
     assert!(!verify_data_group_hash_from_sod(&sod, 1, &altered_dg1).expect("reject altered DG1"));
+    let altered_result = verify_emrtd(
+        &security_object,
+        &HashMap::from([(1, altered_dg1), (2, dg2.clone())]),
+        &registry,
+    );
+    assert!(!altered_result.verified);
+    assert_eq!(altered_result.dg_hash_status, HashStatus::Invalid);
+    assert!(altered_result
+        .error_codes
+        .contains(&"EMRTD_DG_HASH_INVALID".to_string()));
 
     let mut altered_sod = sod.clone();
     let last = altered_sod.len() - 1;

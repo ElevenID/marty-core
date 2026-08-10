@@ -20,7 +20,7 @@
 //! - `CrlInfo` - Parsed CRL information
 //! - `RevokedCertificate` - Revoked certificate entry
 //! - `parse_crl()` - Parse a DER-encoded CRL
-//! - `check_certificate_revocation()` - Check if cert is revoked
+//! - `validate_crl_for_certificate()` - Authenticate CRL evidence and check revocation
 //!
 //! ## Cryptographic Operations
 //! - `hash_data()` - Hash data with specified algorithm
@@ -868,34 +868,6 @@ fn parse_crl(der_bytes: &[u8]) -> PyResult<PyCrlInfo> {
     })
 }
 
-/// Check if a certificate is revoked according to a CRL.
-///
-/// Args:
-///     cert_serial: Certificate serial number (hex string)
-///     cert_issuer: Certificate issuer DN
-///     crl_der: DER-encoded CRL
-///
-/// Returns:
-///     Tuple of (is_revoked: bool, reason: Optional[str])
-#[pyfunction]
-fn check_certificate_revocation(
-    cert_serial: &str,
-    cert_issuer: &str,
-    crl_der: &[u8],
-) -> PyResult<(bool, Option<String>)> {
-    // Parse the CRL first
-    let crl = crate::asn1::crl::parse_crl(crl_der).map_err(to_pyerr)?;
-
-    // Check against the parsed CRL
-    let result = crate::asn1::check_certificate_revocation(cert_serial, cert_issuer, &[crl])
-        .map_err(to_pyerr)?;
-
-    match result {
-        Some(reason) => Ok((true, Some(format!("{:?}", reason)))),
-        None => Ok((false, None)),
-    }
-}
-
 // ============================================================================
 // Cryptographic Operations Bindings
 // ============================================================================
@@ -1000,6 +972,44 @@ fn verify_crl_signature(crl_der: &[u8], issuer_cert_der: &[u8]) -> PyResult<bool
     crate::asn1::crl::verify_crl_signature(crl_der, &issuer_public_key).map_err(to_pyerr)
 }
 
+/// Authenticate a CRL against its issuer and enforce freshness.
+#[pyfunction]
+fn validate_crl(py: Python<'_>, crl_der: &[u8], issuer_cert_der: &[u8]) -> PyResult<Py<PyDict>> {
+    let info = marty_crypto::crl::validate_crl(crl_der, issuer_cert_der).map_err(to_pyerr)?;
+    let result = PyDict::new(py);
+    result.set_item("issuer", info.issuer)?;
+    result.set_item("this_update", info.this_update)?;
+    result.set_item("next_update", info.next_update)?;
+    result.set_item("crl_number", info.crl_number)?;
+    result.set_item("revoked_count", info.revoked_count)?;
+    result.set_item("signature_valid", true)?;
+    result.set_item("freshness_valid", true)?;
+    Ok(result.into())
+}
+
+/// Authenticate a CRL and check one exact certificate/issuer pair.
+#[pyfunction]
+fn validate_crl_for_certificate(
+    py: Python<'_>,
+    crl_der: &[u8],
+    cert_der: &[u8],
+    issuer_cert_der: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let info = marty_crypto::crl::validate_crl_for_certificate(crl_der, cert_der, issuer_cert_der)
+        .map_err(to_pyerr)?;
+    let result = PyDict::new(py);
+    result.set_item("revoked", info.revoked)?;
+    result.set_item("revocation_date", info.revocation_date)?;
+    result.set_item("reason", info.reason.map(|reason| reason.as_str()))?;
+    result.set_item("issuer", info.issuer)?;
+    result.set_item("this_update", info.this_update)?;
+    result.set_item("next_update", info.next_update)?;
+    result.set_item("signature_valid", info.signature_valid)?;
+    result.set_item("freshness_valid", info.freshness_valid)?;
+    result.set_item("certificate_id_valid", info.certificate_id_valid)?;
+    Ok(result.into())
+}
+
 /// Parse an EF.SOD and return its native verification metadata.
 #[pyfunction]
 fn parse_sod<'py>(py: Python<'py>, sod_der: &[u8]) -> PyResult<Bound<'py, PyDict>> {
@@ -1035,6 +1045,81 @@ fn verify_sod_data_group_hash(
         data_group_content,
     )
     .map_err(to_pyerr)
+}
+
+/// Perform complete native ICAO eMRTD verification.
+///
+/// The returned mapping is deliberately stable and contains both human-readable
+/// errors and normalized status/code fields for service-layer adapters.
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (sod_der, data_groups, registry, crls=None, country_hint=None))]
+fn verify_emrtd(
+    py: Python<'_>,
+    sod_der: &[u8],
+    data_groups: std::collections::HashMap<u8, Vec<u8>>,
+    registry: &PyCscaRegistry,
+    crls: Option<Vec<Vec<u8>>>,
+    country_hint: Option<String>,
+) -> PyResult<Py<PyDict>> {
+    use crate::verification::emrtd::{
+        ChainStatus, EmrtdVerificationOptions, HashStatus, RevocationStatus, SecurityObject,
+        SignatureStatus,
+    };
+
+    let sod = SecurityObject::from_sod_der(sod_der, country_hint).map_err(to_pyerr)?;
+    let options = EmrtdVerificationOptions {
+        crls: crls.unwrap_or_default(),
+    };
+    let result = crate::verification::emrtd::verify_emrtd_with_options(
+        &sod,
+        &data_groups,
+        &registry.inner,
+        &options,
+    );
+
+    let output = PyDict::new(py);
+    output.set_item("verified", result.verified)?;
+    output.set_item("country", result.country)?;
+    output.set_item("document_type", result.document_type)?;
+    output.set_item("errors", result.errors)?;
+    output.set_item("error_codes", result.error_codes)?;
+    output.set_item("warnings", result.warnings)?;
+    output.set_item("trust_anchor_subject", result.trust_anchor_subject)?;
+    output.set_item("certificate_chain", result.certificate_chain)?;
+    output.set_item(
+        "dsc_chain_status",
+        match result.dsc_chain_status {
+            ChainStatus::Valid => "valid",
+            ChainStatus::Invalid => "invalid",
+            ChainStatus::Unknown => "unknown",
+        },
+    )?;
+    output.set_item(
+        "sod_signature_status",
+        match result.sod_signature_status {
+            SignatureStatus::Valid => "valid",
+            SignatureStatus::Invalid => "invalid",
+            SignatureStatus::Unknown => "unknown",
+        },
+    )?;
+    output.set_item(
+        "dg_hash_status",
+        match result.dg_hash_status {
+            HashStatus::Valid => "valid",
+            HashStatus::Invalid => "invalid",
+            HashStatus::Unknown => "unknown",
+        },
+    )?;
+    output.set_item(
+        "revocation_status",
+        match result.revocation_status {
+            RevocationStatus::NotRevoked => "not_revoked",
+            RevocationStatus::Revoked => "revoked",
+            RevocationStatus::Unchecked => "unchecked",
+        },
+    )?;
+    Ok(output.into())
 }
 
 /// Parse an ICAO CSCA Master List with the native CMS/X.509 implementation.
@@ -1460,9 +1545,14 @@ impl PyChainValidator {
 
     /// Add a CRL for revocation checking.
     fn add_crl(&mut self, crl_der: &[u8]) -> PyResult<()> {
-        let crl = crate::asn1::crl::parse_crl(crl_der).map_err(to_pyerr)?;
-        self.inner.add_crl(crl);
-        Ok(())
+        self.inner.add_crl_der(crl_der).map_err(to_pyerr)
+    }
+
+    /// Add a DER OCSP response for certificate-bound revocation checking.
+    fn add_ocsp_response(&mut self, response_der: &[u8]) -> PyResult<()> {
+        self.inner
+            .add_ocsp_response_der(response_der)
+            .map_err(to_pyerr)
     }
 
     /// Validate a certificate chain.
@@ -2715,7 +2805,9 @@ fn get_crl_distribution_points(cert_der: &[u8]) -> PyResult<Vec<String>> {
     marty_crypto::certificate::get_crl_distribution_points(cert_der).map_err(to_pyerr)
 }
 
-/// Parse an OCSP response.
+/// Parse an OCSP response without authenticating it.
+///
+/// Diagnostic use only. Use `validate_ocsp_response` for trust decisions.
 ///
 /// Args:
 ///     response_der: DER-encoded OCSP response
@@ -2752,6 +2844,50 @@ fn parse_ocsp_response(py: Python<'_>, response_der: &[u8]) -> PyResult<Py<PyDic
         }
     }
 
+    Ok(dict.into())
+}
+
+/// Authenticate and validate an OCSP response for a certificate/issuer pair.
+///
+/// This is the only OCSP binding suitable for a verification trust decision.
+/// It raises when the signature, responder authorization, CertID binding, or
+/// freshness check fails.
+#[pyfunction]
+fn validate_ocsp_response(
+    py: Python<'_>,
+    response_der: &[u8],
+    cert_der: &[u8],
+    issuer_cert_der: &[u8],
+) -> PyResult<Py<PyDict>> {
+    let info = marty_crypto::ocsp::validate_ocsp_response(response_der, cert_der, issuer_cert_der)
+        .map_err(to_pyerr)?;
+
+    let dict = PyDict::new(py);
+    dict.set_item("this_update", info.this_update)?;
+    dict.set_item("next_update", info.next_update)?;
+    dict.set_item("responder_id", info.responder_id)?;
+    dict.set_item("produced_at", info.produced_at)?;
+    dict.set_item("responder_is_issuer", info.responder_is_issuer)?;
+    dict.set_item("delegated_responder", info.delegated_responder)?;
+    dict.set_item("signature_valid", info.signature_valid)?;
+    dict.set_item("certificate_id_valid", info.certificate_id_valid)?;
+    dict.set_item("freshness_valid", info.freshness_valid)?;
+    match info.cert_status {
+        marty_crypto::ocsp::OcspCertStatus::Good => {
+            dict.set_item("cert_status", "good")?;
+        }
+        marty_crypto::ocsp::OcspCertStatus::Revoked {
+            revocation_time,
+            reason,
+        } => {
+            dict.set_item("cert_status", "revoked")?;
+            dict.set_item("revocation_time", revocation_time)?;
+            dict.set_item("revocation_reason", reason)?;
+        }
+        marty_crypto::ocsp::OcspCertStatus::Unknown => {
+            dict.set_item("cert_status", "unknown")?;
+        }
+    }
     Ok(dict.into())
 }
 
@@ -3282,6 +3418,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
     // MRZ Parsing
@@ -3295,8 +3432,9 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRevokedCertificate>()?;
     m.add_function(wrap_pyfunction!(parse_crl, m)?)?;
     m.add_function(wrap_pyfunction!(crl_pem_to_der, m)?)?;
-    m.add_function(wrap_pyfunction!(check_certificate_revocation, m)?)?;
     m.add_function(wrap_pyfunction!(verify_crl_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_crl, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_crl_for_certificate, m)?)?;
 
     // Crypto Operations - Base
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
@@ -3435,6 +3573,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_ocsp_responder_url, m)?)?;
     m.add_function(wrap_pyfunction!(get_crl_distribution_points, m)?)?;
     m.add_function(wrap_pyfunction!(parse_ocsp_response, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
     m.add_function(wrap_pyfunction!(open_badge_ob2_issue, m)?)?;
@@ -3484,6 +3623,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
     // MRZ Parsing
@@ -3497,8 +3637,9 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRevokedCertificate>()?;
     m.add_function(wrap_pyfunction!(parse_crl, m)?)?;
     m.add_function(wrap_pyfunction!(crl_pem_to_der, m)?)?;
-    m.add_function(wrap_pyfunction!(check_certificate_revocation, m)?)?;
     m.add_function(wrap_pyfunction!(verify_crl_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_crl, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_crl_for_certificate, m)?)?;
 
     // Crypto Operations - Base
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
@@ -3637,6 +3778,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_ocsp_responder_url, m)?)?;
     m.add_function(wrap_pyfunction!(get_crl_distribution_points, m)?)?;
     m.add_function(wrap_pyfunction!(parse_ocsp_response, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
     m.add_function(wrap_pyfunction!(open_badge_ob2_issue, m)?)?;
