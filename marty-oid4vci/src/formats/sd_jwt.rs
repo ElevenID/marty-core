@@ -191,6 +191,22 @@ pub struct PreparedSdJwt {
     pub credential_id: String,
 }
 
+/// Optional protocol fields used when an external issuer profile prepares an
+/// SD-JWT for remote signing.
+#[derive(Debug, Clone, Default)]
+pub struct SdJwtPreparationOptions {
+    /// Preserve a service-assigned credential identifier when supplied.
+    pub credential_id: Option<String>,
+    /// Override the JOSE media type (for example, `dc+sd-jwt`).
+    pub typ: Option<String>,
+    /// Holder confirmation (`cnf`) value to bind into the issuer payload.
+    pub confirmation: Option<serde_json::Value>,
+    /// Optional issuer certificate chain for the protected JOSE header.
+    pub x5c: Vec<String>,
+    /// Include `nbf` at the issuance instant.
+    pub include_nbf: bool,
+}
+
 /// Sign an SD-JWT verifiable credential using any [`CredentialSigner`].
 ///
 /// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
@@ -215,7 +231,19 @@ pub fn prepare_sd_jwt(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<PreparedSdJwt> {
-    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
+    prepare_sd_jwt_with_options(signer, claims, SdJwtPreparationOptions::default())
+}
+
+/// Prepare an SD-JWT with explicit remote-issuer protocol fields.
+pub fn prepare_sd_jwt_with_options(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: SdJwtPreparationOptions,
+) -> Oid4vciResult<PreparedSdJwt> {
+    let credential_id = options
+        .credential_id
+        .clone()
+        .unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
     let now = chrono::Utc::now();
 
     let vct = if claims.credential_type.is_empty() {
@@ -330,13 +358,23 @@ pub fn prepare_sd_jwt(
         }
     }
 
+    if options.include_nbf {
+        payload["nbf"] = serde_json::json!(now.timestamp());
+    }
+    if let Some(ref confirmation) = options.confirmation {
+        payload["cnf"] = confirmation.clone();
+    }
+
     // Build the JWS header with kid and vc+sd-jwt typ.
     let alg_str = signer.algorithm().as_str();
-    let header = serde_json::json!({
+    let mut header = serde_json::json!({
         "alg": alg_str,
-        "typ": "vc+sd-jwt",
+        "typ": options.typ.as_deref().unwrap_or("vc+sd-jwt"),
         "kid": signer.kid_url()
     });
+    if !options.x5c.is_empty() {
+        header["x5c"] = serde_json::json!(options.x5c);
+    }
 
     let header_str = serde_json::to_string(&header)
         .map_err(|e| Oid4vciError::SigningError(format!("Header serialization failed: {}", e)))?;

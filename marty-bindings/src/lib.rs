@@ -8,6 +8,7 @@
 #![allow(clippy::useless_conversion)]
 
 mod mdoc;
+mod remote_credential;
 mod status_list;
 
 use pyo3::prelude::*;
@@ -1675,6 +1676,7 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
 /// Downstream extension crates use this entry point to extend ``_marty_rs``
 /// without copying bindings or publishing a second, incompatible module.
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    remote_credential::register(m)?;
     status_list::register_status_list_bindings(m)?;
 
     // Key Generation
