@@ -620,6 +620,29 @@ pub fn detect_algorithm(jwk_json: &str) -> Oid4vciResult<SigningAlgorithm> {
     }
 }
 
+/// Generate a P-256 signing JWK and its public-only counterpart.
+///
+/// Key generation and public-key derivation stay in Rust so Python callers do
+/// not need to interpret or transform private key material.
+pub fn generate_p256_jwk_pair() -> Oid4vciResult<(String, String)> {
+    let private_jwk = ssi_jwk::JWK::generate_p256();
+    let public_jwk = private_jwk.to_public();
+    let private_json = serde_json::to_string(&private_jwk).map_err(|error| {
+        Oid4vciError::KeyError(format!("Failed to serialize P-256 JWK: {error}"))
+    })?;
+    let public_json = serde_json::to_string(&public_jwk).map_err(|error| {
+        Oid4vciError::KeyError(format!("Failed to serialize public P-256 JWK: {error}"))
+    })?;
+    Ok((private_json, public_json))
+}
+
+/// Generate a did:jwk issuer identifier and its P-256 private signing JWK.
+pub fn generate_p256_did_jwk() -> Oid4vciResult<(String, String)> {
+    let (private_jwk, public_jwk) = generate_p256_jwk_pair()?;
+    let did = format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(public_jwk.as_bytes()));
+    Ok((did, private_jwk))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

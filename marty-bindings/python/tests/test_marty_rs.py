@@ -20,6 +20,16 @@ import pytest
 # All tests are skipped if the native extension hasn't been built yet.
 _marty_rs = pytest.importorskip("marty_rs._marty_rs", reason="native extension not built")
 
+ISSUER_DID = "https://issuer.example.test"
+ISSUER_PRIVATE_JWK = json.dumps(
+    {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+    }
+)
+
 
 def test_canonical_top_level_import_exposes_native_bindings():
     import _marty_rs as canonical
@@ -80,6 +90,23 @@ class TestKeyGeneration:
         secret, public = _marty_rs.generate_p256_key()
         assert len(secret) == 32, "P-256 secret key must be 32 bytes"
         assert len(public) == 65, "P-256 uncompressed public key must be 65 bytes"
+
+    def test_generate_p256_jwk_returns_private_and_public_keys(self):
+        private_json, public_json = _marty_rs.generate_p256_jwk()
+        private_jwk = json.loads(private_json)
+        public_jwk = json.loads(public_json)
+
+        assert private_jwk["kty"] == "EC"
+        assert private_jwk["crv"] == "P-256"
+        assert "d" in private_jwk
+        assert "d" not in public_jwk
+        assert public_jwk["x"] == private_jwk["x"]
+        assert public_jwk["y"] == private_jwk["y"]
+
+    def test_generate_p256_did_jwk_uses_public_material_for_identifier(self):
+        issuer_did, private_json = _marty_rs.generate_p256_did_jwk()
+        assert issuer_did.startswith("did:jwk:")
+        assert "d" in json.loads(private_json)
 
     def test_generate_p256_unique_keys(self):
         """Each call must produce a distinct key pair."""
@@ -171,9 +198,14 @@ class TestErrorHandling:
             _marty_rs.sign_ed25519(b"x" * 16, b"msg")
 
     def test_create_vc_bad_json_raises_value_error(self):
-        secret, _ = _marty_rs.generate_p256_key()
-        with pytest.raises(ValueError, match="Invalid JSON"):
-            _marty_rs.create_verifiable_credential("not json", secret, "key-1")
+        with pytest.raises(ValueError, match="Invalid claims JSON"):
+            _marty_rs.create_verifiable_credential(
+                issuer_did=ISSUER_DID,
+                issuer_jwk_json=ISSUER_PRIVATE_JWK,
+                subject_id="did:example:holder",
+                credential_type="ExampleCredential",
+                claims_json="not json",
+            )
 
 
 class TestMdocPresentationVerification:
@@ -182,7 +214,17 @@ class TestMdocPresentationVerification:
     def test_mdoc_verifier_surface_is_packaged(self):
         assert hasattr(_marty_rs, "parse_device_response")
         assert hasattr(_marty_rs, "verify_mdoc_cbor")
+        assert hasattr(_marty_rs, "verify_mdoc_issuer")
         assert hasattr(_marty_rs, "verify_mdoc_presentation")
+
+    def test_malformed_mdoc_issuer_verification_fails_closed(self):
+        result = _marty_rs.verify_mdoc_issuer(b"\xff", [])
+        assert result.signature_valid is False
+        assert result.issuer_trusted is False
+        assert result.document_evidence == []
+        assert result.revocation_checked is False
+        assert result.not_revoked is None
+        assert result.error
 
     def test_malformed_mdoc_presentation_fails_closed(self):
         result = _marty_rs.verify_mdoc_presentation(
@@ -205,25 +247,29 @@ class TestMdocPresentationVerification:
 
 
 class TestVerifiableCredentials:
-    """Test the simplified create_verifiable_credential binding."""
+    """Test the standards-aware create_verifiable_credential binding."""
 
-    def test_create_vc_returns_valid_json(self):
-        secret, _ = _marty_rs.generate_p256_key()
-        cred = {
-            "@context": ["https://www.w3.org/2018/credentials/v1"],
-            "type": ["VerifiableCredential"],
-            "issuer": "did:example:issuer",
-            "credentialSubject": {"name": "Alice"},
-        }
-        result = _marty_rs.create_verifiable_credential(
-            json.dumps(cred), secret, "did:example:issuer#key-1"
+    def test_create_vc_returns_signed_compact_jwt(self):
+        credential, credential_id = _marty_rs.create_verifiable_credential(
+            issuer_did=ISSUER_DID,
+            issuer_jwk_json=ISSUER_PRIVATE_JWK,
+            subject_id="did:example:holder",
+            credential_type="ExampleCredential",
+            claims_json=json.dumps({"name": "Alice"}),
         )
-        vc = json.loads(result)
-        assert "proof" in vc
-        assert vc["proof"]["type"] == "EcdsaSecp256r1Signature2019"
-        assert vc["proof"]["verificationMethod"] == "did:example:issuer#key-1"
-        assert vc["proof"]["proofPurpose"] == "assertionMethod"
-        assert "jws" in vc["proof"]
+        assert credential.count(".") == 2
+        assert credential_id.startswith("urn:uuid:")
+
+    def test_create_vc_rejects_unknown_format(self):
+        with pytest.raises(ValueError, match="Unsupported credential format"):
+            _marty_rs.create_verifiable_credential(
+                issuer_did=ISSUER_DID,
+                issuer_jwk_json=ISSUER_PRIVATE_JWK,
+                subject_id="did:example:holder",
+                credential_type="ExampleCredential",
+                claims_json="{}",
+                format="unknown",
+            )
 
 
 # =========================================================================

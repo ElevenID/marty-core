@@ -1649,6 +1649,56 @@ fn save_public_key_pem(public_key_der: &[u8]) -> PyResult<String> {
     marty_crypto::serialization::save_public_key_pem(public_key_der).map_err(to_pyerr)
 }
 
+/// Convert a supported SubjectPublicKeyInfo PEM public key to a public JWK.
+#[pyfunction]
+fn public_key_pem_to_jwk(public_key_pem: &str) -> PyResult<String> {
+    crate::open_badges::jwk_from_pem(public_key_pem)
+        .and_then(|jwk| jwk.to_json())
+        .map_err(to_pyerr)
+}
+
+/// Convert a public P-256 JWK to SubjectPublicKeyInfo PEM.
+#[pyfunction]
+fn p256_public_jwk_to_pem(public_jwk_json: &str) -> PyResult<String> {
+    use pyo3::exceptions::PyValueError;
+
+    let jwk = crate::jwk::Jwk::from_json(public_jwk_json).map_err(to_pyerr)?;
+    if jwk.is_private() {
+        return Err(PyValueError::new_err(
+            "public_jwk must not contain private key material",
+        ));
+    }
+    if jwk.kty != "EC" || jwk.crv.as_deref() != Some("P-256") {
+        return Err(PyValueError::new_err("public_jwk must be an EC P-256 key"));
+    }
+
+    let x = crate::jwk::base64url_decode(
+        jwk.x
+            .as_deref()
+            .ok_or_else(|| PyValueError::new_err("public_jwk is missing x"))?,
+    )
+    .map_err(to_pyerr)?;
+    let y = crate::jwk::base64url_decode(
+        jwk.y
+            .as_deref()
+            .ok_or_else(|| PyValueError::new_err("public_jwk is missing y"))?,
+    )
+    .map_err(to_pyerr)?;
+    if x.len() != 32 || y.len() != 32 {
+        return Err(PyValueError::new_err(
+            "P-256 JWK coordinates must each be 32 bytes",
+        ));
+    }
+
+    let mut raw_public_key = Vec::with_capacity(65);
+    raw_public_key.push(0x04);
+    raw_public_key.extend_from_slice(&x);
+    raw_public_key.extend_from_slice(&y);
+    let spki = marty_crypto::serialization::raw_public_key_to_spki(&raw_public_key, "EC_P256")
+        .map_err(to_pyerr)?;
+    marty_crypto::serialization::save_public_key_pem(&spki).map_err(to_pyerr)
+}
+
 /// Extract public key from private key (PKCS#8 DER).
 #[pyfunction]
 fn extract_public_key<'py>(
@@ -3272,6 +3322,8 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_public_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_der, m)?)?;
     m.add_function(wrap_pyfunction!(save_public_key_pem, m)?)?;
+    m.add_function(wrap_pyfunction!(public_key_pem_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(p256_public_jwk_to_pem, m)?)?;
     m.add_function(wrap_pyfunction!(extract_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(detect_private_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(detect_public_key_type, m)?)?;
@@ -3472,6 +3524,8 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_public_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_der, m)?)?;
     m.add_function(wrap_pyfunction!(save_public_key_pem, m)?)?;
+    m.add_function(wrap_pyfunction!(public_key_pem_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(p256_public_jwk_to_pem, m)?)?;
     m.add_function(wrap_pyfunction!(extract_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(detect_private_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(detect_public_key_type, m)?)?;

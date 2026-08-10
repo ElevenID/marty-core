@@ -153,6 +153,28 @@ pub(crate) struct MdocPresentationVerificationResult {
     pub(crate) error: Option<String>,
 }
 
+/// Result of issuer-only mdoc authentication for non-interactive document use.
+#[pyclass(skip_from_py_object)]
+#[derive(Clone)]
+pub(crate) struct MdocIssuerVerificationResult {
+    /// Every document has a valid issuerAuth COSE signature.
+    #[pyo3(get)]
+    pub(crate) signature_valid: bool,
+    /// Every issuer certificate chain terminates at configured trust material.
+    #[pyo3(get)]
+    pub(crate) issuer_trusted: bool,
+    #[pyo3(get)]
+    pub(crate) document_types: Vec<String>,
+    #[pyo3(get)]
+    pub(crate) document_evidence: Vec<MdocDocumentVerificationEvidence>,
+    #[pyo3(get)]
+    pub(crate) revocation_checked: bool,
+    #[pyo3(get)]
+    pub(crate) not_revoked: Option<bool>,
+    #[pyo3(get)]
+    pub(crate) error: Option<String>,
+}
+
 #[pymethods]
 impl MdocPresentationVerificationResult {
     fn __repr__(&self) -> String {
@@ -164,6 +186,45 @@ impl MdocPresentationVerificationResult {
             self.device_authentication_valid,
             self.document_types
         )
+    }
+}
+
+#[pymethods]
+impl MdocIssuerVerificationResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "MdocIssuerVerificationResult(signature_valid={}, issuer_trusted={}, document_types={:?})",
+            self.signature_valid, self.issuer_trusted, self.document_types
+        )
+    }
+}
+
+/// Authenticate issuer signatures and certificate chains without inventing a
+/// holder/session proof. This is suitable for stored mdoc credential checks;
+/// interactive presentations must use `verify_mdoc_presentation` instead.
+#[pyfunction(signature = (
+    mdoc_bytes,
+    trusted_root_certs_pem,
+    pinned_issuer_certs_pem = None
+))]
+pub(crate) fn verify_mdoc_issuer(
+    mdoc_bytes: Vec<u8>,
+    trusted_root_certs_pem: Vec<String>,
+    pinned_issuer_certs_pem: Option<Vec<String>>,
+) -> MdocIssuerVerificationResult {
+    let issuer = verify_issuer_authentication(
+        &mdoc_bytes,
+        &trusted_root_certs_pem,
+        pinned_issuer_certs_pem.as_deref().unwrap_or_default(),
+    );
+    MdocIssuerVerificationResult {
+        signature_valid: issuer.signature_valid,
+        issuer_trusted: issuer.issuer_trusted,
+        document_types: issuer.document_types,
+        document_evidence: issuer.document_evidence,
+        revocation_checked: false,
+        not_revoked: None,
+        error: issuer.error,
     }
 }
 
