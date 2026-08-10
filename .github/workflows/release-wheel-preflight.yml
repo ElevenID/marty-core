@@ -1,0 +1,55 @@
+name: Release Wheel Preflight
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-wheel-preflight.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "*/Cargo.toml"
+
+concurrency:
+  group: release-wheel-preflight-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python-aarch64:
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [marty-bindings, marty-verification, marty-iso18013]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          maturin-version: v1.14.1
+          working-directory: ${{ matrix.package }}
+          command: build
+          args: --release --out dist
+          target: aarch64
+          manylinux: 2_28
+          before-script-linux: |
+            set -eu
+            if command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              apt-get install --no-install-recommends -y \
+                libdbus-1-dev libssl-dev libpcsclite-dev \
+                perl
+            elif command -v dnf >/dev/null 2>&1; then
+              dnf install -y \
+                dbus-devel openssl-devel pcsc-lite-devel \
+                perl-IPC-Cmd perl-Time-Piece
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y \
+                dbus-devel openssl-devel pcsc-lite-devel \
+                perl-IPC-Cmd perl-Time-Piece
+            else
+              echo "Unsupported Linux wheel-build package manager" >&2
+              exit 1
+            fi
+            perl -MIPC::Cmd -MTime::Piece -e 1
