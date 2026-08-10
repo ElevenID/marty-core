@@ -176,6 +176,59 @@ fn session_encryption_tampered_ciphertext_rejected() {
         result.is_err(),
         "tampered ciphertext must not decrypt successfully"
     );
+    assert_eq!(
+        dec.receive_counter(),
+        0,
+        "authentication failures must not advance the receive counter"
+    );
+}
+
+/// Replaying a ciphertext after it has been accepted must fail because the
+/// receiver has advanced to the next counter-derived nonce.
+#[test]
+fn session_encryption_replay_is_rejected_without_counter_advance() {
+    let shared_secret = [0x34u8; 32];
+    let transcript = b"replay-test-transcript";
+    let mut enc = SessionEncryption::new(&shared_secret, transcript).expect("enc");
+    let mut dec = SessionEncryption::new(&shared_secret, transcript).expect("dec");
+    let ciphertext = enc.encrypt(b"one use only").expect("encrypt");
+
+    assert_eq!(
+        dec.decrypt(&ciphertext).expect("first decrypt"),
+        b"one use only"
+    );
+    assert!(dec.decrypt(&ciphertext).is_err(), "replay must be rejected");
+    assert_eq!(dec.receive_counter(), 1, "replay must not advance counter");
+}
+
+/// Configured message limits are enforced before encryption allocates output.
+#[tokio::test]
+async fn session_rejects_oversized_messages_and_post_disconnect_use() {
+    use marty_iso18013::{DeviceEngagement, Session, SessionConfig};
+
+    let engagement = DeviceEngagement::new_qr().expect("engagement");
+    let peer = SessionKeyAgreement::new().expect("peer key");
+    let session = Session::from_engagement(
+        &engagement,
+        SessionConfig {
+            timeout_secs: 300,
+            max_message_size: 8,
+            verbose: false,
+        },
+    )
+    .await
+    .expect("session");
+    session
+        .establish(&peer.public_key())
+        .await
+        .expect("establish");
+
+    assert!(session.send_encrypted(b"123456789").await.is_err());
+    assert!(session.receive_encrypted(&[0; 25]).await.is_err());
+
+    session.terminate().await.expect("terminate");
+    assert!(session.send_encrypted(b"closed").await.is_err());
+    assert!(session.receive_encrypted(&[0; 16]).await.is_err());
 }
 
 /// Encrypting an empty plaintext is permitted (e.g., status messages).

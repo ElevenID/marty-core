@@ -216,6 +216,42 @@ pub fn get_certificate_public_key(der_data: &[u8]) -> CryptoResult<Vec<u8>> {
         .map_err(|e| CryptoError::der_error(format!("Failed to encode public key: {}", e)))
 }
 
+/// Extract HTTP(S) and LDAP CRL distribution point URIs from a certificate.
+pub fn get_crl_distribution_points(der_data: &[u8]) -> CryptoResult<Vec<String>> {
+    use const_oid::AssociatedOid;
+    use x509_cert::ext::pkix::name::{DistributionPointName, GeneralName};
+    use x509_cert::ext::pkix::CrlDistributionPoints;
+
+    let cert = load_certificate_der(der_data)?;
+    let mut urls = Vec::new();
+
+    if let Some(extensions) = &cert.tbs_certificate.extensions {
+        for extension in extensions {
+            if extension.extn_id != CrlDistributionPoints::OID {
+                continue;
+            }
+            let points =
+                CrlDistributionPoints::from_der(extension.extn_value.as_bytes()).map_err(|e| {
+                    CryptoError::der_error(format!(
+                        "Failed to parse CRL distribution points: {}",
+                        e
+                    ))
+                })?;
+            for point in points.0 {
+                if let Some(DistributionPointName::FullName(names)) = point.distribution_point {
+                    for name in names {
+                        if let GeneralName::UniformResourceIdentifier(uri) = name {
+                            urls.push(uri.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(urls)
+}
+
 /// Check if a certificate is expired.
 pub fn is_certificate_expired(der_data: &[u8]) -> CryptoResult<bool> {
     let cert = load_certificate_der(der_data)?;
@@ -321,5 +357,25 @@ mod tests {
     #[test]
     fn test_hex_encode() {
         assert_eq!(hex::encode([0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+    }
+
+    #[test]
+    fn test_extract_crl_distribution_points() {
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        params
+            .crl_distribution_points
+            .push(rcgen::CrlDistributionPoint {
+                uris: vec!["https://example.invalid/issuer.crl".to_string()],
+            });
+        params.is_ca = rcgen::IsCa::ExplicitNoCa;
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let certificate = params.self_signed(&key_pair).unwrap();
+        let urls = get_crl_distribution_points(certificate.der()).unwrap();
+        assert_eq!(urls, vec!["https://example.invalid/issuer.crl"]);
+    }
+
+    #[test]
+    fn test_crl_distribution_points_reject_malformed_certificate() {
+        assert!(get_crl_distribution_points(b"not a certificate").is_err());
     }
 }

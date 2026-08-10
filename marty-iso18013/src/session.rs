@@ -39,25 +39,35 @@ impl SessionEncryption {
 
     /// Encrypt a message with AES-256-GCM
     pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>> {
+        let next_counter = self
+            .send_counter
+            .checked_add(1)
+            .ok_or_else(|| Error::Encryption("message counter exhausted".to_string()))?;
+
         // Construct IV from counter
         let mut iv = vec![0u8; 12];
         iv[8..].copy_from_slice(&self.send_counter.to_be_bytes());
 
         let ciphertext = aes_256_gcm_encrypt(&self.sk_encryption, &iv, plaintext, &[])?;
 
-        self.send_counter += 1;
+        self.send_counter = next_counter;
         Ok(ciphertext)
     }
 
     /// Decrypt a message with AES-256-GCM
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        let next_counter = self
+            .receive_counter
+            .checked_add(1)
+            .ok_or_else(|| Error::Decryption("message counter exhausted".to_string()))?;
+
         // Construct IV from counter
         let mut iv = vec![0u8; 12];
         iv[8..].copy_from_slice(&self.receive_counter.to_be_bytes());
 
         let plaintext = aes_256_gcm_decrypt(&self.sk_encryption, &iv, ciphertext, &[])?;
 
-        self.receive_counter += 1;
+        self.receive_counter = next_counter;
         Ok(plaintext)
     }
 
@@ -168,5 +178,20 @@ mod tests {
 
         encryption.encrypt(b"message 2").unwrap();
         assert_eq!(encryption.send_counter(), 2);
+    }
+
+    #[test]
+    fn test_exhausted_counters_fail_before_crypto() {
+        let shared_secret = vec![0x42; 32];
+        let session_transcript = b"counter exhaustion";
+        let mut encryption = SessionEncryption::new(&shared_secret, session_transcript).unwrap();
+
+        encryption.send_counter = u32::MAX;
+        encryption.receive_counter = u32::MAX;
+
+        assert!(encryption.encrypt(b"must not encrypt").is_err());
+        assert!(encryption.decrypt(&[0; 16]).is_err());
+        assert_eq!(encryption.send_counter(), u32::MAX);
+        assert_eq!(encryption.receive_counter(), u32::MAX);
     }
 }

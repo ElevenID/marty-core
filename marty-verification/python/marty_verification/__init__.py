@@ -1,10 +1,10 @@
-"""
-marty_verification — convenience re-export of native Rust bindings.
-
-All symbols from the compiled ``_marty_verification`` extension are
-re-exported here so callers can write::
-
-    from marty_verification import ChainValidator, IacaRegistry
-"""
+"""Canonical Python surface for the native Marty verification bindings."""
 
 from marty_verification_py._marty_verification import *  # noqa: F401,F403
+
+try:
+    from importlib.metadata import version
+
+    __version__ = version("marty-verification-py")
+except Exception:  # pragma: no cover - editable development builds
+    __version__ = "unknown"

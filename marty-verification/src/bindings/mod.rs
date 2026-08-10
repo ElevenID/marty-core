@@ -968,6 +968,88 @@ fn verify_sod_signature(sod_der: &[u8]) -> PyResult<bool> {
     crate::asn1::sod::verify_sod_signature(sod_der).map_err(to_pyerr)
 }
 
+/// Convert a PEM-encoded CRL to DER.
+#[pyfunction]
+fn crl_pem_to_der<'py>(py: Python<'py>, pem_data: &str) -> PyResult<Bound<'py, PyBytes>> {
+    let der = crate::asn1::crl::crl_pem_to_der(pem_data).map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &der))
+}
+
+/// Verify a DER-encoded CRL using its issuer certificate.
+#[pyfunction]
+fn verify_crl_signature(crl_der: &[u8], issuer_cert_der: &[u8]) -> PyResult<bool> {
+    let issuer_public_key =
+        marty_crypto::certificate::get_certificate_public_key(issuer_cert_der).map_err(to_pyerr)?;
+    crate::asn1::crl::verify_crl_signature(crl_der, &issuer_public_key).map_err(to_pyerr)
+}
+
+/// Parse an EF.SOD and return its native verification metadata.
+#[pyfunction]
+fn parse_sod<'py>(py: Python<'py>, sod_der: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    let sod = crate::asn1::sod::parse_sod(sod_der).map_err(to_pyerr)?;
+    let result = PyDict::new(py);
+    result.set_item("lds_version", sod.lds_version)?;
+    result.set_item("hash_algorithm", sod.hash_algorithm)?;
+    result.set_item(
+        "document_signer_cert",
+        sod.document_signer_cert.unwrap_or_default(),
+    )?;
+    let hashes = PyList::empty(py);
+    for hash in sod.data_group_hashes {
+        let item = PyDict::new(py);
+        item.set_item("data_group_number", hash.data_group_number)?;
+        item.set_item("hash_value", hash.hash_value)?;
+        hashes.append(item)?;
+    }
+    result.set_item("data_group_hashes", hashes)?;
+    Ok(result)
+}
+
+/// Verify one data-group hash against a native EF.SOD payload.
+#[pyfunction]
+fn verify_sod_data_group_hash(
+    sod_der: &[u8],
+    data_group_number: u8,
+    data_group_content: &[u8],
+) -> PyResult<bool> {
+    crate::asn1::sod::verify_data_group_hash_from_sod(
+        sod_der,
+        data_group_number,
+        data_group_content,
+    )
+    .map_err(to_pyerr)
+}
+
+/// Parse an ICAO CSCA Master List with the native CMS/X.509 implementation.
+#[pyfunction]
+fn parse_master_list<'py>(py: Python<'py>, cms_der: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    let master_list = crate::asn1::master_list::parse_master_list(cms_der).map_err(to_pyerr)?;
+    let result = PyDict::new(py);
+    result.set_item("version", master_list.version)?;
+    result.set_item("signer_certificate", master_list.signer_certificate)?;
+    let certificates = PyList::empty(py);
+    for certificate in master_list.certificates {
+        let item = PyDict::new(py);
+        item.set_item("subject", certificate.subject)?;
+        item.set_item("issuer", certificate.issuer)?;
+        item.set_item("serial_number", certificate.serial_number)?;
+        item.set_item("country", certificate.country)?;
+        item.set_item("not_before", certificate.not_before)?;
+        item.set_item("not_after", certificate.not_after)?;
+        item.set_item("der_bytes", PyBytes::new(py, &certificate.der_bytes))?;
+        certificates.append(item)?;
+    }
+    result.set_item("certificates", certificates)?;
+    Ok(result)
+}
+
+/// Verify an ICAO CSCA Master List CMS signature against a pinned signer certificate.
+#[pyfunction]
+fn verify_master_list_signature(cms_der: &[u8], signer_cert_der: &[u8]) -> PyResult<bool> {
+    crate::asn1::master_list::verify_master_list_signature(cms_der, signer_cert_der)
+        .map_err(to_pyerr)
+}
+
 // ============================================================================
 // mDL Document Parsing Bindings
 // ============================================================================
@@ -2561,6 +2643,12 @@ fn get_ocsp_responder_url(cert_der: &[u8]) -> PyResult<Option<String>> {
     marty_crypto::ocsp::get_ocsp_responder_url(cert_der).map_err(to_pyerr)
 }
 
+/// Extract CRL distribution point URIs from a certificate.
+#[pyfunction]
+fn get_crl_distribution_points(cert_der: &[u8]) -> PyResult<Vec<String>> {
+    marty_crypto::certificate::get_crl_distribution_points(cert_der).map_err(to_pyerr)
+}
+
 /// Parse an OCSP response.
 ///
 /// Args:
@@ -3140,12 +3228,18 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCrlInfo>()?;
     m.add_class::<PyRevokedCertificate>()?;
     m.add_function(wrap_pyfunction!(parse_crl, m)?)?;
+    m.add_function(wrap_pyfunction!(crl_pem_to_der, m)?)?;
     m.add_function(wrap_pyfunction!(check_certificate_revocation, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_crl_signature, m)?)?;
 
     // Crypto Operations - Base
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_sod, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sod_data_group_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_master_list, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
@@ -3271,6 +3365,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
     m.add_function(wrap_pyfunction!(get_ocsp_responder_url, m)?)?;
+    m.add_function(wrap_pyfunction!(get_crl_distribution_points, m)?)?;
     m.add_function(wrap_pyfunction!(parse_ocsp_response, m)?)?;
 
     // Open Badges
@@ -3333,12 +3428,18 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCrlInfo>()?;
     m.add_class::<PyRevokedCertificate>()?;
     m.add_function(wrap_pyfunction!(parse_crl, m)?)?;
+    m.add_function(wrap_pyfunction!(crl_pem_to_der, m)?)?;
     m.add_function(wrap_pyfunction!(check_certificate_revocation, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_crl_signature, m)?)?;
 
     // Crypto Operations - Base
     m.add_function(wrap_pyfunction!(hash_data, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(verify_sod_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_sod, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sod_data_group_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_master_list, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
@@ -3464,6 +3565,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
     m.add_function(wrap_pyfunction!(get_ocsp_responder_url, m)?)?;
+    m.add_function(wrap_pyfunction!(get_crl_distribution_points, m)?)?;
     m.add_function(wrap_pyfunction!(parse_ocsp_response, m)?)?;
 
     // Open Badges

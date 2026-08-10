@@ -155,6 +155,11 @@ pub fn parse_crl_pem(pem_data: &str) -> VerificationResult<CrlInfo> {
     parse_crl(&der_bytes)
 }
 
+/// Decode a PEM-encoded CRL to DER bytes.
+pub fn crl_pem_to_der(pem_data: &str) -> VerificationResult<Vec<u8>> {
+    pem_to_der(pem_data, "X509 CRL")
+}
+
 /// Check if a certificate is revoked by any of the provided CRLs.
 ///
 /// # Arguments

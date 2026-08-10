@@ -36,6 +36,7 @@ dev = [
 [tool.maturin]
 python-source = "python"
 module-name = "marty_rs._marty_rs"
+python-packages = ["marty_rs", "_marty_rs"]
 features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]

@@ -188,16 +188,7 @@ fn extract_country(dn: &str) -> Option<String> {
 
 /// Format X.509 time to ISO 8601 string.
 fn format_time(time: &x509_cert::time::Time) -> String {
-    match time {
-        x509_cert::time::Time::UtcTime(t) => {
-            // UTCTime format
-            format!("{:?}", t)
-        }
-        x509_cert::time::Time::GeneralTime(t) => {
-            // GeneralizedTime format
-            format!("{:?}", t)
-        }
-    }
+    time.to_string()
 }
 
 /// Verify Master List signature.
