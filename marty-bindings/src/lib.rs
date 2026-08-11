@@ -7,6 +7,7 @@
 // Rust 1.97 flags even though they are outside the handwritten function bodies.
 #![allow(clippy::useless_conversion)]
 
+mod device_auth;
 mod mdoc;
 mod remote_credential;
 mod status_list;
@@ -774,6 +775,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "oid4vci",
             "oid4vp",
             "document_verification",
+            "device_authentication",
             "status_list"
         ]
     }))
@@ -1847,6 +1849,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(native_backend_diagnostics, m)?)?;
+    device_auth::register_device_auth_bindings(m)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;
     m.add_function(wrap_pyfunction!(

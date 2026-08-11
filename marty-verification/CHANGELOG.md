@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add the canonical device-registration key inspection, challenge-message,
+  RSA-PSS proof, and key-eligibility kernel with shared v1/v2 vectors and thin
+  `_marty_rs` bindings.
+
 ### Security
 
 - Distinguish a DTC's signed issuance-time `is_revoked` claim from current
