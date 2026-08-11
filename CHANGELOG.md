@@ -5,12 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.1.46] - 2026-08-11
+
+### Added
+
+- Add the canonical public status-list crate and Python raw-byte constructors
+  for Token Status List and Bitstring Status List compatibility adapters.
+- Add canonical Rust flow-decision and device-authentication kernels with
+  bounded inputs, normalized outcomes, and fail-closed transition/proof rules.
+- Add canonical wallet QR classification for OID4VCI, OID4VP, and ISO 18013
+  mdoc inputs for Flutter Rust Bridge consumers.
+- Add a bounded VDS-NC CMC, MRV, and eVisa profile kernel with canonical JSON,
+  barcode correction, signing, verification, and Python bindings.
+- Add a canonical external DTC signing handoff that prepares exact signing
+  bytes and authenticates provider signatures before assembly.
 
 ### Changed
 
+- Centralize status-list, flow, device-authentication, wallet QR, VDS-NC, and
+  DTC signing decisions in their reusable Rust owners for thin caller adapters.
 - Consolidate the retained VDS-NC document profile, canonical envelope,
   component policy, barcode selection, and typed Python operations in Rust.
+
+### Security
+
+- Reject malformed, oversized, unsupported, replayed, or cryptographically
+  invalid inputs across the new kernels instead of allowing caller fallbacks.
+- Require Rust to verify externally produced DTC signatures against the exact
+  canonical payload before a DTC can be marked signed.
 
 ## [0.1.45] - 2026-08-10
 
