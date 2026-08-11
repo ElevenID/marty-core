@@ -234,6 +234,8 @@ impl WalletEngine {
     /// Handles both inline `credential_offer` parameter (base64url-encoded JSON)
     /// and the `credential_offer_uri` redirect pattern (fetches the URI).
     pub async fn parse_credential_offer(&self, input: &str) -> Oid4vciResult<CredentialOffer> {
+        let normalized = crate::wallet_input::normalize_credential_offer_uri(input)?;
+        let input = normalized.as_str();
         // Normalise the scheme so `url::Url` can parse it.
         let url_str = if input.starts_with("openid-credential-offer://") {
             input.replacen("openid-credential-offer://", "https://offer.invalid/", 1)

@@ -58,6 +58,7 @@ pub mod proof;
 pub mod signer;
 pub mod types;
 pub mod verifier;
+pub mod wallet_input;
 
 #[cfg(feature = "wallet")]
 pub mod wallet;
@@ -71,6 +72,10 @@ pub use types::{
     CredentialFormat, GrantType, ZkPredicateBinding,
 };
 pub use verifier::VerificationEngine;
+pub use wallet_input::{
+    classify_wallet_input, normalize_credential_offer_uri, ClassifiedWalletInput, WalletInputKind,
+    MAX_WALLET_INPUT_BYTES,
+};
 
 #[cfg(feature = "wallet")]
 pub use wallet::{
