@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "challenge_cases": [
+    {
+      "name": "version_2_registration_bound_message",
+      "challenge": {
+        "challenge_id": "challenge-1",
+        "user_id": "user-1",
+        "device_id": "device-1",
+        "public_key_kid": "kid",
+        "public_key_sha256": "digest",
+        "nonce": "nonce-1",
+        "created_at": "2026-08-11T00:00:00+00:00",
+        "expires_at": "2026-08-11T00:05:00+00:00",
+        "registration_id": "registration-1",
+        "key_version": 1,
+        "purpose": "device_authentication",
+        "audience": "marty-device-registration",
+        "message_version": 2
+      },
+      "expected_message_base64url": "bWFydHktZGV2aWNlLXJlZ2lzdHJhdGlvbi12Mgp7ImF1ZGllbmNlIjoibWFydHktZGV2aWNlLXJlZ2lzdHJhdGlvbiIsImNoYWxsZW5nZV9pZCI6ImNoYWxsZW5nZS0xIiwiZGV2aWNlX2lkIjoiZGV2aWNlLTEiLCJleHBpcmVzX2F0IjoiMjAyNi0wOC0xMVQwMDowNTowMCswMDowMCIsImtleV92ZXJzaW9uIjoxLCJub25jZSI6Im5vbmNlLTEiLCJwdWJsaWNfa2V5X2tpZCI6ImtpZCIsInB1cnBvc2UiOiJkZXZpY2VfYXV0aGVudGljYXRpb24iLCJyZWdpc3RyYXRpb25faWQiOiJyZWdpc3RyYXRpb24tMSIsInVzZXJfaWQiOiJ1c2VyLTEifQ"
+    },
+    {
+      "name": "legacy_version_1_message",
+      "challenge": {
+        "challenge_id": "legacy-challenge",
+        "user_id": "legacy-user",
+        "device_id": "legacy-device",
+        "public_key_kid": "legacy-kid",
+        "public_key_sha256": "legacy-digest",
+        "nonce": "legacy-nonce",
+        "created_at": "2026-08-11T00:00:00+00:00",
+        "expires_at": "2026-08-11T00:05:00+00:00",
+        "registration_id": null,
+        "key_version": null,
+        "purpose": "device_registration",
+        "audience": "ignored-for-v1",
+        "message_version": 1
+      },
+      "expected_message_base64url": "bWFydHktZGV2aWNlLXJlZ2lzdHJhdGlvbi12MQptYXJ0eS1kZXZpY2UtcmVnaXN0cmF0aW9uCmxlZ2FjeS1jaGFsbGVuZ2UKbGVnYWN5LXVzZXIKbGVnYWN5LWRldmljZQpsZWdhY3kta2lkCmxlZ2FjeS1ub25jZQ"
+    }
+  ]
+}
