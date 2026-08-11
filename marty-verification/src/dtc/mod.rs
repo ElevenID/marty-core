@@ -905,21 +905,25 @@ fn required_bounded_pem(
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| VerificationError::dtc_missing_field(field))?;
-    if text.is_empty()
-        || text.chars().count() > max_chars
-        || text.trim() != text
-        || text
+    let normalized = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(text);
+    if normalized.is_empty()
+        || normalized.chars().count() > max_chars
+        || normalized.trim() != normalized
+        || normalized
             .chars()
             .any(|character| character.is_control() && character != '\n' && character != '\r')
-        || !text.starts_with("-----BEGIN PUBLIC KEY-----")
-        || !text.ends_with("-----END PUBLIC KEY-----")
+        || !normalized.starts_with("-----BEGIN PUBLIC KEY-----")
+        || !normalized.ends_with("-----END PUBLIC KEY-----")
     {
         return Err(VerificationError::dtc_invalid(format!(
             "DTC {} must be a bounded public-key PEM without surrounding whitespace",
             field
         )));
     }
-    Ok(text.to_string())
+    Ok(normalized.to_string())
 }
 
 fn validate_bounded_text(

@@ -200,7 +200,7 @@ fn external_signer_round_trip_uses_canonical_rust_payload() {
             "dtc": prepared["dtc"],
             "signature_base64": STANDARD.encode(signature.to_der().as_bytes()),
             "signer_id": "external-test-signer",
-            "signer_public_key_pem": SIGNER_PUBLIC_PEM,
+            "signer_public_key_pem": format!("{SIGNER_PUBLIC_PEM}\n"),
             "signature_date": "2026-08-11T00:00:00Z"
         })
         .to_string(),
