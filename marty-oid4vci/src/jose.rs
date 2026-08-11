@@ -63,6 +63,24 @@ fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Value> {
     Ok(Value::Object(object))
 }
 
+/// Decode the protected header of a compact JWT without treating its claims as trusted.
+///
+/// This is crate-private so protocol validators can select an externally trusted
+/// key before calling [`verify_compact_jwt_with_public_jwk`]. Callers must never
+/// use the returned header as proof that the JWT is authentic.
+pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vciResult<Value> {
+    let parts: Vec<&str> = compact_jwt.split('.').collect();
+    if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
+        return Err(Oid4vciError::JwtError(
+            "Compact JWT must contain three non-empty parts".into(),
+        ));
+    }
+    let header_bytes = B64.decode(parts[0]).map_err(|error| {
+        Oid4vciError::JwtError(format!("Invalid JWT header base64url: {error}"))
+    })?;
+    parse_unique_object(&header_bytes, "JWT header")
+}
+
 fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
     match name {
         "ES256" => Ok(Algorithm::ES256),

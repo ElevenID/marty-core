@@ -14,6 +14,12 @@ mod status_list;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
+pyo3::create_exception!(
+    _marty_rs,
+    OidcValidationError,
+    pyo3::exceptions::PyValueError
+);
+
 /// Convert marty_crypto errors to Python exceptions
 fn to_pyerr(err: impl std::fmt::Display) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string())
@@ -690,6 +696,38 @@ fn oid4vci_verify_compact_jwt(
     let header = serde_json::to_string(&verified.header).map_err(to_pyerr)?;
     let claims = serde_json::to_string(&verified.claims).map_err(to_pyerr)?;
     Ok((header, claims))
+}
+
+/// Validate an OpenID Connect ID token against a provider JWKS.
+///
+/// The Rust validator selects the key by ``kid`` and enforces signature,
+/// algorithm allowlist, issuer, audience/authorized-party, nonce, expiry,
+/// issuance/not-before time, and ``at_hash`` when present. It returns claims
+/// only after every applicable check succeeds.
+#[pyfunction]
+fn oidc_validate_id_token(request_json: &str) -> PyResult<String> {
+    let claims = marty_oid4vci::oidc::validate_id_token_request(request_json)
+        .map_err(|error| PyErr::new::<OidcValidationError, _>(error.to_string()))?;
+    serde_json::to_string(&claims).map_err(to_pyerr)
+}
+
+/// Return explicit native backend and capability diagnostics for readiness.
+#[pyfunction]
+fn native_backend_diagnostics() -> PyResult<String> {
+    serde_json::to_string(&serde_json::json!({
+        "available": true,
+        "backend": "_marty_rs",
+        "version": env!("CARGO_PKG_VERSION"),
+        "build_revision": option_env!("MARTY_BUILD_REVISION").unwrap_or("unknown"),
+        "capabilities": [
+            "oidc_id_token_validation",
+            "oid4vci",
+            "oid4vp",
+            "document_verification",
+            "status_list"
+        ]
+    }))
+    .map_err(to_pyerr)
 }
 
 /// Verify a detached provider/KMS signature using a public JWK.
@@ -1686,6 +1724,10 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
 /// Downstream extension crates use this entry point to extend ``_marty_rs``
 /// without copying bindings or publishing a second, incompatible module.
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add(
+        "OidcValidationError",
+        m.py().get_type::<OidcValidationError>(),
+    )?;
     remote_credential::register(m)?;
     status_list::register_status_list_bindings(m)?;
 
@@ -1743,6 +1785,8 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_compact_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(oidc_validate_id_token, m)?)?;
+    m.add_function(wrap_pyfunction!(native_backend_diagnostics, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;
     m.add_function(wrap_pyfunction!(
