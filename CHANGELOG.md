@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.45] - 2026-08-10
+
+### Added
+
+- Add the canonical service-level presentation-policy request, decision,
+  violation, and normalized result API to `marty-verification` and `_marty_rs`.
+- Add bounded policy parsing, verified credential facts, holder-binding,
+  freshness, revocation, issuer, alternative-requirement, and external
+  authorization evaluation with stable error codes.
+
+### Changed
+
+- Route the legacy wallet policy evaluator and claim, issuer, and freshness
+  compatibility helpers through the canonical service evaluator so there is
+  one maintained allow/deny implementation.
+
+### Security
+
+- Fail closed when policy facts are malformed, unsupported, ambiguous,
+  incomplete, stale, untrusted, revoked, replayable, or missing required
+  cryptographic and authorization evidence.
+
 ## [0.1.44] - 2026-08-10
 
 ### Security
