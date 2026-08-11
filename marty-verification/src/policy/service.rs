@@ -759,12 +759,14 @@ fn apply_freshness(
     evaluation_time: u64,
     errors: &mut Vec<ServicePolicyViolation>,
 ) {
-    let max_age = requirement.max_age_seconds.or_else(|| {
-        policy
-            .freshness
-            .as_ref()
-            .and_then(|freshness| freshness.max_age_seconds)
-    });
+    let policy_max_age = policy
+        .freshness
+        .as_ref()
+        .and_then(|freshness| freshness.max_age_seconds);
+    let max_age = match (requirement.max_age_seconds, policy_max_age) {
+        (Some(requirement_age), Some(policy_age)) => Some(requirement_age.min(policy_age)),
+        (requirement_age, policy_age) => requirement_age.or(policy_age),
+    };
     if max_age.is_some() || requirement.require_fresh_issuance {
         match credential.issued_at_epoch_seconds {
             None => errors.push(violation(
@@ -1558,6 +1560,20 @@ mod tests {
         assert!(codes.contains(&ServicePolicyErrorCode::IssuerComplianceStatusMissing));
         assert!(codes.contains(&ServicePolicyErrorCode::IssuerAccreditationMissing));
         assert!(codes.contains(&ServicePolicyErrorCode::RevocationEvidenceStale));
+    }
+
+    #[test]
+    fn applies_the_stricter_policy_and_requirement_maximum_age() {
+        let mut request = request();
+        request.policy.freshness.as_mut().unwrap().max_age_seconds = Some(50);
+        request.policy.credential_requirements[0].max_age_seconds = Some(500);
+        request.credentials[0].issued_at_epoch_seconds = Some(900);
+
+        let result = evaluate_service_policy(request).unwrap();
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.code == ServicePolicyErrorCode::CredentialStale));
     }
 
     #[test]
