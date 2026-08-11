@@ -40,6 +40,8 @@ pub struct ServicePolicyEvaluationRequest {
     pub replay_check_verified: bool,
     pub proof_epoch_seconds: Option<u64>,
     pub external_authorization: Option<ExternalAuthorizationFacts>,
+    #[serde(default)]
+    pub presentation_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +56,10 @@ pub struct ServicePresentationPolicy {
     pub holder_binding: ServiceHolderBinding,
     pub freshness: Option<ServiceFreshnessPolicy>,
     pub issuer_constraints: Option<ServiceIssuerConstraints>,
+    #[serde(default)]
+    pub allowed_issuers: Vec<String>,
+    #[serde(default)]
+    pub single_presentation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -205,6 +211,7 @@ pub enum ServicePolicyErrorCode {
     SignatureInvalid,
     CredentialFormatMismatch,
     TrustProfileNotVerified,
+    IssuerNotAllowed,
     IssuerTrustLevelInsufficient,
     IssuerComplianceStatusMissing,
     IssuerAccreditationMissing,
@@ -230,6 +237,7 @@ pub enum ServicePolicyErrorCode {
     ExternalAuthorizationDenied,
     ExternalAuthorizationNotEvaluated,
     ConflictingVerifiedClaim,
+    SinglePresentationRequired,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -508,6 +516,15 @@ pub fn evaluate_service_policy(
         }
     }
 
+    if request.policy.single_presentation
+        && request.presentation_count.unwrap_or(credentials.len()) != 1
+    {
+        errors.push(global_violation(
+            ServicePolicyErrorCode::SinglePresentationRequired,
+            "Policy requires exactly one presentation",
+        ));
+    }
+
     let required_policy_satisfied = required_satisfied == required_total;
     let all_direct_required_satisfied = request
         .policy
@@ -675,6 +692,23 @@ fn evaluate_candidate(
             Some(credential),
             None,
             &message,
+        ));
+    }
+    if !policy.allowed_issuers.is_empty()
+        && !policy
+            .allowed_issuers
+            .iter()
+            .any(|issuer| issuer == &credential.issuer_id)
+    {
+        errors.push(violation(
+            ServicePolicyErrorCode::IssuerNotAllowed,
+            requirement,
+            Some(credential),
+            None,
+            &format!(
+                "Issuer '{}' is not in the policy allowlist",
+                credential.issuer_id
+            ),
         ));
     }
     apply_issuer_constraints(requirement, policy, credential, &mut errors);
@@ -1140,8 +1174,15 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
         request.holder_binding_method.as_deref(),
     )?;
     validate_optional_string("proof_profile", request.proof_profile.as_deref())?;
+    validate_bounded_strings("policy.allowed_issuers", &request.policy.allowed_issuers)?;
     if request.credentials.len() > MAX_CREDENTIALS {
         return invalid("too many credentials");
+    }
+    if request
+        .presentation_count
+        .is_some_and(|count| count > MAX_CREDENTIALS)
+    {
+        return invalid("presentation count exceeds the supported limit");
     }
     let requirement_count = request.policy.credential_requirements.len()
         + request
@@ -1357,6 +1398,8 @@ mod tests {
                 revocation_grace_seconds: Some(300),
             }),
             issuer_constraints: None,
+            allowed_issuers: Vec::new(),
+            single_presentation: false,
         }
     }
 
@@ -1397,6 +1440,7 @@ mod tests {
             replay_check_verified: false,
             proof_epoch_seconds: None,
             external_authorization: None,
+            presentation_count: None,
         }
     }
 
@@ -1665,6 +1709,45 @@ mod tests {
         assert!(codes.contains(&ServicePolicyErrorCode::IssuerComplianceStatusMissing));
         assert!(codes.contains(&ServicePolicyErrorCode::IssuerAccreditationMissing));
         assert!(codes.contains(&ServicePolicyErrorCode::RevocationEvidenceStale));
+    }
+
+    #[test]
+    fn issuer_allowlist_and_single_presentation_are_canonical_failures() {
+        let mut request = request();
+        request.policy.allowed_issuers = vec!["did:example:allowed".to_string()];
+        request.policy.single_presentation = true;
+        request.presentation_count = Some(2);
+
+        let result = evaluate_service_policy(request).unwrap();
+        let codes: Vec<ServicePolicyErrorCode> =
+            result.errors.iter().map(|error| error.code).collect();
+
+        assert_eq!(result.decision, ServiceDecision::Deny);
+        assert!(codes.contains(&ServicePolicyErrorCode::IssuerNotAllowed));
+        assert!(codes.contains(&ServicePolicyErrorCode::SinglePresentationRequired));
+    }
+
+    #[test]
+    fn newly_optional_compatibility_fields_preserve_existing_json_contract() {
+        let mut value = serde_json::to_value(request()).unwrap();
+        value["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("allowed_issuers");
+        value["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("single_presentation");
+        value.as_object_mut().unwrap().remove("presentation_count");
+
+        let parsed: ServicePolicyEvaluationRequest = serde_json::from_value(value).unwrap();
+        assert!(parsed.policy.allowed_issuers.is_empty());
+        assert!(!parsed.policy.single_presentation);
+        assert_eq!(parsed.presentation_count, None);
+        assert_eq!(
+            evaluate_service_policy(parsed).unwrap().decision,
+            ServiceDecision::Allow
+        );
     }
 
     #[test]
