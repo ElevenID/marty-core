@@ -1,0 +1,148 @@
+name: Prepare stable tag
+
+run-name: Prepare ${{ inputs.tag }} at ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Previously unused stable tag (for example, v0.2.0)
+        required: true
+        type: string
+      source_sha:
+        description: Exact protected-main commit to validate and tag
+        required: true
+        type: string
+
+concurrency:
+  group: prepare-stable-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  prepare-stable-tag:
+    name: Validate exact main and create annotated tag
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Require exact protected-main dispatch
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.source_sha }}
+          RUN_SHA: ${{ github.sha }}
+          RUN_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$RUN_REF" = refs/heads/main
+          test "$RUN_SHA" = "$EXPECTED_SHA"
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+
+      - name: Fetch exact main and reject an existing tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}" | grep -q .; then
+            echo "::error::Immutable tag $TAG already exists; it will not be moved or reused"
+            exit 1
+          fi
+
+      - name: Capture exact-main workflow evidence
+        shell: bash
+        env:
+          COMMIT: ${{ inputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$COMMIT&per_page=100" \
+            > workflow-runs.json
+
+      - name: Require every configured exact-main gate
+        shell: bash
+        env:
+          COMMIT: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+        run: >-
+          python scripts/stable_tag_gate.py prepare
+          --repository .
+          --repository-name "$GITHUB_REPOSITORY"
+          --tag "$TAG"
+          --commit "$COMMIT"
+          --run-id "$GITHUB_RUN_ID"
+          --runs-json workflow-runs.json
+          --policy .github/stable-tag-policy.json
+          --evidence stable-tag-evidence.json
+
+      - name: Create the exact annotated tag locally
+        shell: bash
+        env:
+          COMMIT: ${{ inputs.source_sha }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          {
+            printf 'Release %s\n\n' "$version"
+            printf 'Stable-Tag-Gate: elevenid.stable-tag-preparation/v1\n'
+            printf 'Preparation-Run: %s\n' "$GITHUB_RUN_ID"
+            printf 'Source-SHA: %s\n' "$COMMIT"
+          } > tag-message.txt
+          git tag -a "$TAG" "$COMMIT" -F tag-message.txt
+          test "$(git cat-file -t "refs/tags/$TAG")" = tag
+          tag_object="$(git rev-parse "refs/tags/$TAG")"
+          peeled="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          python scripts/stable_tag_gate.py record-tag \
+            --evidence stable-tag-evidence.json \
+            --tag-object "$tag_object" \
+            --peeled-commit "$peeled"
+      - name: Upload immutable tag preparation evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stable-tag-evidence-${{ inputs.tag }}
+          path: stable-tag-evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish the exact tag and dispatch its release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git push origin "refs/tags/$TAG:refs/tags/$TAG"
+          for attempt in $(seq 1 5); do
+            if gh workflow run release.yml --ref "$TAG" -f "tag=$TAG"; then
+              exit 0
+            fi
+            echo "Release dispatch attempt $attempt failed" >&2
+            sleep 2
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?branch=$TAG&event=workflow_dispatch" \
+              > release-dispatch-runs.json
+            if jq -e --arg sha "$(git rev-parse "$TAG^{commit}")" \
+              '[.workflow_runs[] | select(.head_sha == $sha)] | length > 0' \
+              release-dispatch-runs.json >/dev/null; then
+              echo "The release dispatch was accepted despite the client error"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::The immutable tag exists but release dispatch failed; quarantine it"
+          exit 1

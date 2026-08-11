@@ -4,12 +4,19 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing prepared stable tag
+        required: true
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
 
 env:
@@ -20,14 +27,65 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      - name: Verify tag and workspace version
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+      - name: Verify successful exact-main tag preparation
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          TAG="$REQUESTED_TAG"
+          expected_workflow_ref="$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$TAG"
+          if [ "$WORKFLOW_REF" != "$expected_workflow_ref" ]; then
+            echo "::error::Run the release workflow from the exact prepared tag ref"
+            exit 1
+          fi
+          tag_type="$(git cat-file -t "refs/tags/$TAG")"
+          tag_object="$(git rev-parse "refs/tags/$TAG")"
+          commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          git for-each-ref --format='%(contents)' "refs/tags/$TAG" > tag-message.txt
+          run_id="$(sed -n 's/^Preparation-Run: //p' tag-message.txt)"
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          for _ in $(seq 1 36); do
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > preparation-run.json
+            status="$(jq -r .status preparation-run.json)"
+            conclusion="$(jq -r '.conclusion // ""' preparation-run.json)"
+            if [ "$status" = completed ]; then
+              test "$conclusion" = success
+              break
+            fi
+            sleep 5
+          done
+          test "$(jq -r .status preparation-run.json)" = completed
+          gh run download "$run_id" --name "stable-tag-evidence-$TAG" \
+            --dir prepared-tag-evidence
+          python scripts/stable_tag_gate.py validate-release \
+            --repository-name "$GITHUB_REPOSITORY" \
+            --tag "$TAG" \
+            --commit "$commit" \
+            --tag-type "$tag_type" \
+            --tag-object "$tag_object" \
+            --tag-message tag-message.txt \
+            --run-json preparation-run.json \
+            --evidence prepared-tag-evidence/stable-tag-evidence.json
+      - name: Verify tag and workspace version
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED_TAG#v}"
           workspace_version="$(awk '/^\[workspace.package\]/{found=1; next} found && /^version =/{gsub(/[\" ]/, "", $3); print $3; exit}' Cargo.toml)"
           test "$version" = "$workspace_version"
       - name: Test workspace
