@@ -37,7 +37,13 @@ pub mod disclosure;
 pub mod freshness;
 pub mod issuer;
 pub mod ranking;
+pub mod service;
 pub mod types;
+
+pub use service::{
+    canonical_credential_format, evaluate_service_policy, ServicePolicyError,
+    ServicePolicyEvaluationRequest,
+};
 
 pub use types::{
     CredentialRankingStrategy, FreshnessRequirements, HolderBindingMethod, PolicyComponent,

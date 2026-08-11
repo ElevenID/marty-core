@@ -726,10 +726,37 @@ fn evaluate_presentation_policy_impl(request_json: &str) -> Result<String, Strin
         .map_err(|error| format!("presentation policy result serialization failed: {error}"))
 }
 
+fn evaluate_service_presentation_policy_impl(request_json: &str) -> Result<String, String> {
+    if request_json.len() > 1_000_000 {
+        return Err("service presentation policy request exceeds 1000000 bytes".to_string());
+    }
+    let request: marty_verification::policy::ServicePolicyEvaluationRequest =
+        serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid service presentation policy request: {error}"))?;
+    let result = marty_verification::policy::evaluate_service_policy(request)
+        .map_err(|error| error.to_string())?;
+    serde_json::to_string(&result).map_err(|error| {
+        format!("service presentation policy result serialization failed: {error}")
+    })
+}
+
 /// Evaluate verified presentation facts with the canonical Rust policy engine.
 #[pyfunction]
 fn evaluate_presentation_policy(request_json: &str) -> PyResult<String> {
     evaluate_presentation_policy_impl(request_json).map_err(PyErr::new::<PolicyEvaluationError, _>)
+}
+
+/// Evaluate the complete presentation-policy service contract in Rust.
+#[pyfunction]
+fn evaluate_service_presentation_policy(request_json: &str) -> PyResult<String> {
+    evaluate_service_presentation_policy_impl(request_json)
+        .map_err(PyErr::new::<PolicyEvaluationError, _>)
+}
+
+/// Normalize a presentation credential format using the canonical Rust aliases.
+#[pyfunction]
+fn normalize_presentation_credential_format(value: &str) -> String {
+    marty_verification::policy::canonical_credential_format(value)
 }
 
 /// Return explicit native backend and capability diagnostics for readiness.
@@ -743,6 +770,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
         "capabilities": [
             "oidc_id_token_validation",
             "presentation_policy_evaluation",
+            "presentation_policy_service_evaluation",
             "oid4vci",
             "oid4vp",
             "document_verification",
@@ -1813,6 +1841,11 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_verify_compact_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oidc_validate_id_token, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_presentation_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_service_presentation_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        normalize_presentation_credential_format,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(native_backend_diagnostics, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;
@@ -2283,5 +2316,61 @@ mod tests {
         let error = evaluate_presentation_policy_impl(&request.to_string())
             .expect_err("unknown fields must fail closed");
         assert!(error.contains("unknown field"));
+    }
+
+    fn service_policy_request() -> serde_json::Value {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/vectors/presentation_policy_service.json"
+        ))
+        .expect("valid service policy golden vector");
+        fixture["request"].clone()
+    }
+
+    #[test]
+    fn service_policy_binding_returns_service_compatible_decision() {
+        let output =
+            evaluate_service_presentation_policy_impl(&service_policy_request().to_string())
+                .expect("valid service policy request");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("result JSON");
+
+        assert_eq!(result["result"], "passed");
+        assert_eq!(result["decision"], "allow");
+        assert_eq!(result["verified_claims"]["email"], "member@example.com");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/vectors/presentation_policy_service.json"
+        ))
+        .expect("valid service policy golden vector");
+        assert_eq!(
+            result["required_total"],
+            fixture["expected"]["required_total"]
+        );
+        assert_eq!(
+            result["required_satisfied"],
+            fixture["expected"]["required_satisfied"]
+        );
+        assert_eq!(result["errors"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn service_policy_binding_rejects_unknown_constraints() {
+        let mut request = service_policy_request();
+        request["policy"]["credential_requirements"][0]["requested_claims"][0]["constraints"][0]
+            ["constraint_type"] = serde_json::json!("unknown");
+
+        let error = evaluate_service_presentation_policy_impl(&request.to_string())
+            .expect_err("unknown constraints must fail closed");
+        assert!(error.contains("unknown variant"));
+    }
+
+    #[test]
+    fn presentation_format_normalization_uses_service_aliases() {
+        assert_eq!(
+            normalize_presentation_credential_format("w3c_vcdm_v2_sd_jwt"),
+            "SD_JWT_VC"
+        );
+        assert_eq!(
+            normalize_presentation_credential_format("JSON_LD"),
+            "W3C_VCDM_V2_DI"
+        );
     }
 }

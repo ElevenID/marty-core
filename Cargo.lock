@@ -3844,6 +3844,7 @@ dependencies = [
  "quick-xml",
  "rand 0.8.7",
  "rcgen",
+ "regex",
  "reqwest",
  "rsa",
  "serde",
