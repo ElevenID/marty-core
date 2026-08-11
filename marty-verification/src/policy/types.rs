@@ -123,7 +123,7 @@ pub struct PolicyEvaluationRequest {
 }
 
 /// Stable names for independently evaluated policy components.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyComponent {
     CredentialType,
@@ -152,9 +152,10 @@ pub struct PolicyComponentStatus {
 }
 
 /// Machine-readable failure codes shared by every language binding.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyErrorCode {
+    InvalidPolicy,
     CredentialTypeNotAccepted,
     ClaimRequirementNotSatisfied,
     IssuerNotAllowed,

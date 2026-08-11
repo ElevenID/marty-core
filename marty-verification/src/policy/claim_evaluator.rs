@@ -1,28 +1,33 @@
-//! Claim constraint evaluation logic.
+//! Compatibility API for claim constraint evaluation.
 
+use super::{
+    compat::{neutral_input, neutral_policy},
+    PolicyEvaluator,
+};
 use crate::policy::types::{PresentationPolicy, RequiredClaim};
 use std::collections::HashMap;
 
 /// Evaluates whether credentials satisfy required claim constraints.
 pub struct ClaimConstraintEvaluator {
-    required_claims: Vec<RequiredClaim>,
-    #[allow(dead_code)]
-    prefer_predicates: bool,
-    derived_preferences: HashMap<String, String>,
+    policy: PresentationPolicy,
 }
 
 impl ClaimConstraintEvaluator {
     pub fn new(policy: &PresentationPolicy) -> Self {
+        let mut compatibility_policy = neutral_policy();
+        compatibility_policy.required_claims = policy.required_claims.clone();
+        compatibility_policy.prefer_predicates = policy.prefer_predicates;
+        compatibility_policy.derived_attribute_preferences =
+            policy.derived_attribute_preferences.clone();
         Self {
-            required_claims: policy.required_claims.clone(),
-            prefer_predicates: policy.prefer_predicates,
-            derived_preferences: policy.derived_attribute_preferences.clone(),
+            policy: compatibility_policy,
         }
     }
 
     /// Check if provided claims satisfy policy requirements.
     pub fn evaluate(&self, claims: &HashMap<String, serde_json::Value>) -> ClaimEvaluationResult {
         let credential_types: Vec<String> = self
+            .policy
             .required_claims
             .iter()
             .map(|required| required.credential_type.clone())
@@ -36,48 +41,32 @@ impl ClaimConstraintEvaluator {
         claims: &HashMap<String, serde_json::Value>,
         credential_types: &[String],
     ) -> ClaimEvaluationResult {
+        let mut input = neutral_input();
+        input.claims = claims.clone();
+        input.credential_types = credential_types.to_vec();
+        let canonical = PolicyEvaluator::new(self.policy.clone()).evaluate(&input);
         let mut missing = Vec::new();
         let mut satisfied = Vec::new();
 
-        for required in &self.required_claims {
-            if !credential_types.contains(&required.credential_type) {
-                missing.push(format!(
-                    "{} (requires credential type {})",
-                    required.claim_name, required.credential_type
-                ));
-                continue;
-            }
-
-            // Check for derived attribute preference first
-            if required.accept_predicate && required.required_value.is_none() {
-                if let Some(derived_name) = self.derived_preferences.get(&required.claim_name) {
-                    if claims.contains_key(derived_name) {
-                        satisfied.push(derived_name.clone());
-                        continue;
-                    }
-                }
-            }
-
-            // Check for direct claim
-            if let Some(value) = claims.get(&required.claim_name) {
-                // If a specific value is required, check it matches
-                if let Some(ref required_value) = required.required_value {
-                    if value != required_value {
-                        missing.push(format!(
-                            "{} (expected {}, got {})",
-                            required.claim_name, required_value, value
-                        ));
-                        continue;
-                    }
-                }
-                satisfied.push(required.claim_name.clone());
+        for required in &self.policy.required_claims {
+            let mut single_policy = self.policy.clone();
+            single_policy.required_claims = vec![required.clone()];
+            let result = PolicyEvaluator::new(single_policy).evaluate(&input);
+            if result.is_satisfied {
+                satisfied.push(selected_claim_name(&self.policy, claims, required));
             } else {
-                missing.push(required.claim_name.clone());
+                missing.push(
+                    result
+                        .missing_claims
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| required.claim_name.clone()),
+                );
             }
         }
 
         ClaimEvaluationResult {
-            is_satisfied: missing.is_empty(),
+            is_satisfied: canonical.is_satisfied,
             missing_claims: missing,
             satisfied_claims: satisfied,
         }
@@ -89,7 +78,7 @@ impl ClaimConstraintEvaluator {
 
         for claim_name in available_claims {
             // If there's a derived preference, use that instead
-            if let Some(derived) = self.derived_preferences.get(claim_name) {
+            if let Some(derived) = self.policy.derived_attribute_preferences.get(claim_name) {
                 if available_claims.contains(&derived.to_string()) {
                     if !preferred.contains(derived) {
                         preferred.push(derived.clone());
@@ -106,6 +95,24 @@ impl ClaimConstraintEvaluator {
 
         preferred
     }
+}
+
+fn selected_claim_name(
+    policy: &PresentationPolicy,
+    claims: &HashMap<String, serde_json::Value>,
+    required: &RequiredClaim,
+) -> String {
+    if required.accept_predicate && required.required_value.is_none() {
+        if let Some(derived) = policy
+            .derived_attribute_preferences
+            .get(&required.claim_name)
+        {
+            if claims.contains_key(derived) {
+                return derived.clone();
+            }
+        }
+    }
+    required.claim_name.clone()
 }
 
 /// Result of claim constraint evaluation.

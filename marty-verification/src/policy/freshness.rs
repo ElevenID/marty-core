@@ -1,5 +1,9 @@
-//! Freshness constraint validation.
+//! Compatibility API for freshness constraint validation.
 
+use super::{
+    compat::{neutral_input, neutral_policy},
+    HolderBindingMethod, PolicyErrorCode, PolicyEvaluator,
+};
 use crate::policy::types::FreshnessRequirements;
 
 /// Checks credential and presentation freshness constraints.
@@ -20,22 +24,17 @@ impl FreshnessChecker {
         issued_at_epoch_seconds: u64,
         evaluation_time_epoch_seconds: u64,
     ) -> FreshnessCheckResult {
-        let Some(age_seconds) = evaluation_time_epoch_seconds.checked_sub(issued_at_epoch_seconds)
-        else {
-            return FreshnessCheckResult::InvalidFuture(
-                "Credential issuance time is after evaluation time".to_string(),
-            );
-        };
-        if let Some(max_age_seconds) = self.requirements.max_credential_age_seconds {
-            if age_seconds > max_age_seconds {
-                return FreshnessCheckResult::Stale(format!(
-                    "Credential is {} seconds old, maximum allowed is {}",
-                    age_seconds, max_age_seconds
-                ));
-            }
-        }
-
-        FreshnessCheckResult::Fresh
+        let mut policy = neutral_policy();
+        policy.freshness_requirements.max_credential_age_seconds =
+            self.requirements.max_credential_age_seconds;
+        let mut input = neutral_input();
+        input.issued_at_epoch_seconds = Some(issued_at_epoch_seconds);
+        input.evaluation_time_epoch_seconds = evaluation_time_epoch_seconds;
+        map_freshness_result(
+            PolicyEvaluator::new(policy).evaluate(&input),
+            PolicyErrorCode::CredentialTimestampFuture,
+            PolicyErrorCode::CredentialStale,
+        )
     }
 
     /// Validate presentation/proof time against max proof age.
@@ -44,25 +43,44 @@ impl FreshnessChecker {
         proof_epoch_seconds: u64,
         evaluation_time_epoch_seconds: u64,
     ) -> FreshnessCheckResult {
-        let Some(age_seconds) = evaluation_time_epoch_seconds.checked_sub(proof_epoch_seconds)
-        else {
-            return FreshnessCheckResult::InvalidFuture(
-                "Proof time is after evaluation time".to_string(),
-            );
-        };
-        if age_seconds > self.requirements.max_proof_age_seconds {
-            return FreshnessCheckResult::Stale(format!(
-                "Proof is {} seconds old, maximum allowed is {}",
-                age_seconds, self.requirements.max_proof_age_seconds
-            ));
-        }
-
-        FreshnessCheckResult::Fresh
+        let mut policy = neutral_policy();
+        policy.holder_binding = HolderBindingMethod::DeviceKey;
+        policy.freshness_requirements.max_proof_age_seconds =
+            self.requirements.max_proof_age_seconds;
+        let mut input = neutral_input();
+        input.proof_epoch_seconds = Some(proof_epoch_seconds);
+        input.evaluation_time_epoch_seconds = evaluation_time_epoch_seconds;
+        input.holder_binding_verified = true;
+        map_freshness_result(
+            PolicyEvaluator::new(policy).evaluate(&input),
+            PolicyErrorCode::ProofTimestampFuture,
+            PolicyErrorCode::ProofStale,
+        )
     }
 
     /// Check if live revocation check is required.
     pub fn requires_live_revocation_check(&self) -> bool {
         self.requirements.require_live_revocation_check
+    }
+}
+
+fn map_freshness_result(
+    result: super::PolicyEvaluationResult,
+    future_code: PolicyErrorCode,
+    stale_code: PolicyErrorCode,
+) -> FreshnessCheckResult {
+    if let Some(error) = result.errors.iter().find(|error| error.code == future_code) {
+        return FreshnessCheckResult::InvalidFuture(error.message.clone());
+    }
+    if let Some(error) = result.errors.iter().find(|error| error.code == stale_code) {
+        return FreshnessCheckResult::Stale(error.message.clone());
+    }
+    if result.is_satisfied {
+        FreshnessCheckResult::Fresh
+    } else {
+        FreshnessCheckResult::InvalidFuture(
+            "Freshness could not be evaluated by the canonical policy kernel".to_string(),
+        )
     }
 }
 

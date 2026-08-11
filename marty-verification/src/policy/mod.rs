@@ -1,38 +1,13 @@
-//! Presentation Policy module for evaluating credential presentation requirements.
+//! Presentation policy evaluation.
 //!
-//! This module provides policy-driven evaluation of verifiable credential presentations,
-//! supporting:
-//! - Claim constraint evaluation (required claims, predicates)
-//! - Issuer constraint checking (allowlist, trust profile)
-//! - Freshness validation (credential age, revocation)
-//! - Minimum disclosure resolution (data minimization)
-//! - Credential ranking (multi-credential scenarios)
-//!
-//! # Architecture
-//!
-//! The policy module mirrors the Python domain model but is implemented in Rust for:
-//! - Performance-critical offline verification (marty-verifier)
-//! - Mobile wallet policy evaluation (marty-authenticator via Flutter FFI)
-//! - Consistent enforcement across all platforms
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use marty_verification::policy::{PresentationPolicy, PolicyEvaluator};
-//!
-//! // Load policy from sync endpoint
-//! let policy: PresentationPolicy = serde_json::from_str(&policy_json)?;
-//!
-//! // Evaluate presentation request
-//! let evaluator = PolicyEvaluator::new(&policy);
-//! let result = evaluator.evaluate(&credential, &request)?;
-//!
-//! if result.is_satisfied {
-//!     // Proceed with presentation
-//! }
-//! ```
+//! `service` is the single canonical decision kernel. The older
+//! [`PresentationPolicy`] API is retained as a compatibility model and is
+//! projected through the same kernel by [`PolicyEvaluator`]. Disclosure and
+//! ranking modules are deterministic helpers; they do not make allow/deny
+//! decisions.
 
 pub mod claim_evaluator;
+mod compat;
 pub mod disclosure;
 pub mod freshness;
 pub mod issuer;
@@ -40,11 +15,11 @@ pub mod ranking;
 pub mod service;
 pub mod types;
 
+pub use compat::PolicyEvaluator;
 pub use service::{
     canonical_credential_format, evaluate_service_policy, ServicePolicyError,
     ServicePolicyEvaluationRequest,
 };
-
 pub use types::{
     CredentialRankingStrategy, FreshnessRequirements, HolderBindingMethod, PolicyComponent,
     PolicyComponentStatus, PolicyComponentStatusValue, PolicyErrorCode, PolicyEvaluationError,
@@ -57,312 +32,6 @@ pub use disclosure::MinimumDisclosureResolver;
 pub use freshness::FreshnessChecker;
 pub use issuer::IssuerConstraintChecker;
 pub use ranking::CredentialRanker;
-
-/// Policy evaluator that orchestrates all constraint checks.
-pub struct PolicyEvaluator {
-    policy: PresentationPolicy,
-    claim_evaluator: ClaimConstraintEvaluator,
-    freshness_checker: FreshnessChecker,
-    issuer_checker: IssuerConstraintChecker,
-    disclosure_resolver: MinimumDisclosureResolver,
-}
-
-impl PolicyEvaluator {
-    /// Create a new policy evaluator.
-    pub fn new(policy: PresentationPolicy) -> Self {
-        Self {
-            claim_evaluator: ClaimConstraintEvaluator::new(&policy),
-            freshness_checker: FreshnessChecker::new(&policy.freshness_requirements),
-            issuer_checker: IssuerConstraintChecker::new(
-                policy.trust_profile_id.as_ref(),
-                &policy.allowed_issuers,
-            ),
-            disclosure_resolver: MinimumDisclosureResolver::new(&policy),
-            policy,
-        }
-    }
-
-    /// Evaluate verified presentation facts against this policy.
-    pub fn evaluate(&self, input: &PolicyEvaluationInput) -> PolicyEvaluationResult {
-        let mut statuses = Vec::new();
-        let mut errors = Vec::new();
-        let mut missing_claims = Vec::new();
-        let mut issuer_violations = Vec::new();
-        let mut freshness_violations = Vec::new();
-
-        let credential_type_status = if self.policy.accepted_credential_types.is_empty() {
-            PolicyComponentStatusValue::NotApplicable
-        } else if input.credential_types.iter().any(|credential_type| {
-            self.policy
-                .accepted_credential_types
-                .contains(credential_type)
-        }) {
-            PolicyComponentStatusValue::Passed
-        } else {
-            errors.push(PolicyEvaluationError {
-                code: PolicyErrorCode::CredentialTypeNotAccepted,
-                component: PolicyComponent::CredentialType,
-                message: "Presented credential type is not accepted by the policy".to_string(),
-            });
-            PolicyComponentStatusValue::Failed
-        };
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::CredentialType,
-            status: credential_type_status,
-        });
-
-        let claim_result = self
-            .claim_evaluator
-            .evaluate_for_credential_types(&input.claims, &input.credential_types);
-        missing_claims.extend(claim_result.missing_claims.clone());
-        for message in &claim_result.missing_claims {
-            errors.push(PolicyEvaluationError {
-                code: PolicyErrorCode::ClaimRequirementNotSatisfied,
-                component: PolicyComponent::Claims,
-                message: format!("Claim requirement not satisfied: {message}"),
-            });
-        }
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::Claims,
-            status: if claim_result.is_satisfied {
-                PolicyComponentStatusValue::Passed
-            } else {
-                PolicyComponentStatusValue::Failed
-            },
-        });
-
-        let issuer_result = self
-            .issuer_checker
-            .check_issuer(&input.issuer_id, input.trust_profile_verified);
-        let issuer_status = match issuer_result {
-            issuer::IssuerCheckResult::Trusted if self.issuer_checker.has_constraints() => {
-                PolicyComponentStatusValue::Passed
-            }
-            issuer::IssuerCheckResult::Trusted => PolicyComponentStatusValue::NotApplicable,
-            issuer::IssuerCheckResult::NotAllowed(message) => {
-                issuer_violations.push(message.clone());
-                errors.push(PolicyEvaluationError {
-                    code: PolicyErrorCode::IssuerNotAllowed,
-                    component: PolicyComponent::Issuer,
-                    message,
-                });
-                PolicyComponentStatusValue::Failed
-            }
-            issuer::IssuerCheckResult::NotTrusted(message) => {
-                issuer_violations.push(message.clone());
-                errors.push(PolicyEvaluationError {
-                    code: PolicyErrorCode::IssuerNotTrusted,
-                    component: PolicyComponent::Issuer,
-                    message,
-                });
-                PolicyComponentStatusValue::Failed
-            }
-        };
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::Issuer,
-            status: issuer_status,
-        });
-
-        let holder_binding_status = if self.policy.holder_binding == HolderBindingMethod::None {
-            PolicyComponentStatusValue::NotApplicable
-        } else if input.holder_binding_verified {
-            PolicyComponentStatusValue::Passed
-        } else {
-            errors.push(PolicyEvaluationError {
-                code: PolicyErrorCode::HolderBindingRequired,
-                component: PolicyComponent::HolderBinding,
-                message: format!(
-                    "Required {:?} holder binding was not verified",
-                    self.policy.holder_binding
-                ),
-            });
-            PolicyComponentStatusValue::Failed
-        };
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::HolderBinding,
-            status: holder_binding_status,
-        });
-
-        let credential_freshness_status = match input.issued_at_epoch_seconds {
-            Some(issued_at) => match self
-                .freshness_checker
-                .check_credential_age(issued_at, input.evaluation_time_epoch_seconds)
-            {
-                freshness::FreshnessCheckResult::Fresh => {
-                    if self
-                        .policy
-                        .freshness_requirements
-                        .max_credential_age_seconds
-                        .is_some()
-                    {
-                        PolicyComponentStatusValue::Passed
-                    } else {
-                        PolicyComponentStatusValue::NotApplicable
-                    }
-                }
-                freshness::FreshnessCheckResult::Stale(message) => {
-                    freshness_violations.push(message.clone());
-                    errors.push(PolicyEvaluationError {
-                        code: PolicyErrorCode::CredentialStale,
-                        component: PolicyComponent::CredentialFreshness,
-                        message,
-                    });
-                    PolicyComponentStatusValue::Failed
-                }
-                freshness::FreshnessCheckResult::InvalidFuture(message) => {
-                    freshness_violations.push(message.clone());
-                    errors.push(PolicyEvaluationError {
-                        code: PolicyErrorCode::CredentialTimestampFuture,
-                        component: PolicyComponent::CredentialFreshness,
-                        message,
-                    });
-                    PolicyComponentStatusValue::Failed
-                }
-            },
-            None if self
-                .policy
-                .freshness_requirements
-                .max_credential_age_seconds
-                .is_some() =>
-            {
-                let message = "Credential issuance time is required by the policy".to_string();
-                freshness_violations.push(message.clone());
-                errors.push(PolicyEvaluationError {
-                    code: PolicyErrorCode::CredentialTimestampMissing,
-                    component: PolicyComponent::CredentialFreshness,
-                    message,
-                });
-                PolicyComponentStatusValue::Failed
-            }
-            None => PolicyComponentStatusValue::NotApplicable,
-        };
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::CredentialFreshness,
-            status: credential_freshness_status,
-        });
-
-        let proof_freshness_status = if self.policy.holder_binding == HolderBindingMethod::None {
-            PolicyComponentStatusValue::NotApplicable
-        } else {
-            match input.proof_epoch_seconds {
-                Some(proof_time) => match self
-                    .freshness_checker
-                    .check_proof_age(proof_time, input.evaluation_time_epoch_seconds)
-                {
-                    freshness::FreshnessCheckResult::Fresh => PolicyComponentStatusValue::Passed,
-                    freshness::FreshnessCheckResult::Stale(message) => {
-                        freshness_violations.push(message.clone());
-                        errors.push(PolicyEvaluationError {
-                            code: PolicyErrorCode::ProofStale,
-                            component: PolicyComponent::ProofFreshness,
-                            message,
-                        });
-                        PolicyComponentStatusValue::Failed
-                    }
-                    freshness::FreshnessCheckResult::InvalidFuture(message) => {
-                        freshness_violations.push(message.clone());
-                        errors.push(PolicyEvaluationError {
-                            code: PolicyErrorCode::ProofTimestampFuture,
-                            component: PolicyComponent::ProofFreshness,
-                            message,
-                        });
-                        PolicyComponentStatusValue::Failed
-                    }
-                },
-                None => {
-                    let message =
-                        "Proof time is required for holder-bound presentations".to_string();
-                    freshness_violations.push(message.clone());
-                    errors.push(PolicyEvaluationError {
-                        code: PolicyErrorCode::ProofTimestampMissing,
-                        component: PolicyComponent::ProofFreshness,
-                        message,
-                    });
-                    PolicyComponentStatusValue::Failed
-                }
-            }
-        };
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::ProofFreshness,
-            status: proof_freshness_status,
-        });
-
-        let revocation_status = if input.not_revoked == Some(false) {
-            errors.push(PolicyEvaluationError {
-                code: PolicyErrorCode::CredentialRevoked,
-                component: PolicyComponent::Revocation,
-                message: "Credential is revoked".to_string(),
-            });
-            PolicyComponentStatusValue::Failed
-        } else if self.freshness_checker.requires_live_revocation_check()
-            && !input.revocation_checked
-        {
-            errors.push(PolicyEvaluationError {
-                code: PolicyErrorCode::RevocationCheckRequired,
-                component: PolicyComponent::Revocation,
-                message: "A live revocation check is required by the policy".to_string(),
-            });
-            PolicyComponentStatusValue::Failed
-        } else if self.freshness_checker.requires_live_revocation_check()
-            && input.not_revoked.is_none()
-        {
-            errors.push(PolicyEvaluationError {
-                code: PolicyErrorCode::RevocationStatusUnknown,
-                component: PolicyComponent::Revocation,
-                message: "Revocation status is unknown".to_string(),
-            });
-            PolicyComponentStatusValue::Failed
-        } else if input.not_revoked == Some(true) {
-            PolicyComponentStatusValue::Passed
-        } else {
-            PolicyComponentStatusValue::NotApplicable
-        };
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::Revocation,
-            status: revocation_status,
-        });
-
-        let presentation_count_status = if !self.policy.single_presentation {
-            PolicyComponentStatusValue::NotApplicable
-        } else if input.presentation_count == 1 {
-            PolicyComponentStatusValue::Passed
-        } else {
-            errors.push(PolicyEvaluationError {
-                code: PolicyErrorCode::SinglePresentationRequired,
-                component: PolicyComponent::PresentationCount,
-                message: format!(
-                    "Policy requires exactly one presentation, received {}",
-                    input.presentation_count
-                ),
-            });
-            PolicyComponentStatusValue::Failed
-        };
-        statuses.push(PolicyComponentStatus {
-            component: PolicyComponent::PresentationCount,
-            status: presentation_count_status,
-        });
-
-        let mut available_claims: Vec<String> = input.claims.keys().cloned().collect();
-        available_claims.sort();
-        let disclosure = self.disclosure_resolver.resolve(&available_claims);
-        let is_satisfied = errors.is_empty();
-
-        PolicyEvaluationResult {
-            is_satisfied,
-            component_statuses: statuses,
-            errors,
-            warnings: Vec::new(),
-            missing_claims,
-            issuer_violations,
-            freshness_violations,
-            minimum_disclosure_set: if is_satisfied {
-                disclosure.claims
-            } else {
-                Vec::new()
-            },
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -422,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluates_all_components_and_resolves_minimum_disclosure() {
+    fn compatibility_api_uses_canonical_kernel_and_resolves_disclosure() {
         let result = PolicyEvaluator::new(policy()).evaluate(&valid_input());
 
         assert!(result.is_satisfied);
@@ -436,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn fails_closed_for_missing_and_invalid_evidence() {
+    fn compatibility_api_fails_closed_for_missing_and_invalid_evidence() {
         let mut input = valid_input();
         input.credential_types = vec!["UnknownCredential".to_string()];
         input.trust_profile_verified = false;
@@ -462,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn known_revocation_rejects_even_without_live_check_requirement() {
+    fn known_revocation_rejects_without_live_check_requirement() {
         let mut policy = policy();
         policy.freshness_requirements.require_live_revocation_check = false;
         let mut input = valid_input();
