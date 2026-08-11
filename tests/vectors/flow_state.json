@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0.0",
+  "transition_cases": [
+    {
+      "name": "enter wallet wait",
+      "request": {
+        "current": "in_progress",
+        "target": "awaiting_wallet",
+        "actor": "wallet",
+        "event": null
+      },
+      "expected": {
+        "prior_state": "in_progress",
+        "new_state": "awaiting_wallet",
+        "terminal": false,
+        "no_op": false,
+        "actor": "wallet",
+        "event": "in_progress_to_awaiting_wallet"
+      }
+    },
+    {
+      "name": "terminal same-state no-op",
+      "request": {
+        "current": "expired",
+        "target": "expired"
+      },
+      "expected": {
+        "prior_state": "expired",
+        "new_state": "expired",
+        "terminal": true,
+        "no_op": true,
+        "actor": null,
+        "event": "expired_to_expired"
+      }
+    }
+  ],
+  "invalid_transitions": [
+    {
+      "current": "completed",
+      "target": "in_progress"
+    },
+    {
+      "current": "created",
+      "target": "completed"
+    }
+  ],
+  "graph": {
+    "entry_step_id": "start",
+    "steps": [
+      { "step_id": "start" },
+      { "step_id": "approve" },
+      { "step_id": "end" }
+    ],
+    "transitions": [
+      {
+        "from_step_id": "start",
+        "to_step_id": "approve",
+        "outcome": "success"
+      },
+      {
+        "from_step_id": "approve",
+        "to_step_id": "end",
+        "outcome": "approval_granted"
+      }
+    ]
+  }
+}
