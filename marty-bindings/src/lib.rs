@@ -2319,76 +2319,11 @@ mod tests {
     }
 
     fn service_policy_request() -> serde_json::Value {
-        serde_json::json!({
-            "policy": {
-                "id": "policy-1",
-                "name": "Member login",
-                "organization_id": "org-1",
-                "credential_requirements": [{
-                    "id": "requirement-1",
-                    "credential_template_id": "member",
-                    "required": true,
-                    "credential_payload_format": "sd_jwt_vc",
-                    "requested_claims": [{
-                        "claim_name": "email",
-                        "required": true,
-                        "selective_disclosure": true,
-                        "accept_derived": false,
-                        "predicate_spec": null,
-                        "constraints": [{
-                            "claim_name": "email",
-                            "constraint_type": "presence",
-                            "value": null
-                        }]
-                    }],
-                    "trust_profile_id": "trust-1",
-                    "max_age_seconds": 3600,
-                    "require_fresh_issuance": false
-                }],
-                "alternative_requirements": [],
-                "trust_profile_id": null,
-                "holder_binding": {
-                    "required": false,
-                    "binding_methods": [],
-                    "proof_profiles": [],
-                    "challenge_required": false,
-                    "audience_binding_required": false,
-                    "replay_detection_required": false,
-                    "max_proof_age_seconds": null
-                },
-                "freshness": {
-                    "max_age_seconds": null,
-                    "require_not_revoked": true,
-                    "revocation_grace_seconds": 300
-                },
-                "issuer_constraints": null
-            },
-            "credentials": [{
-                "credential_id": "credential-1",
-                "credential_template_ids": ["member"],
-                "credential_format": "sd-jwt",
-                "claims": {"email": "member@example.com"},
-                "issuer_id": "did:example:issuer",
-                "signature_verified": true,
-                "trust_profile_verified": true,
-                "trust_level": 80,
-                "compliance_statuses": [],
-                "accreditations": [],
-                "issued_at_epoch_seconds": 900,
-                "revocation_checked_at_epoch_seconds": 990,
-                "not_revoked": true,
-                "warnings": []
-            }],
-            "evaluation_time_epoch_seconds": 1000,
-            "holder_binding_verified": false,
-            "holder_binding_method": null,
-            "proof_profile": null,
-            "challenge_verified": false,
-            "audience_verified": false,
-            "replay_check_verified": false,
-            "proof_epoch_seconds": null,
-            "external_authorization": null
-        })
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/vectors/presentation_policy_service.json"
+        ))
+        .expect("valid service policy golden vector");
+        fixture["request"].clone()
     }
 
     #[test]
@@ -2401,6 +2336,19 @@ mod tests {
         assert_eq!(result["result"], "passed");
         assert_eq!(result["decision"], "allow");
         assert_eq!(result["verified_claims"]["email"], "member@example.com");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/vectors/presentation_policy_service.json"
+        ))
+        .expect("valid service policy golden vector");
+        assert_eq!(
+            result["required_total"],
+            fixture["expected"]["required_total"]
+        );
+        assert_eq!(
+            result["required_satisfied"],
+            fixture["expected"]["required_satisfied"]
+        );
+        assert_eq!(result["errors"], serde_json::json!([]));
     }
 
     #[test]

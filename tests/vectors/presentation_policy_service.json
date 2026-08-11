@@ -1,0 +1,107 @@
+{
+  "schema": "marty.presentation-policy-service-vector/v1",
+  "format_vectors": [
+    {"input": "sd_jwt_vc", "expected": "SD_JWT_VC"},
+    {"input": "dc+sd-jwt", "expected": "SD_JWT_VC"},
+    {"input": "JSON_LD", "expected": "W3C_VCDM_V2_DI"},
+    {"input": "ldp_vc", "expected": "W3C_VCDM_V2_DI"},
+    {"input": "w3c_vcdm_v2_jwt_vc", "expected": "VC_JWT"},
+    {"input": "jwt_vc_json", "expected": "VC_JWT"},
+    {"input": "mso_mdoc", "expected": "MDOC"},
+    {"input": "openbadge-v3", "expected": "OPENBADGE_V3"}
+  ],
+  "request": {
+    "policy": {
+      "id": "policy-1",
+      "name": "Member login",
+      "organization_id": "org-1",
+      "credential_requirements": [
+        {
+          "id": "requirement-1",
+          "credential_template_id": "member",
+          "required": true,
+          "credential_payload_format": "sd_jwt_vc",
+          "requested_claims": [
+            {
+              "claim_name": "email",
+              "required": true,
+              "selective_disclosure": true,
+              "accept_derived": false,
+              "predicate_spec": null,
+              "constraints": [
+                {
+                  "claim_name": "email",
+                  "constraint_type": "presence",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          "trust_profile_id": "trust-1",
+          "max_age_seconds": 3600,
+          "require_fresh_issuance": false
+        }
+      ],
+      "alternative_requirements": [],
+      "trust_profile_id": null,
+      "holder_binding": {
+        "required": false,
+        "binding_methods": [],
+        "proof_profiles": [],
+        "challenge_required": false,
+        "audience_binding_required": false,
+        "replay_detection_required": false,
+        "max_proof_age_seconds": null
+      },
+      "freshness": {
+        "max_age_seconds": null,
+        "require_not_revoked": true,
+        "revocation_grace_seconds": 300
+      },
+      "issuer_constraints": null
+    },
+    "credentials": [
+      {
+        "credential_id": "credential-1",
+        "credential_template_ids": ["member"],
+        "credential_format": "sd-jwt",
+        "claims": {"email": "member@example.com"},
+        "issuer_id": "did:example:issuer",
+        "signature_verified": true,
+        "signature_failure_reason": null,
+        "trust_profile_verified": true,
+        "trust_failure_reason": null,
+        "trust_level": 80,
+        "compliance_statuses": [],
+        "accreditations": [],
+        "issued_at_epoch_seconds": 900,
+        "revocation_checked_at_epoch_seconds": 990,
+        "not_revoked": true,
+        "credential_status": "active",
+        "warnings": []
+      }
+    ],
+    "evaluation_time_epoch_seconds": 1000,
+    "holder_binding_verified": false,
+    "holder_binding_method": null,
+    "proof_profile": null,
+    "challenge_verified": false,
+    "audience_verified": false,
+    "replay_check_verified": false,
+    "proof_epoch_seconds": null,
+    "external_authorization": {
+      "evaluated": true,
+      "allowed": true,
+      "reasons": ["golden-vector"],
+      "errors": []
+    }
+  },
+  "expected": {
+    "result": "passed",
+    "decision": "allow",
+    "required_total": 1,
+    "required_satisfied": 1,
+    "verified_claims": {"email": "member@example.com"},
+    "error_codes": []
+  }
+}
