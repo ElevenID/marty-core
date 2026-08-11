@@ -178,6 +178,12 @@ pub const DTC_NOT_YET_VALID: &str = "E808";
 /// E809: DTC has been revoked.
 pub const DTC_REVOKED: &str = "E809";
 
+/// E810: No authenticated current DTC lifecycle status evidence was available.
+pub const DTC_REVOCATION_STATUS_UNAVAILABLE: &str = "E810";
+
+/// E811: Current DTC lifecycle status evidence was stale, malformed, or mismatched.
+pub const DTC_REVOCATION_STATUS_INVALID: &str = "E811";
+
 //=========================================================================
 // Open Badges additional errors (7xx continued)
 //=========================================================================
@@ -359,6 +365,8 @@ pub fn error_codes_markdown() -> String {
     md.push_str("| E807 | `DTC_EXPIRED` | DTC has expired |\n");
     md.push_str("| E808 | `DTC_NOT_YET_VALID` | DTC is not yet valid |\n");
     md.push_str("| E809 | `DTC_REVOKED` | DTC has been revoked |\n");
+    md.push_str("| E810 | `DTC_REVOCATION_STATUS_UNAVAILABLE` | Authenticated current DTC lifecycle status evidence is unavailable |\n");
+    md.push_str("| E811 | `DTC_REVOCATION_STATUS_INVALID` | Current DTC lifecycle status evidence is stale, malformed, or mismatched |\n");
     md.push('\n');
 
     md.push_str("## General Errors (E9xx)\n\n");

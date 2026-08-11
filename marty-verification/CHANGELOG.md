@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Distinguish a DTC's signed issuance-time `is_revoked` claim from current
+  lifecycle status. Missing or unusable live evidence is explicit and no longer
+  reported as passed; only fresh, exactly bound status from a governed,
+  provenance-bearing orchestrator context can establish current-good status.
+
 ## [0.1.40] - 2026-08-10
 
 ### Added
