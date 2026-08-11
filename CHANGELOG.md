@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.44] - 2026-08-10
+
+### Security
+
+- Stop treating a DTC's issuance-time `is_revoked: false` claim as current
+  lifecycle evidence. Current-good status now requires fresh, exactly bound,
+  provenance-bearing evidence supplied through a governed orchestrator context.
+- Preserve declared or authenticated revocation as fail-closed while keeping
+  cryptographic validity separate from unavailable, stale, malformed, or
+  mismatched lifecycle evidence.
+- Add explicit passed, failed, not-performed, and error outcomes to DTC checks,
+  with stable diagnostics for unavailable and unusable current-status evidence.
+
 ## [0.1.43] - 2026-08-10
 
 ### Added
