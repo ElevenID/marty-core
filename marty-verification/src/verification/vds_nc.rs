@@ -9,8 +9,8 @@
 //!
 //! - **header**: `DC03` version prefix followed by a 3-letter ISO-3166 country code,
 //!   e.g. `DC03AUS`.
-//! - **payload_json**: Canonicalized (BTreeMap-ordered) JSON object containing the
-//!   document claims including a mandatory `"typ"` field.
+//! - **payload_json**: Canonicalized profile JSON containing the document claims
+//!   and signed `_vds` signer/algorithm metadata.
 //! - **signature_b64**: Standard (RFC 4648) base64-encoded raw signature over the
 //!   UTF-8 bytes of `header~payload_json`.
 //!
@@ -20,12 +20,20 @@
 //! |-------|----------|------|
 //! | `ES256` | EC P-256 | SHA-256 |
 //! | `ES384` | EC P-384 | SHA-384 |
+//! | `PS256` | RSA-PSS  | SHA-256 |
+//! | `PS384` | RSA-PSS  | SHA-384 |
+//! | `PS512` | RSA-PSS  | SHA-512 |
 //! | `EdDSA` | Ed25519  | —      |
 //!
 //! Public keys are accepted as DER-encoded SubjectPublicKeyInfo bytes or as
 //! a JSON Web Key (`Jwk`).
 
 use base64::Engine;
+use chrono::NaiveDate;
+use marty_oid4vci::formats::vds_nc_profile::{
+    parse_barcode, recommended_error_correction, select_barcode_format, validate_fields,
+    validate_temporal, ParsedVdsNc,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{VerificationError, VerificationResult};
@@ -80,60 +88,6 @@ pub enum SignatureVerificationStatus {
 // Internal parsing helper
 // ============================================================================
 
-struct ParsedBarcode<'a> {
-    header: &'a str,
-    payload_json: &'a str,
-    signature_b64: &'a str,
-    signing_input: String,
-    country: String,
-}
-
-fn parse_barcode(barcode: &str) -> Result<ParsedBarcode<'_>, String> {
-    let parts: Vec<&str> = barcode.splitn(3, '~').collect();
-    if parts.len() != 3 {
-        return Err(format!(
-            "expected 3 tilde-separated segments, got {}",
-            parts.len()
-        ));
-    }
-
-    let header = parts[0];
-    let payload_json = parts[1];
-    let signature_b64 = parts[2];
-
-    // Validate header format: at least 7 chars, starts with "DC0" + version digit + 3-letter country
-    if header.len() < 7 {
-        return Err(format!(
-            "header segment too short ({}), expected at least 7 chars (e.g. DC03AUS)",
-            header.len()
-        ));
-    }
-    if !header.starts_with("DC0") {
-        return Err(format!(
-            "header must start with 'DC0', got '{}'",
-            &header[..header.len().min(4)]
-        ));
-    }
-    let country_part = &header[4..];
-    if country_part.len() < 3 || !country_part[..3].chars().all(|c| c.is_ascii_alphabetic()) {
-        return Err(format!(
-            "header country code must be 3 ASCII letters, got '{}'",
-            country_part
-        ));
-    }
-    let country = country_part[..3].to_ascii_uppercase();
-
-    let signing_input = format!("{}~{}", header, payload_json);
-
-    Ok(ParsedBarcode {
-        header,
-        payload_json,
-        signature_b64,
-        signing_input,
-        country,
-    })
-}
-
 // ============================================================================
 // Public API: verify with JWK
 // ============================================================================
@@ -141,8 +95,8 @@ fn parse_barcode(barcode: &str) -> Result<ParsedBarcode<'_>, String> {
 /// Verify a VDS-NC barcode string against a JSON Web Key.
 ///
 /// The `issuer_jwk` public key is used to verify the signature over the
-/// `header~payload_json` signing input.  The `alg` field of the JWK (or the
-/// `algorithm` hint when absent) is used to select the verification algorithm.
+/// `header~payload_json` signing input. Signed `_vds.algorithm` metadata selects
+/// the algorithm; a conflicting JWK `alg` value is rejected.
 ///
 /// # Arguments
 ///
@@ -166,27 +120,19 @@ pub fn verify_vds_nc(barcode: &str, issuer_jwk: &Jwk) -> VdsNcVerificationResult
     };
 
     result.country = Some(parsed.country.clone());
-    result.header = Some(parsed.header.to_string());
+    result.header = Some(parsed.header.clone());
 
     // --- 2. Parse payload --------------------------------------------------
-    match serde_json::from_str::<serde_json::Value>(parsed.payload_json) {
-        Ok(v) => result.payload = Some(v),
-        Err(e) => {
-            result
-                .errors
-                .push(format!("VDS-NC payload JSON parse error: {}", e));
-            return result;
-        }
-    }
+    result.payload = Some(parsed.payload.clone());
 
     // --- 3. Decode signature -----------------------------------------------
     let signature_bytes = match base64::engine::general_purpose::STANDARD
-        .decode(parsed.signature_b64)
+        .decode(&parsed.signature_b64)
     {
         Ok(b) => b,
         Err(_) => {
             // Try URL-safe base64 as a fallback (some encoders omit padding)
-            match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parsed.signature_b64) {
+            match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&parsed.signature_b64) {
                 Ok(b) => b,
                 Err(e) => {
                     result
@@ -200,10 +146,19 @@ pub fn verify_vds_nc(barcode: &str, issuer_jwk: &Jwk) -> VdsNcVerificationResult
     };
 
     // --- 4. Derive public key bytes from JWK and verify --------------------
-    let alg = issuer_jwk
+    let alg = parsed.metadata.algorithm.as_str();
+    if issuer_jwk
         .alg
         .as_deref()
-        .unwrap_or_else(|| default_alg_for_jwk(issuer_jwk));
+        .is_some_and(|key_algorithm| key_algorithm != alg)
+    {
+        result.signature_status = SignatureVerificationStatus::Invalid;
+        result.errors.push(format!(
+            "VDS-NC signed algorithm {alg} does not match JWK algorithm {}",
+            issuer_jwk.alg.as_deref().unwrap_or_default()
+        ));
+        return result;
+    }
 
     let verify_ok = verify_signing_input(
         alg,
@@ -248,20 +203,177 @@ pub fn verify_vds_nc_jwk_json(
     Ok(verify_vds_nc(barcode, &jwk))
 }
 
+/// Complete canonical VDS-NC profile result used by service adapters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VdsNcProfileVerificationResult {
+    pub is_valid: bool,
+    pub canonicalization_ok: bool,
+    pub signature_valid: bool,
+    pub field_consistency_valid: bool,
+    pub temporal_validity_ok: bool,
+    pub document_type: String,
+    pub issuing_country: String,
+    pub signer_id: String,
+    pub certificate_reference: Option<String>,
+    pub algorithm: String,
+    pub payload: serde_json::Value,
+    pub barcode_format: String,
+    pub error_correction: String,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Parse and validate a canonical VDS-NC profile envelope without asserting
+/// authenticity. Callers may use the returned signer metadata to select a key,
+/// but must still call a verification function before accepting the document.
+pub fn inspect_vds_nc(barcode: &str) -> VerificationResult<ParsedVdsNc> {
+    parse_barcode(barcode).map_err(|error| VerificationError::vds_nc_invalid(error.to_string()))
+}
+
+/// Verify a VDS-NC barcode with a DER SubjectPublicKeyInfo public key.
+///
+/// The signed profile metadata selects the algorithm; unsupported algorithms
+/// fail closed. This is the canonical path for PEM-backed Python adapters after
+/// PEM decoding has occurred in Rust.
+pub fn verify_vds_nc_public_key_der(
+    barcode: &str,
+    public_key_der: &[u8],
+) -> VdsNcVerificationResult {
+    let mut result = VdsNcVerificationResult::default();
+    let parsed = match parse_barcode(barcode) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            result.errors.push(error.to_string());
+            return result;
+        }
+    };
+    result.country = Some(parsed.country.clone());
+    result.header = Some(parsed.header.clone());
+    result.payload = Some(parsed.payload.clone());
+    let signature = match decode_signature(&parsed.signature_b64) {
+        Ok(signature) => signature,
+        Err(error) => {
+            result.signature_status = SignatureVerificationStatus::Invalid;
+            result.errors.push(error);
+            return result;
+        }
+    };
+    let verified = match parsed.metadata.algorithm.as_str() {
+        "ES256" => marty_crypto::ecdsa::verify_p256_sha256(
+            public_key_der,
+            parsed.signing_input.as_bytes(),
+            &signature,
+        )
+        .map_err(|error| error.to_string()),
+        "ES384" => marty_crypto::ecdsa::verify_p384_sha384(
+            public_key_der,
+            parsed.signing_input.as_bytes(),
+            &signature,
+        )
+        .map_err(|error| error.to_string()),
+        "EdDSA" => marty_crypto::ed25519::parse_public_key_der(public_key_der)
+            .and_then(|key| key.verify(parsed.signing_input.as_bytes(), &signature))
+            .map(|()| true)
+            .map_err(|error| error.to_string()),
+        "PS256" => marty_crypto::rsa::verify_pss_sha256(
+            public_key_der,
+            parsed.signing_input.as_bytes(),
+            &signature,
+        )
+        .map_err(|error| error.to_string()),
+        "PS384" => marty_crypto::rsa::verify_pss_sha384(
+            public_key_der,
+            parsed.signing_input.as_bytes(),
+            &signature,
+        )
+        .map_err(|error| error.to_string()),
+        "PS512" => marty_crypto::rsa::verify_pss_sha512(
+            public_key_der,
+            parsed.signing_input.as_bytes(),
+            &signature,
+        )
+        .map_err(|error| error.to_string()),
+        algorithm => Err(format!("unsupported VDS-NC algorithm: {algorithm}")),
+    };
+    match verified {
+        Ok(true) => {
+            result.verified = true;
+            result.signature_status = SignatureVerificationStatus::Valid;
+        }
+        Ok(false) => {
+            result.signature_status = SignatureVerificationStatus::Invalid;
+            result
+                .errors
+                .push("VDS-NC signature verification failed".to_owned());
+        }
+        Err(error) => {
+            result.signature_status = SignatureVerificationStatus::Invalid;
+            result.errors.push(error);
+        }
+    }
+    result
+}
+
+/// Run canonical profile, signature, printed-field, and temporal checks using a
+/// PEM public key. The caller supplies the evaluation date explicitly so test,
+/// replay, and audit results are deterministic.
+pub fn verify_vds_nc_profile_pem(
+    barcode: &str,
+    public_key_pem: &str,
+    printed_values: Option<&serde_json::Value>,
+    evaluation_date: NaiveDate,
+) -> VerificationResult<VdsNcProfileVerificationResult> {
+    let parsed = inspect_vds_nc(barcode)?;
+    let public_key_der = marty_crypto::serialization::load_public_key_pem(public_key_pem)
+        .map_err(|error| VerificationError::vds_nc_invalid(error.to_string()))?;
+    let signature = verify_vds_nc_public_key_der(barcode, &public_key_der);
+    let field_errors = validate_fields(&parsed.payload, printed_values);
+    let temporal_errors = validate_temporal(&parsed.payload, evaluation_date);
+    let document_type = marty_oid4vci::formats::vds_nc_profile::VdsNcDocumentType::parse(
+        &parsed.metadata.document_type,
+    )
+    .map_err(|error| VerificationError::vds_nc_invalid(error.to_string()))?;
+    let correction = recommended_error_correction(document_type);
+    let format = select_barcode_format(barcode.len(), correction, None)
+        .map_err(|error| VerificationError::vds_nc_invalid(error.to_string()))?;
+    let mut errors = signature.errors;
+    errors.extend(field_errors.iter().cloned());
+    errors.extend(temporal_errors.iter().cloned());
+    let warnings = if printed_values.is_none() {
+        vec!["No printed values provided for field comparison".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let signature_valid = signature.signature_status == SignatureVerificationStatus::Valid;
+    Ok(VdsNcProfileVerificationResult {
+        is_valid: signature_valid && field_errors.is_empty() && temporal_errors.is_empty(),
+        canonicalization_ok: true,
+        signature_valid,
+        field_consistency_valid: field_errors.is_empty(),
+        temporal_validity_ok: temporal_errors.is_empty(),
+        document_type: document_type.as_str().to_owned(),
+        issuing_country: parsed.country,
+        signer_id: parsed.metadata.issuer_id,
+        certificate_reference: parsed.metadata.certificate_reference,
+        algorithm: parsed.metadata.algorithm,
+        payload: parsed.payload,
+        barcode_format: format.as_str().to_owned(),
+        error_correction: correction.as_str().to_owned(),
+        errors,
+        warnings,
+    })
+}
+
+fn decode_signature(value: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value))
+        .map_err(|error| format!("VDS-NC signature base64 decode error: {error}"))
+}
+
 // ============================================================================
 // Algorithm dispatch
 // ============================================================================
-
-fn default_alg_for_jwk(jwk: &Jwk) -> &'static str {
-    match jwk.kty.as_str() {
-        "OKP" => "EdDSA",
-        "EC" => match jwk.crv.as_deref() {
-            Some("P-384") => "ES384",
-            _ => "ES256",
-        },
-        _ => "ES256",
-    }
-}
 
 fn verify_signing_input(
     alg: &str,
@@ -271,12 +383,12 @@ fn verify_signing_input(
 ) -> Result<bool, String> {
     match alg {
         "ES256" => {
-            let key_bytes = jwk_ec_to_uncompressed_spki(jwk)?;
+            let key_bytes = jwk_ec_to_uncompressed_spki(jwk, "P-256", 32)?;
             marty_crypto::ecdsa::verify_p256_sha256(&key_bytes, message, signature)
                 .map_err(|e| e.to_string())
         }
         "ES384" => {
-            let key_bytes = jwk_ec_to_uncompressed_spki(jwk)?;
+            let key_bytes = jwk_ec_to_uncompressed_spki(jwk, "P-384", 48)?;
             marty_crypto::ecdsa::verify_p384_sha384(&key_bytes, message, signature)
                 .map_err(|e| e.to_string())
         }
@@ -285,6 +397,9 @@ fn verify_signing_input(
             Ok(marty_crypto::ed25519::verify_bool(
                 &key_bytes, message, signature,
             ))
+        }
+        "PS256" | "PS384" | "PS512" => {
+            Err("RSA-PSS VDS-NC verification requires a PEM or DER public key".to_owned())
         }
         other => Err(format!(
             "unsupported algorithm for VDS-NC verification: {}",
@@ -298,7 +413,17 @@ fn verify_signing_input(
 /// `marty_crypto::ecdsa::verify_p*` accept SEC1 uncompressed point (04 || x || y)
 /// or a full DER SubjectPublicKeyInfo.  We assemble the 65-byte uncompressed
 /// point directly from the JWK `x` and `y` coordinates.
-fn jwk_ec_to_uncompressed_spki(jwk: &Jwk) -> Result<Vec<u8>, String> {
+fn jwk_ec_to_uncompressed_spki(
+    jwk: &Jwk,
+    expected_curve: &str,
+    expected_coordinate_len: usize,
+) -> Result<Vec<u8>, String> {
+    if jwk.kty != "EC" {
+        return Err(format!("EC algorithm requires an EC JWK, got {}", jwk.kty));
+    }
+    if jwk.crv.as_deref() != Some(expected_curve) {
+        return Err(format!("EC algorithm requires JWK curve {expected_curve}"));
+    }
     let x_b64 = jwk.x.as_deref().ok_or("EC JWK missing 'x' coordinate")?;
     let y_b64 = jwk.y.as_deref().ok_or("EC JWK missing 'y' coordinate")?;
 
@@ -308,6 +433,11 @@ fn jwk_ec_to_uncompressed_spki(jwk: &Jwk) -> Result<Vec<u8>, String> {
     let y = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(y_b64)
         .map_err(|e| format!("JWK 'y' base64 decode: {}", e))?;
+    if x.len() != expected_coordinate_len || y.len() != expected_coordinate_len {
+        return Err(format!(
+            "EC JWK coordinates must each contain {expected_coordinate_len} bytes"
+        ));
+    }
 
     // Uncompressed SEC1 point: 0x04 || x || y
     let mut point = Vec::with_capacity(1 + x.len() + y.len());
@@ -319,10 +449,23 @@ fn jwk_ec_to_uncompressed_spki(jwk: &Jwk) -> Result<Vec<u8>, String> {
 
 /// Convert an OKP (Ed25519) JWK to raw 32-byte public key.
 fn jwk_okp_to_raw(jwk: &Jwk) -> Result<Vec<u8>, String> {
+    if jwk.kty != "OKP" {
+        return Err(format!(
+            "EdDSA algorithm requires an OKP JWK, got {}",
+            jwk.kty
+        ));
+    }
+    if jwk.crv.as_deref() != Some("Ed25519") {
+        return Err("EdDSA algorithm requires JWK curve Ed25519".to_owned());
+    }
     let x_b64 = jwk.x.as_deref().ok_or("OKP JWK missing 'x' field")?;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let key = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(x_b64)
-        .map_err(|e| format!("JWK 'x' base64 decode: {}", e))
+        .map_err(|e| format!("JWK 'x' base64 decode: {}", e))?;
+    if key.len() != 32 {
+        return Err("Ed25519 JWK public key must contain 32 bytes".to_owned());
+    }
+    Ok(key)
 }
 
 // ============================================================================
@@ -363,11 +506,36 @@ mod tests {
         format!("{}~{}~{}", header, payload, sig_b64)
     }
 
+    fn profile_payload(country: &str) -> String {
+        let claims = serde_json::from_value(serde_json::json!({
+            "docType": "CMC",
+            "issuingCountry": country,
+            "documentNumber": "X123456",
+            "surname": "EXAMPLE",
+            "givenNames": "ADA",
+            "dateOfBirth": "19900102",
+            "nationality": country,
+            "gender": "F",
+            "dateOfIssue": "20260101",
+            "dateOfExpiry": "20300101"
+        }))
+        .unwrap();
+        marty_oid4vci::formats::vds_nc_profile::build_profile_payload(
+            &claims,
+            "CMC",
+            "issuer-1",
+            "issuer-1#key-1",
+            "ES256",
+        )
+        .unwrap()
+        .0
+    }
+
     #[test]
     fn verifies_valid_vds_nc_barcode() {
         let (jwk, signing_key) = make_p256_jwk_and_key();
-        let payload = r#"{"issuing_country":"AUS","typ":"TestDoc"}"#;
-        let barcode = sign_barcode(&signing_key, "DC03AUS", payload);
+        let payload = profile_payload("AUS");
+        let barcode = sign_barcode(&signing_key, "DC03AUS", &payload);
 
         let result = verify_vds_nc(&barcode, &jwk);
         assert!(result.verified, "should verify: {:?}", result.errors);
@@ -378,11 +546,11 @@ mod tests {
     #[test]
     fn rejects_tampered_payload() {
         let (jwk, signing_key) = make_p256_jwk_and_key();
-        let payload = r#"{"typ":"TestDoc"}"#;
-        let barcode = sign_barcode(&signing_key, "DC03DEU", payload);
+        let payload = profile_payload("DEU");
+        let barcode = sign_barcode(&signing_key, "DC03DEU", &payload);
 
         // Tamper: replace part of the payload in the barcode string
-        let tampered = barcode.replacen("TestDoc", "TamperedDoc", 1);
+        let tampered = barcode.replacen("EXAMPLE", "CHANGED", 1);
         let result = verify_vds_nc(&tampered, &jwk);
         assert!(!result.verified);
         assert_eq!(
@@ -396,8 +564,8 @@ mod tests {
         let (_jwk, signing_key) = make_p256_jwk_and_key();
         let (other_jwk, _) = make_p256_jwk_and_key();
 
-        let payload = r#"{"typ":"TestDoc"}"#;
-        let barcode = sign_barcode(&signing_key, "DC03USA", payload);
+        let payload = profile_payload("USA");
+        let barcode = sign_barcode(&signing_key, "DC03USA", &payload);
 
         let result = verify_vds_nc(&barcode, &other_jwk);
         assert!(!result.verified);
@@ -408,9 +576,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_jwk_type_and_curve_confusion() {
+        let (mut jwk, signing_key) = make_p256_jwk_and_key();
+        let payload = profile_payload("AUS");
+        let barcode = sign_barcode(&signing_key, "DC03AUS", &payload);
+
+        jwk.kty = "OKP".to_owned();
+        let result = verify_vds_nc(&barcode, &jwk);
+        assert!(!result.verified);
+        assert!(result.errors.iter().any(|error| error.contains("EC JWK")));
+
+        jwk.kty = "EC".to_owned();
+        jwk.crv = Some("P-384".to_owned());
+        let result = verify_vds_nc(&barcode, &jwk);
+        assert!(!result.verified);
+        assert!(result.errors.iter().any(|error| error.contains("P-256")));
+    }
+
+    #[test]
     fn rejects_malformed_barcode_missing_segments() {
         let (jwk, _) = make_p256_jwk_and_key();
-        let result = verify_vds_nc("DC03AUS~{\"typ\":\"T\"}", &jwk);
+        let result = verify_vds_nc("DC03AUS~{}", &jwk);
         assert!(!result.verified);
         assert!(!result.errors.is_empty());
     }
@@ -418,9 +604,8 @@ mod tests {
     #[test]
     fn rejects_invalid_header_prefix() {
         let (jwk, signing_key) = make_p256_jwk_and_key();
-        let payload = r#"{"typ":"T"}"#;
-        // Wrong prefix: should be DC0...
-        let barcode = sign_barcode(&signing_key, "BADAUS", payload);
+        let payload = profile_payload("AUS");
+        let barcode = sign_barcode(&signing_key, "BADAUS", &payload);
         let result = verify_vds_nc(&barcode, &jwk);
         assert!(!result.verified);
     }
@@ -428,8 +613,8 @@ mod tests {
     #[test]
     fn rejects_non_alpha_country_code() {
         let (jwk, signing_key) = make_p256_jwk_and_key();
-        let payload = r#"{"typ":"T"}"#;
-        let barcode = sign_barcode(&signing_key, "DC0312X", payload);
+        let payload = profile_payload("AUS");
+        let barcode = sign_barcode(&signing_key, "DC0312X", &payload);
         let result = verify_vds_nc(&barcode, &jwk);
         assert!(!result.verified);
     }
@@ -438,10 +623,55 @@ mod tests {
     fn verify_vds_nc_jwk_json_roundtrip() {
         let (jwk, signing_key) = make_p256_jwk_and_key();
         let jwk_json = serde_json::to_string(&jwk).unwrap();
-        let payload = r#"{"typ":"TestDoc"}"#;
-        let barcode = sign_barcode(&signing_key, "DC03GBR", payload);
+        let payload = profile_payload("GBR");
+        let barcode = sign_barcode(&signing_key, "DC03GBR", &payload);
 
         let result = verify_vds_nc_jwk_json(&barcode, &jwk_json).unwrap();
         assert!(result.verified);
+    }
+
+    #[test]
+    fn profile_verification_preserves_component_outcomes() {
+        use p256::pkcs8::{EncodePublicKey, LineEnding};
+
+        let (_jwk, signing_key) = make_p256_jwk_and_key();
+        let payload = profile_payload("AUS");
+        let barcode = sign_barcode(&signing_key, "DC03AUS", &payload);
+        let public_key_pem = signing_key
+            .verifying_key()
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        let printed = serde_json::json!({"surname": "example"});
+        let result = verify_vds_nc_profile_pem(
+            &barcode,
+            &public_key_pem,
+            Some(&printed),
+            NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+        )
+        .unwrap();
+        assert!(result.is_valid);
+        assert!(result.canonicalization_ok);
+        assert!(result.signature_valid);
+        assert!(result.field_consistency_valid);
+        assert!(result.temporal_validity_ok);
+        assert_eq!(result.signer_id, "issuer-1");
+
+        let changed = serde_json::json!({"surname": "changed"});
+        let result = verify_vds_nc_profile_pem(
+            &barcode,
+            &public_key_pem,
+            Some(&changed),
+            NaiveDate::from_ymd_opt(2031, 1, 1).unwrap(),
+        )
+        .unwrap();
+        assert!(!result.is_valid);
+        assert!(result.signature_valid);
+        assert!(!result.field_consistency_valid);
+        assert!(!result.temporal_validity_ok);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("FIELD_MISMATCH")));
+        assert!(result.errors.iter().any(|error| error.contains("EXPIRED")));
     }
 }

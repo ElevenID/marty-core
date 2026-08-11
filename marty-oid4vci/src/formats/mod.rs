@@ -11,6 +11,7 @@ pub mod jwt_vc;
 pub mod mdoc;
 pub mod sd_jwt;
 pub mod vds_nc;
+pub mod vds_nc_profile;
 pub mod zk_mdoc;
 
 use crate::error::{Oid4vciError, Oid4vciResult};

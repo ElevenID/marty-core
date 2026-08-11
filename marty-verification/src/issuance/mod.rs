@@ -484,10 +484,7 @@ mod tests {
                 .expect("encapsulated LDS object must occur in encoded SOD");
             let mut altered_content_sod = passport.sod_der.clone();
             altered_content_sod[offset + content.len() - 1] ^= 0x01;
-            assert_eq!(
-                crate::asn1::sod::verify_sod_signature(&altered_content_sod).unwrap(),
-                false
-            );
+            assert!(!crate::asn1::sod::verify_sod_signature(&altered_content_sod).unwrap());
         }
 
         // Chain validation and DG hashes alone must not authenticate a document

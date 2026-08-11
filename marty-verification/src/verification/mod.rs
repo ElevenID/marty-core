@@ -32,5 +32,7 @@ pub use result::{
     VERIFICATION_DECISION_SCHEMA_VERSION,
 };
 pub use vds_nc::{
-    verify_vds_nc, verify_vds_nc_jwk_json, SignatureVerificationStatus, VdsNcVerificationResult,
+    inspect_vds_nc, verify_vds_nc, verify_vds_nc_jwk_json, verify_vds_nc_profile_pem,
+    verify_vds_nc_public_key_der, SignatureVerificationStatus, VdsNcProfileVerificationResult,
+    VdsNcVerificationResult,
 };
