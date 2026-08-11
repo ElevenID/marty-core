@@ -1230,6 +1230,162 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_ca_certificate_as_issuer() {
+        use rcgen::{CertificateParams, DnType, KeyPair};
+
+        let mut issuer_params = CertificateParams::default();
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "Non-CA issuer");
+        issuer_params.is_ca = rcgen::IsCa::NoCa;
+        let issuer_key = KeyPair::generate().unwrap();
+        let issuer_cert = issuer_params.self_signed(&issuer_key).unwrap();
+
+        let mut leaf_params = CertificateParams::default();
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "Leaf signed by non-CA");
+        leaf_params.is_ca = rcgen::IsCa::NoCa;
+        let leaf_key = KeyPair::generate().unwrap();
+        let issuer = rcgen::Issuer::from_params(&issuer_params, &issuer_key);
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
+
+        let issuer_pem = issuer_cert.pem();
+        let mut validator = ChainValidator::new();
+        validator.add_trust_anchor_pem(&issuer_pem).unwrap();
+        let result = validator
+            .validate_chain(&[leaf_cert.pem(), issuer_pem])
+            .unwrap();
+
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| {
+            error.contains("lacks BasicConstraints") || error.contains("is not authorized as a CA")
+        }));
+    }
+
+    #[test]
+    fn rejects_ca_issuer_without_key_cert_sign_usage() {
+        use rcgen::{CertificateParams, DnType, KeyPair, KeyUsagePurpose};
+
+        let mut issuer_params = CertificateParams::default();
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "CA without certificate-signing usage");
+        issuer_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        issuer_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let issuer_key = KeyPair::generate().unwrap();
+        let issuer_cert = issuer_params.self_signed(&issuer_key).unwrap();
+
+        let mut leaf_params = CertificateParams::default();
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "Leaf");
+        leaf_params.is_ca = rcgen::IsCa::NoCa;
+        let leaf_key = KeyPair::generate().unwrap();
+        let issuer = rcgen::Issuer::from_params(&issuer_params, &issuer_key);
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
+
+        let issuer_pem = issuer_cert.pem();
+        let mut validator = ChainValidator::new();
+        validator.add_trust_anchor_pem(&issuer_pem).unwrap();
+        let result = validator
+            .validate_chain(&[leaf_cert.pem(), issuer_pem])
+            .unwrap();
+
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("KeyUsage lacks keyCertSign")));
+    }
+
+    #[test]
+    fn rejects_ca_certificate_in_end_entity_position() {
+        use rcgen::{CertificateParams, DnType, KeyPair};
+
+        let mut root_params = CertificateParams::default();
+        root_params
+            .distinguished_name
+            .push(DnType::CommonName, "Root CA");
+        root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let root_key = KeyPair::generate().unwrap();
+        let root_cert = root_params.self_signed(&root_key).unwrap();
+
+        let mut subordinate_params = CertificateParams::default();
+        subordinate_params
+            .distinguished_name
+            .push(DnType::CommonName, "Subordinate CA used as leaf");
+        subordinate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        let subordinate_key = KeyPair::generate().unwrap();
+        let root_issuer = rcgen::Issuer::from_params(&root_params, &root_key);
+        let subordinate_cert = subordinate_params
+            .signed_by(&subordinate_key, &root_issuer)
+            .unwrap();
+
+        let root_pem = root_cert.pem();
+        let mut validator = ChainValidator::new();
+        validator.add_trust_anchor_pem(&root_pem).unwrap();
+        let result = validator
+            .validate_chain(&[subordinate_cert.pem(), root_pem])
+            .unwrap();
+
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("End-entity certificate is marked as a CA")));
+    }
+
+    #[test]
+    fn rejects_path_length_constraint_violation() {
+        use rcgen::{CertificateParams, DnType, KeyPair};
+
+        let mut root_params = CertificateParams::default();
+        root_params
+            .distinguished_name
+            .push(DnType::CommonName, "Path length zero root");
+        root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        let root_key = KeyPair::generate().unwrap();
+        let root_cert = root_params.self_signed(&root_key).unwrap();
+
+        let mut intermediate_params = CertificateParams::default();
+        intermediate_params
+            .distinguished_name
+            .push(DnType::CommonName, "Prohibited intermediate");
+        intermediate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        let intermediate_key = KeyPair::generate().unwrap();
+        let root_issuer = rcgen::Issuer::from_params(&root_params, &root_key);
+        let intermediate_cert = intermediate_params
+            .signed_by(&intermediate_key, &root_issuer)
+            .unwrap();
+
+        let mut leaf_params = CertificateParams::default();
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "Leaf below prohibited intermediate");
+        leaf_params.is_ca = rcgen::IsCa::NoCa;
+        let leaf_key = KeyPair::generate().unwrap();
+        let intermediate_issuer =
+            rcgen::Issuer::from_params(&intermediate_params, &intermediate_key);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &intermediate_issuer)
+            .unwrap();
+
+        let root_pem = root_cert.pem();
+        let mut validator = ChainValidator::new();
+        validator.add_trust_anchor_pem(&root_pem).unwrap();
+        let result = validator
+            .validate_chain(&[leaf_cert.pem(), intermediate_cert.pem(), root_pem])
+            .unwrap();
+
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("pathLenConstraint 0 was exceeded")));
+    }
+
+    #[test]
     fn test_revocation_soft_fail_mode() {
         use rcgen::{CertificateParams, DnType, KeyPair};
 
