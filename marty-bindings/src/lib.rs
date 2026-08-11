@@ -8,6 +8,7 @@
 #![allow(clippy::useless_conversion)]
 
 mod device_auth;
+mod flow;
 mod mdoc;
 mod remote_credential;
 mod status_list;
@@ -776,6 +777,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "oid4vp",
             "document_verification",
             "device_authentication",
+            "flow_state_machine",
             "status_list"
         ]
     }))
@@ -1776,6 +1778,7 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
 /// Downstream extension crates use this entry point to extend ``_marty_rs``
 /// without copying bindings or publishing a second, incompatible module.
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    flow::register_flow_bindings(m)?;
     m.add(
         "OidcValidationError",
         m.py().get_type::<OidcValidationError>(),
