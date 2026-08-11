@@ -3389,6 +3389,18 @@ fn dtc_create(request_json: &str) -> PyResult<String> {
 }
 
 #[pyfunction]
+fn dtc_prepare_signing(dtc_json: &str) -> PyResult<String> {
+    dtc::prepare_dtc_signing_json(dtc_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+fn dtc_assemble_signature(signature_envelope_json: &str) -> PyResult<String> {
+    dtc::assemble_dtc_signature_json(signature_envelope_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+#[pyfunction]
 fn dtc_sign(dtc_json: &str) -> PyResult<String> {
     dtc::sign_dtc_json(dtc_json).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
@@ -3583,6 +3595,8 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // DTC helpers (JSON in/out)
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
+    m.add_function(wrap_pyfunction!(dtc_prepare_signing, m)?)?;
+    m.add_function(wrap_pyfunction!(dtc_assemble_signature, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
 
@@ -3788,6 +3802,8 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // DTC helpers (JSON in/out)
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
+    m.add_function(wrap_pyfunction!(dtc_prepare_signing, m)?)?;
+    m.add_function(wrap_pyfunction!(dtc_assemble_signature, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
 

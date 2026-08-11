@@ -805,6 +805,141 @@ pub fn create_dtc_json(input: &str) -> VerificationResult<String> {
     })
 }
 
+/// Prepare the canonical bytes that an external signer must sign.
+///
+/// The returned envelope contains the normalized DTC record and a base64
+/// representation of the exact canonical payload consumed by verification.
+/// Callers may transport those bytes to a KMS or document-signing provider,
+/// but must return the provider signature through
+/// [`assemble_dtc_signature_json`] before persisting a signed DTC.
+pub fn prepare_dtc_signing_json(input: &str) -> VerificationResult<String> {
+    let record: DtcRecord = serde_json::from_str(input)
+        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
+    let normalized = normalize_record(record);
+    let signing_input = canonical_payload(&normalized)?;
+
+    serde_json::to_string(&json!({
+        "dtc": normalized,
+        "signing_input_base64": b64_encode(&signing_input),
+        "signature_encoding": "DER_BASE64",
+        "supported_algorithms": ["ES256", "ES384"],
+    }))
+    .map_err(|e| {
+        VerificationError::dtc_invalid(format!("Failed to serialize DTC signing request: {}", e))
+    })
+}
+
+/// Assemble and authenticate a signature returned by an external signer.
+///
+/// The input is an envelope containing `dtc`, `signature_base64`, `signer_id`,
+/// and `signer_public_key_pem`, with an optional `signature_date`. The
+/// signature must be a DER-encoded ES256 or ES384 signature over the exact
+/// bytes returned by [`prepare_dtc_signing_json`]. Invalid provider output is
+/// rejected rather than producing a record marked as signed.
+pub fn assemble_dtc_signature_json(input: &str) -> VerificationResult<String> {
+    let value: Value = serde_json::from_str(input).map_err(|e| {
+        VerificationError::dtc_invalid(format!("Invalid DTC signature envelope: {}", e))
+    })?;
+    let record_value = value
+        .get("dtc")
+        .cloned()
+        .ok_or_else(|| VerificationError::dtc_missing_field("dtc"))?;
+    let mut record: DtcRecord = serde_json::from_value(record_value)
+        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
+    let signature = required_bounded_text(&value, "signature_base64", 16_384)?;
+    let signer_id = required_bounded_text(&value, "signer_id", 256)?;
+    let signer_public_key_pem = required_bounded_pem(&value, "signer_public_key_pem", 32_768)?;
+    let signature_date = match value.get("signature_date") {
+        Some(Value::String(value)) => validate_bounded_text("signature_date", value, 128)?,
+        Some(_) => {
+            return Err(VerificationError::dtc_invalid(
+                "DTC signature_date must be a string".to_string(),
+            ))
+        }
+        None => now_iso(),
+    };
+
+    record = normalize_record(record);
+    let payload = canonical_payload(&record)?;
+    if !verify_ecdsa(&payload, &signature, &signer_public_key_pem)? {
+        return Err(VerificationError::dtc_signature_invalid(
+            "External DTC signature does not match the canonical payload".to_string(),
+        ));
+    }
+
+    record.is_signed = true;
+    record.signature_info = Some(SignatureInfo {
+        signature_date,
+        signer_id,
+        signature,
+        is_valid: true,
+    });
+
+    let mut output = serde_json::to_value(record).map_err(|e| {
+        VerificationError::dtc_invalid(format!("Failed to serialize signed DTC: {}", e))
+    })?;
+    output["signature_info"]["signer_public_key_pem"] = Value::String(signer_public_key_pem);
+    serde_json::to_string(&output).map_err(|e| {
+        VerificationError::dtc_invalid(format!("Failed to serialize signed DTC: {}", e))
+    })
+}
+
+fn required_bounded_text(
+    value: &Value,
+    field: &'static str,
+    max_chars: usize,
+) -> VerificationResult<String> {
+    let text = value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| VerificationError::dtc_missing_field(field))?;
+    validate_bounded_text(field, text, max_chars)
+}
+
+fn required_bounded_pem(
+    value: &Value,
+    field: &'static str,
+    max_chars: usize,
+) -> VerificationResult<String> {
+    let text = value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| VerificationError::dtc_missing_field(field))?;
+    if text.is_empty()
+        || text.chars().count() > max_chars
+        || text.trim() != text
+        || text
+            .chars()
+            .any(|character| character.is_control() && character != '\n' && character != '\r')
+        || !text.starts_with("-----BEGIN PUBLIC KEY-----")
+        || !text.ends_with("-----END PUBLIC KEY-----")
+    {
+        return Err(VerificationError::dtc_invalid(format!(
+            "DTC {} must be a bounded public-key PEM without surrounding whitespace",
+            field
+        )));
+    }
+    Ok(text.to_string())
+}
+
+fn validate_bounded_text(
+    field: &'static str,
+    text: &str,
+    max_chars: usize,
+) -> VerificationResult<String> {
+    if text.is_empty()
+        || text.chars().count() > max_chars
+        || text.trim() != text
+        || text.chars().any(char::is_control)
+    {
+        return Err(VerificationError::dtc_invalid(format!(
+            "DTC {} must be a bounded, non-empty value without surrounding whitespace",
+            field
+        )));
+    }
+    Ok(text.to_string())
+}
+
 pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
     // Accept optional signing_key_pem and signer_public_key_pem in the JSON envelope
     let value: Value = serde_json::from_str(input)
