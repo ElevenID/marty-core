@@ -150,14 +150,27 @@ pub struct VerifiedCredentialFacts {
     pub claims: HashMap<String, Value>,
     pub issuer_id: String,
     pub signature_verified: bool,
+    pub signature_failure_reason: Option<String>,
     pub trust_profile_verified: bool,
+    pub trust_failure_reason: Option<String>,
     pub trust_level: Option<u32>,
     pub compliance_statuses: Vec<String>,
     pub accreditations: Vec<String>,
     pub issued_at_epoch_seconds: Option<u64>,
     pub revocation_checked_at_epoch_seconds: Option<u64>,
     pub not_revoked: Option<bool>,
+    pub credential_status: Option<CredentialLifecycleStatus>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialLifecycleStatus {
+    Active,
+    Revoked,
+    Suspended,
+    Expired,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -620,12 +633,17 @@ fn evaluate_candidate(
     let mut claim_results = Vec::new();
 
     if !credential.signature_verified {
+        let message = credential
+            .signature_failure_reason
+            .as_deref()
+            .map(|reason| format!("Credential signature was not verified: {reason}"))
+            .unwrap_or_else(|| "Credential signature was not verified".to_string());
         errors.push(violation(
             ServicePolicyErrorCode::SignatureInvalid,
             requirement,
             Some(credential),
             None,
-            "Credential signature was not verified",
+            &message,
         ));
     }
     if let Some(required_format) = &requirement.credential_payload_format {
@@ -644,12 +662,19 @@ fn evaluate_candidate(
     if (requirement.trust_profile_id.is_some() || policy.trust_profile_id.is_some())
         && !credential.trust_profile_verified
     {
+        let message = credential
+            .trust_failure_reason
+            .as_deref()
+            .map(|reason| format!("Issuer trust verification failed: {reason}"))
+            .unwrap_or_else(|| {
+                "Issuer was not verified against the required trust profile".to_string()
+            });
         errors.push(violation(
             ServicePolicyErrorCode::TrustProfileNotVerified,
             requirement,
             Some(credential),
             None,
-            "Issuer was not verified against the required trust profile",
+            &message,
         ));
     }
     apply_issuer_constraints(requirement, policy, credential, &mut errors);
@@ -787,7 +812,7 @@ fn apply_freshness(
                 requirement,
                 Some(credential),
                 None,
-                "Credential issuance time is required",
+                "Credential issuance-time evidence is unavailable or invalid",
             )),
             Some(issued_at) if issued_at > evaluation_time => errors.push(violation(
                 ServicePolicyErrorCode::CredentialTimestampFuture,
@@ -799,12 +824,13 @@ fn apply_freshness(
             Some(issued_at)
                 if max_age.is_some_and(|maximum| evaluation_time - issued_at > maximum) =>
             {
+                let maximum = max_age.expect("stale guard requires a maximum age");
                 errors.push(violation(
                     ServicePolicyErrorCode::CredentialStale,
                     requirement,
                     Some(credential),
                     None,
-                    "Credential is older than the policy permits",
+                    &format!("Credential exceeds maximum age of {maximum} seconds"),
                 ));
             }
             Some(_) => {}
@@ -823,12 +849,17 @@ fn apply_freshness(
     }
 
     if credential.not_revoked == Some(false) {
+        let message = match credential.credential_status {
+            Some(CredentialLifecycleStatus::Suspended) => "Credential is suspended",
+            Some(CredentialLifecycleStatus::Expired) => "Credential is expired",
+            _ => "Credential is revoked",
+        };
         errors.push(violation(
             ServicePolicyErrorCode::CredentialRevoked,
             requirement,
             Some(credential),
             None,
-            "Credential is revoked",
+            message,
         ));
         return;
     }
@@ -1136,6 +1167,14 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
         validate_string("credential_id", &credential.credential_id)?;
         validate_string("issuer_id", &credential.issuer_id)?;
         validate_string("credential_format", &credential.credential_format)?;
+        validate_optional_string(
+            "signature_failure_reason",
+            credential.signature_failure_reason.as_deref(),
+        )?;
+        validate_optional_string(
+            "trust_failure_reason",
+            credential.trust_failure_reason.as_deref(),
+        )?;
         validate_bounded_strings(
             "credential_template_ids",
             &credential.credential_template_ids,
@@ -1331,13 +1370,16 @@ mod tests {
                 .collect(),
             issuer_id: "did:example:issuer".to_string(),
             signature_verified: true,
+            signature_failure_reason: None,
             trust_profile_verified: true,
+            trust_failure_reason: None,
             trust_level: Some(80),
             compliance_statuses: Vec::new(),
             accreditations: Vec::new(),
             issued_at_epoch_seconds: Some(900),
             revocation_checked_at_epoch_seconds: Some(990),
             not_revoked: Some(true),
+            credential_status: Some(CredentialLifecycleStatus::Active),
             warnings: Vec::new(),
         }
     }
@@ -1383,6 +1425,32 @@ mod tests {
         assert!(codes.contains(&ServicePolicyErrorCode::CredentialTimestampFuture));
         assert!(codes.contains(&ServicePolicyErrorCode::RevocationCheckRequired));
         assert!(result.verified_claims.is_empty());
+    }
+
+    #[test]
+    fn preserves_bounded_verifier_trust_and_lifecycle_details() {
+        let mut request = request();
+        request.credentials[0].signature_verified = false;
+        request.credentials[0].signature_failure_reason = Some("DID resolution failed".to_string());
+        request.credentials[0].trust_profile_verified = false;
+        request.credentials[0].trust_failure_reason =
+            Some("issuer relationship is explicitly denied".to_string());
+        request.credentials[0].not_revoked = Some(false);
+        request.credentials[0].credential_status = Some(CredentialLifecycleStatus::Suspended);
+
+        let result = evaluate_service_policy(request).unwrap();
+        let messages = result
+            .errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("DID resolution failed")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("explicitly denied")));
+        assert!(messages.contains(&"Credential is suspended"));
     }
 
     #[test]
