@@ -131,7 +131,17 @@ jobs:
               exit 0
             fi
             echo "Release dispatch attempt $attempt failed" >&2
-            sleep 5
+            sleep 2
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?branch=$TAG&event=workflow_dispatch" \
+              > release-dispatch-runs.json
+            if jq -e --arg sha "$(git rev-parse "$TAG^{commit}")" \
+              '[.workflow_runs[] | select(.head_sha == $sha)] | length > 0' \
+              release-dispatch-runs.json >/dev/null; then
+              echo "The release dispatch was accepted despite the client error"
+              exit 0
+            fi
+            sleep 3
           done
           echo "::error::The immutable tag exists but release dispatch failed; quarantine it"
           exit 1
