@@ -33,6 +33,7 @@ ISSUER_PRIVATE_JWK = json.dumps(
 
 def test_canonical_top_level_import_exposes_native_bindings():
     import _marty_rs as canonical
+    import marty_rs
 
     assert canonical.generate_p256_key is _marty_rs.generate_p256_key
     assert canonical.TokenStatusList is _marty_rs.TokenStatusList
@@ -45,6 +46,32 @@ def test_canonical_top_level_import_exposes_native_bindings():
         canonical.oid4vci_normalize_ecdsa_signature
         is _marty_rs.oid4vci_normalize_ecdsa_signature
     )
+    assert canonical.oidc_validate_id_token is _marty_rs.oidc_validate_id_token
+    assert canonical.OidcValidationError is _marty_rs.OidcValidationError
+    assert issubclass(marty_rs.NativeBackendUnavailable, RuntimeError)
+
+
+def test_native_backend_diagnostics_are_explicit_and_versioned():
+    diagnostics = json.loads(_marty_rs.native_backend_diagnostics())
+
+    assert diagnostics["available"] is True
+    assert diagnostics["backend"] == "_marty_rs"
+    assert diagnostics["version"]
+    assert "oidc_id_token_validation" in diagnostics["capabilities"]
+
+
+def test_oidc_validation_exposes_typed_fail_closed_errors():
+    with pytest.raises(_marty_rs.OidcValidationError, match="OIDC.MALFORMED_TOKEN"):
+        _marty_rs.oidc_validate_id_token(
+            json.dumps(
+                {
+                    "compact_jwt": "not-a-jwt",
+                    "jwks": {"keys": []},
+                    "expected_issuer": "https://issuer.example",
+                    "expected_audience": "marty-ui",
+                }
+            )
+        )
 
 
 class TestStatusLists:

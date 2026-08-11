@@ -53,6 +53,7 @@ pub mod jose;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
+pub mod oidc;
 pub mod proof;
 pub mod signer;
 pub mod types;
