@@ -22,15 +22,39 @@ impl ClaimConstraintEvaluator {
 
     /// Check if provided claims satisfy policy requirements.
     pub fn evaluate(&self, claims: &HashMap<String, serde_json::Value>) -> ClaimEvaluationResult {
+        let credential_types: Vec<String> = self
+            .required_claims
+            .iter()
+            .map(|required| required.credential_type.clone())
+            .collect();
+        self.evaluate_for_credential_types(claims, &credential_types)
+    }
+
+    /// Check claims while enforcing the credential type attached to each requirement.
+    pub fn evaluate_for_credential_types(
+        &self,
+        claims: &HashMap<String, serde_json::Value>,
+        credential_types: &[String],
+    ) -> ClaimEvaluationResult {
         let mut missing = Vec::new();
         let mut satisfied = Vec::new();
 
         for required in &self.required_claims {
+            if !credential_types.contains(&required.credential_type) {
+                missing.push(format!(
+                    "{} (requires credential type {})",
+                    required.claim_name, required.credential_type
+                ));
+                continue;
+            }
+
             // Check for derived attribute preference first
-            if let Some(derived_name) = self.derived_preferences.get(&required.claim_name) {
-                if claims.contains_key(derived_name) {
-                    satisfied.push(derived_name.clone());
-                    continue;
+            if required.accept_predicate && required.required_value.is_none() {
+                if let Some(derived_name) = self.derived_preferences.get(&required.claim_name) {
+                    if claims.contains_key(derived_name) {
+                        satisfied.push(derived_name.clone());
+                        continue;
+                    }
                 }
             }
 
@@ -141,6 +165,13 @@ mod tests {
         }
     }
 
+    fn required_predicate(name: &str) -> RequiredClaim {
+        RequiredClaim {
+            accept_predicate: true,
+            ..required(name)
+        }
+    }
+
     // ====================================================================
     // evaluate()
     // ====================================================================
@@ -221,7 +252,7 @@ mod tests {
         let mut derived = HashMap::new();
         derived.insert("birth_date".to_string(), "age_over_18".to_string());
 
-        let policy = make_policy(vec![required("birth_date")], derived);
+        let policy = make_policy(vec![required_predicate("birth_date")], derived);
         let evaluator = ClaimConstraintEvaluator::new(&policy);
 
         let mut claims = HashMap::new();
@@ -237,7 +268,7 @@ mod tests {
         let mut derived = HashMap::new();
         derived.insert("birth_date".to_string(), "age_over_18".to_string());
 
-        let policy = make_policy(vec![required("birth_date")], derived);
+        let policy = make_policy(vec![required_predicate("birth_date")], derived);
         let evaluator = ClaimConstraintEvaluator::new(&policy);
 
         // Derived attr not present, but original is
@@ -247,6 +278,31 @@ mod tests {
         let result = evaluator.evaluate(&claims);
         assert!(result.is_satisfied);
         assert_eq!(result.satisfied_claims, vec!["birth_date"]);
+    }
+
+    #[test]
+    fn test_predicate_does_not_satisfy_requirement_when_not_accepted() {
+        let mut derived = HashMap::new();
+        derived.insert("birth_date".to_string(), "age_over_18".to_string());
+        let policy = make_policy(vec![required("birth_date")], derived);
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+        let claims = [("age_over_18".to_string(), json!(true))]
+            .into_iter()
+            .collect();
+
+        assert!(!evaluator.evaluate(&claims).is_satisfied);
+    }
+
+    #[test]
+    fn test_claim_requirement_enforces_credential_type() {
+        let policy = make_policy(vec![required("name")], HashMap::new());
+        let evaluator = ClaimConstraintEvaluator::new(&policy);
+        let claims = [("name".to_string(), json!("Alice"))].into_iter().collect();
+
+        let result =
+            evaluator.evaluate_for_credential_types(&claims, &["DifferentCredential".to_string()]);
+        assert!(!result.is_satisfied);
+        assert!(result.missing_claims[0].contains("TestCredential"));
     }
 
     // ====================================================================

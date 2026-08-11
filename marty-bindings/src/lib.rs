@@ -19,6 +19,11 @@ pyo3::create_exception!(
     OidcValidationError,
     pyo3::exceptions::PyValueError
 );
+pyo3::create_exception!(
+    _marty_rs,
+    PolicyEvaluationError,
+    pyo3::exceptions::PyValueError
+);
 
 /// Convert marty_crypto errors to Python exceptions
 fn to_pyerr(err: impl std::fmt::Display) -> PyErr {
@@ -711,6 +716,22 @@ fn oidc_validate_id_token(request_json: &str) -> PyResult<String> {
     serde_json::to_string(&claims).map_err(to_pyerr)
 }
 
+fn evaluate_presentation_policy_impl(request_json: &str) -> Result<String, String> {
+    let request: marty_verification::policy::PolicyEvaluationRequest =
+        serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid presentation policy request: {error}"))?;
+    let evaluator = marty_verification::policy::PolicyEvaluator::new(request.policy);
+    let result = evaluator.evaluate(&request.input);
+    serde_json::to_string(&result)
+        .map_err(|error| format!("presentation policy result serialization failed: {error}"))
+}
+
+/// Evaluate verified presentation facts with the canonical Rust policy engine.
+#[pyfunction]
+fn evaluate_presentation_policy(request_json: &str) -> PyResult<String> {
+    evaluate_presentation_policy_impl(request_json).map_err(PyErr::new::<PolicyEvaluationError, _>)
+}
+
 /// Return explicit native backend and capability diagnostics for readiness.
 #[pyfunction]
 fn native_backend_diagnostics() -> PyResult<String> {
@@ -721,6 +742,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
         "build_revision": option_env!("MARTY_BUILD_REVISION").unwrap_or("unknown"),
         "capabilities": [
             "oidc_id_token_validation",
+            "presentation_policy_evaluation",
             "oid4vci",
             "oid4vp",
             "document_verification",
@@ -1728,6 +1750,10 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "OidcValidationError",
         m.py().get_type::<OidcValidationError>(),
     )?;
+    m.add(
+        "PolicyEvaluationError",
+        m.py().get_type::<PolicyEvaluationError>(),
+    )?;
     remote_credential::register(m)?;
     status_list::register_status_list_bindings(m)?;
 
@@ -1786,6 +1812,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_compact_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oidc_validate_id_token, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_presentation_policy, m)?)?;
     m.add_function(wrap_pyfunction!(native_backend_diagnostics, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;
@@ -2185,5 +2212,76 @@ mod tests {
         assert!(result[0]
             .supported_predicates
             .contains(&"age_over_18".to_string()));
+    }
+
+    fn presentation_policy_request() -> serde_json::Value {
+        serde_json::json!({
+            "policy": {
+                "id": "policy-1",
+                "name": "Employee access",
+                "description": null,
+                "purpose": "Authorize access",
+                "accepted_credential_types": ["EmployeeCredential"],
+                "required_claims": [{
+                    "claim_name": "employee_id",
+                    "credential_type": "EmployeeCredential",
+                    "accept_predicate": false,
+                    "required_value": null
+                }],
+                "holder_binding": "session_nonce",
+                "trust_profile_id": "workforce",
+                "allowed_issuers": ["did:example:issuer"],
+                "freshness_requirements": {
+                    "max_credential_age_seconds": 3600,
+                    "max_proof_age_seconds": 300,
+                    "require_live_revocation_check": true
+                },
+                "prefer_predicates": true,
+                "single_presentation": true,
+                "derived_attribute_preferences": {},
+                "credential_ranking_strategy": "freshest_first",
+                "credential_ranking_weights": {},
+                "metadata": {},
+                "version": 1
+            },
+            "input": {
+                "credential_types": ["EmployeeCredential"],
+                "claims": {"employee_id": "E-123"},
+                "issuer_id": "did:example:issuer",
+                "trust_profile_verified": true,
+                "issued_at_epoch_seconds": 900,
+                "proof_epoch_seconds": 990,
+                "evaluation_time_epoch_seconds": 1000,
+                "holder_binding_verified": true,
+                "revocation_checked": true,
+                "not_revoked": true,
+                "presentation_count": 1
+            }
+        })
+    }
+
+    #[test]
+    fn presentation_policy_binding_returns_normalized_result() {
+        let output = evaluate_presentation_policy_impl(&presentation_policy_request().to_string())
+            .expect("valid policy request");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("result JSON");
+
+        assert_eq!(result["is_satisfied"], true);
+        assert_eq!(result["errors"], serde_json::json!([]));
+        assert_eq!(
+            result["minimum_disclosure_set"],
+            serde_json::json!(["employee_id"])
+        );
+        assert_eq!(result["component_statuses"].as_array().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn presentation_policy_binding_rejects_unknown_fields() {
+        let mut request = presentation_policy_request();
+        request["input"]["unexpected"] = serde_json::json!(true);
+
+        let error = evaluate_presentation_policy_impl(&request.to_string())
+            .expect_err("unknown fields must fail closed");
+        assert!(error.contains("unknown field"));
     }
 }
