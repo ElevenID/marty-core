@@ -109,6 +109,39 @@ fn benchmark_verification_kernels(c: &mut Criterion) {
         );
     });
     policy_group.finish();
+
+    let claims = serde_json::from_value(serde_json::json!({
+        "docType": "CMC",
+        "issuingCountry": "AUS",
+        "documentNumber": "X123456",
+        "surname": "EXAMPLE",
+        "givenNames": "ADA",
+        "dateOfBirth": "19900102",
+        "nationality": "AUS",
+        "gender": "F",
+        "dateOfIssue": "20260101",
+        "dateOfExpiry": "20300101"
+    }))
+    .expect("build VDS-NC benchmark claims");
+    let (payload, _, country) = marty_oid4vci::formats::vds_nc_profile::build_profile_payload(
+        &claims,
+        "CMC",
+        "benchmark-issuer",
+        "benchmark-issuer#key-1",
+        "ES256",
+    )
+    .expect("build VDS-NC benchmark profile");
+    let barcode = format!("DC03{country}~{payload}~c2lnbmF0dXJl");
+    let mut vds_group = c.benchmark_group("vds_nc_profile");
+    vds_group.bench_function("parse_canonical_profile", |b| {
+        b.iter(|| {
+            black_box(
+                marty_oid4vci::formats::vds_nc_profile::parse_barcode(black_box(&barcode))
+                    .expect("parse benchmark VDS-NC profile"),
+            );
+        });
+    });
+    vds_group.finish();
 }
 
 criterion_group!(benches, benchmark_verification_kernels);

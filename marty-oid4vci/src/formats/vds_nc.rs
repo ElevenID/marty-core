@@ -4,7 +4,7 @@
 //! with local JWK signing (`IssuerKey`) and external/KMS-backed signing via
 //! the `CredentialSigner` trait.
 
-use crate::error::{Oid4vciError, Oid4vciResult};
+use crate::error::Oid4vciResult;
 use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, IssuerKey, SignedCredential};
 
@@ -26,15 +26,7 @@ pub struct PreparedVdsNc {
 impl PreparedVdsNc {
     /// Reconstruct a prepared envelope from a `header~payload_json` signing input.
     pub fn from_signing_input(signing_input: String, credential_id: String) -> Oid4vciResult<Self> {
-        let mut parts = signing_input.splitn(2, '~');
-        let header = parts.next().unwrap_or_default().to_string();
-        let payload_json = parts.next().unwrap_or_default().to_string();
-
-        if header.is_empty() || payload_json.is_empty() {
-            return Err(Oid4vciError::ConfigError(
-                "Invalid VDS-NC signing_input: expected 'header~payload_json'".into(),
-            ));
-        }
+        let (header, payload_json) = super::vds_nc_profile::validate_signing_input(&signing_input)?;
 
         Ok(Self {
             header,
@@ -68,13 +60,38 @@ pub fn sign_vds_nc_with_signer(
 
 /// Prepare a VDS-NC credential for external signing.
 pub fn prepare_vds_nc(
-    _signer: &dyn CredentialSigner,
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<PreparedVdsNc> {
+    prepare_vds_nc_profile(
+        signer.issuer_id(),
+        &signer.kid_url(),
+        signer.algorithm().as_str(),
+        claims,
+    )
+}
+
+/// Prepare a canonical VDS-NC profile using explicit signed metadata.
+///
+/// This path allows bindings with profile-specific algorithms to share the
+/// same envelope construction without expanding the general credential signer
+/// algorithm surface.
+pub fn prepare_vds_nc_profile(
+    issuer_id: &str,
+    key_id: &str,
+    algorithm: &str,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<PreparedVdsNc> {
     let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
-    let issuing_country = resolve_issuing_country(claims)?;
-    let header = format!("DC03{}", issuing_country);
-    let payload_json = build_payload_json(claims);
+    let (payload_json, _document_type, issuing_country) =
+        super::vds_nc_profile::build_profile_payload(
+            &claims.claims,
+            &claims.credential_type,
+            issuer_id,
+            key_id,
+            algorithm,
+        )?;
+    let header = format!("DC03{issuing_country}");
     let signing_input = format!("{}~{}", header, payload_json);
 
     Ok(PreparedVdsNc {
@@ -83,6 +100,21 @@ pub fn prepare_vds_nc(
         signing_input,
         credential_id,
     })
+}
+
+/// Assemble a VDS-NC credential from a signature already encoded in the
+/// profile algorithm's canonical raw form.
+#[must_use]
+pub fn assemble_vds_nc_raw(prepared: PreparedVdsNc, signature: &[u8]) -> SignedCredential {
+    let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature);
+    let barcode_data = format!(
+        "{}~{}~{}",
+        prepared.header, prepared.payload_json, signature_b64
+    );
+    SignedCredential::VdsNc {
+        barcode_data,
+        credential_id: prepared.credential_id,
+    }
 }
 
 /// Assemble a VDS-NC credential from prepared data and signature bytes.
@@ -130,52 +162,11 @@ fn normalize_signature_bytes(signature: &[u8]) -> Vec<u8> {
     signature.to_vec()
 }
 
-fn resolve_issuing_country(claims: &CredentialClaims) -> Oid4vciResult<String> {
-    let candidate = claims
-        .claims
-        .get("issuing_country")
-        .and_then(|v| v.as_str())
-        .or_else(|| claims.claims.get("issuer_country").and_then(|v| v.as_str()))
-        .or_else(|| claims.claims.get("country_code").and_then(|v| v.as_str()))
-        .or_else(|| claims.claims.get("iss").and_then(|v| v.as_str()))
-        .unwrap_or("UTO")
-        .trim()
-        .to_ascii_uppercase();
-
-    if candidate.len() != 3 || !candidate.chars().all(|c| c.is_ascii_alphabetic()) {
-        return Err(Oid4vciError::ConfigError(format!(
-            "VDS-NC issuing country must be a 3-letter ISO code, got '{}'",
-            candidate
-        )));
-    }
-
-    Ok(candidate)
-}
-
-fn build_payload_json(claims: &CredentialClaims) -> String {
-    let mut payload = claims.claims.clone();
-
-    if !payload.contains_key("typ") {
-        payload.insert(
-            "typ".to_string(),
-            serde_json::Value::String(claims.credential_type.clone()),
-        );
-    }
-
-    let mut ordered = std::collections::BTreeMap::new();
-    for (k, v) in payload {
-        ordered.insert(k, v);
-    }
-
-    serde_json::to_string(&ordered).unwrap_or_else(|_| "{}".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::signer::CredentialSigner;
     use crate::types::SigningAlgorithm;
-    use std::collections::HashMap;
 
     #[derive(Debug)]
     struct TestSigner;
@@ -198,21 +189,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn signs_vds_nc_with_signer() {
-        let signer = TestSigner;
-
-        let mut claims_map = HashMap::new();
-        claims_map.insert(
-            "issuing_country".to_string(),
-            serde_json::Value::String("AUS".to_string()),
-        );
-        claims_map.insert(
-            "doc".to_string(),
-            serde_json::Value::String("X123456".to_string()),
-        );
-
-        let claims = CredentialClaims {
+    fn cmc_claims(country: &str) -> CredentialClaims {
+        let claims_map = serde_json::from_value(serde_json::json!({
+            "docType": "CMC",
+            "issuingCountry": country,
+            "documentNumber": "X123456",
+            "surname": "EXAMPLE",
+            "givenNames": "ADA",
+            "dateOfBirth": "19900102",
+            "nationality": "AUS",
+            "gender": "F",
+            "dateOfIssue": "20260101",
+            "dateOfExpiry": "20300101"
+        }))
+        .unwrap();
+        CredentialClaims {
             subject_id: None,
             credential_type: "CMC".to_string(),
             claims: claims_map,
@@ -224,7 +215,14 @@ mod tests {
             credential_payload_format: Default::default(),
             w3c_context: vec![],
             w3c_types: vec![],
-        };
+        }
+    }
+
+    #[test]
+    fn signs_vds_nc_with_signer() {
+        let signer = TestSigner;
+
+        let claims = cmc_claims("AUS");
 
         let signed = sign_vds_nc_with_signer(&signer, &claims).unwrap();
         match signed {
@@ -240,29 +238,7 @@ mod tests {
     fn prepare_and_assemble_vds_nc_round_trip() {
         let signer = TestSigner;
 
-        let mut claims_map = HashMap::new();
-        claims_map.insert(
-            "issuing_country".to_string(),
-            serde_json::Value::String("USA".to_string()),
-        );
-        claims_map.insert(
-            "doc".to_string(),
-            serde_json::Value::String("ABC123".to_string()),
-        );
-
-        let claims = CredentialClaims {
-            subject_id: None,
-            credential_type: "CMC".to_string(),
-            claims: claims_map,
-            expiration_seconds: None,
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
+        let claims = cmc_claims("USA");
 
         let prepared = prepare_vds_nc(&signer, &claims).unwrap();
         assert!(prepared.signing_input.starts_with("DC03USA~"));
@@ -280,29 +256,11 @@ mod tests {
     fn rejects_invalid_country() {
         let signer = TestSigner;
 
-        let mut claims_map = HashMap::new();
-        claims_map.insert(
-            "issuing_country".to_string(),
-            serde_json::Value::String("US".to_string()),
-        );
-
-        let claims = CredentialClaims {
-            subject_id: None,
-            credential_type: "CMC".to_string(),
-            claims: claims_map,
-            expiration_seconds: None,
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
+        let claims = cmc_claims("US");
 
         let err = sign_vds_nc_with_signer(&signer, &claims).unwrap_err();
         let msg = format!("{}", err);
-        assert!(msg.contains("issuing country"));
+        assert!(msg.contains("issuingCountry"));
     }
 
     // =========================================================================

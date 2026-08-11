@@ -26,6 +26,11 @@ pyo3::create_exception!(
     PolicyEvaluationError,
     pyo3::exceptions::PyValueError
 );
+pyo3::create_exception!(
+    _marty_rs,
+    VdsNcOperationError,
+    pyo3::exceptions::PyValueError
+);
 
 /// Convert marty_crypto errors to Python exceptions
 fn to_pyerr(err: impl std::fmt::Display) -> PyErr {
@@ -778,6 +783,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "document_verification",
             "device_authentication",
             "flow_state_machine",
+            "vds_nc_profile",
             "status_list"
         ]
     }))
@@ -1757,6 +1763,317 @@ fn vds_nc_verify(barcode: &str, issuer_jwk_json: &str) -> PyResult<Py<PyAny>> {
     })
 }
 
+fn vds_nc_error(error: impl std::fmt::Display) -> PyErr {
+    PyErr::new::<VdsNcOperationError, _>(error.to_string())
+}
+
+/// Inspect canonical signer metadata without asserting authenticity.
+#[pyfunction]
+fn vds_nc_inspect(barcode: &str) -> PyResult<String> {
+    let parsed = marty_verification::inspect_vds_nc(barcode).map_err(vds_nc_error)?;
+    serde_json::to_string(&parsed).map_err(vds_nc_error)
+}
+
+/// Verify canonical profile, signature, printed fields, and temporal policy.
+#[pyfunction]
+#[pyo3(signature = (barcode, public_key_pem, evaluation_date, printed_values_json=None))]
+fn vds_nc_verify_profile(
+    barcode: &str,
+    public_key_pem: &str,
+    evaluation_date: &str,
+    printed_values_json: Option<&str>,
+) -> PyResult<String> {
+    let evaluation_date = chrono::NaiveDate::parse_from_str(evaluation_date, "%Y-%m-%d")
+        .map_err(|_| vds_nc_error("VDS_NC.INVALID_DATE: evaluation_date must use YYYY-MM-DD"))?;
+    let printed_values = printed_values_json
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()
+        .map_err(|error| vds_nc_error(format!("VDS_NC.INVALID_PRINTED_FIELDS: {error}")))?;
+    if printed_values
+        .as_ref()
+        .is_some_and(|value| !value.is_object())
+    {
+        return Err(vds_nc_error(
+            "VDS_NC.INVALID_PRINTED_FIELDS: expected a JSON object",
+        ));
+    }
+    let result = marty_verification::verify_vds_nc_profile_pem(
+        barcode,
+        public_key_pem,
+        printed_values.as_ref(),
+        evaluation_date,
+    )
+    .map_err(vds_nc_error)?;
+    serde_json::to_string(&result).map_err(vds_nc_error)
+}
+
+/// Validate canonical profile, printed fields, and temporal policy without
+/// treating the result as an authenticity decision.
+#[pyfunction]
+#[pyo3(signature = (barcode, evaluation_date, printed_values_json=None))]
+fn vds_nc_validate_profile(
+    barcode: &str,
+    evaluation_date: &str,
+    printed_values_json: Option<&str>,
+) -> PyResult<String> {
+    use marty_oid4vci::formats::vds_nc_profile::{
+        recommended_error_correction, select_barcode_format, validate_fields, validate_temporal,
+        VdsNcDocumentType,
+    };
+
+    let evaluation_date = chrono::NaiveDate::parse_from_str(evaluation_date, "%Y-%m-%d")
+        .map_err(|_| vds_nc_error("VDS_NC.INVALID_DATE: evaluation_date must use YYYY-MM-DD"))?;
+    let printed_values = printed_values_json
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()
+        .map_err(|error| vds_nc_error(format!("VDS_NC.INVALID_PRINTED_FIELDS: {error}")))?;
+    if printed_values
+        .as_ref()
+        .is_some_and(|value| !value.is_object())
+    {
+        return Err(vds_nc_error(
+            "VDS_NC.INVALID_PRINTED_FIELDS: expected a JSON object",
+        ));
+    }
+    let parsed = marty_verification::inspect_vds_nc(barcode).map_err(vds_nc_error)?;
+    let field_errors = validate_fields(&parsed.payload, printed_values.as_ref());
+    let temporal_errors = validate_temporal(&parsed.payload, evaluation_date);
+    let document_type =
+        VdsNcDocumentType::parse(&parsed.metadata.document_type).map_err(vds_nc_error)?;
+    let correction = recommended_error_correction(document_type);
+    let format = select_barcode_format(barcode.len(), correction, None).map_err(vds_nc_error)?;
+    let mut errors = field_errors.clone();
+    errors.extend(temporal_errors.iter().cloned());
+    serde_json::to_string(&serde_json::json!({
+        "canonicalization_ok": true,
+        "field_consistency_valid": field_errors.is_empty(),
+        "temporal_validity_ok": temporal_errors.is_empty(),
+        "document_type": document_type.as_str(),
+        "issuing_country": parsed.country,
+        "signer_id": parsed.metadata.issuer_id,
+        "certificate_reference": parsed.metadata.certificate_reference,
+        "algorithm": parsed.metadata.algorithm,
+        "payload": parsed.payload,
+        "barcode_format": format.as_str(),
+        "error_correction": correction.as_str(),
+        "field_errors": field_errors,
+        "temporal_errors": temporal_errors,
+        "errors": errors,
+        "warnings": if printed_values.is_none() {
+            vec!["No printed values provided for field comparison"]
+        } else {
+            Vec::<&str>::new()
+        },
+    }))
+    .map_err(vds_nc_error)
+}
+
+/// Create and sign a canonical VDS-NC profile with a PEM private key.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn vds_nc_sign_profile(
+    private_key_pem: &str,
+    signer_id: &str,
+    certificate_reference: &str,
+    document_type: &str,
+    issuing_country: &str,
+    document_data_json: &str,
+    algorithm: &str,
+) -> PyResult<String> {
+    use marty_oid4vci::types::{CredentialClaims, SignedCredential};
+
+    let private_key_der =
+        marty_crypto::serialization::load_private_key_pem(private_key_pem).map_err(vds_nc_error)?;
+    let key_type = marty_crypto::serialization::detect_private_key_type(&private_key_der)
+        .map_err(vds_nc_error)?;
+    let expected_key_type = match algorithm {
+        "ES256" => "EC_P256",
+        "ES384" => "EC_P384",
+        "EdDSA" => "Ed25519",
+        "PS256" | "PS384" | "PS512" => "RSA",
+        other => {
+            return Err(vds_nc_error(format!(
+                "unsupported VDS-NC algorithm: {other}"
+            )))
+        }
+    };
+    if key_type != expected_key_type {
+        return Err(vds_nc_error(format!(
+            "VDS_NC.KEY_ALGORITHM_MISMATCH: {key_type} key cannot sign with {algorithm}"
+        )));
+    }
+    let mut claims: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(document_data_json).map_err(|error| {
+            vds_nc_error(format!(
+                "VDS_NC.INVALID_PROFILE: invalid document JSON: {error}"
+            ))
+        })?;
+    claims.insert(
+        "docType".to_owned(),
+        serde_json::Value::String(document_type.to_owned()),
+    );
+    claims.insert(
+        "issuingCountry".to_owned(),
+        serde_json::Value::String(issuing_country.to_owned()),
+    );
+    claims.insert(
+        "signerId".to_owned(),
+        serde_json::Value::String(signer_id.to_owned()),
+    );
+    claims.insert(
+        "certificateReference".to_owned(),
+        serde_json::Value::String(certificate_reference.to_owned()),
+    );
+    let credential_claims = CredentialClaims {
+        subject_id: None,
+        credential_type: document_type.to_owned(),
+        claims,
+        expiration_seconds: None,
+        selective_disclosure_claims: vec![],
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: vec![],
+        credential_payload_format: Default::default(),
+        w3c_context: vec![],
+        w3c_types: vec![],
+    };
+    let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc_profile(
+        signer_id,
+        certificate_reference,
+        algorithm,
+        &credential_claims,
+    )
+    .map_err(vds_nc_error)?;
+    let message = prepared.signing_input.as_bytes();
+    let signature = match algorithm {
+        "ES256" | "ES384" | "EdDSA" => {
+            let (raw_private_key, _) =
+                marty_crypto::serialization::pkcs8_to_raw_private_key(&private_key_der)
+                    .map_err(vds_nc_error)?;
+            match algorithm {
+                "ES256" => marty_crypto::ecdsa::sign_p256_sha256(&raw_private_key, message),
+                "ES384" => marty_crypto::ecdsa::sign_p384_sha384(&raw_private_key, message),
+                "EdDSA" => marty_crypto::ed25519::sign(&raw_private_key, message),
+                _ => unreachable!(),
+            }
+        }
+        "PS256" => marty_crypto::rsa::sign_pss_sha256(&private_key_der, message),
+        "PS384" => marty_crypto::rsa::sign_pss_sha384(&private_key_der, message),
+        "PS512" => marty_crypto::rsa::sign_pss_sha512(&private_key_der, message),
+        _ => unreachable!(),
+    }
+    .map_err(vds_nc_error)?;
+    let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc_raw(prepared, &signature);
+    let (barcode_data, credential_id) = match signed {
+        SignedCredential::VdsNc {
+            barcode_data,
+            credential_id,
+        } => (barcode_data, credential_id),
+        _ => return Err(vds_nc_error("VDS-NC signer returned an unexpected format")),
+    };
+    let parsed = marty_verification::inspect_vds_nc(&barcode_data).map_err(vds_nc_error)?;
+    let document_type = marty_oid4vci::formats::vds_nc_profile::VdsNcDocumentType::parse(
+        &parsed.metadata.document_type,
+    )
+    .map_err(vds_nc_error)?;
+    let correction =
+        marty_oid4vci::formats::vds_nc_profile::recommended_error_correction(document_type);
+    let format = marty_oid4vci::formats::vds_nc_profile::select_barcode_format(
+        barcode_data.len(),
+        correction,
+        None,
+    )
+    .map_err(vds_nc_error)?;
+    serde_json::to_string(&serde_json::json!({
+        "barcode_data": barcode_data,
+        "credential_id": credential_id,
+        "payload": parsed.payload,
+        "metadata": parsed.metadata,
+        "barcode_format": format.as_str(),
+        "error_correction": correction.as_str(),
+    }))
+    .map_err(vds_nc_error)
+}
+
+/// Canonicalize one VDS-NC document profile in Rust.
+#[pyfunction]
+fn vds_nc_canonicalize(document_type: &str, document_data_json: &str) -> PyResult<String> {
+    let document_type =
+        marty_oid4vci::formats::vds_nc_profile::VdsNcDocumentType::parse(document_type)
+            .map_err(vds_nc_error)?;
+    let document: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(document_data_json).map_err(vds_nc_error)?;
+    let canonical =
+        marty_oid4vci::formats::vds_nc_profile::canonicalize_document(document_type, &document)
+            .map_err(vds_nc_error)?;
+    serde_json::to_string(&canonical).map_err(vds_nc_error)
+}
+
+/// Return the retained profile's barcode policy decision.
+#[pyfunction]
+#[pyo3(signature = (document_type, payload_size, preferred_format=None))]
+fn vds_nc_barcode_policy(
+    document_type: &str,
+    payload_size: usize,
+    preferred_format: Option<&str>,
+) -> PyResult<(String, String)> {
+    use marty_oid4vci::formats::vds_nc_profile::{
+        recommended_error_correction, select_barcode_format, VdsNcBarcodeFormat, VdsNcDocumentType,
+    };
+    let document_type = VdsNcDocumentType::parse(document_type).map_err(vds_nc_error)?;
+    let correction = recommended_error_correction(document_type);
+    let preferred = preferred_format
+        .map(|value| match value {
+            "QR" => Ok(VdsNcBarcodeFormat::Qr),
+            "AZTEC" => Ok(VdsNcBarcodeFormat::Aztec),
+            "DM" => Ok(VdsNcBarcodeFormat::DataMatrix),
+            other => Err(vds_nc_error(format!(
+                "unsupported VDS-NC barcode format: {other}"
+            ))),
+        })
+        .transpose()?;
+    let format =
+        select_barcode_format(payload_size, correction, preferred).map_err(vds_nc_error)?;
+    Ok((format.as_str().to_owned(), correction.as_str().to_owned()))
+}
+
+/// Select a barcode format with an explicit native error-correction level.
+#[pyfunction]
+#[pyo3(signature = (encoded_size, error_correction, preferred_format=None))]
+fn vds_nc_select_barcode_format(
+    encoded_size: usize,
+    error_correction: &str,
+    preferred_format: Option<&str>,
+) -> PyResult<String> {
+    use marty_oid4vci::formats::vds_nc_profile::{
+        select_barcode_format, VdsNcBarcodeFormat, VdsNcErrorCorrection,
+    };
+    let correction = match error_correction {
+        "L" => VdsNcErrorCorrection::Low,
+        "M" => VdsNcErrorCorrection::Medium,
+        "Q" => VdsNcErrorCorrection::Quartile,
+        "H" => VdsNcErrorCorrection::High,
+        other => {
+            return Err(vds_nc_error(format!(
+                "unsupported VDS-NC error correction level: {other}"
+            )))
+        }
+    };
+    let preferred = preferred_format
+        .map(|value| match value {
+            "QR" => Ok(VdsNcBarcodeFormat::Qr),
+            "AZTEC" => Ok(VdsNcBarcodeFormat::Aztec),
+            "DM" => Ok(VdsNcBarcodeFormat::DataMatrix),
+            other => Err(vds_nc_error(format!(
+                "unsupported VDS-NC barcode format: {other}"
+            ))),
+        })
+        .transpose()?;
+    select_barcode_format(encoded_size, correction, preferred)
+        .map(|format| format.as_str().to_owned())
+        .map_err(vds_nc_error)
+}
+
 /// Python module for Marty cryptographic operations.
 ///
 /// This module provides essential cryptographic functions for credential
@@ -1787,6 +2104,10 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "PolicyEvaluationError",
         m.py().get_type::<PolicyEvaluationError>(),
     )?;
+    m.add(
+        "VdsNcOperationError",
+        m.py().get_type::<VdsNcOperationError>(),
+    )?;
     remote_credential::register(m)?;
     status_list::register_status_list_bindings(m)?;
 
@@ -1816,6 +2137,13 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_inspect, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_verify_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_validate_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_sign_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_canonicalize, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_barcode_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(vds_nc_select_barcode_format, m)?)?;
     m.add_class::<mdoc::MdocDocumentVerificationEvidence>()?;
     m.add_class::<mdoc::MdocIssuerVerificationResult>()?;
     m.add_class::<mdoc::MdocPresentationVerificationResult>()?;
@@ -2377,6 +2705,112 @@ mod tests {
         assert_eq!(
             normalize_presentation_credential_format("JSON_LD"),
             "W3C_VCDM_V2_DI"
+        );
+    }
+
+    #[test]
+    fn vds_nc_profile_binding_signs_and_verifies_in_rust() {
+        let (private_key, public_key) = marty_crypto::ecdsa::generate_p256_keypair().unwrap();
+        let private_der =
+            marty_crypto::serialization::raw_private_key_to_pkcs8(&private_key, "EC_P256").unwrap();
+        let public_der =
+            marty_crypto::serialization::raw_public_key_to_spki(&public_key, "EC_P256").unwrap();
+        let private_pem = marty_crypto::serialization::save_private_key_pem(&private_der).unwrap();
+        let public_pem = marty_crypto::serialization::save_public_key_pem(&public_der).unwrap();
+        let document = serde_json::json!({
+            "documentNumber": "X123456",
+            "surname": "Example",
+            "givenNames": "Ada",
+            "dateOfBirth": "19900102",
+            "nationality": "AUS",
+            "gender": "F",
+            "dateOfIssue": "20260101",
+            "dateOfExpiry": "20300101"
+        });
+        let signed: serde_json::Value = serde_json::from_str(
+            &vds_nc_sign_profile(
+                &private_pem,
+                "TESTSGN",
+                "TESTCERT001",
+                "CMC",
+                "AUS",
+                &document.to_string(),
+                "ES256",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let verified: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(
+                signed["barcode_data"].as_str().unwrap(),
+                &public_pem,
+                "2027-01-01",
+                Some(r#"{"surname":"example"}"#),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(verified["is_valid"], true);
+        assert_eq!(verified["signature_valid"], true);
+        assert_eq!(verified["field_consistency_valid"], true);
+        assert_eq!(verified["signer_id"], "TESTSGN");
+
+        let policy: serde_json::Value = serde_json::from_str(
+            &vds_nc_validate_profile(
+                signed["barcode_data"].as_str().unwrap(),
+                "2031-01-01",
+                Some(r#"{"surname":"changed"}"#),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(policy["canonicalization_ok"], true);
+        assert_eq!(policy["field_consistency_valid"], false);
+        assert_eq!(policy["temporal_validity_ok"], false);
+        assert!(policy["field_errors"].as_array().unwrap()[0]
+            .as_str()
+            .unwrap()
+            .contains("FIELD_MISMATCH"));
+
+        let (rsa_private_der, rsa_public_der) =
+            marty_crypto::rsa::generate_rsa_keypair(2048).unwrap();
+        let rsa_private_pem =
+            marty_crypto::serialization::save_private_key_pem(&rsa_private_der).unwrap();
+        let rsa_public_pem =
+            marty_crypto::serialization::save_public_key_pem(&rsa_public_der).unwrap();
+        let rsa_signed: serde_json::Value = serde_json::from_str(
+            &vds_nc_sign_profile(
+                &rsa_private_pem,
+                "TESTSGN",
+                "TESTRSA001",
+                "CMC",
+                "AUS",
+                &document.to_string(),
+                "PS256",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let rsa_verified: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(
+                rsa_signed["barcode_data"].as_str().unwrap(),
+                &rsa_public_pem,
+                "2027-01-01",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rsa_verified["is_valid"], true);
+        assert_eq!(rsa_verified["algorithm"], "PS256");
+
+        assert_eq!(
+            vds_nc_select_barcode_format(2_000, "L", Some("QR")).unwrap(),
+            "QR"
+        );
+        assert_eq!(
+            vds_nc_select_barcode_format(2_000, "H", Some("QR")).unwrap(),
+            "DM"
         );
     }
 }

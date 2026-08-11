@@ -30,6 +30,7 @@ full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "s
 [dependencies]
 # Internal crate
 marty-crypto = { workspace = true, features = ["sod-builder", "cert-builder"] }
+marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci" }
 
 # Re-export crypto types
 x509-cert = { workspace = true }

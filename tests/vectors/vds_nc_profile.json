@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "canonical": [
+    {
+      "name": "cmc_normalizes_case_and_scalar_text",
+      "document_type": "CMC",
+      "input": {
+        "docType": " cmc ",
+        "issuingCountry": "aus",
+        "documentNumber": "x123456",
+        "surname": "Example",
+        "givenNames": "Ada",
+        "dateOfBirth": "19900102",
+        "nationality": "aus",
+        "gender": "f",
+        "dateOfIssue": "20260101",
+        "dateOfExpiry": "20300101"
+      },
+      "expected_json": "{\"dateOfBirth\":\"19900102\",\"dateOfExpiry\":\"20300101\",\"dateOfIssue\":\"20260101\",\"docType\":\"CMC\",\"documentNumber\":\"X123456\",\"gender\":\"F\",\"givenNames\":\"ADA\",\"issuingCountry\":\"AUS\",\"nationality\":\"AUS\",\"surname\":\"EXAMPLE\"}"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "rejects_extra_field",
+      "document_type": "CMC",
+      "input": {
+        "docType": "CMC",
+        "issuingCountry": "AUS",
+        "documentNumber": "X123456",
+        "surname": "EXAMPLE",
+        "givenNames": "ADA",
+        "dateOfBirth": "19900102",
+        "nationality": "AUS",
+        "gender": "F",
+        "dateOfIssue": "20260101",
+        "dateOfExpiry": "20300101",
+        "unknown": true
+      },
+      "error_contains": "extra fields"
+    },
+    {
+      "name": "rejects_impossible_date",
+      "document_type": "CMC",
+      "input": {
+        "docType": "CMC",
+        "issuingCountry": "AUS",
+        "documentNumber": "X123456",
+        "surname": "EXAMPLE",
+        "givenNames": "ADA",
+        "dateOfBirth": "20260231",
+        "nationality": "AUS",
+        "gender": "F",
+        "dateOfIssue": "20260101",
+        "dateOfExpiry": "20300101"
+      },
+      "error_contains": "valid date"
+    },
+    {
+      "name": "rejects_short_country",
+      "document_type": "CMC",
+      "input": {
+        "docType": "CMC",
+        "issuingCountry": "US",
+        "documentNumber": "X123456",
+        "surname": "EXAMPLE",
+        "givenNames": "ADA",
+        "dateOfBirth": "19900102",
+        "nationality": "AUS",
+        "gender": "F",
+        "dateOfIssue": "20260101",
+        "dateOfExpiry": "20300101"
+      },
+      "error_contains": "three uppercase ASCII letters"
+    }
+  ]
+}

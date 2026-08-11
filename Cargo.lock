@@ -3846,6 +3846,7 @@ dependencies = [
  "isomdl",
  "ldap3",
  "marty-crypto",
+ "marty-oid4vci",
  "moka",
  "openssl",
  "p256",
