@@ -119,7 +119,7 @@ jobs:
             wait_for_index "$crate"
           }
 
-          for crate in marty-types marty-crypto marty-biometrics marty-didcomm; do publish "$crate"; done
+          for crate in marty-types marty-crypto marty-biometrics marty-didcomm marty-status; do publish "$crate"; done
           for crate in marty-verification marty-secure-storage marty-zkp; do publish "$crate"; done
           publish marty-oid4vci
           publish marty-iso18013

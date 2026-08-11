@@ -188,6 +188,7 @@ jobs:
       matrix:
         crate:
           - marty-crypto
+          - marty-status
           - marty-secure-storage
           - marty-bindings
     steps:

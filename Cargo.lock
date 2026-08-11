@@ -3586,12 +3586,12 @@ dependencies = [
  "chrono",
  "ciborium",
  "coset",
- "flate2",
  "hex",
  "isomdl",
  "marty-crypto",
  "marty-didcomm",
  "marty-oid4vci",
+ "marty-status",
  "marty-types",
  "marty-verification",
  "pem-rfc7468 0.7.0",
@@ -3778,6 +3778,20 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "marty-status"
+version = "0.1.45"
+dependencies = [
+ "base64 0.22.1",
+ "criterion",
+ "flate2",
+ "hex",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
