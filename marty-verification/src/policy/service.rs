@@ -463,9 +463,20 @@ pub fn evaluate_service_policy(
 
     if let Some(external) = &request.external_authorization {
         if !external.evaluated {
+            let details = external
+                .reasons
+                .iter()
+                .chain(external.errors.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ");
             errors.push(global_violation(
                 ServicePolicyErrorCode::ExternalAuthorizationNotEvaluated,
-                "External authorization was supplied but not evaluated",
+                &if details.is_empty() {
+                    "External authorization was supplied but not evaluated".to_string()
+                } else {
+                    format!("External authorization was not evaluated: {details}")
+                },
             ));
         } else if !external.allowed {
             errors.push(global_violation(
@@ -1514,6 +1525,23 @@ mod tests {
         assert!(codes.contains(&ServicePolicyErrorCode::HolderBindingRequired));
         assert!(codes.contains(&ServicePolicyErrorCode::ProofTimestampFuture));
         assert!(codes.contains(&ServicePolicyErrorCode::ExternalAuthorizationDenied));
+    }
+
+    #[test]
+    fn unevaluated_external_authorization_preserves_failure_details() {
+        let mut request = request();
+        request.external_authorization = Some(ExternalAuthorizationFacts {
+            evaluated: false,
+            allowed: false,
+            reasons: Vec::new(),
+            errors: vec!["Cedar policy engine is unavailable".to_string()],
+        });
+
+        let result = evaluate_service_policy(request).unwrap();
+        assert_eq!(result.decision, ServiceDecision::Deny);
+        assert!(result
+            .decision_reason
+            .contains("Cedar policy engine is unavailable"));
     }
 
     #[test]
