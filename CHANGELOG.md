@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.43] - 2026-08-10
+
+### Added
+
+- Add canonical fail-closed OpenID Connect token validation with typed stable
+  error codes, issuer/audience/authorized-party/nonce/time-claim policy, JWKS
+  key selection, algorithm allowlisting, and access-token hash verification.
+- Expose OIDC validation and native backend/version/capability diagnostics
+  through the supported `_marty_rs` Python binding surface.
+
+### Security
+
+- Reject malformed, unsigned, ambiguously keyed, expired, not-yet-valid,
+  incorrectly issued, incorrectly addressed, or nonce-mismatched OIDC tokens.
+- Require callers to receive an explicit native error when the Rust extension
+  or required capability is unavailable; no Python validation fallback exists.
+
 ## [0.1.42] - 2026-08-10
 
 ### Fixed
