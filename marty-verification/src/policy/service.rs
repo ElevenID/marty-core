@@ -629,7 +629,9 @@ fn evaluate_candidate(
         ));
     }
     if let Some(required_format) = &requirement.credential_payload_format {
-        if canonical_format(required_format) != canonical_format(&credential.credential_format) {
+        if canonical_credential_format(required_format)
+            != canonical_credential_format(&credential.credential_format)
+        {
             errors.push(violation(
                 ServicePolicyErrorCode::CredentialFormatMismatch,
                 requirement,
@@ -1004,12 +1006,19 @@ fn value_text(value: &Value) -> Option<String> {
     }
 }
 
-fn canonical_format(value: &str) -> String {
+/// Normalize every service-supported credential format alias in one place.
+pub fn canonical_credential_format(value: &str) -> String {
     let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
+        "" => "UNKNOWN".to_string(),
+        "w3c-vcdm-di" | "w3c-vcdm-v2-di" | "data-integrity" | "json-ld" | "ldp-vc" => {
+            "W3C_VCDM_V2_DI".to_string()
+        }
         "sd-jwt" | "sd-jwt-vc" | "dc+sd-jwt" | "vc+sd-jwt" | "spruce-vc+sd-jwt" | "ietf-sd-jwt"
         | "w3c-vcdm-v2-sd-jwt" => "SD_JWT_VC".to_string(),
-        "w3c-vc" | "jwt-vc" | "vc-jwt" | "jwt-vc-json" => "VC_JWT".to_string(),
+        "w3c-vc" | "w3c-vcdm-v2-jwt-vc" | "jwt-vc" | "vc-jwt" | "jwt-vc-json" => {
+            "VC_JWT".to_string()
+        }
         "mdoc" | "mso-mdoc" => "MDOC".to_string(),
         "openbadge-v3" | "open-badge-v3" | "openbadge3" => "OPENBADGE_V3".to_string(),
         "openbadge-v2" | "open-badge-v2" | "openbadge2" => "OPENBADGE_V2".to_string(),
@@ -1626,5 +1635,25 @@ mod tests {
             .iter()
             .any(|error| error.code == ServicePolicyErrorCode::ConflictingVerifiedClaim));
         assert!(result.verified_claims.is_empty());
+    }
+
+    #[test]
+    fn canonical_format_aliases_are_stable() {
+        assert_eq!(canonical_credential_format("sd_jwt_vc"), "SD_JWT_VC");
+        assert_eq!(
+            canonical_credential_format("w3c_vcdm_v2_sd_jwt"),
+            "SD_JWT_VC"
+        );
+        assert_eq!(canonical_credential_format("jwt_vc_json"), "VC_JWT");
+        assert_eq!(
+            canonical_credential_format("w3c_vcdm_v2_di"),
+            "W3C_VCDM_V2_DI"
+        );
+        assert_eq!(
+            canonical_credential_format("JSON_LD"),
+            "W3C_VCDM_V2_DI"
+        );
+        assert_eq!(canonical_credential_format("mso_mdoc"), "MDOC");
+        assert_eq!(canonical_credential_format("open-badge-v3"), "OPENBADGE_V3");
     }
 }

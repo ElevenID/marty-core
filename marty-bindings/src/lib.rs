@@ -753,6 +753,12 @@ fn evaluate_service_presentation_policy(request_json: &str) -> PyResult<String> 
         .map_err(PyErr::new::<PolicyEvaluationError, _>)
 }
 
+/// Normalize a presentation credential format using the canonical Rust aliases.
+#[pyfunction]
+fn normalize_presentation_credential_format(value: &str) -> String {
+    marty_verification::policy::canonical_credential_format(value)
+}
+
 /// Return explicit native backend and capability diagnostics for readiness.
 #[pyfunction]
 fn native_backend_diagnostics() -> PyResult<String> {
@@ -1836,6 +1842,10 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oidc_validate_id_token, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_presentation_policy, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_service_presentation_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        normalize_presentation_credential_format,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(native_backend_diagnostics, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;
@@ -2402,5 +2412,17 @@ mod tests {
         let error = evaluate_service_presentation_policy_impl(&request.to_string())
             .expect_err("unknown constraints must fail closed");
         assert!(error.contains("unknown variant"));
+    }
+
+    #[test]
+    fn presentation_format_normalization_uses_service_aliases() {
+        assert_eq!(
+            normalize_presentation_credential_format("w3c_vcdm_v2_sd_jwt"),
+            "SD_JWT_VC"
+        );
+        assert_eq!(
+            normalize_presentation_credential_format("JSON_LD"),
+            "W3C_VCDM_V2_DI"
+        );
     }
 }

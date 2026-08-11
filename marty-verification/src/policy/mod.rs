@@ -40,7 +40,10 @@ pub mod ranking;
 pub mod service;
 pub mod types;
 
-pub use service::{evaluate_service_policy, ServicePolicyError, ServicePolicyEvaluationRequest};
+pub use service::{
+    canonical_credential_format, evaluate_service_policy, ServicePolicyError,
+    ServicePolicyEvaluationRequest,
+};
 
 pub use types::{
     CredentialRankingStrategy, FreshnessRequirements, HolderBindingMethod, PolicyComponent,
