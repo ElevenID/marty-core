@@ -1649,10 +1649,7 @@ mod tests {
             canonical_credential_format("w3c_vcdm_v2_di"),
             "W3C_VCDM_V2_DI"
         );
-        assert_eq!(
-            canonical_credential_format("JSON_LD"),
-            "W3C_VCDM_V2_DI"
-        );
+        assert_eq!(canonical_credential_format("JSON_LD"), "W3C_VCDM_V2_DI");
         assert_eq!(canonical_credential_format("mso_mdoc"), "MDOC");
         assert_eq!(canonical_credential_format("open-badge-v3"), "OPENBADGE_V3");
     }
