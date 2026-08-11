@@ -1,7 +1,8 @@
 use chrono::{Duration, Utc};
 use marty_verification::dtc::{
-    create_dtc_json, sign_dtc_json, verify_dtc_json, verify_dtc_json_with_status,
-    ArtifactProvenance, AuthenticatedDtcStatus, DtcCurrentStatus, StatusAuthorityProvenance,
+    assemble_dtc_signature_json, create_dtc_json, prepare_dtc_signing_json, sign_dtc_json,
+    verify_dtc_json, verify_dtc_json_with_status, ArtifactProvenance, AuthenticatedDtcStatus,
+    DtcCurrentStatus, StatusAuthorityProvenance,
 };
 
 const SIGNING_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
@@ -172,6 +173,74 @@ fn create_normalizes_and_fills_sod_hash() {
         .and_then(|s| s.as_str())
         .unwrap_or("");
     assert!(!t1.is_empty(), "expected sod_hash to be filled");
+}
+
+#[test]
+fn external_signer_round_trip_uses_canonical_rust_payload() {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+    use p256::pkcs8::DecodePrivateKey;
+
+    let created = create_dtc_json(&sample_create_request()).expect("create failed");
+    let prepared = prepare_dtc_signing_json(&created).expect("prepare failed");
+    let prepared: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+    assert_eq!(prepared["signature_encoding"], "DER_BASE64");
+    assert_eq!(
+        prepared["supported_algorithms"],
+        serde_json::json!(["ES256", "ES384"])
+    );
+
+    let signing_input = STANDARD
+        .decode(prepared["signing_input_base64"].as_str().unwrap())
+        .unwrap();
+    let signing_key = SigningKey::from_pkcs8_pem(SIGNING_KEY_PEM).unwrap();
+    let signature: Signature = signing_key.sign(&signing_input);
+    let assembled = assemble_dtc_signature_json(
+        &serde_json::json!({
+            "dtc": prepared["dtc"],
+            "signature_base64": STANDARD.encode(signature.to_der().as_bytes()),
+            "signer_id": "external-test-signer",
+            "signer_public_key_pem": format!("{SIGNER_PUBLIC_PEM}\n"),
+            "signature_date": "2026-08-11T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .expect("assemble failed");
+    let assembled: serde_json::Value = serde_json::from_str(&assembled).unwrap();
+
+    assert_eq!(assembled["is_signed"], true);
+    assert_eq!(assembled["signature_info"]["is_valid"], true);
+    assert_eq!(
+        assembled["signature_info"]["signer_id"],
+        "external-test-signer"
+    );
+    assert_eq!(
+        assembled["signature_info"]["signer_public_key_pem"],
+        SIGNER_PUBLIC_PEM
+    );
+}
+
+#[test]
+fn external_signer_output_fails_closed_when_payload_or_signature_is_invalid() {
+    let created = create_dtc_json(&sample_create_request()).expect("create failed");
+    let prepared = prepare_dtc_signing_json(&created).expect("prepare failed");
+    let mut prepared: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+    prepared["dtc"]["passport_number"] = "TAMPERED".into();
+
+    let invalid = serde_json::json!({
+        "dtc": prepared["dtc"],
+        "signature_base64": "AA==",
+        "signer_id": "external-test-signer",
+        "signer_public_key_pem": SIGNER_PUBLIC_PEM
+    });
+    assert!(assemble_dtc_signature_json(&invalid.to_string()).is_err());
+
+    let missing_key = serde_json::json!({
+        "dtc": prepared["dtc"],
+        "signature_base64": "AA==",
+        "signer_id": "external-test-signer"
+    });
+    assert!(assemble_dtc_signature_json(&missing_key.to_string()).is_err());
 }
 
 #[test]
