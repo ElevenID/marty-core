@@ -68,7 +68,6 @@ jobs:
             sleep 5
           done
           test "$(jq -r .status preparation-run.json)" = completed
-          rm -rf prepared-tag-evidence
           gh run download "$run_id" --name "stable-tag-evidence-$TAG" \
             --dir prepared-tag-evidence
           python scripts/stable_tag_gate.py validate-release \

@@ -86,7 +86,7 @@ jobs:
           --policy .github/stable-tag-policy.json
           --evidence stable-tag-evidence.json
 
-      - name: Create and push the exact annotated tag
+      - name: Create the exact annotated tag locally
         shell: bash
         env:
           COMMIT: ${{ inputs.source_sha }}
@@ -110,8 +110,6 @@ jobs:
             --evidence stable-tag-evidence.json \
             --tag-object "$tag_object" \
             --peeled-commit "$peeled"
-          git push origin "refs/tags/$TAG:refs/tags/$TAG"
-
       - name: Upload immutable tag preparation evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -120,9 +118,20 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Dispatch release from the exact tag ref
+      - name: Publish the exact tag and dispatch its release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-        run: gh workflow run release.yml --ref "$TAG" -f "tag=$TAG"
+        run: |
+          set -euo pipefail
+          git push origin "refs/tags/$TAG:refs/tags/$TAG"
+          for attempt in $(seq 1 5); do
+            if gh workflow run release.yml --ref "$TAG" -f "tag=$TAG"; then
+              exit 0
+            fi
+            echo "Release dispatch attempt $attempt failed" >&2
+            sleep 5
+          done
+          echo "::error::The immutable tag exists but release dispatch failed; quarantine it"
+          exit 1
