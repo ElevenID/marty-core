@@ -102,6 +102,16 @@ class TestStatusLists:
         assert restored.is_revoked(131_071)
         assert restored.count_revoked() == 2
 
+    def test_persisted_raw_bytes_roundtrip(self):
+        token = _marty_rs.TokenStatusList.from_bytes(b"\x00\x07", 2, 8)
+        token.set(0, 3)
+        assert bytes(token.to_bytes()) == b"\x03\x07"
+
+        bitstring = _marty_rs.BitstringStatusList.from_bytes(b"\x80", 8)
+        assert bitstring.is_revoked(0)
+        bitstring.reinstate(0)
+        assert bytes(bitstring.to_bytes()) == b"\x00"
+
     def test_malformed_payloads_are_rejected(self):
         with pytest.raises(ValueError):
             _marty_rs.TokenStatusList.from_compressed(b"not-zlib", 100, 8)

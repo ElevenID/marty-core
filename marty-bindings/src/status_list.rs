@@ -68,6 +68,15 @@ impl TokenStatusList {
 
     #[staticmethod]
     #[pyo3(signature = (data, size, bits=8))]
+    pub fn from_bytes(data: Vec<u8>, size: usize, bits: u8) -> PyResult<Self> {
+        Ok(Self {
+            inner: marty_status::TokenStatusList::from_bytes(data, size, bits)
+                .map_err(native_error)?,
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (data, size, bits=8))]
     pub fn from_compressed(data: Vec<u8>, size: usize, bits: u8) -> PyResult<Self> {
         Ok(Self {
             inner: marty_status::TokenStatusList::from_compressed(&data, size, bits)
@@ -141,6 +150,14 @@ impl BitstringStatusList {
 
     pub fn to_base64url(&self) -> PyResult<String> {
         self.inner.to_base64url().map_err(native_error)
+    }
+
+    #[staticmethod]
+    pub fn from_bytes(data: Vec<u8>, size: usize) -> PyResult<Self> {
+        Ok(Self {
+            inner: marty_status::BitstringStatusList::from_bytes(data, size)
+                .map_err(native_error)?,
+        })
     }
 
     #[staticmethod]
@@ -245,9 +262,24 @@ mod tests {
 
     #[test]
     fn binding_rejects_malformed_and_unreasonable_inputs() {
+        assert!(TokenStatusList::from_bytes(vec![0], 2, 8).is_err());
+        assert!(BitstringStatusList::from_bytes(vec![0], 9).is_err());
         assert!(TokenStatusList::from_compressed(vec![1, 2, 3], 100, 8).is_err());
         assert!(BitstringStatusList::from_base64url("not-multibase", 8).is_err());
         assert!(TokenStatusList::new(marty_status::MAX_STATUS_LIST_ENTRIES + 1, 8).is_err());
+    }
+
+    #[test]
+    fn binding_restores_persisted_raw_bytes() {
+        let mut token = TokenStatusList::from_bytes(vec![0, 7], 2, 8).unwrap();
+        assert_eq!(token.get(1).unwrap(), 7);
+        token.set(0, 3).unwrap();
+        assert_eq!(token.to_bytes(), vec![3, 7]);
+
+        let mut bitstring = BitstringStatusList::from_bytes(vec![0b1000_0000], 8).unwrap();
+        assert!(bitstring.get(0).unwrap());
+        bitstring.reinstate(0).unwrap();
+        assert_eq!(bitstring.to_bytes(), vec![0]);
     }
 
     #[test]
