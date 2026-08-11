@@ -84,5 +84,10 @@ class ReleaseChecksumPolicyTests(unittest.TestCase):
         self.assertTrue(any("must verify" in error for error in errors))
 
 
+class StableTagGateContractTests(unittest.TestCase):
+    def test_checked_in_stable_tag_gate_is_complete(self) -> None:
+        self.assertEqual(check_release_contract.check_stable_tag_gate(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,29 @@
+{
+  "schema": "elevenid.stable-tag-preparation/v1",
+  "required_workflows": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "event": "push"
+    },
+    {
+      "path": ".github/workflows/open-source-policy.yml",
+      "event": "push"
+    },
+    {
+      "path": ".github/workflows/organization-quality.yml",
+      "event": "push"
+    },
+    {
+      "path": ".github/workflows/license-compliance.yml",
+      "event": "push"
+    },
+    {
+      "path": ".github/workflows/mip-release-wallet.yml",
+      "event": "push"
+    },
+    {
+      "path": "dynamic/github-code-scanning/codeql",
+      "event": "dynamic"
+    }
+  ]
+}

@@ -32,6 +32,8 @@ RELEASE_DELETION_PATTERNS = (
 )
 CAPABILITY_LIFECYCLE = ROOT / "capability-lifecycle.json"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+PREPARE_STABLE_WORKFLOW = ROOT / ".github" / "workflows" / "prepare-stable-tag.yml"
+STABLE_TAG_POLICY = ROOT / ".github" / "stable-tag-policy.json"
 
 
 def load_toml(path: Path) -> dict[str, object]:
@@ -161,6 +163,48 @@ def check_release_checksum_policy(workflow_text: str | None = None) -> list[str]
     return errors
 
 
+def check_stable_tag_gate() -> list[str]:
+    errors: list[str] = []
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    prepare = PREPARE_STABLE_WORKFLOW.read_text(encoding="utf-8")
+    policy = json.loads(STABLE_TAG_POLICY.read_text(encoding="utf-8"))
+    required_paths = {
+        item.get("path")
+        for item in policy.get("required_workflows", [])
+        if isinstance(item, dict)
+    }
+    expected_paths = {
+        ".github/workflows/ci.yml",
+        ".github/workflows/open-source-policy.yml",
+        ".github/workflows/organization-quality.yml",
+        ".github/workflows/license-compliance.yml",
+        ".github/workflows/mip-release-wallet.yml",
+        "dynamic/github-code-scanning/codeql",
+    }
+    if policy.get("schema") != "elevenid.stable-tag-preparation/v1":
+        errors.append(".github/stable-tag-policy.json: invalid schema")
+    if required_paths != expected_paths:
+        errors.append(".github/stable-tag-policy.json: required workflow set is incomplete")
+    for marker in (
+        "scripts/stable_tag_gate.py prepare",
+        "git tag -a",
+        "git ls-remote --tags",
+        "stable-tag-evidence-${{ inputs.tag }}",
+        "gh workflow run release.yml --ref",
+    ):
+        if marker not in prepare:
+            errors.append(f"prepare-stable-tag.yml: missing {marker!r}")
+    for marker in (
+        "scripts/stable_tag_gate.py validate-release",
+        "gh run download",
+        "actions: read",
+        "Run the release workflow from the exact prepared tag ref",
+    ):
+        if marker not in release:
+            errors.append(f"release.yml: missing {marker!r}")
+    return errors
+
+
 def check_capability_lifecycle(as_of: date | None = None) -> list[str]:
     errors: list[str] = []
     today = as_of or date.today()
@@ -261,6 +305,7 @@ def main() -> int:
         *check_release_asset_policy(),
         *check_native_build_cache_scope(),
         *check_release_checksum_policy(),
+        *check_stable_tag_gate(),
         *check_capability_lifecycle(),
     ]
     if errors:
@@ -277,6 +322,7 @@ def main() -> int:
     print(
         "release-contract: checksum manifest excludes itself and verifies listed assets"
     )
+    print("release-contract: stable tags require exact-main preparation evidence")
     print("release-contract: temporary capability lifecycle policy is current")
     return 0
 
