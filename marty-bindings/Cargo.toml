@@ -19,6 +19,7 @@ marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", features = ["lti
 marty-didcomm = { version = "0.1.5", path = "../marty-didcomm" }
 marty-verification = { version = "0.1.5", path = "../marty-verification" }
 marty-types = { version = "0.1.5", path = "../marty-types" }
+marty-status = { version = "0.1.45", path = "../marty-status" }
 
 # PyO3 for Python bindings (use workspace version)
 pyo3 = { workspace = true, features = ["abi3-py311"] }
@@ -38,7 +39,6 @@ bs58 = "0.5"
 # DateTime for credential timestamps
 chrono = { version = "0.4", features = ["serde"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
-flate2 = "1.0"
 
 # Error handling
 anyhow = "1.0"

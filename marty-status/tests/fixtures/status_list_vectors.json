@@ -1,0 +1,25 @@
+{
+  "schema": "elevenid.status-list-vectors/v1",
+  "vectors": [
+    {
+      "id": "ietf-draft-20-one-bit-example",
+      "source": "https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/20/",
+      "kind": "token_status_list",
+      "size": 16,
+      "bits": 1,
+      "statuses": [1, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 0, 1],
+      "raw_hex": "b9a3",
+      "compressed_hex": "78dadbb918000217015d",
+      "encoded": "eNrbuRgAAhcBXQ"
+    },
+    {
+      "id": "w3c-recommendation-empty-privacy-floor",
+      "source": "https://www.w3.org/TR/vc-bitstring-status-list/",
+      "kind": "bitstring_status_list",
+      "size": 131072,
+      "revoked_indices": [],
+      "raw_hex_prefix": "0000000000000000",
+      "encoded": "uH4sIAAAAAAAAA-3BMQEAAADCoPVPbQwfoAAAAAAAAAAAAAAAAAAAAIC3AYbSVKsAQAAA"
+    }
+  ]
+}

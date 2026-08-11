@@ -11,6 +11,8 @@ Foundational Rust crates for the Marty ecosystem.
 | [`marty-secure-storage`](./marty-secure-storage) | Encrypted SQLite with platform keychain integration | 🚧 |
 | [`marty-biometrics`](./marty-biometrics) | Biometric authentication (iOS Face ID, Touch ID, Android) | 🚧 |
 
+| [`marty-status`](./marty-status) | Canonical IETF Token Status List and W3C Bitstring Status List processing | Current |
+
 **Note:** marty-core is the canonical source for all Rust verification and crypto libraries. All other projects ([marty-credentials](../marty-credentials), [marty-verifier](../marty-verifier)) depend on these crates.
 
 ## Architecture

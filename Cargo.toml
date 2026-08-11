@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-bindings", "marty-oid4vci", "marty-didcomm", "marty-test-wallet"]
+members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-status", "marty-bindings", "marty-oid4vci", "marty-didcomm", "marty-test-wallet"]
 resolver = "2"
 
 [workspace.package]
@@ -109,6 +109,7 @@ marty-crypto = { version = "0.1.5", path = "marty-crypto" }
 marty-verification = { version = "0.1.5", path = "marty-verification" }
 marty-secure-storage = { version = "0.1.5", path = "marty-secure-storage" }
 marty-biometrics = { version = "0.1.5", path = "marty-biometrics" }
+marty-status = { version = "0.1.45", path = "marty-status" }
 
 # Test/dev dependencies
 rcgen = "0.14"
