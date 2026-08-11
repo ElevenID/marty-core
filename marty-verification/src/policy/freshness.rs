@@ -1,7 +1,6 @@
 //! Freshness constraint validation.
 
 use crate::policy::types::FreshnessRequirements;
-use std::time::{Duration, SystemTime};
 
 /// Checks credential and presentation freshness constraints.
 pub struct FreshnessChecker {
@@ -16,17 +15,22 @@ impl FreshnessChecker {
     }
 
     /// Validate credential issuance time against max age constraint.
-    pub fn check_credential_age(&self, issued_at: SystemTime) -> FreshnessCheckResult {
+    pub fn check_credential_age(
+        &self,
+        issued_at_epoch_seconds: u64,
+        evaluation_time_epoch_seconds: u64,
+    ) -> FreshnessCheckResult {
+        let Some(age_seconds) = evaluation_time_epoch_seconds.checked_sub(issued_at_epoch_seconds)
+        else {
+            return FreshnessCheckResult::InvalidFuture(
+                "Credential issuance time is after evaluation time".to_string(),
+            );
+        };
         if let Some(max_age_seconds) = self.requirements.max_credential_age_seconds {
-            let age = SystemTime::now()
-                .duration_since(issued_at)
-                .unwrap_or(Duration::from_secs(0));
-
-            if age.as_secs() > max_age_seconds {
+            if age_seconds > max_age_seconds {
                 return FreshnessCheckResult::Stale(format!(
                     "Credential is {} seconds old, maximum allowed is {}",
-                    age.as_secs(),
-                    max_age_seconds
+                    age_seconds, max_age_seconds
                 ));
             }
         }
@@ -35,16 +39,21 @@ impl FreshnessChecker {
     }
 
     /// Validate presentation/proof time against max proof age.
-    pub fn check_proof_age(&self, proof_timestamp: SystemTime) -> FreshnessCheckResult {
-        let age = SystemTime::now()
-            .duration_since(proof_timestamp)
-            .unwrap_or(Duration::from_secs(0));
-
-        if age.as_secs() > self.requirements.max_proof_age_seconds {
+    pub fn check_proof_age(
+        &self,
+        proof_epoch_seconds: u64,
+        evaluation_time_epoch_seconds: u64,
+    ) -> FreshnessCheckResult {
+        let Some(age_seconds) = evaluation_time_epoch_seconds.checked_sub(proof_epoch_seconds)
+        else {
+            return FreshnessCheckResult::InvalidFuture(
+                "Proof time is after evaluation time".to_string(),
+            );
+        };
+        if age_seconds > self.requirements.max_proof_age_seconds {
             return FreshnessCheckResult::Stale(format!(
                 "Proof is {} seconds old, maximum allowed is {}",
-                age.as_secs(),
-                self.requirements.max_proof_age_seconds
+                age_seconds, self.requirements.max_proof_age_seconds
             ));
         }
 
@@ -62,6 +71,7 @@ impl FreshnessChecker {
 pub enum FreshnessCheckResult {
     Fresh,
     Stale(String),
+    InvalidFuture(String),
 }
 
 impl FreshnessCheckResult {
@@ -72,7 +82,9 @@ impl FreshnessCheckResult {
     pub fn violation_message(&self) -> Option<&str> {
         match self {
             FreshnessCheckResult::Fresh => None,
-            FreshnessCheckResult::Stale(msg) => Some(msg),
+            FreshnessCheckResult::Stale(msg) | FreshnessCheckResult::InvalidFuture(msg) => {
+                Some(msg)
+            }
         }
     }
 }
@@ -123,8 +135,7 @@ mod tests {
     #[test]
     fn test_credential_age_fresh() {
         let checker = FreshnessChecker::new(&default_requirements());
-        let issued_now = SystemTime::now();
-        let result = checker.check_credential_age(issued_now);
+        let result = checker.check_credential_age(1_000, 1_000);
         assert!(result.is_fresh());
     }
 
@@ -132,8 +143,7 @@ mod tests {
     fn test_credential_age_stale() {
         let checker = FreshnessChecker::new(&default_requirements());
         // Issued 2 hours ago — exceeds 1-hour max
-        let issued_2h_ago = SystemTime::now() - Duration::from_secs(7200);
-        let result = checker.check_credential_age(issued_2h_ago);
+        let result = checker.check_credential_age(1_000, 8_200);
         assert!(!result.is_fresh());
         let msg = result.violation_message().unwrap();
         assert!(msg.contains("maximum allowed is 3600"));
@@ -148,8 +158,7 @@ mod tests {
         };
         let checker = FreshnessChecker::new(&requirements);
         // Even very old credentials pass when no max is set
-        let old = SystemTime::now() - Duration::from_secs(86400 * 365);
-        assert!(checker.check_credential_age(old).is_fresh());
+        assert!(checker.check_credential_age(1, 31_536_001).is_fresh());
     }
 
     #[test]
@@ -161,16 +170,17 @@ mod tests {
         };
         let checker = FreshnessChecker::new(&requirements);
         // Issued exactly at the boundary — should still be fresh (age == max)
-        let issued = SystemTime::now() - Duration::from_secs(10);
-        assert!(checker.check_credential_age(issued).is_fresh());
+        assert!(checker.check_credential_age(90, 100).is_fresh());
     }
 
     #[test]
     fn test_credential_age_future_timestamp() {
         let checker = FreshnessChecker::new(&default_requirements());
         // Future timestamp — duration_since returns Err, defaults to 0 → fresh
-        let future = SystemTime::now() + Duration::from_secs(3600);
-        assert!(checker.check_credential_age(future).is_fresh());
+        assert!(matches!(
+            checker.check_credential_age(101, 100),
+            FreshnessCheckResult::InvalidFuture(_)
+        ));
     }
 
     // ====================================================================
@@ -180,16 +190,14 @@ mod tests {
     #[test]
     fn test_proof_age_fresh() {
         let checker = FreshnessChecker::new(&default_requirements());
-        let now = SystemTime::now();
-        assert!(checker.check_proof_age(now).is_fresh());
+        assert!(checker.check_proof_age(1_000, 1_000).is_fresh());
     }
 
     #[test]
     fn test_proof_age_stale() {
         let checker = FreshnessChecker::new(&default_requirements());
         // 10 minutes ago — exceeds 5-minute max
-        let old = SystemTime::now() - Duration::from_secs(600);
-        let result = checker.check_proof_age(old);
+        let result = checker.check_proof_age(400, 1_000);
         assert!(!result.is_fresh());
         let msg = result.violation_message().unwrap();
         assert!(msg.contains("maximum allowed is 300"));
@@ -198,8 +206,10 @@ mod tests {
     #[test]
     fn test_proof_age_future_timestamp() {
         let checker = FreshnessChecker::new(&default_requirements());
-        let future = SystemTime::now() + Duration::from_secs(60);
-        assert!(checker.check_proof_age(future).is_fresh());
+        assert!(matches!(
+            checker.check_proof_age(1_001, 1_000),
+            FreshnessCheckResult::InvalidFuture(_)
+        ));
     }
 
     // ====================================================================

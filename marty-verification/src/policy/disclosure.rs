@@ -32,10 +32,12 @@ impl MinimumDisclosureResolver {
             let mut found = false;
 
             // First, check for derived attribute preference
-            if let Some(derived_name) = self.derived_preferences.get(&required.claim_name) {
-                if available_claims.contains(derived_name) {
-                    selected.insert(derived_name.clone());
-                    found = true;
+            if required.accept_predicate && required.required_value.is_none() {
+                if let Some(derived_name) = self.derived_preferences.get(&required.claim_name) {
+                    if available_claims.contains(derived_name) {
+                        selected.insert(derived_name.clone());
+                        found = true;
+                    }
                 }
             }
 
@@ -51,8 +53,10 @@ impl MinimumDisclosureResolver {
             }
         }
 
+        let mut claims: Vec<String> = selected.into_iter().collect();
+        claims.sort();
         MinimumDisclosureSet {
-            claims: selected.into_iter().collect(),
+            claims,
             missing_required: missing,
         }
     }
@@ -67,12 +71,19 @@ impl MinimumDisclosureResolver {
 
         for claim_name in available_claims {
             // Check if this claim has a derived preference
-            if let Some(derived) = self.derived_preferences.get(claim_name) {
-                if available_claims.contains(derived) {
-                    if !result.contains(derived) {
-                        result.push(derived.clone());
+            let accepts_predicate = self.required_claims.iter().any(|required| {
+                required.claim_name == *claim_name
+                    && required.accept_predicate
+                    && required.required_value.is_none()
+            });
+            if accepts_predicate {
+                if let Some(derived) = self.derived_preferences.get(claim_name) {
+                    if available_claims.contains(derived) {
+                        if !result.contains(derived) {
+                            result.push(derived.clone());
+                        }
+                        continue;
                     }
-                    continue;
                 }
             }
 
@@ -145,6 +156,13 @@ mod tests {
         }
     }
 
+    fn required_predicate(name: &str) -> RequiredClaim {
+        RequiredClaim {
+            accept_predicate: true,
+            ..required(name)
+        }
+    }
+
     // ====================================================================
     // resolve()
     // ====================================================================
@@ -194,7 +212,7 @@ mod tests {
         let mut derived = HashMap::new();
         derived.insert("birth_date".to_string(), "age_over_21".to_string());
 
-        let policy = make_policy(vec![required("birth_date")], derived);
+        let policy = make_policy(vec![required_predicate("birth_date")], derived);
         let resolver = MinimumDisclosureResolver::new(&policy);
 
         let available = vec!["birth_date".to_string(), "age_over_21".to_string()];
@@ -210,7 +228,7 @@ mod tests {
         let mut derived = HashMap::new();
         derived.insert("birth_date".to_string(), "age_over_21".to_string());
 
-        let policy = make_policy(vec![required("birth_date")], derived);
+        let policy = make_policy(vec![required_predicate("birth_date")], derived);
         let resolver = MinimumDisclosureResolver::new(&policy);
 
         let available = vec!["birth_date".to_string()];
@@ -259,7 +277,7 @@ mod tests {
         let mut derived = HashMap::new();
         derived.insert("birth_date".to_string(), "age_over_18".to_string());
 
-        let policy = make_policy(vec![required("birth_date")], derived);
+        let policy = make_policy(vec![required_predicate("birth_date")], derived);
         let resolver = MinimumDisclosureResolver::new(&policy);
 
         let available = vec!["birth_date".to_string(), "age_over_18".to_string()];
