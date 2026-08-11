@@ -9,8 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 use crate::verification::ChainValidator;
 use base64::{engine::general_purpose, Engine as _};
+use chrono::{DateTime, Utc};
 use const_oid::{db::rfc5280::ID_CE_EXT_KEY_USAGE, ObjectIdentifier};
 use der::Decode;
+use iref::IriBuf;
 use p256::ecdsa::{
     signature::Signer, signature::Verifier, Signature as P256Signature,
     SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey,
@@ -28,7 +30,151 @@ use sha2::{Digest, Sha256};
 use spki::SubjectPublicKeyInfoRef;
 use x509_cert::{ext::pkix::ExtendedKeyUsage, Certificate};
 
+// These provenance types are shared by governed status integrations. Re-export
+// them here so DTC callers do not need to depend on the Open Badges module path.
+pub use crate::open_badges::{ArtifactProvenance, StatusAuthorityProvenance};
+
 const DTC_SIGNER_EKU_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.23.136.1.1.12.1");
+const MAX_STATUS_IDENTIFIER_CHARS: usize = 256;
+const MAX_STATUS_SOURCE_CHARS: usize = 4096;
+
+/// Explicit outcome of a DTC verification check.
+///
+/// `passed` remains in the JSON result as a compatibility projection. Callers
+/// must use `outcome` to distinguish a failed check from one that was not
+/// performed or could not use the supplied evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DtcVerificationCheckOutcome {
+    Passed,
+    Failed,
+    NotPerformed,
+    Error,
+}
+
+/// Current DTC lifecycle status established by verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DtcRevocationStatus {
+    Good,
+    Revoked,
+    Unknown,
+}
+
+/// Status returned by a governed DTC lifecycle source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DtcCurrentStatus {
+    Good,
+    Revoked,
+}
+
+/// Current DTC/eMRTD lifecycle evidence admitted by a trusted orchestrator.
+///
+/// This type is intentionally not deserializable from the credential or JSON
+/// verification request. The orchestrator must authenticate an appropriate
+/// domestic or international issuing-authority source, apply its governed trust
+/// profile, and then construct this context with immutable resolver/software
+/// provenance. Core still enforces exact credential binding and freshness.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthenticatedDtcStatus {
+    dtc_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    document_number: Option<String>,
+    status: DtcCurrentStatus,
+    checked_at: DateTime<Utc>,
+    fresh_until: DateTime<Utc>,
+    source: String,
+    authority_provenance: StatusAuthorityProvenance,
+}
+
+impl AuthenticatedDtcStatus {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        dtc_id: impl Into<String>,
+        document_number: Option<String>,
+        status: DtcCurrentStatus,
+        checked_at: DateTime<Utc>,
+        fresh_until: DateTime<Utc>,
+        source: impl Into<String>,
+        authority_provenance: StatusAuthorityProvenance,
+    ) -> Result<Self, String> {
+        let evidence = Self {
+            dtc_id: dtc_id.into(),
+            document_number,
+            status,
+            checked_at,
+            fresh_until,
+            source: source.into(),
+            authority_provenance,
+        };
+        validate_status_identifier("DTC ID", &evidence.dtc_id)?;
+        if let Some(document_number) = evidence.document_number.as_deref() {
+            validate_status_identifier("document number", document_number)?;
+        }
+        validate_status_source(&evidence.source)?;
+        if evidence.fresh_until <= evidence.checked_at {
+            return Err("DTC status fresh_until must be later than checked_at".to_string());
+        }
+        Ok(evidence)
+    }
+
+    pub fn dtc_id(&self) -> &str {
+        &self.dtc_id
+    }
+
+    pub fn document_number(&self) -> Option<&str> {
+        self.document_number.as_deref()
+    }
+
+    pub fn status(&self) -> DtcCurrentStatus {
+        self.status
+    }
+
+    pub fn checked_at(&self) -> DateTime<Utc> {
+        self.checked_at
+    }
+
+    pub fn fresh_until(&self) -> DateTime<Utc> {
+        self.fresh_until
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn authority_provenance(&self) -> &StatusAuthorityProvenance {
+        &self.authority_provenance
+    }
+}
+
+fn validate_status_identifier(name: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.chars().count() > MAX_STATUS_IDENTIFIER_CHARS
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "{name} must be a bounded, non-empty value without surrounding whitespace"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_status_source(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.chars().count() > MAX_STATUS_SOURCE_CHARS
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+        || IriBuf::new(value.to_string()).is_err()
+    {
+        return Err(
+            "DTC status source must be a bounded, non-empty absolute IRI without surrounding whitespace"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DataGroup {
@@ -593,9 +739,41 @@ fn record_check(
     details: Option<String>,
     error_code: Option<&'static str>,
 ) {
+    let outcome = if passed {
+        DtcVerificationCheckOutcome::Passed
+    } else {
+        DtcVerificationCheckOutcome::Failed
+    };
+    record_check_outcome(
+        checks,
+        errors,
+        error_codes,
+        name,
+        outcome,
+        details,
+        error_code,
+    );
+}
+
+fn record_check_outcome(
+    checks: &mut Vec<Value>,
+    errors: &mut Vec<String>,
+    error_codes: &mut Vec<String>,
+    name: &str,
+    outcome: DtcVerificationCheckOutcome,
+    details: Option<String>,
+    error_code: Option<&'static str>,
+) {
     let mut check = serde_json::Map::new();
     check.insert("check_name".to_string(), Value::String(name.to_string()));
-    check.insert("passed".to_string(), Value::Bool(passed));
+    check.insert(
+        "passed".to_string(),
+        Value::Bool(outcome == DtcVerificationCheckOutcome::Passed),
+    );
+    check.insert(
+        "outcome".to_string(),
+        serde_json::to_value(outcome).expect("DTC check outcome must serialize"),
+    );
 
     if let Some(ref details) = details {
         check.insert("details".to_string(), Value::String(details.clone()));
@@ -606,7 +784,7 @@ fn record_check(
 
     checks.push(Value::Object(check));
 
-    if !passed {
+    if outcome == DtcVerificationCheckOutcome::Failed {
         if let Some(details) = details {
             errors.push(details);
         } else {
@@ -668,6 +846,21 @@ pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
 /// key must match `signer_public_key_pem` and whose EKU must authorize DTC
 /// signing. Missing or partial trust material fails the final decision.
 pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
+    verify_dtc_json_with_status(input, None)
+}
+
+/// Verify a DTC with separately authenticated, verifier-selected lifecycle
+/// status evidence.
+///
+/// Status context cannot be supplied through `input`: callers must obtain it
+/// from a governed source and construct [`AuthenticatedDtcStatus`] outside the
+/// credential trust boundary. Missing, stale, future-dated, or mismatched
+/// evidence leaves current status unknown without changing cryptographic
+/// validity. Authenticated revocation still fails closed.
+pub fn verify_dtc_json_with_status(
+    input: &str,
+    current_status: Option<&AuthenticatedDtcStatus>,
+) -> VerificationResult<String> {
     let value: Value = serde_json::from_str(input)
         .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
     let record: DtcRecord = serde_json::from_value(value.clone())
@@ -843,28 +1036,74 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
         }
     }
 
-    // Revocation check
+    // A signed issuance-time claim can fail closed, but `false` is not current
+    // status evidence. Only separately authenticated, fresh, exactly bound
+    // lifecycle context may produce a passed current-status check.
+    let mut revocation_status = DtcRevocationStatus::Unknown;
+    let mut accepted_status_evidence: Option<&AuthenticatedDtcStatus> = None;
     if record.is_revoked {
         is_valid = false;
-        record_check(
+        revocation_status = DtcRevocationStatus::Revoked;
+        record_check_outcome(
             &mut checks,
             &mut errors,
             &mut error_codes_out,
             "RevocationStatus",
-            false,
-            Some("DTC has been revoked".to_string()),
+            DtcVerificationCheckOutcome::Failed,
+            Some("DTC declares a revoked status".to_string()),
             Some(error_codes::DTC_REVOKED),
         );
     } else {
-        record_check(
-            &mut checks,
-            &mut errors,
-            &mut error_codes_out,
-            "RevocationStatus",
-            true,
-            None,
-            None,
-        );
+        match validate_current_status(&record, current_status, Utc::now()) {
+            CurrentStatusValidation::Good(evidence) => {
+                revocation_status = DtcRevocationStatus::Good;
+                accepted_status_evidence = Some(evidence);
+                record_check_outcome(
+                    &mut checks,
+                    &mut errors,
+                    &mut error_codes_out,
+                    "RevocationStatus",
+                    DtcVerificationCheckOutcome::Passed,
+                    Some("Authenticated current DTC lifecycle status is good".to_string()),
+                    None,
+                );
+            }
+            CurrentStatusValidation::Revoked(evidence) => {
+                is_valid = false;
+                revocation_status = DtcRevocationStatus::Revoked;
+                accepted_status_evidence = Some(evidence);
+                record_check_outcome(
+                    &mut checks,
+                    &mut errors,
+                    &mut error_codes_out,
+                    "RevocationStatus",
+                    DtcVerificationCheckOutcome::Failed,
+                    Some("Authenticated current DTC lifecycle status is revoked".to_string()),
+                    Some(error_codes::DTC_REVOKED),
+                );
+            }
+            CurrentStatusValidation::NotPerformed => record_check_outcome(
+                &mut checks,
+                &mut errors,
+                &mut error_codes_out,
+                "RevocationStatus",
+                DtcVerificationCheckOutcome::NotPerformed,
+                Some(
+                    "No authenticated current DTC lifecycle status evidence was provided"
+                        .to_string(),
+                ),
+                Some(error_codes::DTC_REVOCATION_STATUS_UNAVAILABLE),
+            ),
+            CurrentStatusValidation::Error(details) => record_check_outcome(
+                &mut checks,
+                &mut errors,
+                &mut error_codes_out,
+                "RevocationStatus",
+                DtcVerificationCheckOutcome::Error,
+                Some(details),
+                Some(error_codes::DTC_REVOCATION_STATUS_INVALID),
+            ),
+        }
     }
 
     // Type-specific checks
@@ -1126,6 +1365,8 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
 
     let resp = json!({
         "is_valid": is_valid,
+        "revocation_status": revocation_status,
+        "revocation_evidence": accepted_status_evidence,
         "verification_results": checks,
         "errors": errors,
         "error_codes": error_codes_out,
@@ -1139,4 +1380,50 @@ pub fn verify_dtc_json(input: &str) -> VerificationResult<String> {
             e
         ))
     })
+}
+
+enum CurrentStatusValidation<'a> {
+    Good(&'a AuthenticatedDtcStatus),
+    Revoked(&'a AuthenticatedDtcStatus),
+    NotPerformed,
+    Error(String),
+}
+
+fn validate_current_status<'a>(
+    record: &DtcRecord,
+    evidence: Option<&'a AuthenticatedDtcStatus>,
+    now: DateTime<Utc>,
+) -> CurrentStatusValidation<'a> {
+    let Some(evidence) = evidence else {
+        return CurrentStatusValidation::NotPerformed;
+    };
+
+    if evidence.dtc_id() != record.dtc_id {
+        return CurrentStatusValidation::Error(
+            "Authenticated DTC status evidence does not match the credential ID".to_string(),
+        );
+    }
+    let expected_document_number = record
+        .linked_passport
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            (!record.passport_number.is_empty()).then_some(record.passport_number.as_str())
+        });
+    if evidence.document_number() != expected_document_number {
+        return CurrentStatusValidation::Error(
+            "Authenticated DTC status evidence does not match the underlying document number"
+                .to_string(),
+        );
+    }
+    if evidence.checked_at() > now || evidence.fresh_until() <= now {
+        return CurrentStatusValidation::Error(
+            "Authenticated DTC status evidence is future-dated or stale".to_string(),
+        );
+    }
+
+    match evidence.status() {
+        DtcCurrentStatus::Good => CurrentStatusValidation::Good(evidence),
+        DtcCurrentStatus::Revoked => CurrentStatusValidation::Revoked(evidence),
+    }
 }

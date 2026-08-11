@@ -1,4 +1,8 @@
-use marty_verification::dtc::{create_dtc_json, sign_dtc_json, verify_dtc_json};
+use chrono::{Duration, Utc};
+use marty_verification::dtc::{
+    create_dtc_json, sign_dtc_json, verify_dtc_json, verify_dtc_json_with_status,
+    ArtifactProvenance, AuthenticatedDtcStatus, DtcCurrentStatus, StatusAuthorityProvenance,
+};
 
 const SIGNING_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgiNW7Kf1E+H1DeG4s
@@ -98,6 +102,63 @@ fn sample_create_request() -> String {
         }
     })
     .to_string()
+}
+
+fn status_authority_provenance() -> StatusAuthorityProvenance {
+    let artifact = |id: &str, byte: char| {
+        ArtifactProvenance::new(id, "1", format!("sha256:{}", byte.to_string().repeat(64)))
+            .expect("valid status provenance")
+    };
+    StatusAuthorityProvenance::new(
+        artifact("dtc-status-trust-profile", 'a'),
+        artifact("dtc-status-resolver", 'b'),
+        artifact("marty-verification", 'c'),
+    )
+}
+
+fn signed_verification_envelope(request: &str) -> serde_json::Value {
+    let created = create_dtc_json(request).expect("create failed");
+    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
+    let object = signing_envelope.as_object_mut().unwrap();
+    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
+    object.insert("signer_id".to_string(), "rust-dtc".into());
+    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+    let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
+    add_test_trust_material(
+        &mut verify_envelope,
+        SIGNING_KEY_PEM,
+        Some((DTC_SIGNER_EKU_OID, true)),
+    );
+    verify_envelope
+}
+
+fn current_status(
+    envelope: &serde_json::Value,
+    status: DtcCurrentStatus,
+    checked_at: chrono::DateTime<Utc>,
+    fresh_until: chrono::DateTime<Utc>,
+) -> AuthenticatedDtcStatus {
+    AuthenticatedDtcStatus::new(
+        envelope["dtc_id"].as_str().expect("DTC ID"),
+        envelope["passport_number"].as_str().map(str::to_string),
+        status,
+        checked_at,
+        fresh_until,
+        "urn:marty:test:dtc-lifecycle-status",
+        status_authority_provenance(),
+    )
+    .expect("valid current status context")
+}
+
+fn revocation_check(value: &serde_json::Value) -> &serde_json::Value {
+    value["verification_results"]
+        .as_array()
+        .and_then(|checks| {
+            checks.iter().find(|check| {
+                check.get("check_name").and_then(|name| name.as_str()) == Some("RevocationStatus")
+            })
+        })
+        .expect("RevocationStatus check")
 }
 
 #[test]
@@ -654,33 +715,7 @@ fn verify_rejects_revoked_dtc() {
         }
     });
 
-    let created = create_dtc_json(&revoked_req.to_string()).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
-
-    let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
-    }
-
+    let verify_env = signed_verification_envelope(&revoked_req.to_string());
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
 
@@ -696,6 +731,181 @@ fn verify_rejects_revoked_dtc() {
         error_codes.iter().any(|c| c.as_str() == Some("E809")),
         "expected E809 (DTC_REVOKED) in error_codes: {:?}",
         error_codes
+    );
+    assert_eq!(v["revocation_status"], "REVOKED");
+    assert_eq!(revocation_check(&v)["outcome"], "FAILED");
+    assert_eq!(revocation_check(&v)["passed"], false);
+}
+
+#[test]
+fn signed_not_revoked_without_live_status_is_explicitly_not_performed() {
+    let verify_env = signed_verification_envelope(&sample_create_request());
+    let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
+    let value: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(
+        value["is_valid"], true,
+        "cryptographic validity is separate"
+    );
+    assert_eq!(value["revocation_status"], "UNKNOWN");
+    assert!(value["revocation_evidence"].is_null());
+    assert_eq!(revocation_check(&value)["outcome"], "NOT_PERFORMED");
+    assert_eq!(revocation_check(&value)["passed"], false);
+    assert_eq!(revocation_check(&value)["error_code"], "E810");
+    assert!(value["error_codes"]
+        .as_array()
+        .expect("error codes")
+        .is_empty());
+}
+
+#[test]
+fn authenticated_fresh_current_good_status_can_pass() {
+    let verify_env = signed_verification_envelope(&sample_create_request());
+    let now = Utc::now();
+    let evidence = current_status(
+        &verify_env,
+        DtcCurrentStatus::Good,
+        now - Duration::seconds(1),
+        now + Duration::minutes(5),
+    );
+
+    let verified = verify_dtc_json_with_status(&verify_env.to_string(), Some(&evidence))
+        .expect("verify failed");
+    let value: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(value["is_valid"], true);
+    assert_eq!(value["revocation_status"], "GOOD");
+    assert_eq!(revocation_check(&value)["outcome"], "PASSED");
+    assert_eq!(revocation_check(&value)["passed"], true);
+    assert_eq!(
+        value["revocation_evidence"]["source"],
+        "urn:marty:test:dtc-lifecycle-status"
+    );
+}
+
+#[test]
+fn authenticated_current_revoked_status_fails_closed() {
+    let verify_env = signed_verification_envelope(&sample_create_request());
+    let now = Utc::now();
+    let evidence = current_status(
+        &verify_env,
+        DtcCurrentStatus::Revoked,
+        now - Duration::seconds(1),
+        now + Duration::minutes(5),
+    );
+
+    let verified = verify_dtc_json_with_status(&verify_env.to_string(), Some(&evidence))
+        .expect("verify failed");
+    let value: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(value["is_valid"], false);
+    assert_eq!(value["revocation_status"], "REVOKED");
+    assert_eq!(revocation_check(&value)["outcome"], "FAILED");
+    assert_eq!(revocation_check(&value)["error_code"], "E809");
+}
+
+#[test]
+fn stale_current_status_is_unknown_without_erasing_cryptographic_validity() {
+    let verify_env = signed_verification_envelope(&sample_create_request());
+    let now = Utc::now();
+    let evidence = current_status(
+        &verify_env,
+        DtcCurrentStatus::Good,
+        now - Duration::minutes(10),
+        now - Duration::minutes(1),
+    );
+
+    let verified = verify_dtc_json_with_status(&verify_env.to_string(), Some(&evidence))
+        .expect("verify failed");
+    let value: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(value["is_valid"], true);
+    assert_eq!(value["revocation_status"], "UNKNOWN");
+    assert!(value["revocation_evidence"].is_null());
+    assert_eq!(revocation_check(&value)["outcome"], "ERROR");
+    assert_eq!(revocation_check(&value)["passed"], false);
+    assert_eq!(revocation_check(&value)["error_code"], "E811");
+}
+
+#[test]
+fn mismatched_current_status_cannot_upgrade_the_credential() {
+    let verify_env = signed_verification_envelope(&sample_create_request());
+    let now = Utc::now();
+    let evidence = AuthenticatedDtcStatus::new(
+        verify_env["dtc_id"].as_str().expect("DTC ID"),
+        Some("DIFFERENT-DOCUMENT".to_string()),
+        DtcCurrentStatus::Good,
+        now - Duration::seconds(1),
+        now + Duration::minutes(5),
+        "urn:marty:test:dtc-lifecycle-status",
+        status_authority_provenance(),
+    )
+    .expect("well-formed but mismatched evidence");
+
+    let verified = verify_dtc_json_with_status(&verify_env.to_string(), Some(&evidence))
+        .expect("verify failed");
+    let value: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(value["is_valid"], true);
+    assert_eq!(value["revocation_status"], "UNKNOWN");
+    assert_eq!(revocation_check(&value)["outcome"], "ERROR");
+    assert!(value["revocation_evidence"].is_null());
+}
+
+#[test]
+fn current_status_for_another_dtc_cannot_upgrade_the_credential() {
+    let verify_env = signed_verification_envelope(&sample_create_request());
+    let now = Utc::now();
+    let evidence = AuthenticatedDtcStatus::new(
+        "DTC-FOR-A-DIFFERENT-CREDENTIAL",
+        verify_env["passport_number"].as_str().map(str::to_string),
+        DtcCurrentStatus::Good,
+        now - Duration::seconds(1),
+        now + Duration::minutes(5),
+        "urn:marty:test:dtc-lifecycle-status",
+        status_authority_provenance(),
+    )
+    .expect("well-formed but mismatched evidence");
+
+    let verified = verify_dtc_json_with_status(&verify_env.to_string(), Some(&evidence))
+        .expect("verify failed");
+    let value: serde_json::Value = serde_json::from_str(&verified).unwrap();
+
+    assert_eq!(value["is_valid"], true);
+    assert_eq!(value["revocation_status"], "UNKNOWN");
+    assert_eq!(revocation_check(&value)["outcome"], "ERROR");
+    assert!(value["revocation_evidence"].is_null());
+}
+
+#[test]
+fn malformed_current_status_context_is_rejected_before_verification() {
+    let now = Utc::now();
+    let malformed_source = AuthenticatedDtcStatus::new(
+        "DTC-1",
+        Some("P1234567".to_string()),
+        DtcCurrentStatus::Good,
+        now,
+        now + Duration::minutes(5),
+        "not an absolute IRI",
+        status_authority_provenance(),
+    );
+    assert_eq!(
+        malformed_source.expect_err("malformed source must be rejected"),
+        "DTC status source must be a bounded, non-empty absolute IRI without surrounding whitespace"
+    );
+
+    let invalid_freshness = AuthenticatedDtcStatus::new(
+        "DTC-1",
+        Some("P1234567".to_string()),
+        DtcCurrentStatus::Good,
+        now,
+        now,
+        "urn:marty:test:dtc-lifecycle-status",
+        status_authority_provenance(),
+    );
+    assert_eq!(
+        invalid_freshness.expect_err("invalid freshness must be rejected"),
+        "DTC status fresh_until must be later than checked_at"
     );
 }
 
