@@ -1,7 +1,10 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use marty_verification::asn1::sod::{parse_sod, verify_sod_signature};
 use marty_verification::issuance::CscaAuthority;
 use marty_verification::mrz::parse_mrz;
+use marty_verification::policy::service::{
+    evaluate_service_policy, ServicePolicyEvaluationRequest,
+};
 use marty_verification::verification::ChainValidator;
 use std::hint::black_box;
 
@@ -84,6 +87,28 @@ fn benchmark_verification_kernels(c: &mut Criterion) {
     });
 
     group.finish();
+
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/vectors/presentation_policy_service.json"
+    ))
+    .expect("parse presentation-policy benchmark fixture");
+    let request: ServicePolicyEvaluationRequest =
+        serde_json::from_value(fixture["request"].clone())
+            .expect("parse presentation-policy benchmark request");
+    let mut policy_group = c.benchmark_group("presentation_policy");
+    policy_group.bench_function("evaluate_service_policy", |b| {
+        b.iter_batched(
+            || request.clone(),
+            |request| {
+                black_box(
+                    evaluate_service_policy(request)
+                        .expect("evaluate presentation-policy benchmark request"),
+                );
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    policy_group.finish();
 }
 
 criterion_group!(benches, benchmark_verification_kernels);
