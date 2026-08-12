@@ -16,6 +16,8 @@ use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+/// Canonical 1EdTech Open Badges 3.0 JSON-LD context.
+pub const OPEN_BADGES_V3_CONTEXT: &str = "https://purl.imsglobal.org/spec/ob/v3p0/context.json";
 
 /// Sign a W3C VC-JWT credential.
 ///
@@ -171,6 +173,186 @@ impl Default for JwtVcPreparationOptions {
             include_nbf: false,
         }
     }
+}
+
+/// Apply the canonical Open Badges 3.0 JWT-VC profile before preparation.
+///
+/// This keeps the credential shape in the Rust protocol owner while allowing
+/// callers to retain their application-level configuration identifiers. Flat
+/// application claims are preserved on the `AchievementSubject`; only the
+/// legacy `achievement_name` and `achievement_description` aliases are moved
+/// into the required OB3 `achievement` object.
+pub fn apply_open_badge_v3_profile(
+    claims: &mut CredentialClaims,
+    options: &mut JwtVcPreparationOptions,
+    achievement_id: &str,
+) -> Oid4vciResult<()> {
+    url::Url::parse(achievement_id).map_err(|error| {
+        Oid4vciError::InvalidRequest(format!(
+            "Open Badges achievement_id must be an absolute URI: {error}"
+        ))
+    })?;
+
+    let mut subject = options.credential_subject.take().unwrap_or_else(|| {
+        serde_json::Value::Object(std::mem::take(&mut claims.claims).into_iter().collect())
+    });
+    let subject_object = subject.as_object_mut().ok_or_else(|| {
+        Oid4vciError::InvalidRequest("Open Badges credentialSubject must be one JSON object".into())
+    })?;
+
+    if let Some(holder_id) = claims.subject_id.as_deref() {
+        match subject_object.get("id").and_then(serde_json::Value::as_str) {
+            Some(existing) if existing != holder_id => {
+                return Err(Oid4vciError::InvalidRequest(
+                    "Open Badges credentialSubject id does not match the holder".into(),
+                ));
+            }
+            Some(_) => {}
+            None if subject_object.contains_key("id") => {
+                return Err(Oid4vciError::InvalidRequest(
+                    "Open Badges credentialSubject id must be a string".into(),
+                ));
+            }
+            None => {
+                subject_object.insert("id".into(), serde_json::json!(holder_id));
+            }
+        }
+    }
+    ensure_required_type(subject_object, "AchievementSubject", "credentialSubject")?;
+
+    let legacy_name = take_optional_non_empty_string(subject_object, "achievement_name")?;
+    let legacy_description =
+        take_optional_non_empty_string(subject_object, "achievement_description")?;
+    let legacy_criteria = subject_object.remove("achievement_criteria");
+    let achievement = subject_object
+        .entry("achievement")
+        .or_insert_with(|| serde_json::json!({}));
+    let achievement_object = achievement.as_object_mut().ok_or_else(|| {
+        Oid4vciError::InvalidRequest("Open Badges achievement must be an object".into())
+    })?;
+
+    match achievement_object
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(existing) if existing != achievement_id => {
+            return Err(Oid4vciError::InvalidRequest(
+                "Open Badges achievement id conflicts with the selected template".into(),
+            ));
+        }
+        Some(_) => {}
+        None if achievement_object.contains_key("id") => {
+            return Err(Oid4vciError::InvalidRequest(
+                "Open Badges achievement id must be a string".into(),
+            ));
+        }
+        None => {
+            achievement_object.insert("id".into(), serde_json::json!(achievement_id));
+        }
+    }
+    ensure_required_type(achievement_object, "Achievement", "achievement")?;
+    merge_required_string(achievement_object, "name", legacy_name)?;
+    merge_required_string(achievement_object, "description", legacy_description)?;
+    if let Some(criteria) = legacy_criteria {
+        if achievement_object
+            .insert("criteria".into(), criteria)
+            .is_some()
+        {
+            return Err(Oid4vciError::InvalidRequest(
+                "Open Badges achievement criteria were supplied twice".into(),
+            ));
+        }
+    }
+
+    claims.credential_type = "OpenBadgeCredential".into();
+    claims
+        .w3c_types
+        .retain(|value| !matches!(value.as_str(), "open_badge" | "open_badge_v3"));
+    if !claims
+        .w3c_context
+        .iter()
+        .any(|value| value == OPEN_BADGES_V3_CONTEXT)
+    {
+        claims.w3c_context.push(OPEN_BADGES_V3_CONTEXT.into());
+    }
+    claims.claims.clear();
+    options.credential_subject = Some(subject);
+    Ok(())
+}
+
+fn take_optional_non_empty_string(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Oid4vciResult<Option<String>> {
+    let Some(value) = object.remove(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    value.map(|value| Some(value.to_string())).ok_or_else(|| {
+        Oid4vciError::InvalidRequest(format!("Open Badges {field} must be a non-empty string"))
+    })
+}
+
+fn merge_required_string(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    legacy_value: Option<String>,
+) -> Oid4vciResult<()> {
+    let existing = object
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let (Some(existing), Some(legacy)) = (existing, legacy_value.as_deref()) {
+        if existing != legacy {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Open Badges achievement {field} conflicts with its legacy claim"
+            )));
+        }
+    }
+    if existing.is_none() {
+        let value = legacy_value.ok_or_else(|| {
+            Oid4vciError::InvalidRequest(format!("Open Badges achievement {field} is required"))
+        })?;
+        object.insert(field.into(), serde_json::json!(value));
+    }
+    Ok(())
+}
+
+fn ensure_required_type(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    required: &str,
+    label: &str,
+) -> Oid4vciResult<()> {
+    match object.get_mut("type") {
+        None => {
+            object.insert("type".into(), serde_json::json!([required]));
+        }
+        Some(serde_json::Value::String(value)) if value == required => {}
+        Some(serde_json::Value::String(value)) => {
+            let existing = std::mem::take(value);
+            object.insert("type".into(), serde_json::json!([existing, required]));
+        }
+        Some(serde_json::Value::Array(values)) => {
+            if !values.iter().all(serde_json::Value::is_string) {
+                return Err(Oid4vciError::InvalidRequest(format!(
+                    "Open Badges {label} type must contain only strings"
+                )));
+            }
+            if !values.iter().any(|value| value.as_str() == Some(required)) {
+                values.push(serde_json::json!(required));
+            }
+        }
+        Some(_) => {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Open Badges {label} type must be a string or array"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Prepare a JWT-VC for signing (build header + payload, but don't sign).
@@ -436,5 +618,179 @@ mod tests {
             }
             _ => panic!("Expected JwtVcJson"),
         }
+    }
+
+    #[test]
+    fn open_badge_v3_profile_builds_canonical_achievement_subject() {
+        let key = test_p256_key();
+        let mut claims = CredentialClaims {
+            subject_id: Some("did:key:holder".into()),
+            credential_type: "open_badge".into(),
+            claims: [
+                (
+                    "achievement_name".into(),
+                    serde_json::json!("Marty Verified Member Badge"),
+                ),
+                (
+                    "achievement_description".into(),
+                    serde_json::json!("Membership verified by Marty"),
+                ),
+                ("email".into(), serde_json::json!("holder@example.test")),
+                ("member_id".into(), serde_json::json!("member-1")),
+            ]
+            .into(),
+            expiration_seconds: Some(3600),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: CredentialPayloadFormat::W3cVcdmV2JwtVc,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let mut options = JwtVcPreparationOptions::default();
+        apply_open_badge_v3_profile(
+            &mut claims,
+            &mut options,
+            "https://issuer.example/credentials/marty-verified-member-badge",
+        )
+        .unwrap();
+
+        let prepared = prepare_jwt_vc_with_options(&key, &claims, options).unwrap();
+        let payload_segment = prepared.signing_input.split('.').nth(1).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&B64.decode(payload_segment).unwrap()).unwrap();
+        let vc = &payload["vc"];
+
+        assert_eq!(
+            vc["type"],
+            serde_json::json!(["VerifiableCredential", "OpenBadgeCredential"])
+        );
+        assert_eq!(
+            vc["@context"],
+            serde_json::json!([
+                "https://www.w3.org/ns/credentials/v2",
+                OPEN_BADGES_V3_CONTEXT
+            ])
+        );
+        assert_eq!(vc["credentialSubject"]["id"], "did:key:holder");
+        assert_eq!(
+            vc["credentialSubject"]["type"],
+            serde_json::json!(["AchievementSubject"])
+        );
+        assert_eq!(
+            vc["credentialSubject"]["achievement"]["type"],
+            serde_json::json!(["Achievement"])
+        );
+        assert_eq!(
+            vc["credentialSubject"]["achievement"]["name"],
+            "Marty Verified Member Badge"
+        );
+        assert_eq!(
+            vc["credentialSubject"]["achievement"]["description"],
+            "Membership verified by Marty"
+        );
+        assert_eq!(
+            vc["credentialSubject"]["achievement"]["id"],
+            "https://issuer.example/credentials/marty-verified-member-badge"
+        );
+        assert_eq!(vc["credentialSubject"]["email"], "holder@example.test");
+        assert_eq!(vc["credentialSubject"]["member_id"], "member-1");
+        assert!(vc["credentialSubject"].get("achievement_name").is_none());
+    }
+
+    #[test]
+    fn open_badge_v3_profile_rejects_missing_or_conflicting_achievement_data() {
+        let mut claims = CredentialClaims {
+            subject_id: Some("did:key:holder".into()),
+            credential_type: "open_badge".into(),
+            claims: [("achievement_name".into(), serde_json::json!("Badge"))].into(),
+            expiration_seconds: None,
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: CredentialPayloadFormat::W3cVcdmV2JwtVc,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let mut options = JwtVcPreparationOptions::default();
+        let error = apply_open_badge_v3_profile(
+            &mut claims,
+            &mut options,
+            "https://issuer.example/achievement",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("description is required"));
+
+        let mut claims = CredentialClaims {
+            subject_id: Some("did:key:holder".into()),
+            credential_type: "open_badge".into(),
+            claims: HashMap::new(),
+            expiration_seconds: None,
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: CredentialPayloadFormat::W3cVcdmV2JwtVc,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let mut options = JwtVcPreparationOptions {
+            credential_subject: Some(serde_json::json!({
+                "id": "did:key:other-holder",
+                "achievement": {
+                    "id": "https://issuer.example/achievement",
+                    "type": "Achievement",
+                    "name": "Badge",
+                    "description": "Description"
+                }
+            })),
+            ..Default::default()
+        };
+        let error = apply_open_badge_v3_profile(
+            &mut claims,
+            &mut options,
+            "https://issuer.example/achievement",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not match the holder"));
+    }
+
+    #[test]
+    fn open_badge_v3_profile_accepts_non_hierarchical_absolute_uris() {
+        let mut claims = CredentialClaims {
+            subject_id: Some("did:key:holder".into()),
+            credential_type: "open_badge".into(),
+            claims: [
+                ("achievement_name".into(), serde_json::json!("Badge")),
+                (
+                    "achievement_description".into(),
+                    serde_json::json!("Description"),
+                ),
+            ]
+            .into(),
+            expiration_seconds: None,
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: CredentialPayloadFormat::W3cVcdmV2JwtVc,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let mut options = JwtVcPreparationOptions::default();
+
+        apply_open_badge_v3_profile(
+            &mut claims,
+            &mut options,
+            "did:web:issuer.example:achievements:member",
+        )
+        .unwrap();
+
+        assert_eq!(
+            options.credential_subject.unwrap()["achievement"]["id"],
+            "did:web:issuer.example:achievements:member"
+        );
     }
 }

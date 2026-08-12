@@ -291,7 +291,9 @@ fn explicit_subject_identifies_holder(subject: &serde_json::Value, holder: &str)
     claims_json,
     expiration_seconds=None,
     credential_id=None,
-    credential_subject_json=None
+    credential_subject_json=None,
+    credential_profile=None,
+    achievement_id=None
 ))]
 fn oid4vci_prepare_jwt_vc(
     issuer_id: &str,
@@ -303,8 +305,12 @@ fn oid4vci_prepare_jwt_vc(
     expiration_seconds: Option<i64>,
     credential_id: Option<&str>,
     credential_subject_json: Option<&str>,
+    credential_profile: Option<&str>,
+    achievement_id: Option<&str>,
 ) -> PyResult<PreparedRemoteCredential> {
-    use marty_oid4vci::formats::jwt_vc::{prepare_jwt_vc_with_options, JwtVcPreparationOptions};
+    use marty_oid4vci::formats::jwt_vc::{
+        apply_open_badge_v3_profile, prepare_jwt_vc_with_options, JwtVcPreparationOptions,
+    };
 
     let signer = metadata_signer(issuer_id, verification_method_id, algorithm)?;
     let mut claims = parse_claims(claims_json)?;
@@ -350,7 +356,7 @@ fn oid4vci_prepare_jwt_vc(
             .is_none_or(|subject| explicit_subject_identifies_holder(subject, holder))
     });
 
-    let claims = credential_claims(
+    let mut claims = credential_claims(
         subject_id,
         credential_type,
         claims,
@@ -358,22 +364,90 @@ fn oid4vci_prepare_jwt_vc(
         vec![],
         CredentialPayloadFormat::W3cVcdmV2JwtVc,
     );
-    let prepared = prepare_jwt_vc_with_options(
-        &signer,
-        &claims,
-        JwtVcPreparationOptions {
-            credential_id: credential_id.map(str::to_string),
-            credential_subject: explicit_subject,
-            credential_status,
-            include_subject_claim,
-            include_vc_id: false,
-            include_nbf: true,
-        },
-    )
-    .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+    let mut options = JwtVcPreparationOptions {
+        credential_id: credential_id.map(str::to_string),
+        credential_subject: explicit_subject,
+        credential_status,
+        include_subject_claim,
+        include_vc_id: false,
+        include_nbf: true,
+    };
+    match credential_profile {
+        Some("open_badge_v3") => {
+            let achievement_id = achievement_id
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "open_badge_v3 profile requires achievement_id",
+                    )
+                })?;
+            apply_open_badge_v3_profile(&mut claims, &mut options, achievement_id)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        }
+        Some(profile) => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unsupported JWT-VC credential profile: {profile}"
+            )));
+        }
+        None if achievement_id.is_some() => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "achievement_id is only valid with the open_badge_v3 profile",
+            ));
+        }
+        None => {}
+    }
+    let prepared = prepare_jwt_vc_with_options(&signer, &claims, options)
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
     Ok(PreparedRemoteCredential {
         inner: Some(PreparedCredential::JwtVc(prepared)),
     })
+}
+
+/// Prepare a canonical Open Badges 3.0 JWT-VC for remote signing.
+///
+/// The dedicated binding name is also the startup capability contract. It
+/// prevents callers from mistaking an older generic JWT-VC binding for one
+/// that understands the Open Badges profile.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (
+    issuer_id,
+    verification_method_id,
+    algorithm,
+    subject_id,
+    credential_type,
+    claims_json,
+    expiration_seconds=None,
+    credential_id=None,
+    credential_subject_json=None,
+    *,
+    achievement_id
+))]
+fn oid4vci_prepare_open_badge_v3_jwt_vc(
+    issuer_id: &str,
+    verification_method_id: &str,
+    algorithm: &str,
+    subject_id: Option<&str>,
+    credential_type: &str,
+    claims_json: &str,
+    expiration_seconds: Option<i64>,
+    credential_id: Option<&str>,
+    credential_subject_json: Option<&str>,
+    achievement_id: &str,
+) -> PyResult<PreparedRemoteCredential> {
+    oid4vci_prepare_jwt_vc(
+        issuer_id,
+        verification_method_id,
+        algorithm,
+        subject_id,
+        credential_type,
+        claims_json,
+        expiration_seconds,
+        credential_id,
+        credential_subject_json,
+        Some("open_badge_v3"),
+        Some(achievement_id),
+    )
 }
 
 #[pyfunction]
@@ -405,6 +479,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_prepare_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_jwt_vc, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_prepare_open_badge_v3_jwt_vc, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_jwt_vc, m)?)?;
     Ok(())
 }
@@ -466,6 +541,8 @@ mod tests {
             Some(3600),
             Some("urn:uuid:00000000-0000-0000-0000-000000000456"),
             Some(r#"[{"id":"did:example:subject"}]"#),
+            None,
+            None,
         )
         .expect("native JWT-VC preparation");
         let PreparedCredential::JwtVc(state) = prepared.inner.expect("prepared state") else {
@@ -487,5 +564,53 @@ mod tests {
             "BitstringStatusListEntry"
         );
         assert!(payload["vc"].get("id").is_none());
+    }
+
+    #[test]
+    fn remote_jwt_vc_open_badge_profile_is_canonical_and_fail_closed() {
+        let prepared = oid4vci_prepare_open_badge_v3_jwt_vc(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key-1",
+            "ES256",
+            Some("did:key:holder"),
+            "open_badge",
+            r#"{"achievement_name":"Member Badge","achievement_description":"Verified member","email":"holder@example.test"}"#,
+            Some(3600),
+            Some("urn:uuid:00000000-0000-0000-0000-000000000789"),
+            None,
+            "https://issuer.example/credentials/member-badge",
+        )
+        .expect("native Open Badges JWT-VC preparation");
+        let PreparedCredential::JwtVc(state) = prepared.inner.expect("prepared state") else {
+            panic!("expected JWT-VC state")
+        };
+        let payload = decode_segment(state.signing_input.split('.').nth(1).expect("payload"));
+        assert_eq!(
+            payload["vc"]["type"],
+            serde_json::json!(["VerifiableCredential", "OpenBadgeCredential"])
+        );
+        assert_eq!(
+            payload["vc"]["credentialSubject"]["achievement"]["name"],
+            "Member Badge"
+        );
+        assert_eq!(
+            payload["vc"]["credentialSubject"]["email"],
+            "holder@example.test"
+        );
+
+        assert!(oid4vci_prepare_jwt_vc(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key-1",
+            "ES256",
+            Some("did:key:holder"),
+            "open_badge",
+            r#"{"achievement_name":"Member Badge"}"#,
+            Some(3600),
+            None,
+            None,
+            Some("open_badge_v3"),
+            Some("https://issuer.example/credentials/member-badge"),
+        )
+        .is_err());
     }
 }

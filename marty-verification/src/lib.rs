@@ -30,6 +30,7 @@
 pub mod asn1;
 #[cfg(feature = "csca")]
 pub mod chip_io;
+pub mod credential_format;
 pub mod device_auth;
 pub mod dtc;
 pub mod error;
