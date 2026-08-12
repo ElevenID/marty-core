@@ -781,6 +781,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "oid4vci",
             "oid4vp",
             "document_verification",
+            "credential_format_detection",
             "device_authentication",
             "flow_state_machine",
             "vds_nc_profile",
@@ -2074,6 +2075,17 @@ fn vds_nc_select_barcode_format(
         .map_err(vds_nc_error)
 }
 
+/// Select the canonical credential verifier for a JSON or compact token.
+///
+/// This operation performs routing only. The selected verifier remains
+/// responsible for proof, trust, status, and policy validation.
+#[pyfunction]
+fn detect_credential_format(input: &str) -> String {
+    marty_verification::credential_format::detect_credential_format(input)
+        .as_str()
+        .to_string()
+}
+
 /// Python module for Marty cryptographic operations.
 ///
 /// This module provides essential cryptographic functions for credential
@@ -2125,6 +2137,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_ed25519, m)?)?;
 
     // Verification
+    m.add_function(wrap_pyfunction!(detect_credential_format, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p256, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p384, m)?)?;
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
