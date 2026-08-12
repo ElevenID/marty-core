@@ -10,17 +10,21 @@ on:
     - cron: "37 7 * * 1"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   workflow-quality:
-    uses: ElevenID/.github/.github/workflows/quality-workflows.yml@9b6141e294da5c0f9254cfaa60c8934df95ec68b
+    uses: ElevenID/.github/.github/workflows/quality-workflows.yml@a88e5a0a68f31f822b4c169a8ff50fb232c39f0e
     with:
-      policy-ref: 9b6141e294da5c0f9254cfaa60c8934df95ec68b
+      policy-ref: a88e5a0a68f31f822b4c169a8ff50fb232c39f0e
   dependency-review:
     if: github.event_name == 'pull_request'
-    uses: ElevenID/.github/.github/workflows/dependency-review.yml@9b6141e294da5c0f9254cfaa60c8934df95ec68b
+    uses: ElevenID/.github/.github/workflows/dependency-review.yml@a88e5a0a68f31f822b4c169a8ff50fb232c39f0e
 
   scorecard:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -28,4 +32,4 @@ jobs:
       security-events: write # Required to upload Scorecard SARIF.
       id-token: write # Required for keyless Scorecard result publishing.
       contents: read
-    uses: ElevenID/.github/.github/workflows/scorecard.yml@9b6141e294da5c0f9254cfaa60c8934df95ec68b
+    uses: ElevenID/.github/.github/workflows/scorecard.yml@a88e5a0a68f31f822b4c169a8ff50fb232c39f0e
