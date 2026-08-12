@@ -282,6 +282,114 @@ pub fn apply_open_badge_v3_profile(
     Ok(())
 }
 
+/// Validate the canonical Open Badges 3.0 shape used by Marty's VC-JWT profile.
+///
+/// Cryptographic verification is intentionally outside this function. Callers
+/// must invoke it only for a credential recovered from an authenticated JWT or
+/// Data Integrity proof. Keeping the shape rules beside the issuer-side
+/// profile builder prevents issuance and verification from drifting apart.
+pub fn validate_open_badge_v3_profile(credential: &serde_json::Value) -> Oid4vciResult<()> {
+    let credential = credential.as_object().ok_or_else(|| {
+        Oid4vciError::InvalidRequest("Open Badges credential must be one JSON object".into())
+    })?;
+
+    require_string_array_member(
+        credential.get("@context"),
+        "https://www.w3.org/ns/credentials/v2",
+        "credential @context",
+    )?;
+    require_string_array_member(
+        credential.get("@context"),
+        OPEN_BADGES_V3_CONTEXT,
+        "credential @context",
+    )?;
+    require_string_array_member(
+        credential.get("type"),
+        "VerifiableCredential",
+        "credential type",
+    )?;
+    require_string_array_member(
+        credential.get("type"),
+        OPEN_BADGES_V3_CREDENTIAL_TYPE,
+        "credential type",
+    )?;
+
+    let subject = credential
+        .get("credentialSubject")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            Oid4vciError::InvalidRequest(
+                "Open Badges credentialSubject must be one JSON object".into(),
+            )
+        })?;
+    require_string_array_member(
+        subject.get("type"),
+        "AchievementSubject",
+        "credentialSubject type",
+    )?;
+    require_non_empty_string(subject.get("id"), "credentialSubject id")?;
+
+    let achievement = subject
+        .get("achievement")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            Oid4vciError::InvalidRequest("Open Badges achievement must be an object".into())
+        })?;
+    require_string_array_member(achievement.get("type"), "Achievement", "achievement type")?;
+    let achievement_id = require_non_empty_string(achievement.get("id"), "achievement id")?;
+    url::Url::parse(achievement_id).map_err(|error| {
+        Oid4vciError::InvalidRequest(format!(
+            "Open Badges achievement id must be an absolute URI: {error}"
+        ))
+    })?;
+    require_non_empty_string(achievement.get("name"), "achievement name")?;
+    require_non_empty_string(achievement.get("description"), "achievement description")?;
+    Ok(())
+}
+
+fn require_non_empty_string<'a>(
+    value: Option<&'a serde_json::Value>,
+    label: &str,
+) -> Oid4vciResult<&'a str> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            Oid4vciError::InvalidRequest(format!("Open Badges {label} must be a non-empty string"))
+        })
+}
+
+fn require_string_array_member(
+    value: Option<&serde_json::Value>,
+    required: &str,
+    label: &str,
+) -> Oid4vciResult<()> {
+    let values = match value {
+        Some(serde_json::Value::String(value)) => vec![value.as_str()],
+        Some(serde_json::Value::Array(values))
+            if values.iter().all(serde_json::Value::is_string) =>
+        {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect()
+        }
+        _ => {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Open Badges {label} must be a string or array of strings"
+            )))
+        }
+    };
+    if values.contains(&required) {
+        Ok(())
+    } else {
+        Err(Oid4vciError::InvalidRequest(format!(
+            "Open Badges {label} must include {required}"
+        )))
+    }
+}
+
 fn take_optional_non_empty_string(
     object: &mut serde_json::Map<String, serde_json::Value>,
     field: &str,
@@ -794,5 +902,48 @@ mod tests {
             options.credential_subject.unwrap()["achievement"]["id"],
             "did:web:issuer.example:achievements:member"
         );
+    }
+
+    #[test]
+    fn validates_canonical_open_badge_v3_profile_and_rejects_missing_semantics() {
+        let credential = serde_json::json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                OPEN_BADGES_V3_CONTEXT
+            ],
+            "id": "urn:uuid:5cd704e2-9034-470a-b31e-e02d2f766d91",
+            "type": ["VerifiableCredential", OPEN_BADGES_V3_CREDENTIAL_TYPE],
+            "issuer": "did:web:issuer.example",
+            "credentialSubject": {
+                "id": "did:key:zHolder",
+                "type": ["AchievementSubject"],
+                "email": "holder@example.test",
+                "achievement": {
+                    "id": "https://issuer.example/achievements/member",
+                    "type": ["Achievement"],
+                    "name": "Verified Member",
+                    "description": "Membership achievement"
+                }
+            }
+        });
+        validate_open_badge_v3_profile(&credential).unwrap();
+
+        for pointer in [
+            "/credentialSubject/id",
+            "/credentialSubject/achievement/name",
+            "/credentialSubject/achievement/description",
+        ] {
+            let mut malformed = credential.clone();
+            *malformed.pointer_mut(pointer).unwrap() = serde_json::Value::Null;
+            assert!(
+                validate_open_badge_v3_profile(&malformed).is_err(),
+                "{pointer}"
+            );
+        }
+
+        let mut relative_achievement = credential;
+        relative_achievement["credentialSubject"]["achievement"]["id"] =
+            serde_json::json!("achievements/member");
+        assert!(validate_open_badge_v3_profile(&relative_achievement).is_err());
     }
 }
