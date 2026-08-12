@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.50] - 2026-08-12
+
+### Added
+
+- Add a canonical Open Badges 3.0 profile validator beside the Rust issuance
+  profile builder.
+- Expose composite Open Badge VC-JWT verification through `_marty_rs`.
+
+### Changed
+
+- Authenticate VC-JWT signatures, issuer binding, validity, VCDM structure,
+  and Open Badge semantics through one Rust verification boundary.
+
+### Security
+
+- Clear credential claims when the JWT signature or Open Badge profile is
+  rejected so callers cannot consume unverified badge data.
+
 ## [0.1.49] - 2026-08-12
 
 ### Added
