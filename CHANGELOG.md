@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.49] - 2026-08-12
+
+### Added
+
+- Add canonical Rust-owned OID4VP and DCQL presentation metadata for Open
+  Badges 3.0 VC-JWT and legacy SD-JWT application profiles.
+- Expose an explicit `credential_presentation_metadata` native capability for
+  startup and health diagnostics.
+
+### Changed
+
+- Reuse the Open Badges 3.0 credential type emitted by the Rust issuer when
+  constructing presentation requirements.
+- Preserve current and legacy Open Badge SD-JWT VCT matching through the same
+  Rust profile resolver instead of caller-side mappings.
+
+### Security
+
+- Reject unknown profiles, unsupported presentation formats, missing SD-JWT
+  VCT identifiers, and malformed native presentation metadata fail closed.
+
 ## [0.1.48] - 2026-08-12
 
 ### Added
