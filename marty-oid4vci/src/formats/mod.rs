@@ -86,3 +86,55 @@ pub fn negotiate_format(
             .ok_or_else(|| Oid4vciError::ConfigError("No credential formats configured".into()))
     }
 }
+
+/// Return canonical OID4VP/DCQL metadata for an application credential profile.
+///
+/// Application-facing profile aliases are accepted only at this boundary. The
+/// returned values are the exact wire-format and credential types emitted by
+/// the corresponding Rust issuer profile.
+pub fn credential_profile_presentation_metadata(profile: &str) -> Oid4vciResult<serde_json::Value> {
+    match profile.trim().to_ascii_lowercase().as_str() {
+        "open_badge" | "open_badge_v3" | "openbadge-v3" | "openbadgecredential" => {
+            Ok(serde_json::json!({
+                "format": CredentialFormat::JwtVcJson.as_str(),
+                "meta": {
+                    "type_values": [[
+                        "VerifiableCredential",
+                        jwt_vc::OPEN_BADGES_V3_CREDENTIAL_TYPE,
+                    ]],
+                },
+            }))
+        }
+        _ => Err(Oid4vciError::UnsupportedFormat(format!(
+            "Unsupported credential presentation profile: {profile}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod presentation_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn open_badge_aliases_resolve_to_the_issued_ob3_wire_contract() {
+        for profile in [
+            "open_badge",
+            "open_badge_v3",
+            "openbadge-v3",
+            "OpenBadgeCredential",
+        ] {
+            let metadata = credential_profile_presentation_metadata(profile).unwrap();
+            assert_eq!(metadata["format"], "jwt_vc_json");
+            assert_eq!(
+                metadata["meta"]["type_values"],
+                serde_json::json!([["VerifiableCredential", "OpenBadgeCredential"]])
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_presentation_profile_fails_closed() {
+        let error = credential_profile_presentation_metadata("unknown-profile").unwrap_err();
+        assert!(matches!(error, Oid4vciError::UnsupportedFormat(_)));
+    }
+}

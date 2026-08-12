@@ -782,6 +782,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "oid4vp",
             "document_verification",
             "credential_format_detection",
+            "credential_presentation_metadata",
             "device_authentication",
             "flow_state_machine",
             "vds_nc_profile",
@@ -2086,6 +2087,15 @@ fn detect_credential_format(input: &str) -> String {
         .to_string()
 }
 
+/// Resolve application profile aliases to the canonical Rust-issued OID4VP
+/// format and DCQL metadata.
+#[pyfunction]
+fn credential_profile_presentation_metadata(profile: &str) -> PyResult<String> {
+    let metadata = marty_oid4vci::formats::credential_profile_presentation_metadata(profile)
+        .map_err(to_pyerr)?;
+    serde_json::to_string(&metadata).map_err(to_pyerr)
+}
+
 /// Python module for Marty cryptographic operations.
 ///
 /// This module provides essential cryptographic functions for credential
@@ -2138,6 +2148,10 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Verification
     m.add_function(wrap_pyfunction!(detect_credential_format, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        credential_profile_presentation_metadata,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(verify_p256, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p384, m)?)?;
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;

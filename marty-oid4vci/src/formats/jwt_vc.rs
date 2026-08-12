@@ -18,6 +18,8 @@ use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedC
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 /// Canonical 1EdTech Open Badges 3.0 JSON-LD context.
 pub const OPEN_BADGES_V3_CONTEXT: &str = "https://purl.imsglobal.org/spec/ob/v3p0/context.json";
+/// Canonical W3C credential type for an Open Badges 3.0 credential.
+pub const OPEN_BADGES_V3_CREDENTIAL_TYPE: &str = "OpenBadgeCredential";
 
 /// Sign a W3C VC-JWT credential.
 ///
@@ -264,7 +266,7 @@ pub fn apply_open_badge_v3_profile(
         }
     }
 
-    claims.credential_type = "OpenBadgeCredential".into();
+    claims.credential_type = OPEN_BADGES_V3_CREDENTIAL_TYPE.into();
     claims
         .w3c_types
         .retain(|value| !matches!(value.as_str(), "open_badge" | "open_badge_v3"));
