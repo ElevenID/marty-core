@@ -31,9 +31,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::issuer::generate_pkce_challenge_s256;
 use crate::types::{
-    AuthorizationDetail, AuthorizationRequest, CodeChallengeMethod, CredentialFormat,
-    CredentialOffer, CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject,
-    TokenResponse,
+    AuthorizationDetail, AuthorizationRequest, CodeChallengeMethod, CredentialOffer,
+    CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject, TokenResponse,
 };
 use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
 
@@ -49,6 +48,9 @@ use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSu
 pub struct IssuerMetadata {
     /// The Credential Issuer identifier URL.
     pub credential_issuer: String,
+    /// Authorization Server identifiers published by the Credential Issuer.
+    #[serde(default)]
+    pub authorization_servers: Vec<String>,
     /// Token endpoint (may live on a separate AS).
     pub token_endpoint: Option<String>,
     /// Credential endpoint.
@@ -68,13 +70,16 @@ pub struct IssuerMetadata {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-impl IssuerMetadata {
-    /// Resolve the token endpoint, falling back to `{credential_issuer}/token`.
-    pub fn token_endpoint(&self) -> String {
-        self.token_endpoint
-            .clone()
-            .unwrap_or_else(|| format!("{}/token", self.credential_issuer))
-    }
+/// Parsed OAuth Authorization Server Metadata (RFC 8414).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizationServerMetadata {
+    /// Authorization Server issuer identifier.
+    pub issuer: String,
+    /// OAuth token endpoint.
+    pub token_endpoint: String,
+    /// Raw extra fields preserved for forward-compatibility.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -303,6 +308,128 @@ impl WalletEngine {
         resp.json::<IssuerMetadata>().await.map_err(|e| {
             Oid4vciError::InvalidRequest(format!("Metadata response parse error: {}", e))
         })
+    }
+
+    /// Fetch OAuth Authorization Server Metadata using the RFC 8414 insertion
+    /// rule for an issuer identifier with a path component.
+    pub async fn fetch_authorization_server_metadata(
+        &self,
+        authorization_server: &str,
+    ) -> Oid4vciResult<AuthorizationServerMetadata> {
+        let well_known = Self::authorization_server_metadata_url(authorization_server)?;
+        let resp = self.client.get(&well_known).send().await.map_err(|e| {
+            Oid4vciError::InvalidRequest(format!(
+                "Authorization Server Metadata fetch failed: {}",
+                e
+            ))
+        })?;
+
+        if !resp.status().is_success() {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "Authorization Server Metadata endpoint returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        let metadata = resp
+            .json::<AuthorizationServerMetadata>()
+            .await
+            .map_err(|e| {
+                Oid4vciError::InvalidRequest(format!(
+                    "Authorization Server Metadata response parse error: {}",
+                    e
+                ))
+            })?;
+        if Self::normalized_issuer(&metadata.issuer)?
+            != Self::normalized_issuer(authorization_server)?
+        {
+            return Err(Oid4vciError::InvalidRequest(
+                "Authorization Server Metadata issuer does not match the requested issuer".into(),
+            ));
+        }
+        Self::validate_endpoint_url(&metadata.token_endpoint, "token_endpoint")?;
+        Ok(metadata)
+    }
+
+    /// Resolve the OAuth token endpoint for an OID4VCI issuer.
+    ///
+    /// Legacy metadata that embeds `token_endpoint` remains supported. Final
+    /// OID4VCI metadata is resolved through the first published Authorization
+    /// Server, or through the Credential Issuer itself when the list is absent.
+    pub async fn resolve_token_endpoint(
+        &self,
+        issuer_metadata: &IssuerMetadata,
+    ) -> Oid4vciResult<String> {
+        if let Some(endpoint) = issuer_metadata.token_endpoint.as_deref() {
+            Self::validate_endpoint_url(endpoint, "token_endpoint")?;
+            return Ok(endpoint.to_string());
+        }
+
+        let authorization_server = issuer_metadata
+            .authorization_servers
+            .first()
+            .map(String::as_str)
+            .unwrap_or(&issuer_metadata.credential_issuer);
+        let metadata = self
+            .fetch_authorization_server_metadata(authorization_server)
+            .await?;
+        Ok(metadata.token_endpoint)
+    }
+
+    fn authorization_server_metadata_url(authorization_server: &str) -> Oid4vciResult<String> {
+        let mut issuer = Self::parse_http_url(authorization_server, "authorization server")?;
+        if issuer.query().is_some() || issuer.fragment().is_some() {
+            return Err(Oid4vciError::InvalidRequest(
+                "Authorization server identifier must not contain a query or fragment".into(),
+            ));
+        }
+        let issuer_path = issuer.path().trim_matches('/');
+        let metadata_path = if issuer_path.is_empty() {
+            "/.well-known/oauth-authorization-server".to_string()
+        } else {
+            format!("/.well-known/oauth-authorization-server/{issuer_path}")
+        };
+        issuer.set_path(&metadata_path);
+        Ok(issuer.to_string())
+    }
+
+    fn normalized_issuer(value: &str) -> Oid4vciResult<String> {
+        let mut issuer = Self::parse_http_url(value, "issuer")?;
+        if issuer.query().is_some() || issuer.fragment().is_some() {
+            return Err(Oid4vciError::InvalidRequest(
+                "Issuer identifier must not contain a query or fragment".into(),
+            ));
+        }
+        let normalized_path = issuer.path().trim_end_matches('/').to_string();
+        issuer.set_path(if normalized_path.is_empty() {
+            "/"
+        } else {
+            &normalized_path
+        });
+        Ok(issuer.to_string())
+    }
+
+    fn validate_endpoint_url(value: &str, field: &str) -> Oid4vciResult<()> {
+        let endpoint = Self::parse_http_url(value, field)?;
+        if endpoint.fragment().is_some() {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "{field} must not contain a fragment"
+            )));
+        }
+        Ok(())
+    }
+
+    fn parse_http_url(value: &str, field: &str) -> Oid4vciResult<url::Url> {
+        let parsed = url::Url::parse(value)
+            .map_err(|e| Oid4vciError::InvalidRequest(format!("Invalid {field} URL: {e}")))?;
+        if !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.host_str().is_none()
+        {
+            return Err(Oid4vciError::InvalidRequest(format!("Invalid {field} URL")));
+        }
+        Ok(parsed)
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -588,22 +715,10 @@ impl WalletEngine {
         &self,
         credential_endpoint: &str,
         access_token: &str,
-        format: &CredentialFormat,
-        credential_configuration_id: Option<&str>,
+        credential_configuration_id: &str,
         proof_jwt: &str,
     ) -> Oid4vciResult<CredentialResponse> {
-        let req = CredentialRequest {
-            format: Some(format.as_str().to_string()),
-            credential_configuration_id: credential_configuration_id.map(|s| s.to_string()),
-            credential_identifier: None,
-            proofs: Some(ProofsObject {
-                jwt: Some(vec![proof_jwt.to_string()]),
-            }),
-            credential_definition: None,
-            vct: None,
-            doctype: None,
-            claims: None,
-        };
+        let req = Self::build_credential_request(credential_configuration_id, proof_jwt)?;
 
         let resp = self
             .client
@@ -627,6 +742,36 @@ impl WalletEngine {
 
         resp.json::<CredentialResponse>().await.map_err(|e| {
             Oid4vciError::InvalidRequest(format!("Credential response parse error: {}", e))
+        })
+    }
+
+    fn build_credential_request(
+        credential_configuration_id: &str,
+        proof_jwt: &str,
+    ) -> Oid4vciResult<CredentialRequest> {
+        if credential_configuration_id.trim().is_empty() {
+            return Err(Oid4vciError::InvalidRequest(
+                "credential_configuration_id must not be empty".into(),
+            ));
+        }
+        if proof_jwt.trim().is_empty() {
+            return Err(Oid4vciError::InvalidRequest(
+                "credential proof JWT must not be empty".into(),
+            ));
+        }
+        Ok(CredentialRequest {
+            // OID4VCI 1.0 removed the request-level `format` selector. The
+            // configuration ID selects the format through issuer metadata.
+            format: None,
+            credential_configuration_id: Some(credential_configuration_id.to_string()),
+            credential_identifier: None,
+            proofs: Some(ProofsObject {
+                jwt: Some(vec![proof_jwt.to_string()]),
+            }),
+            credential_definition: None,
+            vct: None,
+            doctype: None,
+            claims: None,
         })
     }
 
@@ -1307,9 +1452,152 @@ fn infer_format(cred: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::oneshot;
+
+    fn issuer_metadata(credential_issuer: String) -> IssuerMetadata {
+        IssuerMetadata {
+            credential_issuer,
+            authorization_servers: Vec::new(),
+            token_endpoint: None,
+            credential_endpoint: "https://issuer.example/credential".into(),
+            nonce_endpoint: None,
+            authorization_endpoint: None,
+            grant_types_supported: Vec::new(),
+            credential_configurations_supported: HashMap::new(),
+            extra: HashMap::new(),
+        }
+    }
+
+    async fn metadata_server(
+        issuer_path: &str,
+        advertised_issuer: Option<&str>,
+    ) -> (String, oneshot::Receiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let issuer = format!("http://{address}{issuer_path}");
+        let metadata_issuer = advertised_issuer.unwrap_or(&issuer).to_string();
+        let token_endpoint = format!("http://{address}/oauth/token");
+        let body = serde_json::json!({
+            "issuer": metadata_issuer,
+            "token_endpoint": token_endpoint,
+        })
+        .to_string();
+        let (request_tx, request_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0; 4096];
+            let length = stream.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..length]);
+            let request_line = request.lines().next().unwrap_or_default().to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            let _ = request_tx.send(request_line);
+        });
+        (issuer, request_rx)
+    }
 
     fn encode_query_json(value: &str) -> String {
         url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+    }
+
+    #[test]
+    fn authorization_server_metadata_url_uses_rfc8414_insertion_rule() {
+        assert_eq!(
+            WalletEngine::authorization_server_metadata_url(
+                "https://issuer.example/org/organization-1"
+            )
+            .unwrap(),
+            "https://issuer.example/.well-known/oauth-authorization-server/org/organization-1"
+        );
+        assert_eq!(
+            WalletEngine::authorization_server_metadata_url("https://issuer.example").unwrap(),
+            "https://issuer.example/.well-known/oauth-authorization-server"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_token_endpoint_discovers_published_authorization_server() {
+        let (authorization_server, request_rx) = metadata_server("/org/organization-1", None).await;
+        let mut issuer = issuer_metadata("https://credential-issuer.example".into());
+        issuer.authorization_servers = vec![authorization_server.clone()];
+
+        let endpoint = WalletEngine::new()
+            .resolve_token_endpoint(&issuer)
+            .await
+            .unwrap();
+
+        assert!(endpoint.ends_with("/oauth/token"));
+        assert_eq!(
+            request_rx.await.unwrap(),
+            "GET /.well-known/oauth-authorization-server/org/organization-1 HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_token_endpoint_defaults_authorization_server_to_credential_issuer() {
+        let (credential_issuer, request_rx) = metadata_server("/issuer", None).await;
+        let issuer = issuer_metadata(credential_issuer);
+
+        let endpoint = WalletEngine::new()
+            .resolve_token_endpoint(&issuer)
+            .await
+            .unwrap();
+
+        assert!(endpoint.ends_with("/oauth/token"));
+        assert_eq!(
+            request_rx.await.unwrap(),
+            "GET /.well-known/oauth-authorization-server/issuer HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_token_endpoint_rejects_authorization_server_issuer_mismatch() {
+        let (authorization_server, _request_rx) =
+            metadata_server("/issuer", Some("https://attacker.example")).await;
+        let mut issuer = issuer_metadata("https://credential-issuer.example".into());
+        issuer.authorization_servers = vec![authorization_server];
+
+        let error = WalletEngine::new()
+            .resolve_token_endpoint(&issuer)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("issuer does not match"));
+    }
+
+    #[tokio::test]
+    async fn resolve_token_endpoint_preserves_valid_legacy_metadata() {
+        let mut issuer = issuer_metadata("https://credential-issuer.example".into());
+        issuer.token_endpoint = Some("https://authorization.example/oauth/token".into());
+
+        let endpoint = WalletEngine::new()
+            .resolve_token_endpoint(&issuer)
+            .await
+            .unwrap();
+
+        assert_eq!(endpoint, "https://authorization.example/oauth/token");
+    }
+
+    #[test]
+    fn credential_request_uses_final_configuration_selector_without_format() {
+        let request = WalletEngine::build_credential_request("open_badge", "proof.jwt").unwrap();
+        let value = serde_json::to_value(request).unwrap();
+
+        assert_eq!(value["credential_configuration_id"], "open_badge");
+        assert_eq!(value["proofs"]["jwt"][0], "proof.jwt");
+        assert!(value.get("format").is_none());
+        assert!(value.get("credential_identifier").is_none());
+    }
+
+    #[test]
+    fn credential_request_rejects_empty_selector_or_proof() {
+        assert!(WalletEngine::build_credential_request("", "proof.jwt").is_err());
+        assert!(WalletEngine::build_credential_request("open_badge", "").is_err());
     }
 
     #[tokio::test]
