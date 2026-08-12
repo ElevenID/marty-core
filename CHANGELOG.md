@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.48] - 2026-08-12
+
+### Added
+
+- Add canonical Open Badges 3.0 JWT-VC profile construction and a dedicated
+  native preparation capability for fail-closed caller startup validation.
+- Add canonical native credential-format routing for JSON, JWT VC, SD-JWT,
+  Open Badges, and mdoc verification candidates.
+
+### Changed
+
+- Discover OID4VCI authorization-server metadata before token exchange and
+  require exact issuer metadata instead of guessing a token endpoint.
+- Consolidate Open Badges context, credential type, achievement subject, and
+  achievement construction in the Rust OID4VCI owner.
+
+### Security
+
+- Reject malformed or conflicting Open Badges profile data, unknown native
+  profile requests, malformed compact tokens, and unavailable native routing
+  operations instead of falling back to caller-side interpretation.
+
 ## [0.1.47] - 2026-08-12
 
 ### Added
