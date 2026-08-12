@@ -219,10 +219,15 @@ async fn receive_credential(
             "The browser test wallet accepts SD-JWT VC and W3C VC-JWT credentials only",
         ));
     }
+    let token_endpoint = state
+        .engine
+        .resolve_token_endpoint(&metadata)
+        .await
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
     let token = state
         .engine
         .exchange_pre_auth_code(
-            &metadata.token_endpoint(),
+            &token_endpoint,
             &grant.pre_authorized_code,
             request.tx_code.as_deref(),
         )
@@ -255,8 +260,7 @@ async fn receive_credential(
         .request_credential(
             &metadata.credential_endpoint,
             &token.access_token,
-            &format,
-            Some(&configuration_id),
+            &configuration_id,
             &proof,
         )
         .await
