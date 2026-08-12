@@ -3,7 +3,7 @@ name: License Compliance
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * 1'  # Weekly on Monday at 6 AM UTC
+    - cron: '0 6 * * 1'  # Weekly Monday, staggered across repositories.
   push:
     branches: [main]
     paths:
@@ -20,6 +20,10 @@ on:
       - 'LICENSE-APACHE'
       - 'LICENSE-MIT'
       - 'README.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   metadata-consistency:

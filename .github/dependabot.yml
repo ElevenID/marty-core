@@ -8,7 +8,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-      day: "monday"
+      day: "saturday"
+      time: "00:00"
+      timezone: "America/Denver"
     open-pull-requests-limit: 10
     groups:
       rust-dependencies:
@@ -29,7 +31,9 @@ updates:
     directory: "/marty-biometrics"
     schedule:
       interval: "weekly"
-      day: "monday"
+      day: "saturday"
+      time: "01:00"
+      timezone: "America/Denver"
     open-pull-requests-limit: 5
     groups:
       python-dependencies:
@@ -50,7 +54,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-      day: "monday"
+      day: "saturday"
+      time: "02:00"
+      timezone: "America/Denver"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
