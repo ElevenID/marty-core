@@ -8,7 +8,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use marty_oid4vci::types::CredentialFormat;
-use marty_oid4vci::wallet::{HolderKeyMaterial, WalletEngine};
+use marty_oid4vci::wallet::{DcqlCredentialQuery, HolderKeyMaterial, WalletEngine};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -75,6 +75,7 @@ struct PresentResponse {
     redirect_uri: Option<String>,
 }
 
+#[derive(Debug)]
 struct AppError {
     status: StatusCode,
     message: String,
@@ -210,9 +211,12 @@ async fn receive_credential(
     let format = CredentialFormat::from_str_loose(format_name).ok_or_else(|| {
         AppError::unprocessable(format!("Unsupported credential format {format_name}"))
     })?;
-    if format != CredentialFormat::SdJwt {
+    if !matches!(
+        format,
+        CredentialFormat::SdJwt | CredentialFormat::JwtVcJson
+    ) {
         return Err(AppError::unprocessable(
-            "The browser test wallet currently accepts SD-JWT VC credentials only",
+            "The browser test wallet accepts SD-JWT VC and W3C VC-JWT credentials only",
         ));
     }
     let token = state
@@ -260,16 +264,15 @@ async fn receive_credential(
     let raw = extract_credential(&response).ok_or_else(|| {
         AppError::unprocessable("Credential response contained no credential value")
     })?;
-    let payload = decode_sd_jwt(&raw)?;
+    let payload = decode_credential_payload(&raw, &format)?;
+    let vct = credential_vct(&payload);
+    let claim_names = credential_claim_names(&raw, &format, &payload);
     let credential = StoredCredential {
         id: uuid::Uuid::new_v4().to_string(),
         credential_configuration_id: configuration_id,
         format,
-        vct: payload
-            .get("vct")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        claim_names: disclosed_claim_names(&raw),
+        vct,
+        claim_names,
         raw,
         received_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -293,30 +296,26 @@ async fn present_credential(
     let wallet = state.wallet.read().await;
     let mut presentations = HashMap::new();
     for query in &dcql.credentials {
-        if query.format != "dc+sd-jwt" {
+        let requested_format =
+            CredentialFormat::from_str_loose(&query.format).ok_or_else(|| {
+                AppError::unprocessable(format!(
+                    "Unsupported DCQL credential format {}",
+                    query.format
+                ))
+            })?;
+        if !matches!(
+            requested_format,
+            CredentialFormat::SdJwt | CredentialFormat::JwtVcJson
+        ) {
             return Err(AppError::unprocessable(format!(
                 "Unsupported DCQL credential format {}",
                 query.format
             )));
         }
-        let accepted_vcts = query
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get("vct_values"))
-            .and_then(Value::as_array)
-            .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-            .unwrap_or_default();
         let credential = wallet
             .credentials
             .iter()
-            .find(|credential| {
-                credential.format == CredentialFormat::SdJwt
-                    && (accepted_vcts.is_empty()
-                        || credential
-                            .vct
-                            .as_deref()
-                            .is_some_and(|vct| accepted_vcts.contains(&vct)))
-            })
+            .find(|credential| credential_matches_query(credential, query, &requested_format))
             .ok_or_else(|| {
                 AppError::unprocessable(format!(
                     "No stored credential satisfies DCQL query {}",
@@ -328,16 +327,20 @@ async fn present_credential(
             .iter()
             .filter_map(|claim| claim.path.first().cloned())
             .collect::<Vec<_>>();
-        let presentation = state
-            .engine
-            .create_sd_jwt_presentation(
-                &credential.raw,
-                &claims,
-                &presentation_request.nonce,
-                &presentation_request.client_id,
-                &wallet.holder.private_jwk,
-            )
-            .map_err(|error| AppError::bad_request(error.to_string()))?;
+        let presentation = match requested_format {
+            CredentialFormat::SdJwt => state
+                .engine
+                .create_sd_jwt_presentation(
+                    &credential.raw,
+                    &claims,
+                    &presentation_request.nonce,
+                    &presentation_request.client_id,
+                    &wallet.holder.private_jwk,
+                )
+                .map_err(|error| AppError::bad_request(error.to_string()))?,
+            CredentialFormat::JwtVcJson => credential.raw.clone(),
+            _ => unreachable!("unsupported formats are rejected before selection"),
+        };
         presentations.insert(query.id.clone(), presentation);
     }
     drop(wallet);
@@ -387,17 +390,108 @@ fn credential_value(value: &Value) -> Option<String> {
     })
 }
 
-fn decode_sd_jwt(raw: &str) -> Result<Value, AppError> {
-    let jwt = raw.split('~').next().unwrap_or_default();
+fn decode_credential_payload(raw: &str, format: &CredentialFormat) -> Result<Value, AppError> {
+    let (jwt, label) = match format {
+        CredentialFormat::SdJwt => (raw.split('~').next().unwrap_or_default(), "SD-JWT"),
+        CredentialFormat::JwtVcJson => (raw, "VC-JWT"),
+        _ => {
+            return Err(AppError::unprocessable(
+                "Unsupported credential payload format",
+            ))
+        }
+    };
     let payload = jwt
         .split('.')
         .nth(1)
-        .ok_or_else(|| AppError::bad_request("Issued SD-JWT does not contain a JWT payload"))?;
+        .ok_or_else(|| AppError::bad_request(format!("Issued {label} has no JWT payload")))?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
-        .map_err(|error| AppError::bad_request(format!("Invalid SD-JWT payload: {error}")))?;
+        .map_err(|error| AppError::bad_request(format!("Invalid {label} payload: {error}")))?;
     serde_json::from_slice(&bytes)
-        .map_err(|error| AppError::bad_request(format!("Invalid SD-JWT claims: {error}")))
+        .map_err(|error| AppError::bad_request(format!("Invalid {label} claims: {error}")))
+}
+
+fn credential_vct(payload: &Value) -> Option<String> {
+    payload
+        .get("vct")
+        .or_else(|| payload.pointer("/vc/credentialSchema/id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn credential_claim_names(raw: &str, format: &CredentialFormat, payload: &Value) -> Vec<String> {
+    let mut claims = match format {
+        CredentialFormat::SdJwt => disclosed_claim_names(raw),
+        CredentialFormat::JwtVcJson => payload
+            .pointer("/vc/credentialSubject")
+            .and_then(Value::as_object)
+            .map(|subject| subject.keys().cloned().collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    claims.sort();
+    claims.dedup();
+    claims
+}
+
+fn credential_matches_query(
+    credential: &StoredCredential,
+    query: &DcqlCredentialQuery,
+    requested_format: &CredentialFormat,
+) -> bool {
+    if &credential.format != requested_format {
+        return false;
+    }
+    match requested_format {
+        CredentialFormat::SdJwt => {
+            let accepted_vcts = query
+                .meta
+                .as_ref()
+                .and_then(|meta| meta.get("vct_values"))
+                .and_then(Value::as_array)
+                .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+                .unwrap_or_default();
+            accepted_vcts.is_empty()
+                || credential
+                    .vct
+                    .as_deref()
+                    .is_some_and(|vct| accepted_vcts.contains(&vct))
+        }
+        CredentialFormat::JwtVcJson => jwt_vc_matches_type_values(&credential.raw, query),
+        _ => false,
+    }
+}
+
+fn jwt_vc_matches_type_values(raw: &str, query: &DcqlCredentialQuery) -> bool {
+    let accepted_type_sets = query
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("type_values"))
+        .and_then(Value::as_array)
+        .map(|sets| {
+            sets.iter()
+                .filter_map(Value::as_array)
+                .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+                .filter(|values| !values.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if accepted_type_sets.is_empty() {
+        return true;
+    }
+    let Ok(payload) = decode_credential_payload(raw, &CredentialFormat::JwtVcJson) else {
+        return false;
+    };
+    let credential_types = payload
+        .pointer("/vc/type")
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    accepted_type_sets.iter().any(|required| {
+        required
+            .iter()
+            .all(|value| credential_types.contains(value))
+    })
 }
 
 fn disclosed_claim_names(raw: &str) -> Vec<String> {
@@ -447,5 +541,110 @@ mod tests {
         };
         let serialized = serde_json::to_string(&CredentialSummary::from(&stored)).unwrap();
         assert!(!serialized.contains("sensitive.raw.credential"));
+    }
+
+    fn jwt(payload: Value) -> String {
+        format!(
+            "header.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string())
+        )
+    }
+
+    #[test]
+    fn vc_jwt_payload_exposes_subject_claim_names() {
+        let raw = jwt(serde_json::json!({
+            "vc": {
+                "type": ["VerifiableCredential", "open_badge"],
+                "credentialSubject": {"email": "holder@example.test", "role": "member"}
+            }
+        }));
+        let payload = decode_credential_payload(&raw, &CredentialFormat::JwtVcJson).unwrap();
+
+        assert_eq!(
+            credential_claim_names(&raw, &CredentialFormat::JwtVcJson, &payload),
+            vec!["email", "role"]
+        );
+    }
+
+    #[test]
+    fn vc_jwt_matches_dcql_type_values_fail_closed() {
+        let raw = jwt(serde_json::json!({
+            "vc": {
+                "type": ["VerifiableCredential", "open_badge"],
+                "credentialSubject": {"email": "holder@example.test"}
+            }
+        }));
+        let credential = StoredCredential {
+            id: "id-1".into(),
+            credential_configuration_id: "OpenBadgeCredential#jwt-vc".into(),
+            format: CredentialFormat::JwtVcJson,
+            raw,
+            vct: None,
+            claim_names: vec!["email".into()],
+            received_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let matching = DcqlCredentialQuery {
+            id: "badge".into(),
+            format: "jwt_vc_json".into(),
+            meta: Some(serde_json::json!({
+                "type_values": [["VerifiableCredential", "open_badge"]]
+            })),
+            claims: Vec::new(),
+        };
+        let wrong = DcqlCredentialQuery {
+            meta: Some(serde_json::json!({
+                "type_values": [["VerifiableCredential", "EmployeeCredential"]]
+            })),
+            ..matching.clone()
+        };
+
+        assert!(credential_matches_query(
+            &credential,
+            &matching,
+            &CredentialFormat::JwtVcJson
+        ));
+        assert!(!credential_matches_query(
+            &credential,
+            &wrong,
+            &CredentialFormat::JwtVcJson
+        ));
+    }
+
+    #[test]
+    fn sd_jwt_vct_matching_remains_strict() {
+        let credential = StoredCredential {
+            id: "id-1".into(),
+            credential_configuration_id: "MemberCredential#sd-jwt".into(),
+            format: CredentialFormat::SdJwt,
+            raw: "issuer.payload.signature~disclosure".into(),
+            vct: Some("https://issuer.example/member".into()),
+            claim_names: vec!["email".into()],
+            received_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let matching = DcqlCredentialQuery {
+            id: "member".into(),
+            format: "dc+sd-jwt".into(),
+            meta: Some(serde_json::json!({
+                "vct_values": ["https://issuer.example/member"]
+            })),
+            claims: Vec::new(),
+        };
+        let wrong = DcqlCredentialQuery {
+            meta: Some(serde_json::json!({
+                "vct_values": ["https://issuer.example/employee"]
+            })),
+            ..matching.clone()
+        };
+
+        assert!(credential_matches_query(
+            &credential,
+            &matching,
+            &CredentialFormat::SdJwt
+        ));
+        assert!(!credential_matches_query(
+            &credential,
+            &wrong,
+            &CredentialFormat::SdJwt
+        ));
     }
 }
