@@ -63,7 +63,9 @@ def test_native_backend_diagnostics_are_explicit_and_versioned():
 
 def test_open_badge_presentation_metadata_matches_canonical_rust_issuer_profile():
     metadata = json.loads(
-        _marty_rs.credential_profile_presentation_metadata("open_badge")
+        _marty_rs.credential_profile_presentation_metadata(
+            "open_badge", "jwt_vc_json", ""
+        )
     )
 
     assert metadata == {
@@ -76,7 +78,9 @@ def test_open_badge_presentation_metadata_matches_canonical_rust_issuer_profile(
 
 def test_unknown_credential_presentation_profile_fails_closed():
     with pytest.raises(RuntimeError, match="Unsupported credential presentation profile"):
-        _marty_rs.credential_profile_presentation_metadata("unknown-profile")
+        _marty_rs.credential_profile_presentation_metadata(
+            "unknown-profile", "jwt_vc_json", ""
+        )
 
 
 def test_oidc_validation_exposes_typed_fail_closed_errors():

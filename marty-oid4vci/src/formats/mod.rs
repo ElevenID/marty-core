@@ -92,18 +92,45 @@ pub fn negotiate_format(
 /// Application-facing profile aliases are accepted only at this boundary. The
 /// returned values are the exact wire-format and credential types emitted by
 /// the corresponding Rust issuer profile.
-pub fn credential_profile_presentation_metadata(profile: &str) -> Oid4vciResult<serde_json::Value> {
+pub fn credential_profile_presentation_metadata(
+    profile: &str,
+    credential_format: &str,
+    type_identifier: &str,
+) -> Oid4vciResult<serde_json::Value> {
     match profile.trim().to_ascii_lowercase().as_str() {
         "open_badge" | "open_badge_v3" | "openbadge-v3" | "openbadgecredential" => {
-            Ok(serde_json::json!({
-                "format": CredentialFormat::JwtVcJson.as_str(),
-                "meta": {
-                    "type_values": [[
-                        "VerifiableCredential",
-                        jwt_vc::OPEN_BADGES_V3_CREDENTIAL_TYPE,
-                    ]],
-                },
-            }))
+            match credential_format.trim().to_ascii_lowercase().as_str() {
+                "jwt_vp" | "jwt_vc" | "jwt_vc_json" => Ok(serde_json::json!({
+                    "format": CredentialFormat::JwtVcJson.as_str(),
+                    "meta": {
+                        "type_values": [[
+                            "VerifiableCredential",
+                            jwt_vc::OPEN_BADGES_V3_CREDENTIAL_TYPE,
+                        ]],
+                    },
+                })),
+                "sd_jwt_vc" | "vc+sd-jwt" | "dc+sd-jwt" => {
+                    let type_identifier = type_identifier.trim();
+                    if type_identifier.is_empty() {
+                        return Err(Oid4vciError::ConfigError(
+                            "Open Badge SD-JWT presentation metadata requires a vct".into(),
+                        ));
+                    }
+                    let mut vct_values = vec![type_identifier];
+                    const LEGACY_OPEN_BADGE_VCT: &str =
+                        "https://marty.example/credentials/open_badge";
+                    if type_identifier != LEGACY_OPEN_BADGE_VCT {
+                        vct_values.push(LEGACY_OPEN_BADGE_VCT);
+                    }
+                    Ok(serde_json::json!({
+                        "format": CredentialFormat::SdJwt.as_str(),
+                        "meta": {"vct_values": vct_values},
+                    }))
+                }
+                _ => Err(Oid4vciError::UnsupportedFormat(format!(
+                    "Unsupported Open Badge presentation format: {credential_format}"
+                ))),
+            }
         }
         _ => Err(Oid4vciError::UnsupportedFormat(format!(
             "Unsupported credential presentation profile: {profile}"
@@ -123,7 +150,8 @@ mod presentation_metadata_tests {
             "openbadge-v3",
             "OpenBadgeCredential",
         ] {
-            let metadata = credential_profile_presentation_metadata(profile).unwrap();
+            let metadata =
+                credential_profile_presentation_metadata(profile, "jwt_vc_json", "").unwrap();
             assert_eq!(metadata["format"], "jwt_vc_json");
             assert_eq!(
                 metadata["meta"]["type_values"],
@@ -134,7 +162,32 @@ mod presentation_metadata_tests {
 
     #[test]
     fn unknown_presentation_profile_fails_closed() {
-        let error = credential_profile_presentation_metadata("unknown-profile").unwrap_err();
+        let error = credential_profile_presentation_metadata("unknown-profile", "jwt_vc_json", "")
+            .unwrap_err();
         assert!(matches!(error, Oid4vciError::UnsupportedFormat(_)));
+    }
+
+    #[test]
+    fn legacy_open_badge_sd_jwt_metadata_preserves_current_and_legacy_vcts() {
+        let metadata = credential_profile_presentation_metadata(
+            "open_badge",
+            "dc+sd-jwt",
+            "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+        )
+        .unwrap();
+        assert_eq!(metadata["format"], "dc+sd-jwt");
+        assert_eq!(
+            metadata["meta"]["vct_values"],
+            serde_json::json!([
+                "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+                "https://marty.example/credentials/open_badge",
+            ])
+        );
+    }
+
+    #[test]
+    fn open_badge_metadata_rejects_unsupported_formats_and_missing_vct() {
+        assert!(credential_profile_presentation_metadata("open_badge", "ldp_vc", "").is_err());
+        assert!(credential_profile_presentation_metadata("open_badge", "dc+sd-jwt", "").is_err());
     }
 }

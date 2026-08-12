@@ -2090,9 +2090,17 @@ fn detect_credential_format(input: &str) -> String {
 /// Resolve application profile aliases to the canonical Rust-issued OID4VP
 /// format and DCQL metadata.
 #[pyfunction]
-fn credential_profile_presentation_metadata(profile: &str) -> PyResult<String> {
-    let metadata = marty_oid4vci::formats::credential_profile_presentation_metadata(profile)
-        .map_err(to_pyerr)?;
+fn credential_profile_presentation_metadata(
+    profile: &str,
+    credential_format: &str,
+    type_identifier: &str,
+) -> PyResult<String> {
+    let metadata = marty_oid4vci::formats::credential_profile_presentation_metadata(
+        profile,
+        credential_format,
+        type_identifier,
+    )
+    .map_err(to_pyerr)?;
     serde_json::to_string(&metadata).map_err(to_pyerr)
 }
 
