@@ -265,6 +265,15 @@ fn verify_vcdm_jwt(request_json: &str) -> String {
     marty_verification::vcdm::verify_vcdm_jwt_json(request_json)
 }
 
+/// Verify an Open Badges 3.0 credential carried as a compact VCDM v2 VC-JWT.
+///
+/// This composes issuer-signature verification and the canonical Open Badge
+/// profile validator in Rust. Invalid signatures never expose badge claims.
+#[pyfunction]
+fn verify_open_badge_v3_jwt(request_json: &str) -> String {
+    marty_verification::vcdm::verify_open_badge_v3_jwt_json(request_json)
+}
+
 /// Prepare the exact canonical bytes for an issuer-profile-backed
 /// `eddsa-rdfc-2022` credential signature.
 #[pyfunction]
@@ -2165,6 +2174,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_data_integrity, m)?)?;
     m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_open_badge_v3_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(verification_build_decision_result, m)?)?;
     m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
     m.add_function(wrap_pyfunction!(

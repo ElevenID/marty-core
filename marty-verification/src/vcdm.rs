@@ -682,6 +682,66 @@ pub fn verify_vcdm_jwt_json(request_json: &str) -> String {
     futures::executor::block_on(verify_vcdm_jwt_json_async(request_json))
 }
 
+/// Verify a compact Open Badges 3.0 credential encoded as a VCDM v2 VC-JWT.
+///
+/// The JWT signature, issuer binding, VCDM structure, and validity window are
+/// verified first. Open Badge profile validation is applied only to the
+/// authenticated `vc` object, so an unverified payload can never supply badge
+/// semantics or claims.
+pub async fn verify_open_badge_v3_jwt_json_async(request_json: &str) -> String {
+    let raw = verify_vcdm_jwt_json_async(request_json).await;
+    let mut result: Value = serde_json::from_str(&raw).unwrap_or_else(|error| {
+        serde_json::json!({
+            "valid": false,
+            "algorithm": null,
+            "issuer": null,
+            "claims": null,
+            "errors": [format!("Invalid internal VCDM JWT result: {error}")]
+        })
+    });
+    let object = result
+        .as_object_mut()
+        .expect("VCDM JWT verification always returns one JSON object");
+    object.insert(
+        "credential_profile".to_string(),
+        Value::String("openbadge-v3".to_string()),
+    );
+
+    if object.get("valid").and_then(Value::as_bool) == Some(true) {
+        let profile_result = object
+            .get("claims")
+            .and_then(|claims| claims.get("vc"))
+            .ok_or_else(|| "Authenticated VC-JWT has no credential object".to_string())
+            .and_then(|credential| {
+                marty_oid4vci::formats::jwt_vc::validate_open_badge_v3_profile(credential)
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = profile_result {
+            object.insert("valid".to_string(), Value::Bool(false));
+            object.insert("claims".to_string(), Value::Null);
+            object
+                .entry("errors".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+                .expect("VCDM JWT errors are always an array")
+                .push(Value::String(format!(
+                    "Open Badges v3 profile validation failed: {error}"
+                )));
+        }
+    } else {
+        // Do not expose payload claims from a rejected signature or malformed
+        // credential through the profile-specific verification boundary.
+        object.insert("claims".to_string(), Value::Null);
+    }
+
+    serde_json::to_string(&result).expect("serializing an Open Badges VC-JWT result cannot fail")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn verify_open_badge_v3_jwt_json(request_json: &str) -> String {
+    futures::executor::block_on(verify_open_badge_v3_jwt_json_async(request_json))
+}
+
 fn parse_public_jwk(value: Value) -> Result<JWK, String> {
     let object = value
         .as_object()
@@ -1466,6 +1526,97 @@ mod tests {
                 }
             }
         })
+    }
+
+    fn open_badge_jwt_claims(issuer: &str) -> Value {
+        json!({
+            "iss": issuer,
+            "sub": "did:example:alice",
+            "jti": "urn:uuid:41d3f3e6-f3a0-4a78-bc93-a5bec8ef137d",
+            "vc": {
+                "@context": [
+                    "https://www.w3.org/ns/credentials/v2",
+                    marty_oid4vci::formats::jwt_vc::OPEN_BADGES_V3_CONTEXT
+                ],
+                "id": "urn:uuid:41d3f3e6-f3a0-4a78-bc93-a5bec8ef137d",
+                "type": [
+                    "VerifiableCredential",
+                    marty_oid4vci::formats::jwt_vc::OPEN_BADGES_V3_CREDENTIAL_TYPE
+                ],
+                "issuer": issuer,
+                "validFrom": "2025-01-01T00:00:00Z",
+                "validUntil": "2099-01-01T00:00:00Z",
+                "credentialSubject": {
+                    "id": "did:example:alice",
+                    "type": ["AchievementSubject"],
+                    "email": "alice@example.test",
+                    "achievement": {
+                        "id": "https://issuer.example/achievements/member",
+                        "type": ["Achievement"],
+                        "name": "Verified Member",
+                        "description": "Membership achievement"
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn verifies_open_badge_v3_vc_jwt_as_one_authenticated_profile() {
+        let mut key = JWK::generate_p256();
+        let issuer = "did:web:issuer.example";
+        key.key_id = Some(format!("{issuer}#key-1"));
+        let token = encode_sign(
+            Algorithm::ES256,
+            &open_badge_jwt_claims(issuer).to_string(),
+            &key,
+        )
+        .unwrap();
+        let public_jwk = serde_json::to_value(key.to_public()).unwrap();
+
+        let result: Value = serde_json::from_str(&verify_open_badge_v3_jwt_json(
+            &json!({
+                "token": token,
+                "issuer_public_jwk": public_jwk
+            })
+            .to_string(),
+        ))
+        .unwrap();
+        assert_eq!(result["valid"], true, "{result}");
+        assert_eq!(result["credential_profile"], "openbadge-v3");
+        assert_eq!(result["issuer"], issuer);
+        assert_eq!(
+            result["claims"]["vc"]["credentialSubject"]["email"],
+            "alice@example.test"
+        );
+    }
+
+    #[test]
+    fn open_badge_v3_vc_jwt_rejects_valid_signature_over_invalid_profile() {
+        let mut key = JWK::generate_p256();
+        let issuer = "did:web:issuer.example";
+        key.key_id = Some(format!("{issuer}#key-1"));
+        let mut claims = open_badge_jwt_claims(issuer);
+        claims["vc"]["credentialSubject"]["achievement"]["name"] = Value::Null;
+        let token = encode_sign(Algorithm::ES256, &claims.to_string(), &key).unwrap();
+        let public_jwk = serde_json::to_value(key.to_public()).unwrap();
+        let request = json!({
+            "token": token,
+            "issuer_public_jwk": public_jwk
+        })
+        .to_string();
+
+        let generic: Value = serde_json::from_str(&verify_vcdm_jwt_json(&request)).unwrap();
+        assert_eq!(generic["valid"], true, "{generic}");
+
+        let profile: Value =
+            serde_json::from_str(&verify_open_badge_v3_jwt_json(&request)).unwrap();
+        assert_eq!(profile["valid"], false, "{profile}");
+        assert!(profile["claims"].is_null());
+        assert!(profile["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("achievement name"));
     }
 
     #[test]
