@@ -46,6 +46,7 @@ pub use marty_types as types;
 
 // Core protocol modules
 pub mod core;
+pub mod openid4vp;
 pub mod protocol;
 pub mod selective;
 pub mod session;
