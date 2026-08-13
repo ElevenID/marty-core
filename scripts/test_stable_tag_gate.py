@@ -10,7 +10,7 @@ TAG_OBJECT = "b" * 40
 POLICY = {
     "schema": stable_tag_gate.SCHEMA,
     "required_workflows": [
-        {"path": ".github/workflows/ci.yml", "event": "push"},
+        {"path": ".github/workflows/ci.yml", "event": "workflow_dispatch"},
         {"path": "dynamic/github-code-scanning/codeql", "event": "dynamic"},
     ],
 }
@@ -39,7 +39,7 @@ class WorkflowGateTests(unittest.TestCase):
     def payload(self) -> dict[str, object]:
         return {
             "workflow_runs": [
-                run(10, ".github/workflows/ci.yml", "push"),
+                run(10, ".github/workflows/ci.yml", "workflow_dispatch"),
                 run(11, "dynamic/github-code-scanning/codeql", "dynamic"),
             ]
         }
@@ -54,7 +54,7 @@ class WorkflowGateTests(unittest.TestCase):
         payload = self.payload()
         payload["workflow_runs"][0]["status"] = "in_progress"
         payload["workflow_runs"][0]["conclusion"] = None
-        with self.assertRaisesRegex(stable_tag_gate.StableTagGateError, "pending"):
+        with self.assertRaisesRegex(stable_tag_gate.StableTagGatePending, "pending"):
             stable_tag_gate.validate_workflow_runs(payload, POLICY, COMMIT, 99)
 
     def test_failed_workflow_blocks_tag_preparation(self) -> None:
@@ -66,15 +66,20 @@ class WorkflowGateTests(unittest.TestCase):
     def test_missing_and_different_head_workflows_block(self) -> None:
         payload = self.payload()
         payload["workflow_runs"][0]["head_sha"] = "c" * 40
-        with self.assertRaisesRegex(stable_tag_gate.StableTagGateError, "missing"):
+        with self.assertRaisesRegex(stable_tag_gate.StableTagGatePending, "missing"):
             stable_tag_gate.validate_workflow_runs(payload, POLICY, COMMIT, 99)
 
     def test_latest_rerun_is_authoritative(self) -> None:
         payload = self.payload()
         payload["workflow_runs"].extend(
             [
-                run(20, ".github/workflows/ci.yml", "push", conclusion="failure"),
-                run(21, ".github/workflows/ci.yml", "push"),
+                run(
+                    20,
+                    ".github/workflows/ci.yml",
+                    "workflow_dispatch",
+                    conclusion="failure",
+                ),
+                run(21, ".github/workflows/ci.yml", "workflow_dispatch"),
             ]
         )
         accepted = stable_tag_gate.validate_workflow_runs(payload, POLICY, COMMIT, 99)

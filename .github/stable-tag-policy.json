@@ -3,23 +3,23 @@
   "required_workflows": [
     {
       "path": ".github/workflows/ci.yml",
-      "event": "push"
+      "event": "workflow_dispatch"
     },
     {
       "path": ".github/workflows/open-source-policy.yml",
-      "event": "push"
+      "event": "workflow_dispatch"
     },
     {
       "path": ".github/workflows/organization-quality.yml",
-      "event": "push"
+      "event": "workflow_dispatch"
     },
     {
       "path": ".github/workflows/license-compliance.yml",
-      "event": "push"
+      "event": "workflow_dispatch"
     },
     {
       "path": ".github/workflows/mip-release-wallet.yml",
-      "event": "push"
+      "event": "workflow_dispatch"
     },
     {
       "path": "dynamic/github-code-scanning/codeql",
