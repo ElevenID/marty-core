@@ -125,7 +125,7 @@ jobs:
           path: .
           format: spdx-json
           output-file: release/marty-core.spdx.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: crate-release-assets
           path: release
@@ -228,7 +228,7 @@ jobs:
               exit 1
             fi
             perl -MIPC::Cmd -MTime::Piece -e 1
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}-${{ matrix.target }}
           path: ${{ matrix.package }}/dist/*
@@ -250,7 +250,7 @@ jobs:
           working-directory: ${{ matrix.package }}
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: sdist-${{ matrix.package }}
           path: ${{ matrix.package }}/dist/*
