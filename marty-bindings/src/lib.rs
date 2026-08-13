@@ -9,6 +9,7 @@
 
 mod device_auth;
 mod flow;
+mod haip;
 mod mdoc;
 mod remote_credential;
 mod status_list;
@@ -795,6 +796,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "oid4vp_request_builder",
             "device_authentication",
             "flow_state_machine",
+            "haip_response_encryption",
             "did_resolution",
             "openid4vp_mdoc_handover",
             "vds_nc_profile",
@@ -2205,6 +2207,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     remote_credential::register(m)?;
     status_list::register_status_list_bindings(m)?;
+    haip::register(m)?;
 
     // Key Generation
     m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
@@ -2842,7 +2845,7 @@ mod tests {
     }
 
     #[test]
-    fn native_diagnostics_advertise_controlled_did_resolution() {
+    fn native_diagnostics_advertise_migrated_capabilities() {
         let diagnostics: serde_json::Value =
             serde_json::from_str(&native_backend_diagnostics().expect("native diagnostics"))
                 .expect("diagnostics JSON");
@@ -2855,6 +2858,9 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability == "openid4vp_mdoc_handover"));
+        assert!(capabilities
+            .iter()
+            .any(|capability| capability == "haip_response_encryption"));
     }
 
     #[test]

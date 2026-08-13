@@ -20,7 +20,7 @@ pub struct Jwk {
     pub kty: String,
 
     /// Key use: sig (signature) or enc (encryption)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "use", skip_serializing_if = "Option::is_none")]
     pub use_: Option<String>,
 
     /// Key operations: sign, verify, encrypt, decrypt, etc.

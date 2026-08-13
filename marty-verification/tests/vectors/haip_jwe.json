@@ -1,0 +1,13 @@
+{
+  "compact_jwe": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImVwayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImtoMnZkbndhY21PZU1UdnNrUGxFM28wcFJtdHNqZ0hqUGZSYkp5TTU5UWMiLCJ5IjoiVTRCejExb1hmXzRuRU4xSXN2d29RVTNBc1hqeWd6Q1RUbmdSeXM5TTlaNCJ9fQ..xxlWxWnqIjyCcEk8.Kedj8YQZCAmf4i539LlzVBE33C0fsw.0m7aoF-0RHfBYzXk8P38Sw",
+  "plaintext": "{\"vp_token\":\"fixture\"}",
+  "private_jwk": {
+    "crv": "P-256",
+    "d": "c9-kiGUZgx7uLIoTdkW8C2KzdtG6eedmJGIlWG2riy4",
+    "kid": "haip-rust-vector",
+    "kty": "EC",
+    "x": "iNh3aYz1T6B7nOJohp3RSMHfBRHzJfRXfqzFKTQWX8g",
+    "y": "fBLMiszTerNbHMl_HTA2PsZUkMf8YXl_hpByXrj4TVw"
+  },
+  "source": "jwcrypto"
+}
