@@ -58,6 +58,7 @@ pub mod oidc;
 pub mod presentation_request;
 pub mod proof;
 pub mod signer;
+pub mod siop;
 pub mod types;
 pub mod verifier;
 pub mod wallet_input;

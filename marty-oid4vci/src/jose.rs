@@ -52,7 +52,7 @@ impl<'de> Visitor<'de> for UniqueObjectVisitor {
     }
 }
 
-fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Value> {
+pub(crate) fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Value> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
     let object = deserializer
         .deserialize_map(UniqueObjectVisitor)
@@ -69,6 +69,14 @@ fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Value> {
 /// key before calling [`verify_compact_jwt_with_public_jwk`]. Callers must never
 /// use the returned header as proof that the JWT is authentic.
 pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vciResult<Value> {
+    decode_unverified_compact_jwt(compact_jwt).map(|(header, _)| header)
+}
+
+/// Decode unique JOSE header and claim objects for protocol-specific key selection.
+///
+/// The values remain untrusted until a protocol validator selects an allowed key
+/// and calls [`verify_compact_jwt_with_public_jwk`].
+pub(crate) fn decode_unverified_compact_jwt(compact_jwt: &str) -> Oid4vciResult<(Value, Value)> {
     let parts: Vec<&str> = compact_jwt.split('.').collect();
     if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
         return Err(Oid4vciError::JwtError(
@@ -78,7 +86,13 @@ pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vci
     let header_bytes = B64.decode(parts[0]).map_err(|error| {
         Oid4vciError::JwtError(format!("Invalid JWT header base64url: {error}"))
     })?;
-    parse_unique_object(&header_bytes, "JWT header")
+    let claims_bytes = B64.decode(parts[1]).map_err(|error| {
+        Oid4vciError::JwtError(format!("Invalid JWT claims base64url: {error}"))
+    })?;
+    Ok((
+        parse_unique_object(&header_bytes, "JWT header")?,
+        parse_unique_object(&claims_bytes, "JWT claims")?,
+    ))
 }
 
 fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
@@ -106,23 +120,19 @@ fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oid4vciResult
             "Public JWK contains private key material: {field}"
         )));
     }
-    if object
-        .get("alg")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value != expected_algorithm)
-    {
-        return Err(Oid4vciError::KeyError(
-            "Public JWK alg does not match the JWT algorithm".into(),
-        ));
+    if let Some(value) = object.get("alg") {
+        if value.as_str() != Some(expected_algorithm) {
+            return Err(Oid4vciError::KeyError(
+                "Public JWK alg does not match the JWT algorithm".into(),
+            ));
+        }
     }
-    if object
-        .get("use")
-        .and_then(Value::as_str)
-        .is_some_and(|value| value != "sig")
-    {
-        return Err(Oid4vciError::KeyError(
-            "Public JWK use must be sig when present".into(),
-        ));
+    if let Some(value) = object.get("use") {
+        if value.as_str() != Some("sig") {
+            return Err(Oid4vciError::KeyError(
+                "Public JWK use must be sig when present".into(),
+            ));
+        }
     }
     if let Some(operations) = object.get("key_ops") {
         let operations = operations
@@ -150,21 +160,7 @@ pub fn verify_compact_jwt_with_public_jwk(
     public_jwk_json: &str,
     expected_algorithm: &str,
 ) -> Oid4vciResult<VerifiedCompactJwt> {
-    let parts: Vec<&str> = compact_jwt.split('.').collect();
-    if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
-        return Err(Oid4vciError::JwtError(
-            "Compact JWT must contain three non-empty parts".into(),
-        ));
-    }
-
-    let header_bytes = B64.decode(parts[0]).map_err(|error| {
-        Oid4vciError::JwtError(format!("Invalid JWT header base64url: {error}"))
-    })?;
-    let claims_bytes = B64.decode(parts[1]).map_err(|error| {
-        Oid4vciError::JwtError(format!("Invalid JWT claims base64url: {error}"))
-    })?;
-    let header_value = parse_unique_object(&header_bytes, "JWT header")?;
-    let claims = parse_unique_object(&claims_bytes, "JWT claims")?;
+    let (header_value, claims) = decode_unverified_compact_jwt(compact_jwt)?;
 
     let expected = algorithm(expected_algorithm)?;
     let header = decode_header(compact_jwt)

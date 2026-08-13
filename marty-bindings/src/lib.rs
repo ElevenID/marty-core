@@ -13,6 +13,7 @@ mod haip;
 mod mdoc;
 mod oid4vp_identity;
 mod remote_credential;
+mod siop;
 mod status_list;
 
 use pyo3::prelude::*;
@@ -796,6 +797,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "credential_presentation_metadata",
             "oid4vp_request_builder",
             "oid4vp_x509_identity",
+            "siop_jwk_id_token_verification",
             "device_authentication",
             "flow_state_machine",
             "haip_response_encryption",
@@ -2196,6 +2198,7 @@ fn build_oid4vp_presentation_request(request_json: &str) -> PyResult<String> {
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     flow::register_flow_bindings(m)?;
     oid4vp_identity::register(m)?;
+    siop::register(m)?;
     m.add(
         "OidcValidationError",
         m.py().get_type::<OidcValidationError>(),
@@ -2867,6 +2870,9 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability == "oid4vp_x509_identity"));
+        assert!(capabilities
+            .iter()
+            .any(|capability| capability == "siop_jwk_id_token_verification"));
     }
 
     #[test]
