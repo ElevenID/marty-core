@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.52] - 2026-08-13
+
+### Added
+
+- Add canonical ISO 18013-7 OpenID4VP mdoc handover and SessionTranscript
+  construction with RFC 7638 client identifier thumbprints.
+- Expose non-reversible OpenID4VP response-URI and nonce binding digests
+  through `_marty_rs` with shared cross-language golden vectors.
+
+### Changed
+
+- Make `marty-iso18013` the single owner of OpenID4VP mdoc transcript and
+  handover encoding used by Python compatibility adapters.
+
+### Security
+
+- Bound and validate OpenID4VP handover inputs and fail closed for malformed
+  JWKs, unsupported keys, empty identifiers or nonces, and oversized values.
+
 ## [0.1.51] - 2026-08-13
 
 ### Added
