@@ -6,21 +6,35 @@
 
 use crate::error::{DidcommError, DidcommResult};
 use crate::types::{DidDocument, Jwk, ServiceEntry, VerificationMethod};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[cfg(feature = "did_web")]
 use std::collections::{HashMap, HashSet};
 
-#[cfg(feature = "did_web")]
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 
-#[cfg(feature = "did_web")]
 const MAX_DID_DOCUMENT_BYTES: usize = 1024 * 1024;
+const MAX_DID_DOCUMENT_DEPTH: usize = 32;
+
+/// A resolved DID document together with integrity and source provenance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DidResolutionResult {
+    pub document: DidDocument,
+    pub source: String,
+    pub retrieved_at: String,
+    pub content_sha256: String,
+}
 
 /// DID Resolver supporting non-ledger DID methods.
 pub struct DidResolver {
     /// Optional URL for a Universal Resolver (e.g. `https://resolver.example.com/1.0/identifiers/`).
     /// When set, network-backed and otherwise unsupported methods are resolved through it.
     universal_resolver_url: Option<String>,
+    /// Deployment-owned HTTP(S) bases that serve `did:web` documents at the
+    /// standard path without contacting the public DID host.
+    #[cfg(feature = "did_web")]
+    did_web_internal_base_urls: Vec<String>,
     /// Exact hosts that may be contacted directly for `did:web` resolution.
     /// Empty by default so resolving untrusted DIDs cannot create ambient egress.
     #[cfg(feature = "did_web")]
@@ -33,6 +47,8 @@ impl DidResolver {
         Self {
             universal_resolver_url: None,
             #[cfg(feature = "did_web")]
+            did_web_internal_base_urls: Vec::new(),
+            #[cfg(feature = "did_web")]
             did_web_allowed_hosts: HashSet::new(),
         }
     }
@@ -42,8 +58,28 @@ impl DidResolver {
         Self {
             universal_resolver_url: Some(url.into()),
             #[cfg(feature = "did_web")]
+            did_web_internal_base_urls: Vec::new(),
+            #[cfg(feature = "did_web")]
             did_web_allowed_hosts: HashSet::new(),
         }
+    }
+
+    /// Add deployment-owned bases that mirror standard `did:web` document
+    /// paths. Bases are tried in order before any public or Universal Resolver
+    /// route.
+    #[cfg(feature = "did_web")]
+    pub fn with_did_web_internal_base_urls<I, S>(mut self, urls: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.did_web_internal_base_urls.extend(
+            urls.into_iter()
+                .map(Into::into)
+                .map(|url: String| url.trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty()),
+        );
+        self
     }
 
     /// Permit direct `did:web` resolution for an exact set of deployment-owned hosts.
@@ -78,22 +114,38 @@ impl DidResolver {
 
     /// Resolve a DID to its DID Document.
     pub async fn resolve(&self, did: &str) -> DidcommResult<DidDocument> {
+        self.resolve_with_source(did)
+            .await
+            .map(|(document, _)| document)
+    }
+
+    async fn resolve_with_source(&self, did: &str) -> DidcommResult<(DidDocument, &'static str)> {
         let method = extract_method(did)?;
         match method {
-            "key" => resolve_did_key(did),
-            "jwk" => resolve_did_jwk(did),
-            "peer" => resolve_did_peer(did),
+            "key" => resolve_did_key(did).map(|document| (document, "embedded:did:key")),
+            "jwk" => resolve_did_jwk(did).map(|document| (document, "embedded:did:jwk")),
+            "peer" => resolve_did_peer(did).map(|document| (document, "embedded:did:peer")),
             #[cfg(feature = "did_web")]
             "web" => {
+                for base_url in &self.did_web_internal_base_urls {
+                    let url = internal_did_web_url(base_url, did)?;
+                    if let Ok(document) = fetch_did_document(url, did, false).await {
+                        return Ok((document, "configured_internal_resolver"));
+                    }
+                }
                 let host = did_web_host(did)?;
                 if self.did_web_allowed_hosts.contains(&host) {
-                    resolve_did_web(did, &self.did_web_allowed_hosts).await
+                    resolve_did_web(did, &self.did_web_allowed_hosts)
+                        .await
+                        .map(|document| (document, "allowlisted_public_did_web"))
                 } else if let Some(ref base_url) = self.universal_resolver_url {
-                    resolve_via_universal_resolver(base_url, did).await
+                    resolve_via_universal_resolver(base_url, did)
+                        .await
+                        .map(|document| (document, "configured_internal_resolver"))
                 } else {
                     Err(DidcommError::ResolutionFailed {
                         did: did.to_string(),
-                        reason: "direct did:web resolution is disabled; configure a managed resolver or an exact host allowlist".to_string(),
+                        reason: "configured internal DID resolution failed and direct did:web resolution is disabled; configure a managed resolver or an exact host allowlist".to_string(),
                     })
                 }
             }
@@ -102,7 +154,9 @@ impl DidResolver {
                 if let Some(ref base_url) = self.universal_resolver_url {
                     #[cfg(feature = "did_web")]
                     {
-                        return resolve_via_universal_resolver(base_url, did).await;
+                        return resolve_via_universal_resolver(base_url, did)
+                            .await
+                            .map(|document| (document, "configured_internal_resolver"));
                     }
                     #[cfg(not(feature = "did_web"))]
                     {
@@ -117,6 +171,22 @@ impl DidResolver {
                 })
             }
         }
+    }
+
+    /// Resolve a DID and return stable provenance generated by the native
+    /// resolver. Callers do not need to recreate document hashing or infer
+    /// which network policy path was used.
+    pub async fn resolve_with_metadata(&self, did: &str) -> DidcommResult<DidResolutionResult> {
+        let (document, source) = self.resolve_with_source(did).await?;
+        let canonical = canonical_json_bytes(&serde_json::to_value(&document)?)?;
+        let content_sha256 = format!("{:x}", Sha256::digest(&canonical));
+
+        Ok(DidResolutionResult {
+            document,
+            source: source.to_string(),
+            retrieved_at: chrono::Utc::now().to_rfc3339(),
+            content_sha256,
+        })
     }
 }
 
@@ -139,6 +209,57 @@ fn extract_method(did: &str) -> DidcommResult<&str> {
         return Err(DidcommError::InvalidDid(did.to_string()));
     }
     Ok(parts[1])
+}
+
+fn canonical_json_bytes(value: &serde_json::Value) -> Result<Vec<u8>, serde_json::Error> {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(object) => {
+                let mut entries = object.iter().collect::<Vec<_>>();
+                entries.sort_unstable_by_key(|(key, _)| *key);
+                serde_json::Value::Object(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key.clone(), sorted(value)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(sorted).collect())
+            }
+            _ => value.clone(),
+        }
+    }
+
+    serde_json::to_vec(&sorted(value))
+}
+
+fn json_depth(value: &serde_json::Value, depth: usize) -> usize {
+    if depth > MAX_DID_DOCUMENT_DEPTH {
+        return depth;
+    }
+    match value {
+        serde_json::Value::Object(object) => object
+            .values()
+            .map(|value| json_depth(value, depth + 1))
+            .max()
+            .unwrap_or(depth),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(|value| json_depth(value, depth + 1))
+            .max()
+            .unwrap_or(depth),
+        _ => depth,
+    }
+}
+
+fn enforce_json_depth(value: &serde_json::Value, subject: &str) -> DidcommResult<()> {
+    if json_depth(value, 0) > MAX_DID_DOCUMENT_DEPTH {
+        return Err(DidcommError::InvalidDid(format!(
+            "{subject} exceeds the JSON nesting limit"
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -210,9 +331,11 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                     y: None,
                     d: None,
                     kid: Some(format!("{did}#{multibase}")),
+                    additional_properties: serde_json::Map::new(),
                 }),
                 public_key_multibase: None,
                 public_key_base58: None,
+                additional_properties: serde_json::Map::new(),
             });
             // Derive X25519 key agreement key from Ed25519
             if let Some(x25519_pub) = ed25519_to_x25519(pub_key) {
@@ -230,9 +353,11 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                         y: None,
                         d: None,
                         kid: Some(ka_id.clone()),
+                        additional_properties: serde_json::Map::new(),
                     }),
                     public_key_multibase: None,
                     public_key_base58: None,
+                    additional_properties: serde_json::Map::new(),
                 };
                 vms.push(ka_vm);
                 ka.push(serde_json::json!(ka_id));
@@ -251,9 +376,11 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                     y: None,
                     d: None,
                     kid: Some(ka_id.clone()),
+                    additional_properties: serde_json::Map::new(),
                 }),
                 public_key_multibase: None,
                 public_key_base58: None,
+                additional_properties: serde_json::Map::new(),
             };
             vms.push(vm);
             ka.push(serde_json::json!(ka_id));
@@ -271,9 +398,11 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                     y: None,
                     d: None,
                     kid: Some(format!("{did}#{multibase}")),
+                    additional_properties: serde_json::Map::new(),
                 }),
                 public_key_multibase: None,
                 public_key_base58: None,
+                additional_properties: serde_json::Map::new(),
             });
         }
         _ => {}
@@ -286,9 +415,11 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
             "https://w3id.org/security/suites/jws-2020/v1"
         ]),
         authentication: vec![serde_json::json!(format!("{did}#{multibase}"))],
+        assertion_method: vec![serde_json::json!(format!("{did}#{multibase}"))],
         key_agreement: ka,
         verification_method: vms,
         service: vec![],
+        additional_properties: serde_json::Map::new(),
     })
 }
 
@@ -326,7 +457,19 @@ fn resolve_did_jwk(did: &str) -> DidcommResult<DidDocument> {
                 reason: format!("base64url decode: {e}"),
             })?;
 
-    let jwk: Jwk = serde_json::from_slice(&jwk_bytes)?;
+    if URL_SAFE_NO_PAD.encode(&jwk_bytes) != encoded {
+        return Err(DidcommError::InvalidDid(
+            "did:jwk payload is not canonical base64url".to_string(),
+        ));
+    }
+    let raw_jwk = parse_json_without_duplicate_members(&jwk_bytes)?;
+    enforce_json_depth(&raw_jwk, "did:jwk payload")?;
+    let jwk: Jwk = serde_json::from_value(raw_jwk)?;
+    if !valid_public_jwk(&jwk) {
+        return Err(DidcommError::InvalidDid(
+            "did:jwk payload is not a supported public JWK".to_string(),
+        ));
+    }
 
     let vm_id = format!("{did}#0");
     let is_key_agreement = jwk.crv.as_deref() == Some("X25519");
@@ -338,6 +481,7 @@ fn resolve_did_jwk(did: &str) -> DidcommResult<DidDocument> {
         public_key_jwk: Some(jwk),
         public_key_multibase: None,
         public_key_base58: None,
+        additional_properties: serde_json::Map::new(),
     };
 
     let ka = if is_key_agreement {
@@ -350,9 +494,11 @@ fn resolve_did_jwk(did: &str) -> DidcommResult<DidDocument> {
         id: did.to_string(),
         context: serde_json::json!(["https://www.w3.org/ns/did/v1"]),
         authentication: vec![serde_json::json!(vm_id)],
+        assertion_method: vec![serde_json::json!(vm_id)],
         key_agreement: ka,
         verification_method: vec![vm],
         service: vec![],
+        additional_properties: serde_json::Map::new(),
     })
 }
 
@@ -457,9 +603,11 @@ fn resolve_did_peer_2(did: &str, elements: &str) -> DidcommResult<DidDocument> {
         id: did.to_string(),
         context: serde_json::json!(["https://www.w3.org/ns/did/v1"]),
         authentication: auth,
+        assertion_method: vec![],
         key_agreement: ka,
         verification_method: vms,
         service: services,
+        additional_properties: serde_json::Map::new(),
     })
 }
 
@@ -494,6 +642,33 @@ fn did_web_host(did: &str) -> DidcommResult<String> {
 }
 
 #[cfg(feature = "did_web")]
+fn did_web_path_parts(did: &str) -> DidcommResult<Vec<String>> {
+    let stripped = did
+        .strip_prefix("did:web:")
+        .ok_or_else(|| DidcommError::InvalidDid(did.to_string()))?;
+    let mut encoded_parts = stripped.split(':');
+    let _authority = encoded_parts.next();
+    let path_parts = encoded_parts
+        .map(|part| decode_did_web_component(part, did))
+        .collect::<DidcommResult<Vec<_>>>()?;
+    if path_parts.iter().any(|part| {
+        part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.contains('/')
+            || part.contains('\\')
+            || part.contains('?')
+            || part.contains('#')
+            || part.chars().any(char::is_control)
+    }) {
+        return Err(DidcommError::InvalidDid(format!(
+            "did:web contains an unsafe path component: {did}"
+        )));
+    }
+    Ok(path_parts)
+}
+
+#[cfg(feature = "did_web")]
 async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommResult<DidDocument> {
     let stripped = did
         .strip_prefix("did:web:")
@@ -501,8 +676,7 @@ async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommR
 
     // did:web:example.com → https://example.com/.well-known/did.json
     // did:web:example.com:path:to → https://example.com/path/to/did.json
-    let mut encoded_parts = stripped.split(':');
-    let authority = decode_did_web_component(encoded_parts.next().unwrap_or_default(), did)?;
+    let authority = decode_did_web_component(stripped.split(':').next().unwrap_or_default(), did)?;
     let authority_url = url::Url::parse(&format!("https://{authority}/")).map_err(|_| {
         DidcommError::InvalidDid(format!("did:web contains an invalid authority: {did}"))
     })?;
@@ -522,22 +696,7 @@ async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommR
         });
     }
 
-    let path_parts = encoded_parts
-        .map(|part| decode_did_web_component(part, did))
-        .collect::<DidcommResult<Vec<_>>>()?;
-    if path_parts.iter().any(|part| {
-        part.is_empty()
-            || part == "."
-            || part == ".."
-            || part.contains('/')
-            || part.contains('\\')
-            || part.contains('?')
-            || part.contains('#')
-    }) {
-        return Err(DidcommError::InvalidDid(format!(
-            "did:web contains an unsafe path component: {did}"
-        )));
-    }
+    let path_parts = did_web_path_parts(did)?;
 
     let mut document_url = authority_url;
     if path_parts.is_empty() {
@@ -554,6 +713,45 @@ async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommR
     }
 
     fetch_did_document(document_url, did, true).await
+}
+
+#[cfg(feature = "did_web")]
+fn internal_did_web_url(base_url: &str, did: &str) -> DidcommResult<url::Url> {
+    did_web_host(did)?;
+    let path_parts = did_web_path_parts(did)?;
+    let mut url = url::Url::parse(base_url).map_err(|_| DidcommError::ResolutionFailed {
+        did: did.to_string(),
+        reason: "managed did:web base URL is invalid".to_string(),
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(DidcommError::ResolutionFailed {
+            did: did.to_string(),
+            reason: "managed did:web base must be an HTTP(S) URL without credentials, query, or fragment".to_string(),
+        });
+    }
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| DidcommError::ResolutionFailed {
+            did: did.to_string(),
+            reason: "managed did:web base cannot accept a document path".to_string(),
+        })?;
+    segments.pop_if_empty();
+    if path_parts.is_empty() {
+        segments.push(".well-known");
+    } else {
+        for part in path_parts {
+            segments.push(&part);
+        }
+    }
+    segments.push("did.json");
+    drop(segments);
+    Ok(url)
 }
 
 #[cfg(feature = "did_web")]
@@ -706,6 +904,7 @@ async fn fetch_did_document(
 
     // Universal Resolver wraps in { didDocument: {...} }, did:web returns raw
     let parsed = parse_json_without_duplicate_members(&body)?;
+    enforce_json_depth(&parsed, "DID document")?;
     let document = if let Some(inner) = parsed.get("didDocument") {
         serde_json::from_value(inner.clone())?
     } else {
@@ -715,7 +914,6 @@ async fn fetch_did_document(
     Ok(document)
 }
 
-#[cfg(feature = "did_web")]
 fn parse_json_without_duplicate_members(
     body: &[u8],
 ) -> Result<serde_json::Value, serde_json::Error> {
@@ -725,10 +923,8 @@ fn parse_json_without_duplicate_members(
     Ok(value)
 }
 
-#[cfg(feature = "did_web")]
 struct UniqueJsonValue;
 
-#[cfg(feature = "did_web")]
 impl<'de> DeserializeSeed<'de> for UniqueJsonValue {
     type Value = serde_json::Value;
 
@@ -740,10 +936,8 @@ impl<'de> DeserializeSeed<'de> for UniqueJsonValue {
     }
 }
 
-#[cfg(feature = "did_web")]
 struct UniqueJsonValueVisitor;
 
-#[cfg(feature = "did_web")]
 impl<'de> Visitor<'de> for UniqueJsonValueVisitor {
     type Value = serde_json::Value;
 
@@ -870,14 +1064,24 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
         });
     }
 
+    if document.verification_method.is_empty() {
+        return Err(DidcommError::ResolutionFailed {
+            did: did.to_string(),
+            reason: "DID document has no verification methods".to_string(),
+        });
+    }
+
     let mut methods = HashMap::new();
     for method in &document.verification_method {
+        let Some(method_id) = absolute_method_id(did, &method.id) else {
+            return Err(DidcommError::ResolutionFailed {
+                did: did.to_string(),
+                reason: "DID document contains a foreign verification method".to_string(),
+            });
+        };
         if !valid_verification_method(method, did)
             || methods
-                .insert(
-                    method.id.clone(),
-                    serde_json::to_value(method).unwrap_or(serde_json::Value::Null),
-                )
+                .insert(method_id, serde_json::to_value(method)?)
                 .is_some()
         {
             return Err(DidcommError::ResolutionFailed {
@@ -889,13 +1093,21 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
         }
     }
 
+    if document.authentication.is_empty() && document.assertion_method.is_empty() {
+        return Err(DidcommError::ResolutionFailed {
+            did: did.to_string(),
+            reason: "DID document has no authentication or assertion relationship".to_string(),
+        });
+    }
+
     for relationship in document
         .authentication
         .iter()
+        .chain(document.assertion_method.iter())
         .chain(document.key_agreement.iter())
     {
         if let Some(reference) = relationship.as_str() {
-            if !methods.contains_key(reference) {
+            if absolute_method_id(did, reference).is_none_or(|id| !methods.contains_key(&id)) {
                 return Err(DidcommError::ResolutionFailed {
                     did: did.to_string(),
                     reason: "DID document references an unknown verification method".to_string(),
@@ -917,9 +1129,16 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
                         .to_string(),
                 });
             }
-            let serialized = serde_json::to_value(&method).unwrap_or(serde_json::Value::Null);
+            let serialized = serde_json::to_value(&method)?;
+            let Some(method_id) = absolute_method_id(did, &method.id) else {
+                return Err(DidcommError::ResolutionFailed {
+                    did: did.to_string(),
+                    reason: "DID document contains a foreign inline verification method"
+                        .to_string(),
+                });
+            };
             if methods
-                .get(&method.id)
+                .get(&method_id)
                 .is_some_and(|existing| existing != &serialized)
             {
                 return Err(DidcommError::ResolutionFailed {
@@ -929,15 +1148,16 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
                             .to_string(),
                 });
             }
-            methods.entry(method.id.clone()).or_insert(serialized);
+            methods.entry(method_id).or_insert(serialized);
         }
     }
 
     let mut service_ids = HashSet::new();
     for service in &document.service {
-        if service.id.is_empty()
-            || !(service.id == did || service.id.starts_with(&format!("{did}#")))
-            || !service_ids.insert(service.id.as_str())
+        let service_id = absolute_method_id(did, &service.id);
+        if service_id
+            .as_ref()
+            .is_none_or(|service_id| !service_ids.insert(service_id.clone()))
         {
             return Err(DidcommError::ResolutionFailed {
                 did: did.to_string(),
@@ -951,22 +1171,62 @@ fn validate_resolved_document(document: &DidDocument, did: &str) -> DidcommResul
 }
 
 #[cfg(feature = "did_web")]
+fn absolute_method_id(did: &str, value: &str) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else if value.starts_with('#') {
+        Some(format!("{did}{value}"))
+    } else if value == did || value.starts_with(&format!("{did}#")) {
+        Some(value.to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "did_web")]
 fn valid_verification_method(method: &VerificationMethod, did: &str) -> bool {
     let key_material_count = usize::from(method.public_key_jwk.is_some())
         + usize::from(method.public_key_multibase.is_some())
         + usize::from(method.public_key_base58.is_some());
-    let public_jwk = method.public_key_jwk.as_ref().is_none_or(|jwk| {
-        !jwk.kty.is_empty()
-            && jwk.x.as_deref().is_some_and(|value| !value.is_empty())
-            && jwk.d.is_none()
-    });
+    let public_jwk = method.public_key_jwk.as_ref().is_none_or(valid_public_jwk);
 
     !method.id.is_empty()
         && method.controller == did
-        && (method.id == did || method.id.starts_with(&format!("{did}#")))
+        && absolute_method_id(did, &method.id).is_some()
         && !method.r#type.is_empty()
         && key_material_count == 1
         && public_jwk
+}
+
+fn valid_public_jwk(jwk: &Jwk) -> bool {
+    const PRIVATE_MEMBERS: [&str; 7] = ["p", "q", "dp", "dq", "qi", "oth", "k"];
+    if jwk.d.is_some()
+        || PRIVATE_MEMBERS
+            .iter()
+            .any(|member| jwk.additional_properties.contains_key(*member))
+    {
+        return false;
+    }
+
+    let present = |value: Option<&str>| value.is_some_and(|value| !value.is_empty());
+    match jwk.kty.as_str() {
+        "OKP" => present(jwk.crv.as_deref()) && present(jwk.x.as_deref()),
+        "EC" => {
+            present(jwk.crv.as_deref()) && present(jwk.x.as_deref()) && present(jwk.y.as_deref())
+        }
+        "RSA" => {
+            present(
+                jwk.additional_properties
+                    .get("n")
+                    .and_then(serde_json::Value::as_str),
+            ) && present(
+                jwk.additional_properties
+                    .get("e")
+                    .and_then(serde_json::Value::as_str),
+            )
+        }
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -983,9 +1243,11 @@ mod tests {
             id: did.to_string(),
             context: serde_json::json!(["https://www.w3.org/ns/did/v1"]),
             authentication: vec![],
+            assertion_method: vec![],
             key_agreement: vec![],
             verification_method: vec![],
             service: vec![],
+            additional_properties: serde_json::Map::new(),
         }
     }
 
@@ -1002,9 +1264,11 @@ mod tests {
                 y: None,
                 d: None,
                 kid: None,
+                additional_properties: serde_json::Map::new(),
             }),
             public_key_multibase: None,
             public_key_base58: None,
+            additional_properties: serde_json::Map::new(),
         }
     }
 
@@ -1034,6 +1298,63 @@ mod tests {
         let doc = resolve_did_jwk(&did).unwrap();
         assert_eq!(doc.id, did);
         assert!(!doc.key_agreement.is_empty());
+    }
+
+    #[test]
+    fn did_jwk_rejects_private_duplicate_and_incomplete_keys() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+
+        for raw in [
+            r#"{"kty":"OKP","crv":"Ed25519","x":"public","d":"private"}"#,
+            r#"{"kty":"OKP","kty":"EC","crv":"Ed25519","x":"public"}"#,
+            r#"{"kty":"EC","crv":"P-256","x":"public"}"#,
+            r#"{"kty":"oct","k":"secret"}"#,
+        ] {
+            let did = format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(raw));
+            assert!(resolve_did_jwk(&did).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn did_jwk_preserves_supported_rsa_members() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+
+        let raw = r#"{"kty":"RSA","n":"modulus","e":"AQAB","use":"sig"}"#;
+        let did = format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(raw));
+        let document = resolve_did_jwk(&did).unwrap();
+        let jwk = document.verification_method[0]
+            .public_key_jwk
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(jwk.additional_properties["n"], "modulus");
+        assert_eq!(jwk.additional_properties["e"], "AQAB");
+        assert_eq!(jwk.additional_properties["use"], "sig");
+        assert_eq!(document.assertion_method, document.authentication);
+    }
+
+    #[tokio::test]
+    async fn resolution_metadata_is_native_and_stable() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+
+        let raw = r#"{"kty":"OKP","crv":"Ed25519","x":"public"}"#;
+        let did = format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(raw));
+        let first = DidResolver::new()
+            .resolve_with_metadata(&did)
+            .await
+            .unwrap();
+        let second = DidResolver::new()
+            .resolve_with_metadata(&did)
+            .await
+            .unwrap();
+
+        assert_eq!(first.source, "embedded:did:jwk");
+        assert_eq!(first.content_sha256, second.content_sha256);
+        assert_eq!(first.content_sha256.len(), 64);
+        assert!(!first.retrieved_at.is_empty());
     }
 
     #[test]
@@ -1077,6 +1398,52 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("must be an HTTP(S) base URL"));
+    }
+
+    #[cfg(feature = "did_web")]
+    #[tokio::test]
+    async fn internal_did_web_base_preserves_path_and_reports_actual_source() {
+        use std::io::{Read, Write};
+
+        let did = "did:web:issuer.example:orgs:tenant-a";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let document = serde_json::json!({
+            "id": did,
+            "verificationMethod": [{
+                "id": "#key-1",
+                "type": "JsonWebKey2020",
+                "controller": did,
+                "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"}
+            }],
+            "assertionMethod": ["#key-1"]
+        })
+        .to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.starts_with("GET /base/orgs/tenant-a/did.json "));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/did+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                document.len(),
+                document
+            )
+            .unwrap();
+        });
+
+        let result = DidResolver::new()
+            .with_did_web_internal_base_urls([format!("http://{address}/base")])
+            .resolve_with_metadata(did)
+            .await
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(result.source, "configured_internal_resolver");
+        assert_eq!(result.document.verification_method[0].id, "#key-1");
+        assert_eq!(result.document.assertion_method[0], "#key-1");
     }
 
     #[cfg(feature = "did_web")]
@@ -1135,13 +1502,38 @@ mod tests {
         conflicting.public_key_jwk.as_mut().unwrap().x =
             Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string());
         let mut document = empty_document(did);
-        document.authentication = vec![serde_json::to_value(method).unwrap()];
+        document.verification_method = vec![method.clone()];
+        document.authentication = vec![serde_json::json!(method.id)];
         document.key_agreement = vec![serde_json::to_value(conflicting).unwrap()];
 
         let error = validate_resolved_document(&document, did).unwrap_err();
         assert!(error
             .to_string()
             .contains("conflicting verification methods"));
+    }
+
+    #[cfg(feature = "did_web")]
+    #[test]
+    fn resolved_document_requires_verification_methods_and_relationships() {
+        let did = "did:web:example.com";
+        let mut document = empty_document(did);
+        let error = validate_resolved_document(&document, did).unwrap_err();
+        assert!(error.to_string().contains("no verification methods"));
+
+        document.verification_method = vec![x25519_method(did, "key-1")];
+        let error = validate_resolved_document(&document, did).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("no authentication or assertion relationship"));
+    }
+
+    #[test]
+    fn resolver_json_rejects_excessive_nesting() {
+        let mut value = serde_json::Value::Null;
+        for _ in 0..=MAX_DID_DOCUMENT_DEPTH {
+            value = serde_json::json!({"nested": value});
+        }
+        assert!(enforce_json_depth(&value, "DID document").is_err());
     }
 
     #[cfg(feature = "did_web")]

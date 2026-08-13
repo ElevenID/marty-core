@@ -144,6 +144,7 @@ mod tests {
             id: "did:example:bob".into(),
             context: serde_json::json!("https://www.w3.org/ns/did/v1"),
             authentication: vec![],
+            assertion_method: vec![],
             key_agreement: vec![],
             verification_method: vec![crate::types::VerificationMethod {
                 id: "did:example:bob#key-x25519-1".into(),
@@ -159,11 +160,14 @@ mod tests {
                     y: None,
                     d: None,
                     kid: None,
+                    additional_properties: serde_json::Map::new(),
                 }),
                 public_key_multibase: None,
                 public_key_base58: None,
+                additional_properties: serde_json::Map::new(),
             }],
             service: vec![],
+            additional_properties: serde_json::Map::new(),
         };
 
         (did_doc, recipient_private_bytes)
