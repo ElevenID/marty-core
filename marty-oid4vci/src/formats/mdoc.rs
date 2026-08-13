@@ -65,21 +65,12 @@ pub fn sign_mdoc(
         let digest_id = i as u64;
 
         // Generate 32 bytes of random salt
-        let mut salt = [0u8; 32];
-        rand::thread_rng().fill(&mut salt);
+        let salt: [u8; 32] = rand::thread_rng().gen();
 
-        // Build IssuerSignedItem as a CBOR map
-        let item = build_issuer_signed_item(digest_id, &salt, claim_name, claim_value)?;
-
-        // CBOR-encode the item and compute its digest
-        let item_bytes = cbor_encode(&item)?;
-        let digest = Sha256::digest(&item_bytes).to_vec();
-
+        let (issuer_signed_item_bytes, digest) =
+            build_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
         value_digests.push((digest_id, digest));
-        issuer_signed_items.push(CborValue::Tag(
-            CBOR_TAG_ENCODED_CBOR,
-            Box::new(CborValue::Bytes(item_bytes)),
-        ));
+        issuer_signed_items.push(issuer_signed_item_bytes);
     }
 
     // 2. Build the MobileSecurityObject
@@ -243,16 +234,11 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
         .enumerate()
     {
         let digest_id = i as u64;
-        let mut salt = [0u8; 32];
-        rand::thread_rng().fill(&mut salt);
-        let item = build_issuer_signed_item(digest_id, &salt, claim_name, claim_value)?;
-        let item_bytes = cbor_encode(&item)?;
-        let digest = Sha256::digest(&item_bytes).to_vec();
+        let salt: [u8; 32] = rand::thread_rng().gen();
+        let (issuer_signed_item_bytes, digest) =
+            build_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
         value_digests.push((digest_id, digest));
-        issuer_signed_items.push(CborValue::Tag(
-            CBOR_TAG_ENCODED_CBOR,
-            Box::new(CborValue::Bytes(item_bytes)),
-        ));
+        issuer_signed_items.push(issuer_signed_item_bytes);
     }
 
     // Build MSO
@@ -379,6 +365,27 @@ fn build_issuer_signed_item(
         ),
         (CborValue::Text("elementValue".into()), cbor_value),
     ]))
+}
+
+/// Build the ISO `IssuerSignedItemBytes` value and its MSO commitment.
+///
+/// ISO 18013-5 commits the complete tag-24 encoded value, not only the CBOR
+/// map carried inside its byte string. Keeping construction and hashing in one
+/// helper prevents issuance and disclosure verification from drifting apart.
+fn build_issuer_signed_item_bytes(
+    digest_id: u64,
+    random: &[u8],
+    element_identifier: &str,
+    element_value: &serde_json::Value,
+) -> Oid4vciResult<(CborValue, Vec<u8>)> {
+    let item = build_issuer_signed_item(digest_id, random, element_identifier, element_value)?;
+    let encoded_item = cbor_encode(&item)?;
+    let issuer_signed_item_bytes = CborValue::Tag(
+        CBOR_TAG_ENCODED_CBOR,
+        Box::new(CborValue::Bytes(encoded_item)),
+    );
+    let digest = Sha256::digest(cbor_encode(&issuer_signed_item_bytes)?).to_vec();
+    Ok((issuer_signed_item_bytes, digest))
 }
 
 /// Build MobileSecurityObject (MSO) per ISO 18013-5 §9.1.2.4.
@@ -805,6 +812,67 @@ mod tests {
         assert!(matches!(mso, CborValue::Map(_)));
     }
 
+    fn assert_issuer_value_digests(issuer_signed_b64: &str) {
+        use isomdl::definitions::IssuerSigned;
+
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            issuer_signed_b64,
+        )
+        .unwrap();
+        let issuer_signed: IssuerSigned = isomdl::cbor::from_slice(&bytes).unwrap();
+        let encoded_mso: CborValue =
+            isomdl::cbor::from_slice(issuer_signed.issuer_auth.payload.as_ref().unwrap()).unwrap();
+        let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_mso) = encoded_mso else {
+            panic!("issuerAuth payload must be MobileSecurityObjectBytes");
+        };
+        let CborValue::Bytes(encoded_mso) = *encoded_mso else {
+            panic!("MobileSecurityObjectBytes must contain a byte string");
+        };
+        let CborValue::Map(mso) = isomdl::cbor::from_slice(&encoded_mso).unwrap() else {
+            panic!("MobileSecurityObject must be a CBOR map");
+        };
+        let CborValue::Map(value_digests) = mso
+            .iter()
+            .find_map(|(key, value)| {
+                (key == &CborValue::Text("valueDigests".to_string())).then_some(value)
+            })
+            .unwrap()
+        else {
+            panic!("MobileSecurityObject must contain valueDigests");
+        };
+
+        for (namespace, items) in issuer_signed.namespaces.unwrap().iter() {
+            let CborValue::Map(expected_digests) = value_digests
+                .iter()
+                .find_map(|(key, value)| {
+                    (key == &CborValue::Text(namespace.clone())).then_some(value)
+                })
+                .unwrap()
+            else {
+                panic!("namespace digest collection must be a CBOR map");
+            };
+            for tagged_item in items.iter() {
+                let digest_id = serde_json::to_value(tagged_item.as_ref().digest_id)
+                    .unwrap()
+                    .as_u64()
+                    .unwrap();
+                let CborValue::Bytes(expected) = expected_digests
+                    .iter()
+                    .find_map(|(key, value)| {
+                        (key == &CborValue::Integer(digest_id.into())).then_some(value)
+                    })
+                    .unwrap()
+                else {
+                    panic!("issuer value digest must be a byte string");
+                };
+                let encoded_item = isomdl::cbor::to_vec(tagged_item).unwrap();
+                let computed = Sha256::digest(encoded_item);
+                assert_eq!(computed.as_slice(), expected);
+            }
+        }
+    }
+
     #[test]
     fn test_json_to_cbor_primitives() {
         let null = json_to_cbor(&serde_json::json!(null)).unwrap();
@@ -877,6 +945,7 @@ mod tests {
                 );
                 assert!(credential_id.starts_with("urn:uuid:"));
                 assert_mobile_security_object_bytes(&issuer_signed_b64);
+                assert_issuer_value_digests(&issuer_signed_b64);
 
                 // Decode and verify it's valid CBOR
                 let bytes = base64::Engine::decode(
@@ -934,6 +1003,7 @@ mod tests {
         };
 
         assert_mobile_security_object_bytes(&issuer_signed_b64);
+        assert_issuer_value_digests(&issuer_signed_b64);
     }
 
     #[test]
