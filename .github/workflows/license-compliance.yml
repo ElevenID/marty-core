@@ -4,14 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1'  # Weekly Monday, staggered across repositories.
-  push:
-    branches: [main]
-    paths:
-      - 'Cargo.toml'
-      - '**/Cargo.toml'
-      - 'LICENSE-APACHE'
-      - 'LICENSE-MIT'
-      - 'README.md'
   pull_request:
     branches: [main]
     paths:

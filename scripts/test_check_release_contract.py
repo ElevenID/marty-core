@@ -89,5 +89,24 @@ class StableTagGateContractTests(unittest.TestCase):
         self.assertEqual(check_release_contract.check_stable_tag_gate(), [])
 
 
+class NativeBuildCacheContractTests(unittest.TestCase):
+    def test_checked_in_ci_uses_an_approved_native_build_cache(self) -> None:
+        self.assertEqual(check_release_contract.check_native_build_cache_scope(), [])
+
+    def test_accepts_platform_and_toolchain_scoped_target_cache(self) -> None:
+        workflow = (
+            "key: ${{ runner.os }}-${{ runner.arch }}-"
+            "${{ env.RUSTUP_TOOLCHAIN }}-cargo-build-target\n"
+        )
+        self.assertEqual(
+            check_release_contract.check_native_build_cache_scope(workflow), []
+        )
+
+    def test_rejects_unpinned_or_incomplete_sccache(self) -> None:
+        workflow = "RUSTC_WRAPPER: sccache\nSCCACHE_GHA_ENABLED: true\n"
+        errors = check_release_contract.check_native_build_cache_scope(workflow)
+        self.assertTrue(any("missing a pinned sccache" in error for error in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

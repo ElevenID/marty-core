@@ -115,9 +115,19 @@ def check_release_asset_policy() -> list[str]:
     return errors
 
 
-def check_native_build_cache_scope() -> list[str]:
-    workflow = ROOT / ".github" / "workflows" / "ci.yml"
-    contents = workflow.read_text(encoding="utf-8")
+def check_native_build_cache_scope(workflow_text: str | None = None) -> list[str]:
+    contents = (
+        workflow_text
+        if workflow_text is not None
+        else (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    sccache_requirements = (
+        "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
+        "RUSTC_WRAPPER: sccache",
+        'SCCACHE_GHA_ENABLED: "true"',
+    )
+    if all(requirement in contents for requirement in sccache_requirements):
+        return []
     target_key = next(
         (line.strip() for line in contents.splitlines() if "cargo-build-target" in line),
         "",
@@ -125,7 +135,10 @@ def check_native_build_cache_scope() -> list[str]:
     required_contexts = ("runner.os", "runner.arch", "env.RUSTUP_TOOLCHAIN")
     missing = [context for context in required_contexts if context not in target_key]
     if not target_key:
-        return [".github/workflows/ci.yml: missing Cargo target cache key"]
+        return [
+            ".github/workflows/ci.yml: missing a pinned sccache configuration or "
+            "Cargo target cache key"
+        ]
     if missing:
         return [
             ".github/workflows/ci.yml: Cargo target cache must be scoped by OS, "
