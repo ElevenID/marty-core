@@ -792,6 +792,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "document_verification",
             "credential_format_detection",
             "credential_presentation_metadata",
+            "oid4vp_request_builder",
             "device_authentication",
             "flow_state_machine",
             "did_resolution",
@@ -2147,6 +2148,26 @@ fn credential_profile_presentation_metadata(
     serde_json::to_string(&metadata).map_err(to_pyerr)
 }
 
+fn build_oid4vp_presentation_request_impl(request_json: &str) -> Result<String, String> {
+    if request_json.len() > 1_000_000 {
+        return Err("OID4VP presentation request input exceeds 1000000 bytes".into());
+    }
+    let request: marty_oid4vci::presentation_request::PresentationRequestBuildInput =
+        serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid OID4VP presentation request input: {error}"))?;
+    let result = marty_oid4vci::presentation_request::build_presentation_request(request)
+        .map_err(|error| error.to_string())?;
+    serde_json::to_string(&result)
+        .map_err(|error| format!("OID4VP presentation request serialization failed: {error}"))
+}
+
+/// Build equivalent Presentation Exchange and DCQL credential queries in Rust.
+#[pyfunction]
+fn build_oid4vp_presentation_request(request_json: &str) -> PyResult<String> {
+    build_oid4vp_presentation_request_impl(request_json)
+        .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+}
+
 /// Python module for Marty cryptographic operations.
 ///
 /// This module provides essential cryptographic functions for credential
@@ -2203,6 +2224,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         credential_profile_presentation_metadata,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(build_oid4vp_presentation_request, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p256, m)?)?;
     m.add_function(wrap_pyfunction!(verify_p384, m)?)?;
     m.add_function(wrap_pyfunction!(verify_ed25519, m)?)?;
@@ -2819,6 +2841,30 @@ mod tests {
             .expect("capability array")
             .iter()
             .any(|capability| capability == "did_resolution"));
+    }
+
+    #[test]
+    fn oid4vp_request_builder_binding_returns_both_query_shapes() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/vectors/oid4vp_request_builder.json"
+        ))
+        .expect("valid shared fixture");
+        let vector = &fixture["valid"][0];
+
+        let output = build_oid4vp_presentation_request_impl(&vector["request"].to_string())
+            .expect("valid OID4VP builder input");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("result JSON");
+
+        assert_eq!(result, vector["expected"]);
+    }
+
+    #[test]
+    fn oid4vp_request_builder_binding_fails_closed() {
+        let error = build_oid4vp_presentation_request_impl(
+            r#"{"id":"pd-1","wallet_formats":["dc+sd-jwt"],"requirements":[]}"#,
+        )
+        .expect_err("empty requirements must fail");
+        assert!(error.contains("at least one credential requirement"));
     }
 
     #[test]

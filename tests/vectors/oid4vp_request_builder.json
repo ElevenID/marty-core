@@ -1,0 +1,162 @@
+{
+  "schema": "marty.oid4vp-request-builder-v1",
+  "valid": [
+    {
+      "name": "sd-jwt-required-and-optional-claims",
+      "request": {
+        "id": "pd-1",
+        "wallet_formats": ["dc+sd-jwt", "mso_mdoc"],
+        "requirements": [
+          {
+            "id": "member",
+            "display_name": "Member credential",
+            "description": "Verify membership",
+            "credential_type": "MemberCredential",
+            "credential_vct": "https://issuer.example/member",
+            "supported_formats": ["sd_jwt_vc"],
+            "requested_claims": [
+              {"claim_name": "email", "required": true},
+              {"claim_name": "nickname", "required": false}
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "presentation_definition": {
+          "id": "pd-1",
+          "format": {
+            "dc+sd-jwt": {
+              "sd-jwt_alg_values": ["ES256", "EdDSA"],
+              "kb-jwt_alg_values": ["ES256", "EdDSA"]
+            }
+          },
+          "input_descriptors": [
+            {
+              "id": "member",
+              "name": "Member credential",
+              "purpose": "Verify membership",
+              "format": {
+                "dc+sd-jwt": {
+                  "sd-jwt_alg_values": ["ES256", "EdDSA"],
+                  "kb-jwt_alg_values": ["ES256", "EdDSA"]
+                }
+              },
+              "constraints": {
+                "fields": [
+                  {
+                    "path": ["$.vct"],
+                    "filter": {"type": "string", "const": "https://issuer.example/member"}
+                  },
+                  {
+                    "path": ["$.vc.type", "$.type"],
+                    "filter": {
+                      "anyOf": [
+                        {"type": "array", "contains": {"const": "MemberCredential"}},
+                        {"type": "string", "const": "MemberCredential"}
+                      ]
+                    },
+                    "optional": true
+                  },
+                  {
+                    "name": "Email",
+                    "purpose": "Share Email",
+                    "path": ["$.vc.credentialSubject.email", "$.credentialSubject.email", "$.email"],
+                    "intent_to_retain": false,
+                    "optional": false
+                  },
+                  {
+                    "name": "Nickname",
+                    "purpose": "Share Nickname",
+                    "path": ["$.vc.credentialSubject.nickname", "$.credentialSubject.nickname", "$.nickname"],
+                    "intent_to_retain": false,
+                    "optional": true
+                  }
+                ],
+                "limit_disclosure": "required"
+              }
+            }
+          ]
+        },
+        "dcql_query": {
+          "credentials": [
+            {
+              "id": "member",
+              "format": "dc+sd-jwt",
+              "meta": {"vct_values": ["https://issuer.example/member"]},
+              "claims": [{"id": "claim_email", "path": ["email"]}]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "multi-format-template-prefers-first-family",
+      "request": {
+        "id": "pd-multi",
+        "wallet_formats": ["dc+sd-jwt", "jwt_vc_json", "jwt_vp"],
+        "requirements": [
+          {
+            "id": "member",
+            "display_name": "Member credential",
+            "description": "Verify membership",
+            "credential_type": "MemberCredential",
+            "supported_formats": ["jwt_vc", "sd_jwt_vc"]
+          }
+        ]
+      },
+      "expected": {
+        "presentation_definition": {
+          "id": "pd-multi",
+          "format": {
+            "jwt_vc_json": {"alg": ["ES256", "EdDSA"]},
+            "jwt_vp": {"alg": ["ES256", "EdDSA"]}
+          },
+          "input_descriptors": [
+            {
+              "id": "member",
+              "name": "Member credential",
+              "purpose": "Verify membership",
+              "format": {
+                "jwt_vc_json": {"alg": ["ES256", "EdDSA"]},
+                "jwt_vp": {"alg": ["ES256", "EdDSA"]}
+              },
+              "constraints": {
+                "fields": [
+                  {
+                    "path": ["$.vc.type", "$.type"],
+                    "filter": {
+                      "anyOf": [
+                        {"type": "array", "contains": {"const": "MemberCredential"}},
+                        {"type": "string", "const": "MemberCredential"}
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "dcql_query": {
+          "credentials": [
+            {
+              "id": "member",
+              "format": "jwt_vc_json",
+              "meta": {"type_values": [["VerifiableCredential", "MemberCredential"]]}
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "empty-policy",
+      "request": {
+        "id": "pd-empty",
+        "wallet_formats": ["dc+sd-jwt"],
+        "requirements": []
+      },
+      "error_contains": "at least one credential requirement"
+    }
+  ]
+}
