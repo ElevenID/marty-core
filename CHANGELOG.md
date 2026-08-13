@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.51] - 2026-08-13
+
+### Added
+
+- Add an explicit presentation-proof policy obligation independently from
+  credential obligations and expose it through the native binding.
+- Expose controlled DID resolution with native source, timestamp, and content
+  digest provenance through `_marty_rs`.
+- Add a canonical OID4VP request builder for equivalent Presentation Exchange
+  and DCQL credential queries and expose it through `_marty_rs`.
+
+### Changed
+
+- Run faster affected-package pull-request feedback while preserving the full
+  verification matrix on merge candidates, and cancel superseded workflow runs.
+- Centralize OID4VP format normalization, algorithm policy, Open Badge aliases,
+  mdoc claim paths, disclosure requirements, and resource limits in Rust.
+
+### Security
+
+- Require independently verified presentation proof when configured, without
+  allowing that proof to satisfy a missing credential obligation or create
+  credential-policy partiality.
+- Reject private, duplicate, malformed, or incomplete `did:jwk` key material
+  before returning a DID document, and preserve validated document members.
+- Reject empty OID4VP policies, incompatible formats, duplicate descriptors or
+  claims, incomplete credential metadata, and missing mdoc mappings.
+
 ## [0.1.50] - 2026-08-12
 
 ### Added
@@ -12,8 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a canonical Open Badges 3.0 profile validator beside the Rust issuance
   profile builder.
 - Expose composite Open Badge VC-JWT verification through `_marty_rs`.
-- Expose controlled DID resolution with native source, timestamp, and content
-  digest provenance through `_marty_rs`.
 
 ### Changed
 
@@ -24,8 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Clear credential claims when the JWT signature or Open Badge profile is
   rejected so callers cannot consume unverified badge data.
-- Reject private, duplicate, malformed, or incomplete `did:jwk` key material
-  before returning a DID document, and preserve validated document members.
 
 ## [0.1.49] - 2026-08-12
 
