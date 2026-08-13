@@ -13,16 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   construction with RFC 7638 client identifier thumbprints.
 - Expose non-reversible OpenID4VP response-URI and nonce binding digests
   through `_marty_rs` with shared cross-language golden vectors.
+- Add canonical HAIP response-encryption key generation and compact JWE
+  decryption with RFC 7518 Concat KDF interoperability vectors.
+- Add bounded OID4VP `x509_hash` identity construction with certificate-chain
+  parsing, SHA-256 client identifiers, and `x5c` shaping.
+- Add canonical SIOPv2 ID-token verification for JWK-thumbprint subjects.
+- Add network-free P-256 holder-key generation and reconstruction for public
+  `did:jwk` identifiers with separately returned private key material.
 
 ### Changed
 
 - Make `marty-iso18013` the single owner of OpenID4VP mdoc transcript and
   handover encoding used by Python compatibility adapters.
+- Route HAIP ECDH, KDF, authenticated decryption, OID4VP x509 identity, SIOPv2
+  signature and subject binding, and wallet holder-key decisions through their
+  canonical Rust owners and typed `_marty_rs` operations.
 
 ### Security
 
 - Bound and validate OpenID4VP handover inputs and fail closed for malformed
   JWKs, unsupported keys, empty identifiers or nonces, and oversized values.
+- Reject malformed or oversized JWE, certificate, token, and holder-key input;
+  unsupported algorithms or curves; certificate/key mismatches; unauthenticated
+  SIOPv2 subjects; and private key material embedded in `did:jwk` identifiers.
 
 ## [0.1.51] - 2026-08-13
 
