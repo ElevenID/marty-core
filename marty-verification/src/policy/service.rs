@@ -32,6 +32,8 @@ pub struct ServicePolicyEvaluationRequest {
     pub policy: ServicePresentationPolicy,
     pub credentials: Vec<VerifiedCredentialFacts>,
     pub evaluation_time_epoch_seconds: u64,
+    #[serde(default)]
+    pub presentation_verified: bool,
     pub holder_binding_verified: bool,
     pub holder_binding_method: Option<String>,
     pub proof_profile: Option<String>,
@@ -60,6 +62,8 @@ pub struct ServicePresentationPolicy {
     pub allowed_issuers: Vec<String>,
     #[serde(default)]
     pub single_presentation: bool,
+    #[serde(default)]
+    pub presentation_proof_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -207,6 +211,7 @@ pub enum ServiceDecision {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ServicePolicyErrorCode {
+    PresentationProofRequired,
     CredentialMissing,
     SignatureInvalid,
     CredentialFormatMismatch,
@@ -318,6 +323,13 @@ pub fn evaluate_service_policy(
     let mut verified_claims = BTreeMap::new();
     let mut aggregation_errors = Vec::new();
 
+    if request.policy.presentation_proof_required {
+        required_total += 1;
+        if request.presentation_verified {
+            required_satisfied += 1;
+        }
+    }
+
     for requirement in &request.policy.credential_requirements {
         let result = evaluate_requirement(
             requirement,
@@ -374,6 +386,12 @@ pub fn evaluate_service_policy(
         .flat_map(|result| result.errors.clone())
         .collect();
     errors.extend(aggregation_errors);
+    if request.policy.presentation_proof_required && !request.presentation_verified {
+        errors.push(global_violation(
+            ServicePolicyErrorCode::PresentationProofRequired,
+            "Required presentation proof was not verified",
+        ));
+    }
     for alternative in &alternative_results {
         if !alternative.satisfied {
             errors.extend(
@@ -535,13 +553,20 @@ pub fn evaluate_service_policy(
     let global_failure = errors.iter().any(|error| error.requirement_id.is_none());
     let fully_satisfied =
         required_policy_satisfied && all_direct_required_satisfied && !global_failure;
+    let satisfied_credential_obligations = required_satisfied.saturating_sub(usize::from(
+        request.policy.presentation_proof_required && request.presentation_verified,
+    ));
     let (result, decision, decision_reason) = if fully_satisfied {
         (
             ServiceEvaluationOutcome::Passed,
             ServiceDecision::Allow,
-            "All required credentials and claims satisfied".to_string(),
+            if request.policy.presentation_proof_required {
+                "All required presentation and credential evidence satisfied".to_string()
+            } else {
+                "All required credentials and claims satisfied".to_string()
+            },
         )
-    } else if required_satisfied > 0 && !global_failure {
+    } else if satisfied_credential_obligations > 0 && !global_failure {
         (
             ServiceEvaluationOutcome::Partial,
             ServiceDecision::ManualReview,
@@ -572,7 +597,9 @@ pub fn evaluate_service_policy(
         decision_reason,
         policy_id: request.policy.id,
         policy_name: request.policy.name,
-        total_requirements: direct_results.len() + alternative_results.len(),
+        total_requirements: direct_results.len()
+            + alternative_results.len()
+            + usize::from(request.policy.presentation_proof_required),
         satisfied_requirements: direct_results
             .iter()
             .filter(|result| result.satisfied)
@@ -580,7 +607,10 @@ pub fn evaluate_service_policy(
             + alternative_results
                 .iter()
                 .filter(|result| result.satisfied)
-                .count(),
+                .count()
+            + usize::from(
+                request.policy.presentation_proof_required && request.presentation_verified,
+            ),
         required_satisfied,
         required_total,
         verified_claims,
@@ -1201,8 +1231,8 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
         .filter(|requirement| requirement.required)
         .count()
         + request.policy.alternative_requirements.len();
-    if required_units == 0 {
-        return invalid("policy has no required credential obligations");
+    if required_units == 0 && !request.policy.presentation_proof_required {
+        return invalid("policy has no required credential or presentation obligations");
     }
     for credential in &request.credentials {
         validate_string("credential_id", &credential.credential_id)?;
@@ -1400,6 +1430,7 @@ mod tests {
             issuer_constraints: None,
             allowed_issuers: Vec::new(),
             single_presentation: false,
+            presentation_proof_required: false,
         }
     }
 
@@ -1432,6 +1463,7 @@ mod tests {
             policy: policy(),
             credentials: vec![credential()],
             evaluation_time_epoch_seconds: 1_000,
+            presentation_verified: false,
             holder_binding_verified: false,
             holder_binding_method: None,
             proof_profile: None,
@@ -1450,6 +1482,110 @@ mod tests {
         assert_eq!(result.result, ServiceEvaluationOutcome::Passed);
         assert_eq!(result.decision, ServiceDecision::Allow);
         assert_eq!(result.verified_claims["email"], "member@example.com");
+    }
+
+    fn presentation_only_request() -> ServicePolicyEvaluationRequest {
+        let mut request = request();
+        request.policy.credential_requirements.clear();
+        request.policy.freshness = None;
+        request.policy.presentation_proof_required = true;
+        request.policy.single_presentation = true;
+        request.policy.holder_binding = ServiceHolderBinding {
+            required: true,
+            binding_methods: vec!["DEVICE_KEY".to_string()],
+            proof_profiles: vec!["OID4VP_VERIFIABLE_PRESENTATION".to_string()],
+            challenge_required: true,
+            audience_binding_required: true,
+            replay_detection_required: true,
+            max_proof_age_seconds: None,
+        };
+        request.credentials.clear();
+        request.presentation_verified = true;
+        request.holder_binding_verified = true;
+        request.holder_binding_method = Some("DEVICE_KEY".to_string());
+        request.proof_profile = Some("OID4VP_VERIFIABLE_PRESENTATION".to_string());
+        request.challenge_verified = true;
+        request.audience_verified = true;
+        request.replay_check_verified = true;
+        request.presentation_count = Some(1);
+        request
+    }
+
+    #[test]
+    fn explicit_presentation_proof_can_be_the_only_required_obligation() {
+        let result = evaluate_service_policy(presentation_only_request()).unwrap();
+
+        assert_eq!(result.result, ServiceEvaluationOutcome::Passed);
+        assert_eq!(result.decision, ServiceDecision::Allow);
+        assert_eq!(result.total_requirements, 1);
+        assert_eq!(result.satisfied_requirements, 1);
+        assert_eq!(result.required_total, 1);
+        assert_eq!(result.required_satisfied, 1);
+        assert!(result.credential_results.is_empty());
+        assert!(result.verified_claims.is_empty());
+        assert_eq!(
+            result.decision_reason,
+            "All required presentation and credential evidence satisfied"
+        );
+    }
+
+    #[test]
+    fn missing_required_presentation_proof_denies_with_stable_code() {
+        let mut request = presentation_only_request();
+        request.presentation_verified = false;
+
+        let result = evaluate_service_policy(request).unwrap();
+
+        assert_eq!(result.decision, ServiceDecision::Deny);
+        assert_eq!(result.required_total, 1);
+        assert_eq!(result.required_satisfied, 0);
+        assert!(result.errors.iter().any(|error| {
+            error.code == ServicePolicyErrorCode::PresentationProofRequired
+                && error.requirement_id.is_none()
+                && error.credential_id.is_none()
+        }));
+    }
+
+    #[test]
+    fn presentation_proof_never_substitutes_for_a_required_credential() {
+        let mut request = request();
+        request.policy.presentation_proof_required = true;
+        request.presentation_verified = true;
+        request.credentials.clear();
+
+        let result = evaluate_service_policy(request).unwrap();
+
+        assert_eq!(result.decision, ServiceDecision::Deny);
+        assert_eq!(result.required_total, 2);
+        assert_eq!(result.required_satisfied, 1);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.code == ServicePolicyErrorCode::CredentialMissing));
+    }
+
+    #[test]
+    fn presentation_proof_obligation_keeps_all_binding_checks_fail_closed() {
+        let mut request = presentation_only_request();
+        request.holder_binding_method = Some("SESSION_BINDING".to_string());
+        request.proof_profile = Some("UNSUPPORTED".to_string());
+        request.challenge_verified = false;
+        request.audience_verified = false;
+        request.replay_check_verified = false;
+
+        let result = evaluate_service_policy(request).unwrap();
+        let codes = result
+            .errors
+            .iter()
+            .map(|error| error.code)
+            .collect::<Vec<_>>();
+
+        assert_eq!(result.decision, ServiceDecision::Deny);
+        assert!(codes.contains(&ServicePolicyErrorCode::HolderBindingMethodNotAllowed));
+        assert!(codes.contains(&ServicePolicyErrorCode::ProofProfileNotAllowed));
+        assert!(codes.contains(&ServicePolicyErrorCode::ChallengeBindingRequired));
+        assert!(codes.contains(&ServicePolicyErrorCode::AudienceBindingRequired));
+        assert!(codes.contains(&ServicePolicyErrorCode::ReplayDetectionRequired));
     }
 
     #[test]
@@ -1613,7 +1749,7 @@ mod tests {
         assert_eq!(
             evaluate_service_policy(request).unwrap_err(),
             ServicePolicyError::InvalidRequest(
-                "policy has no required credential obligations".to_string()
+                "policy has no required credential or presentation obligations".to_string()
             )
         );
     }
@@ -1738,11 +1874,21 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("single_presentation");
+        value["policy"]
+            .as_object_mut()
+            .unwrap()
+            .remove("presentation_proof_required");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("presentation_verified");
         value.as_object_mut().unwrap().remove("presentation_count");
 
         let parsed: ServicePolicyEvaluationRequest = serde_json::from_value(value).unwrap();
         assert!(parsed.policy.allowed_issuers.is_empty());
         assert!(!parsed.policy.single_presentation);
+        assert!(!parsed.policy.presentation_proof_required);
+        assert!(!parsed.presentation_verified);
         assert_eq!(parsed.presentation_count, None);
         assert_eq!(
             evaluate_service_policy(parsed).unwrap().decision,
