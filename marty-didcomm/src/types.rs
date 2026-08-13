@@ -14,6 +14,9 @@ pub struct DidDocument {
     pub authentication: Vec<serde_json::Value>,
 
     #[serde(default)]
+    pub assertion_method: Vec<serde_json::Value>,
+
+    #[serde(default)]
     pub key_agreement: Vec<serde_json::Value>,
 
     #[serde(default)]
@@ -21,6 +24,9 @@ pub struct DidDocument {
 
     #[serde(default)]
     pub service: Vec<ServiceEntry>,
+
+    #[serde(default, flatten)]
+    pub additional_properties: serde_json::Map<String, serde_json::Value>,
 }
 
 impl DidDocument {
@@ -117,6 +123,8 @@ pub struct VerificationMethod {
     pub public_key_multibase: Option<String>,
     #[serde(default)]
     pub public_key_base58: Option<String>,
+    #[serde(default, flatten)]
+    pub additional_properties: serde_json::Map<String, serde_json::Value>,
 }
 
 /// JSON Web Key (subset needed for DIDComm key agreement).
@@ -133,6 +141,8 @@ pub struct Jwk {
     pub d: Option<String>,
     #[serde(default)]
     pub kid: Option<String>,
+    #[serde(default, flatten)]
+    pub additional_properties: serde_json::Map<String, serde_json::Value>,
 }
 
 /// DID Document service entry.
@@ -142,6 +152,8 @@ pub struct ServiceEntry {
     pub id: String,
     pub r#type: String,
     pub service_endpoint: ServiceEndpoint,
+    #[serde(default, flatten)]
+    pub additional_properties: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Service endpoint — can be a plain URI string or a structured object.
@@ -169,6 +181,8 @@ pub struct ServiceEndpointObject {
     pub accept: Vec<String>,
     #[serde(default)]
     pub routing_keys: Vec<String>,
+    #[serde(default, flatten)]
+    pub additional_properties: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A DIDComm v2 plaintext message.

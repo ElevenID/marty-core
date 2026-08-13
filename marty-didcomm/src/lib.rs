@@ -34,7 +34,7 @@ pub mod envelope;
 pub mod error;
 pub mod types;
 
-pub use did_resolver::DidResolver;
+pub use did_resolver::{DidResolutionResult, DidResolver};
 pub use encrypted_envelope::{decrypt_jwe, encrypt_for_recipient};
 pub use envelope::{pack_credential_for_holder, unpack_didcomm_message};
 pub use error::{DidcommError, DidcommResult};

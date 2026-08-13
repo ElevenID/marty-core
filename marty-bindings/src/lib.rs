@@ -1613,6 +1613,39 @@ fn didcomm_resolve_did(did: &str, universal_resolver_url: Option<&str>) -> PyRes
     serde_json::to_string(&doc).map_err(to_pyerr)
 }
 
+/// Resolve a DID with native egress policy and integrity provenance.
+///
+/// `did_web_internal_base_urls` are deployment-owned HTTP(S) bases that serve
+/// standard did:web document paths and are tried in order. Public HTTPS
+/// resolution is enabled only for exact `did_web_allowed_hosts`. The JSON
+/// result contains `document`, `source`, `retrieved_at`, and `content_sha256`.
+#[pyfunction]
+#[pyo3(signature = (did, *, universal_resolver_url=None, did_web_internal_base_urls=None, did_web_allowed_hosts=None))]
+fn didcomm_resolve_did_with_metadata(
+    did: &str,
+    universal_resolver_url: Option<&str>,
+    did_web_internal_base_urls: Option<Vec<String>>,
+    did_web_allowed_hosts: Option<Vec<String>>,
+) -> PyResult<String> {
+    let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
+    let resolver = match universal_resolver_url {
+        Some(url) => marty_didcomm::DidResolver::with_universal_resolver(url),
+        None => marty_didcomm::DidResolver::new(),
+    };
+    let resolver = match did_web_internal_base_urls {
+        Some(urls) => resolver.with_did_web_internal_base_urls(urls),
+        None => resolver,
+    };
+    let resolver = match did_web_allowed_hosts {
+        Some(hosts) => resolver.allow_did_web_hosts(hosts),
+        None => resolver,
+    };
+    let result = rt
+        .block_on(resolver.resolve_with_metadata(did))
+        .map_err(to_pyerr)?;
+    serde_json::to_string(&result).map_err(to_pyerr)
+}
+
 /// Extract the DIDComm service endpoint URI from a DID Document JSON.
 ///
 /// Args:
@@ -2253,6 +2286,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // DIDComm v2
     m.add_function(wrap_pyfunction!(didcomm_resolve_did, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_resolve_did_with_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_extract_endpoint, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_pack_credential, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_unpack_message, m)?)?;

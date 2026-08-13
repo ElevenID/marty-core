@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a canonical Open Badges 3.0 profile validator beside the Rust issuance
   profile builder.
 - Expose composite Open Badge VC-JWT verification through `_marty_rs`.
+- Expose controlled DID resolution with native source, timestamp, and content
+  digest provenance through `_marty_rs`.
 
 ### Changed
 
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Clear credential claims when the JWT signature or Open Badge profile is
   rejected so callers cannot consume unverified badge data.
+- Reject private, duplicate, malformed, or incomplete `did:jwk` key material
+  before returning a DID document, and preserve validated document members.
 
 ## [0.1.49] - 2026-08-12
 

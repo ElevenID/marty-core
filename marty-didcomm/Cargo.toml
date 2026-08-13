@@ -34,6 +34,7 @@ affinidi-messaging-didcomm = "=0.14.0"
 # DID document parsing + resolution
 uuid = { workspace = true }
 chrono = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
