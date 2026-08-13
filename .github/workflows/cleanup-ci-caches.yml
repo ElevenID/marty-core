@@ -31,11 +31,18 @@ jobs:
             const closedNumber = context.eventName === 'pull_request'
               ? context.payload.pull_request.number
               : null;
-            const caches = await github.paginate(
-              'GET /repos/{owner}/{repo}/actions/caches',
-              {owner, repo, per_page: 100},
-              response => response.data.actions_caches,
-            );
+            const caches = [];
+            for (let page = 1; ; page += 1) {
+              const {data} = await github.request('GET /repos/{owner}/{repo}/actions/caches', {
+                owner,
+                repo,
+                per_page: 100,
+                page,
+              });
+              const pageCaches = (data.actions_caches || []).filter(Boolean);
+              caches.push(...pageCaches);
+              if (pageCaches.length < 100) break;
+            }
             const candidates = caches.flatMap(cache => {
               const match = cache.ref.match(/^refs\/pull\/(\d+)\/merge$/)
                 || cache.ref.match(/^refs\/heads\/gh-readonly-queue\/[^/]+\/pr-(\d+)-/);
