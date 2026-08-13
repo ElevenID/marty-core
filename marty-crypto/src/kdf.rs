@@ -83,6 +83,72 @@ pub fn hkdf(
 }
 
 // ============================================================================
+// Concat KDF (NIST SP 800-56A / RFC 7518 section 4.6.2)
+// ============================================================================
+
+/// Derive key material with the SHA-256 Concat KDF used by JOSE ECDH-ES.
+///
+/// `party_u_info` and `party_v_info` are the decoded agreement-party values.
+/// This function constructs the length-prefixed OtherInfo structure required
+/// by RFC 7518 rather than accepting an ambiguous pre-encoded buffer.
+pub fn concat_kdf_sha256(
+    shared_secret: &[u8],
+    algorithm_id: &[u8],
+    party_u_info: &[u8],
+    party_v_info: &[u8],
+    key_data_len: usize,
+) -> CryptoResult<Vec<u8>> {
+    use sha2::Digest;
+
+    if shared_secret.is_empty() {
+        return Err(CryptoError::internal(
+            "Concat KDF shared secret must not be empty".to_string(),
+        ));
+    }
+    if key_data_len == 0 {
+        return Err(CryptoError::internal(
+            "Concat KDF output length must be positive".to_string(),
+        ));
+    }
+
+    let key_data_bits = key_data_len
+        .checked_mul(8)
+        .ok_or_else(|| CryptoError::internal("Concat KDF output length overflow".to_string()))?;
+    let key_data_bits = u32::try_from(key_data_bits).map_err(|_| {
+        CryptoError::internal("Concat KDF output length exceeds RFC 7518 limits".to_string())
+    })?;
+
+    let mut other_info = Vec::new();
+    append_length_prefixed(&mut other_info, algorithm_id)?;
+    append_length_prefixed(&mut other_info, party_u_info)?;
+    append_length_prefixed(&mut other_info, party_v_info)?;
+    other_info.extend_from_slice(&key_data_bits.to_be_bytes());
+
+    let repetitions = key_data_len.div_ceil(32);
+    let repetitions = u32::try_from(repetitions)
+        .map_err(|_| CryptoError::internal("Concat KDF repetition count overflow".to_string()))?;
+    let mut derived = Vec::with_capacity(key_data_len);
+    for counter in 1..=repetitions {
+        let mut digest = Sha256::new();
+        digest.update(counter.to_be_bytes());
+        digest.update(shared_secret);
+        digest.update(&other_info);
+        derived.extend_from_slice(&digest.finalize());
+    }
+    derived.truncate(key_data_len);
+    Ok(derived)
+}
+
+fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) -> CryptoResult<()> {
+    let length = u32::try_from(value.len()).map_err(|_| {
+        CryptoError::internal("Concat KDF field exceeds RFC 7518 limits".to_string())
+    })?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(value);
+    Ok(())
+}
+
+// ============================================================================
 // PBKDF2 (RFC 2898)
 // ============================================================================
 
@@ -221,6 +287,20 @@ mod tests {
 
         let result = hkdf_sha256(&ikm, &salt, &info, 42).unwrap();
         assert_eq!(result.len(), 42);
+    }
+
+    #[test]
+    fn concat_kdf_matches_rfc7518_appendix_c() {
+        let shared_secret = [
+            158, 86, 217, 29, 129, 113, 53, 211, 114, 131, 66, 131, 191, 132, 38, 156, 251, 49,
+            110, 163, 218, 128, 106, 72, 246, 218, 167, 121, 140, 254, 144, 196,
+        ];
+        let derived = concat_kdf_sha256(&shared_secret, b"A128GCM", b"Alice", b"Bob", 16)
+            .expect("RFC 7518 Concat KDF vector");
+        assert_eq!(
+            derived,
+            [86, 170, 141, 234, 248, 35, 109, 32, 92, 34, 40, 205, 113, 167, 16, 26]
+        );
     }
 
     #[test]
