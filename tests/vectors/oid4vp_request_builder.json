@@ -88,6 +88,64 @@
           ]
         }
       }
+    },
+    {
+      "name": "multi-format-template-prefers-first-family",
+      "request": {
+        "id": "pd-multi",
+        "wallet_formats": ["dc+sd-jwt", "jwt_vc_json", "jwt_vp"],
+        "requirements": [
+          {
+            "id": "member",
+            "display_name": "Member credential",
+            "description": "Verify membership",
+            "credential_type": "MemberCredential",
+            "supported_formats": ["jwt_vc", "sd_jwt_vc"]
+          }
+        ]
+      },
+      "expected": {
+        "presentation_definition": {
+          "id": "pd-multi",
+          "format": {
+            "jwt_vc_json": {"alg": ["ES256", "EdDSA"]},
+            "jwt_vp": {"alg": ["ES256", "EdDSA"]}
+          },
+          "input_descriptors": [
+            {
+              "id": "member",
+              "name": "Member credential",
+              "purpose": "Verify membership",
+              "format": {
+                "jwt_vc_json": {"alg": ["ES256", "EdDSA"]},
+                "jwt_vp": {"alg": ["ES256", "EdDSA"]}
+              },
+              "constraints": {
+                "fields": [
+                  {
+                    "path": ["$.vc.type", "$.type"],
+                    "filter": {
+                      "anyOf": [
+                        {"type": "array", "contains": {"const": "MemberCredential"}},
+                        {"type": "string", "const": "MemberCredential"}
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "dcql_query": {
+          "credentials": [
+            {
+              "id": "member",
+              "format": "jwt_vc_json",
+              "meta": {"type_values": [["VerifiableCredential", "MemberCredential"]]}
+            }
+          ]
+        }
+      }
     }
   ],
   "invalid": [
