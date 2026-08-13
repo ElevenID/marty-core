@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
   contents: read
   pull-requests: read
 
@@ -20,6 +19,10 @@ jobs:
   cleanup:
     name: Remove caches for closed pull requests
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
         with:
