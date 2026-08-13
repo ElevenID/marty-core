@@ -38,6 +38,7 @@ pub mod flow;
 pub mod jwk;
 pub mod mdoc;
 pub mod mrz;
+pub mod oid4vp;
 pub mod open_badges;
 pub mod policy;
 pub mod trust_anchor;
