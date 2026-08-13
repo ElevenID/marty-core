@@ -2731,6 +2731,27 @@ mod tests {
     }
 
     #[test]
+    fn service_policy_binding_accepts_explicit_presentation_only_obligation() {
+        let mut request = service_policy_request();
+        request["policy"]["credential_requirements"] = serde_json::json!([]);
+        request["policy"]["freshness"] = serde_json::Value::Null;
+        request["policy"]["presentation_proof_required"] = serde_json::json!(true);
+        request["credentials"] = serde_json::json!([]);
+        request["presentation_verified"] = serde_json::json!(true);
+
+        let output = evaluate_service_presentation_policy_impl(&request.to_string())
+            .expect("valid presentation-only policy request");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("result JSON");
+
+        assert_eq!(result["result"], "passed");
+        assert_eq!(result["decision"], "allow");
+        assert_eq!(result["required_total"], 1);
+        assert_eq!(result["required_satisfied"], 1);
+        assert_eq!(result["credential_results"], serde_json::json!([]));
+        assert_eq!(result["verified_claims"], serde_json::json!({}));
+    }
+
+    #[test]
     fn service_policy_binding_rejects_unknown_constraints() {
         let mut request = service_policy_request();
         request["policy"]["credential_requirements"][0]["requested_claims"][0]["constraints"][0]

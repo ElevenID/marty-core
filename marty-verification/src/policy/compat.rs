@@ -199,6 +199,7 @@ impl<'a> LegacyProjection<'a> {
                 issuer_constraints: None,
                 allowed_issuers: policy.allowed_issuers.clone(),
                 single_presentation: policy.single_presentation,
+                presentation_proof_required: false,
             },
             credentials: vec![VerifiedCredentialFacts {
                 credential_id: LEGACY_CREDENTIAL_ID.to_string(),
@@ -224,6 +225,7 @@ impl<'a> LegacyProjection<'a> {
                 warnings: Vec::new(),
             }],
             evaluation_time_epoch_seconds: input.evaluation_time_epoch_seconds,
+            presentation_verified: false,
             holder_binding_verified: input.holder_binding_verified,
             holder_binding_method: input
                 .holder_binding_verified
@@ -343,7 +345,8 @@ impl<'a> LegacyProjection<'a> {
                     self.input.issuer_id
                 ),
             ),
-            ServiceCode::HolderBindingRequired
+            ServiceCode::PresentationProofRequired
+            | ServiceCode::HolderBindingRequired
             | ServiceCode::HolderBindingMethodNotAllowed
             | ServiceCode::ProofProfileNotAllowed
             | ServiceCode::ChallengeBindingRequired
