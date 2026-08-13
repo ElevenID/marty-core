@@ -1,14 +1,14 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -17,24 +17,23 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Bypass rustup's implicit component installation from rust-toolchain.toml;
-  # each job installs its required components explicitly.
   RUSTUP_TOOLCHAIN: 1.97.1
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   preflight:
     name: Fast Rust Preflight
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     env:
       USE_ZK_MOCK: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: '3.12'
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
       - name: Verify Python versions and release-asset retention
         run: |
           python scripts/check_release_contract.py
@@ -43,226 +42,227 @@ jobs:
         with:
           toolchain: 1.97.1
           components: clippy, rustfmt
-      - name: Cache cargo registry
+      - name: Cache Cargo inputs
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache cargo index
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-inputs-${{ hashFiles('**/Cargo.lock') }}
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache cargo build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: target
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+          version: v0.16.0
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
 
-  test:
-    name: Test
+  affected-tests:
+    name: Affected Rust Tests
+    if: github.event_name == 'pull_request'
+    needs: preflight
+    runs-on: ubuntu-latest
+    env:
+      USE_ZK_MOCK: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Select affected packages and reverse dependencies
+        id: affected
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/ci_affected_packages.py --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Test the workspace after root dependency changes
+        if: steps.affected.outputs.all == 'true'
+        run: |
+          cargo test --locked --workspace --exclude marty-zkp --exclude marty-bindings --features test-fixtures
+          cargo test --locked -p marty-bindings --no-default-features
+          cargo test --locked -p marty-zkp
+      - name: Test affected packages first
+        if: steps.affected.outputs.has_packages == 'true'
+        shell: bash
+        env:
+          PACKAGES: ${{ steps.affected.outputs.packages }}
+        run: |
+          for package in $PACKAGES; do
+            case "$package" in
+              marty-bindings)
+                cargo test --locked -p marty-bindings --no-default-features
+                ;;
+              marty-zkp)
+                cargo test --locked -p marty-zkp
+                ;;
+              *)
+                cargo test --locked -p "$package"
+                ;;
+            esac
+          done
+      - name: Record non-Rust-only change
+        if: steps.affected.outputs.all != 'true' && steps.affected.outputs.has_packages != 'true'
+        run: echo "No Rust package tests are needed for the affected-first lane."
+
+  platform-tests:
+    name: Platform Tests (${{ matrix.os }})
+    if: github.event_name != 'pull_request'
     needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Install Rust ${{ matrix.rust }}
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Cache cargo registry
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+      - name: Cache Cargo inputs
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-inputs-${{ hashFiles('**/Cargo.lock') }}
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+          version: v0.16.0
+      - name: Install cargo-nextest
+        if: runner.os == 'Linux'
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d
         with:
-          path: target
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ env.RUSTUP_TOOLCHAIN }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-
+          tool: cargo-nextest@0.9.143
       - name: Require reproducible release sources
         shell: bash
         run: |
           test -f Cargo.lock
           test -f marty-test-wallet/Cargo.toml
           cargo metadata --locked --no-deps --format-version 1 >/dev/null
-
-      - name: Run tests (workspace, excluding native extension crates)
+      - name: Run workspace tests with build reuse
+        if: runner.os == 'Linux'
+        run: >-
+          cargo nextest run --locked --workspace
+          --exclude marty-zkp --exclude marty-bindings
+          --features test-fixtures
+      - name: Retain Rust documentation tests
+        if: runner.os == 'Linux'
+        run: >-
+          cargo test --locked --doc --workspace
+          --exclude marty-zkp --exclude marty-bindings
+          --features test-fixtures
+      - name: Run workspace tests
+        if: runner.os != 'Linux'
         run: cargo test --locked --workspace --exclude marty-zkp --exclude marty-bindings --features test-fixtures
-
       - name: Run binding tests without extension-module linking
         run: cargo test --locked -p marty-bindings --no-default-features
-
-      - name: Run marty-zkp tests (ZK mock)
+      - name: Run marty-zkp tests
         env:
           USE_ZK_MOCK: "1"
         run: cargo test --locked -p marty-zkp
 
   security:
-    name: Security Audit
+    name: Rust and Python Security
+    if: github.event_name != 'pull_request'
     needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
-
-      - name: Cache cargo-audit
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: marty-biometrics/pyproject.toml
+      - name: Cache security tools
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
-          path: ~/.cargo/bin/cargo-audit
-          key: ${{ runner.os }}-cargo-audit
-
-      - name: Install cargo-audit
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-security-tools-v1
+      - name: Install security tools
         run: |
-          if ! command -v cargo-audit &> /dev/null; then
-            cargo install cargo-audit --locked
-          fi
-
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+          command -v cargo-deny >/dev/null || cargo install cargo-deny --locked
+          python -m pip install --disable-pip-version-check 'bandit[toml]' safety
       - name: Run cargo-audit
         continue-on-error: true
         run: cargo audit
-
-      - name: Cache cargo-deny
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: ~/.cargo/bin/cargo-deny
-          key: ${{ runner.os }}-cargo-deny
-
-      - name: Install cargo-deny
-        run: |
-          if ! command -v cargo-deny &> /dev/null; then
-            cargo install cargo-deny --locked
-          fi
-
       - name: Run cargo-deny
         continue-on-error: true
         run: cargo deny check
-
-  python-security:
-    name: Python Security (marty-biometrics)
-    needs: preflight
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+      - name: Run Bandit
+        continue-on-error: true
+        run: bandit -r marty-biometrics/python/marty_biometrics/
+      - name: Run Python dependency safety check
+        continue-on-error: true
         working-directory: marty-biometrics
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
-
-      - name: Install security tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install bandit[toml] safety
-
-      - name: Run bandit
-        continue-on-error: true
-        run: bandit -r python/marty_biometrics/
-
-      - name: Run safety check
-        continue-on-error: true
         run: safety check
 
   feature-matrix:
-    name: Feature Matrix (${{ matrix.crate }})
+    name: Feature Matrix (${{ matrix.shard }})
+    if: github.event_name != 'pull_request'
     needs: preflight
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        crate:
-          - marty-crypto
-          - marty-status
-          - marty-secure-storage
-          - marty-bindings
+        shard: [crates, protocols]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
-
-      - name: Test no default features
-        run: cargo test --locked -p ${{ matrix.crate }} --no-default-features
-
-      - name: Exercise default features
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Exercise crate features
+        if: matrix.shard == 'crates'
         shell: bash
         run: |
-          # PyO3's extension-module feature intentionally omits libpython
-          # linkage, so it must be compiled rather than linked into a Rust
-          # test executable. Binding tests run separately with that feature
-          # disabled, and Python-package jobs test the actual extension.
-          if [ "${{ matrix.crate }}" = "marty-bindings" ]; then
-            cargo check --locked -p marty-bindings
-          else
-            cargo test --locked -p "${{ matrix.crate }}"
-          fi
-
-  feature-matrix-verification:
-    name: Feature Matrix (marty-verification)
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: 1.97.1
-
-      - name: Build no default features
-        run: cargo build --locked -p marty-verification --no-default-features
-
-      - name: Build with default features
-        run: cargo build --locked -p marty-verification
-
-      - name: Run tests with fixtures
-        run: cargo test --locked -p marty-verification --features test-fixtures
-
-  feature-matrix-oid4vci:
-    name: Feature Matrix (marty-oid4vci)
-    needs: preflight
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: 1.97.1
-
-      - name: Check no default features
-        run: cargo check --locked -p marty-oid4vci --no-default-features
-
-      - name: Test default features
-        run: cargo test --locked -p marty-oid4vci
-
-      - name: Check issuer role alone
-        run: cargo check --locked -p marty-oid4vci --no-default-features --features issuer
-
-      - name: Check verifier role alone
-        run: cargo check --locked -p marty-oid4vci --no-default-features --features verifier
+          for crate in marty-crypto marty-status marty-secure-storage; do
+            cargo test --locked -p "$crate" --no-default-features
+            cargo test --locked -p "$crate"
+          done
+          cargo test --locked -p marty-bindings --no-default-features
+          cargo check --locked -p marty-bindings
+      - name: Exercise protocol features
+        if: matrix.shard == 'protocols'
+        run: |
+          cargo build --locked -p marty-verification --no-default-features
+          cargo build --locked -p marty-verification
+          cargo test --locked -p marty-verification --features test-fixtures
+          cargo check --locked -p marty-oid4vci --no-default-features
+          cargo test --locked -p marty-oid4vci
+          cargo check --locked -p marty-oid4vci --no-default-features --features issuer
+          cargo check --locked -p marty-oid4vci --no-default-features --features verifier
 
   feature-combinations:
     name: Feature Combinations
+    if: github.event_name != 'pull_request'
     needs: preflight
     runs-on: ubuntu-latest
     env:
@@ -270,134 +270,119 @@ jobs:
       USE_ZK_MOCK: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
-
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
       - name: Run critical feature combinations
         run: bash ./scripts/test-feature-combinations.sh
 
-  python-test:
-    name: Python Tests (marty-biometrics)
+  python-tests:
+    name: Python Tests (${{ matrix.os }})
+    if: github.event_name != 'pull_request'
     needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.11', '3.12']
     defaults:
       run:
         working-directory: marty-biometrics
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Set up Python ${{ matrix.python-version }}
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Set up Python 3.11
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
+      - name: Test Python 3.11 on Unix
+        if: runner.os != 'Windows'
+        run: |
+          python -m venv .venv-3.11
+          .venv-3.11/bin/python -m pip install --disable-pip-version-check 'maturin[patchelf]' pytest
+          .venv-3.11/bin/maturin develop --features python
+          .venv-3.11/bin/python -m pytest python/tests/
+      - name: Test Python 3.11 on Windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          python -m venv .venv-3.11
+          .venv-3.11\Scripts\python -m pip install --disable-pip-version-check maturin pytest
+          .venv-3.11\Scripts\maturin develop --features python
+          .venv-3.11\Scripts\python -m pytest python\tests\
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Test Python 3.12 on Unix
+        if: runner.os != 'Windows'
+        run: |
+          python -m venv .venv-3.12
+          .venv-3.12/bin/python -m pip install --disable-pip-version-check 'maturin[patchelf]' pytest
+          .venv-3.12/bin/maturin develop --features python
+          .venv-3.12/bin/python -m pytest python/tests/
+      - name: Test Python 3.12 on Windows
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          python -m venv .venv-3.12
+          .venv-3.12\Scripts\python -m pip install --disable-pip-version-check maturin pytest
+          .venv-3.12\Scripts\maturin develop --features python
+          .venv-3.12\Scripts\python -m pytest python\tests\
 
+  python-conformance:
+    name: Python and Rust Conformance
+    if: github.event_name != 'pull_request'
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
-
-      - name: Create virtualenv and install dependencies (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          pip install maturin[patchelf] pytest
-
-      - name: Create virtualenv and install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          python -m venv .venv
-          .venv\Scripts\activate.bat
-          pip install maturin pytest
-        shell: cmd
-
-      - name: Build Python package (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          source .venv/bin/activate
-          maturin develop --features python
-
-      - name: Build Python package (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          .venv\Scripts\activate.bat
-          maturin develop --features python
-        shell: cmd
-
-      - name: Run Python tests (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          source .venv/bin/activate
-          pytest python/tests/
-
-      - name: Run Python tests (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          .venv\Scripts\activate.bat
-          pytest python\tests\
-        shell: cmd
-
-  verification-python-test:
-    name: Python/Rust Conformance (marty-verification)
-    needs: preflight
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Build and test verification bindings
         working-directory: marty-verification
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: 1.97.1
-      - name: Build native verification bindings
         run: |
           python -m venv .venv
-          source .venv/bin/activate
-          pip install 'maturin[patchelf]==1.14.1' pytest
-          maturin develop
-      - name: Run shared golden-vector tests
-        run: |
-          source .venv/bin/activate
-          pytest python/tests/
-
-  iso18013-python-test:
-    name: Python/Rust Conformance (marty-iso18013)
-    needs: preflight
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: marty-iso18013
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.11'
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: 1.97.1
+          .venv/bin/python -m pip install --disable-pip-version-check 'maturin[patchelf]==1.14.1' pytest
+          .venv/bin/maturin develop
+          .venv/bin/python -m pytest python/tests/
       - name: Install native transport build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libpcsclite-dev libdbus-1-dev pkg-config
-      - name: Build native ISO bindings
+      - name: Build and test ISO bindings
+        working-directory: marty-iso18013
         run: |
           python -m venv .venv
-          source .venv/bin/activate
-          pip install 'maturin[patchelf]==1.14.1' pytest
-          maturin develop
-      - name: Run native binding tests
-        run: |
-          source .venv/bin/activate
-          pytest python/tests/
+          .venv/bin/python -m pip install --disable-pip-version-check 'maturin[patchelf]==1.14.1' pytest
+          .venv/bin/maturin develop
+          .venv/bin/python -m pytest python/tests/
 
-  wasm-test:
-    name: WASM Tests (marty-biometrics)
+  wasm-tests:
+    name: WASM Tests
+    if: github.event_name != 'pull_request'
     needs: preflight
     runs-on: ubuntu-latest
     defaults:
@@ -405,18 +390,66 @@ jobs:
         working-directory: marty-biometrics
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
-
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: curl --proto '=https' --tlsv1.2 -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+      - name: Build WASM targets
+        run: |
+          wasm-pack build --target web --features wasm
+          wasm-pack build --target nodejs --features wasm
+          wasm-pack build --target bundler --features wasm
 
-      - name: Build WASM (web target)
-        run: wasm-pack build --target web --features wasm
-
-      - name: Build WASM (nodejs target)
-        run: wasm-pack build --target nodejs --features wasm
-
-      - name: Build WASM (bundler target)
-        run: wasm-pack build --target bundler --features wasm
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs:
+      - preflight
+      - affected-tests
+      - platform-tests
+      - security
+      - feature-matrix
+      - feature-combinations
+      - python-tests
+      - python-conformance
+      - wasm-tests
+    runs-on: ubuntu-latest
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      PREFLIGHT: ${{ needs.preflight.result }}
+      AFFECTED_TESTS: ${{ needs.affected-tests.result }}
+      PLATFORM_TESTS: ${{ needs.platform-tests.result }}
+      SECURITY: ${{ needs.security.result }}
+      FEATURE_MATRIX: ${{ needs.feature-matrix.result }}
+      FEATURE_COMBINATIONS: ${{ needs.feature-combinations.result }}
+      PYTHON_TESTS: ${{ needs.python-tests.result }}
+      PYTHON_CONFORMANCE: ${{ needs.python-conformance.result }}
+      WASM_TESTS: ${{ needs.wasm-tests.result }}
+    steps:
+      - name: Require every applicable quality lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PREFLIGHT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$AFFECTED_TESTS" = success
+            for result in "$PLATFORM_TESTS" "$SECURITY" "$FEATURE_MATRIX" \
+              "$FEATURE_COMBINATIONS" "$PYTHON_TESTS" \
+              "$PYTHON_CONFORMANCE" "$WASM_TESTS"; do
+              test "$result" = skipped
+            done
+          else
+            test "$AFFECTED_TESTS" = skipped
+            for result in "$PLATFORM_TESTS" "$SECURITY" "$FEATURE_MATRIX" \
+              "$FEATURE_COMBINATIONS" "$PYTHON_TESTS" \
+              "$PYTHON_CONFORMANCE" "$WASM_TESTS"; do
+              test "$result" = success
+            done
+          fi
