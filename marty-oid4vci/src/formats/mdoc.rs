@@ -369,8 +369,9 @@ fn build_issuer_signed_item(
 
 /// Build the ISO `IssuerSignedItemBytes` value and its MSO commitment.
 ///
-/// ISO 18013-5 commits the complete tag-24 encoded value, not only the CBOR
-/// map carried inside its byte string. Keeping construction and hashing in one
+/// The MSO digest commits the encoded `IssuerSignedItem` carried by the
+/// tag-24 byte string. The tag and byte-string wrapper are transport framing,
+/// not part of the committed bytes. Keeping construction and hashing in one
 /// helper prevents issuance and disclosure verification from drifting apart.
 fn build_issuer_signed_item_bytes(
     digest_id: u64,
@@ -382,9 +383,9 @@ fn build_issuer_signed_item_bytes(
     let encoded_item = cbor_encode(&item)?;
     let issuer_signed_item_bytes = CborValue::Tag(
         CBOR_TAG_ENCODED_CBOR,
-        Box::new(CborValue::Bytes(encoded_item)),
+        Box::new(CborValue::Bytes(encoded_item.clone())),
     );
-    let digest = Sha256::digest(cbor_encode(&issuer_signed_item_bytes)?).to_vec();
+    let digest = Sha256::digest(encoded_item).to_vec();
     Ok((issuer_signed_item_bytes, digest))
 }
 
@@ -866,9 +867,13 @@ mod tests {
                 else {
                     panic!("issuer value digest must be a byte string");
                 };
-                let encoded_item = isomdl::cbor::to_vec(tagged_item).unwrap();
+                let encoded_item = isomdl::cbor::to_vec(tagged_item.as_ref()).unwrap();
                 let computed = Sha256::digest(encoded_item);
                 assert_eq!(computed.as_slice(), expected);
+
+                let encoded_wrapper = isomdl::cbor::to_vec(tagged_item).unwrap();
+                let wrapper_digest = Sha256::digest(encoded_wrapper);
+                assert_ne!(wrapper_digest.as_slice(), expected);
             }
         }
     }
