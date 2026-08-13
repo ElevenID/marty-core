@@ -23,6 +23,10 @@ class StableTagGateError(ValueError):
     """Raised when stable-tag evidence is incomplete or inconsistent."""
 
 
+class StableTagGatePending(StableTagGateError):
+    """Raised while an exact-main workflow is missing or still running."""
+
+
 def _object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise StableTagGateError(f"{label} must be a JSON object")
@@ -136,10 +140,12 @@ def validate_workflow_runs(
             and run.get("id") != current_run_id
         ]
         if not matches:
-            raise StableTagGateError(f"required exact-main workflow is missing: {path}")
+            raise StableTagGatePending(
+                f"required exact-main workflow is missing: {path}"
+            )
         latest = max(matches, key=lambda run: int(run.get("id", 0)))
         if latest.get("status") != "completed":
-            raise StableTagGateError(f"required workflow is still pending: {path}")
+            raise StableTagGatePending(f"required workflow is still pending: {path}")
         if latest.get("conclusion") != "success":
             raise StableTagGateError(
                 f"required workflow did not succeed: {path} ({latest.get('conclusion')})"
@@ -272,6 +278,12 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--policy", type=Path, required=True)
     prepare.add_argument("--evidence", type=Path, required=True)
 
+    check = subparsers.add_parser("check-workflows")
+    check.add_argument("--commit", required=True)
+    check.add_argument("--run-id", type=int, required=True)
+    check.add_argument("--runs-json", type=Path, required=True)
+    check.add_argument("--policy", type=Path, required=True)
+
     record = subparsers.add_parser("record-tag")
     record.add_argument("--evidence", type=Path, required=True)
     record.add_argument("--tag-object", required=True)
@@ -306,6 +318,13 @@ def main(argv: list[str] | None = None) -> int:
             args.evidence.write_text(
                 json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
+        elif args.command == "check-workflows":
+            validate_workflow_runs(
+                _load_json(args.runs_json, "workflow runs"),
+                _load_json(args.policy, "stable-tag policy"),
+                args.commit,
+                args.run_id,
+            )
         elif args.command == "record-tag":
             evidence = record_tag(
                 _load_json(args.evidence, "preparation evidence"),
@@ -326,6 +345,9 @@ def main(argv: list[str] | None = None) -> int:
                 _load_json(args.run_json, "preparation run"),
                 _load_json(args.evidence, "preparation evidence"),
             )
+    except StableTagGatePending as error:
+        print(f"stable-tag-gate: {error}", file=sys.stderr)
+        return 2 if args.command == "check-workflows" else 1
     except (OSError, StableTagGateError) as error:
         print(f"stable-tag-gate: {error}", file=sys.stderr)
         return 1

@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Run faster affected-package pull-request feedback while preserving the full
   verification matrix on merge candidates, and cancel superseded workflow runs.
+- Dispatch and await the full verification matrix on the exact protected-main
+  release source before creating an immutable stable tag.
 - Centralize OID4VP format normalization, algorithm policy, Open Badge aliases,
   mdoc claim paths, disclosure requirements, and resource limits in Rust.
 

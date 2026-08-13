@@ -176,11 +176,8 @@ def check_release_checksum_policy(workflow_text: str | None = None) -> list[str]
     return errors
 
 
-def check_stable_tag_gate() -> list[str]:
+def check_stable_tag_policy(policy: dict[str, object]) -> list[str]:
     errors: list[str] = []
-    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    prepare = PREPARE_STABLE_WORKFLOW.read_text(encoding="utf-8")
-    policy = json.loads(STABLE_TAG_POLICY.read_text(encoding="utf-8"))
     required_paths = {
         item.get("path")
         for item in policy.get("required_workflows", [])
@@ -198,10 +195,43 @@ def check_stable_tag_gate() -> list[str]:
         errors.append(".github/stable-tag-policy.json: invalid schema")
     if required_paths != expected_paths:
         errors.append(".github/stable-tag-policy.json: required workflow set is incomplete")
+    for item in policy.get("required_workflows", []):
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        event = item.get("event")
+        expected_event = (
+            "dynamic"
+            if path == "dynamic/github-code-scanning/codeql"
+            else "workflow_dispatch"
+        )
+        if event != expected_event:
+            errors.append(
+                f".github/stable-tag-policy.json: {path} must use {expected_event} evidence"
+            )
+        if expected_event == "workflow_dispatch" and isinstance(path, str):
+            workflow = ROOT / path
+            if not workflow.is_file() or "workflow_dispatch:" not in workflow.read_text(
+                encoding="utf-8"
+            ):
+                errors.append(f"{path}: required release gate is not dispatchable")
+    return errors
+
+
+def check_stable_tag_gate() -> list[str]:
+    errors: list[str] = []
+    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    prepare = PREPARE_STABLE_WORKFLOW.read_text(encoding="utf-8")
+    policy = json.loads(STABLE_TAG_POLICY.read_text(encoding="utf-8"))
+    errors.extend(check_stable_tag_policy(policy))
     for marker in (
+        'gh workflow run "$workflow" --ref main',
+        "scripts/stable_tag_gate.py check-workflows",
         "scripts/stable_tag_gate.py prepare",
         "git tag -a",
         "git ls-remote --tags",
+        'test "$protected_main" = "$COMMIT"',
+        "refs/remotes/origin/main^{commit}",
         "stable-tag-evidence-${{ inputs.tag }}",
         "gh workflow run release.yml --ref",
     ):

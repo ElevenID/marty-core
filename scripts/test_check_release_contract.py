@@ -88,6 +88,14 @@ class StableTagGateContractTests(unittest.TestCase):
     def test_checked_in_stable_tag_gate_is_complete(self) -> None:
         self.assertEqual(check_release_contract.check_stable_tag_gate(), [])
 
+    def test_release_policy_rejects_a_removed_push_trigger(self) -> None:
+        policy = json.loads(
+            (ROOT / ".github" / "stable-tag-policy.json").read_text(encoding="utf-8")
+        )
+        policy["required_workflows"][0]["event"] = "push"
+        errors = check_release_contract.check_stable_tag_policy(policy)
+        self.assertTrue(any("must use workflow_dispatch" in error for error in errors))
+
 
 class NativeBuildCacheContractTests(unittest.TestCase):
     def test_checked_in_ci_uses_an_approved_native_build_cache(self) -> None:
