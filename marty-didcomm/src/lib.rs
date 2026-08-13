@@ -28,12 +28,14 @@
 //! out of scope. For those methods, use the DIF Universal Resolver as an HTTP
 //! proxy and configure its HTTP(S) base URL explicitly.
 
+pub mod did_identifier;
 pub mod did_resolver;
 pub mod encrypted_envelope;
 pub mod envelope;
 pub mod error;
 pub mod types;
 
+pub use did_identifier::{derive_p256_did_identifier, derive_p256_did_jwk, derive_p256_did_key};
 pub use did_resolver::{DidResolutionResult, DidResolver};
 pub use encrypted_envelope::{decrypt_jwe, encrypt_for_recipient};
 pub use envelope::{pack_credential_for_holder, unpack_didcomm_message};

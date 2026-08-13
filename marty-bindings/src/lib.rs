@@ -91,6 +91,12 @@ fn generate_p256_did_jwk() -> PyResult<(String, String)> {
     marty_oid4vci::issuer::generate_p256_did_jwk().map_err(to_pyerr)
 }
 
+/// Derive a self-describing `did:jwk` or `did:key` from a P-256 public JWK.
+#[pyfunction]
+fn derive_p256_did_identifier(public_jwk_json: &str, method: &str) -> PyResult<String> {
+    marty_didcomm::derive_p256_did_identifier(public_jwk_json, method).map_err(to_pyerr)
+}
+
 /// Generate a P-384 ECDSA key pair for signing credentials.
 ///
 /// Returns:
@@ -802,6 +808,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "flow_state_machine",
             "haip_response_encryption",
             "did_resolution",
+            "did_identifier_derivation",
             "openid4vp_mdoc_handover",
             "vds_nc_profile",
             "status_list"
@@ -2219,6 +2226,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
     m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(generate_p256_did_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(derive_p256_did_identifier, m)?)?;
     m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
     m.add_function(wrap_pyfunction!(generate_ed25519_key, m)?)?;
     m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
@@ -2863,6 +2871,9 @@ mod tests {
             .any(|capability| capability == "did_resolution"));
         assert!(capabilities
             .iter()
+            .any(|capability| capability == "did_identifier_derivation"));
+        assert!(capabilities
+            .iter()
             .any(|capability| capability == "openid4vp_mdoc_handover"));
         assert!(capabilities
             .iter()
@@ -2873,6 +2884,18 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability == "siop_jwk_id_token_verification"));
+    }
+
+    #[test]
+    fn did_identifier_binding_derives_supported_methods_and_fails_closed() {
+        let public_jwk = r#"{"alg":"ES256","crv":"P-256","kid":"key-1","kty":"EC","use":"sig","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#;
+        assert!(derive_p256_did_identifier(public_jwk, "did:jwk")
+            .unwrap()
+            .starts_with("did:jwk:"));
+        assert!(derive_p256_did_identifier(public_jwk, "did:key")
+            .unwrap()
+            .starts_with("did:key:z"));
+        assert!(derive_p256_did_identifier(public_jwk, "did:web").is_err());
     }
 
     #[test]

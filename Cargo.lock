@@ -3686,6 +3686,7 @@ dependencies = [
  "bs58 0.5.1",
  "chrono",
  "ed25519-dalek",
+ "p256",
  "reqwest",
  "serde",
  "serde_json",
