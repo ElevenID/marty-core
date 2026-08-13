@@ -65,8 +65,7 @@ pub fn sign_mdoc(
         let digest_id = i as u64;
 
         // Generate 32 bytes of random salt
-        let mut salt = [0u8; 32];
-        rand::thread_rng().fill(&mut salt);
+        let salt: [u8; 32] = rand::thread_rng().gen();
 
         let (issuer_signed_item_bytes, digest) =
             build_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
@@ -235,8 +234,7 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
         .enumerate()
     {
         let digest_id = i as u64;
-        let mut salt = [0u8; 32];
-        rand::thread_rng().fill(&mut salt);
+        let salt: [u8; 32] = rand::thread_rng().gen();
         let (issuer_signed_item_bytes, digest) =
             build_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
         value_digests.push((digest_id, digest));
