@@ -48,6 +48,7 @@
 
 pub mod error;
 pub mod formats;
+pub mod holder_key;
 pub mod issuer;
 pub mod jose;
 #[cfg(feature = "lti")]
@@ -65,6 +66,10 @@ pub mod wallet_input;
 pub mod wallet;
 
 pub use error::{Oid4vciError, Oid4vciResult};
+pub use holder_key::{
+    generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
+    DidJwkHolderKeyMaterial,
+};
 pub use issuer::{generate_pkce_challenge_s256, verify_pkce_s256, IssuanceEngine};
 pub use signer::CredentialSigner;
 pub use types::{

@@ -199,13 +199,9 @@ impl WalletEngine {
 
     /// Generate a P-256 holder key represented as a self-contained `did:key`.
     pub fn generate_holder_key(&self) -> HolderKeyMaterial {
-        use p256::ecdsa::SigningKey;
-        use p256::elliptic_curve::rand_core::OsRng;
-
-        let signing_key = SigningKey::random(&mut OsRng);
-        let encoded_point = signing_key.verifying_key().to_encoded_point(false);
-        let x = encoded_point.x().expect("uncompressed P-256 point has x");
-        let y = encoded_point.y().expect("uncompressed P-256 point has y");
+        let signing_key = crate::holder_key::generate_p256_signing_key();
+        let (x, y) = crate::holder_key::p256_public_coordinates(&signing_key)
+            .expect("a generated P-256 key always has affine coordinates");
         let mut multicodec_key = vec![0x80, 0x24];
         multicodec_key.extend_from_slice(
             signing_key
@@ -227,6 +223,25 @@ impl WalletEngine {
             holder_id,
             private_jwk,
         }
+    }
+
+    /// Generate canonical P-256 holder material represented as `did:jwk`.
+    pub fn generate_p256_did_jwk_holder_key(
+        &self,
+    ) -> Oid4vciResult<crate::holder_key::DidJwkHolderKeyMaterial> {
+        crate::holder_key::generate_p256_did_jwk_holder_key()
+    }
+
+    /// Validate stored private P-256 JWK material and derive its canonical
+    /// public JWK and `did:jwk` identifier.
+    ///
+    /// This is used when loading existing mobile-wallet keys so malformed or
+    /// mismatched public coordinates fail closed instead of being trusted.
+    pub fn p256_did_jwk_holder_key_from_private_jwk(
+        &self,
+        private_jwk: &str,
+    ) -> Oid4vciResult<crate::holder_key::DidJwkHolderKeyMaterial> {
+        crate::holder_key::p256_did_jwk_holder_key_from_private_jwk(private_jwk)
     }
 
     // ──────────────────────────────────────────────────────────────────────
