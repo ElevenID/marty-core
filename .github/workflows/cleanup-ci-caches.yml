@@ -49,9 +49,12 @@ jobs:
               return match ? [{cache, number: Number(match[1])}] : [];
             });
             const pullStates = new Map();
+            const seenCacheIds = new Set();
             const maxDeletions = 500;
             let removed = 0;
             for (const {cache, number} of candidates) {
+              if (seenCacheIds.has(cache.id)) continue;
+              seenCacheIds.add(cache.id);
               if (closedNumber !== null && number !== closedNumber) continue;
               if (closedNumber === null) {
                 if (!pullStates.has(number)) {
@@ -60,11 +63,15 @@ jobs:
                 }
                 if (pullStates.get(number) !== 'closed') continue;
               }
-              await github.rest.actions.deleteActionsCacheById({
-                owner,
-                repo,
-                cache_id: cache.id,
-              });
+              try {
+                await github.rest.actions.deleteActionsCacheById({owner, repo, cache_id: cache.id});
+              } catch (error) {
+                if (error.status === 404) {
+                  core.info(`Cache ${cache.id} was already removed; continuing.`);
+                  continue;
+                }
+                throw error;
+              }
               core.info(`Removed cache ${cache.id} scoped to ${cache.ref}`);
               removed += 1;
               if (removed >= maxDeletions) break;
