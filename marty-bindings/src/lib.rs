@@ -794,6 +794,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "credential_presentation_metadata",
             "device_authentication",
             "flow_state_machine",
+            "did_resolution",
             "vds_nc_profile",
             "status_list"
         ]
@@ -2785,6 +2786,18 @@ mod tests {
             normalize_presentation_credential_format("JSON_LD"),
             "W3C_VCDM_V2_DI"
         );
+    }
+
+    #[test]
+    fn native_diagnostics_advertise_controlled_did_resolution() {
+        let diagnostics: serde_json::Value =
+            serde_json::from_str(&native_backend_diagnostics().expect("native diagnostics"))
+                .expect("diagnostics JSON");
+        assert!(diagnostics["capabilities"]
+            .as_array()
+            .expect("capability array")
+            .iter()
+            .any(|capability| capability == "did_resolution"));
     }
 
     #[test]
