@@ -141,7 +141,6 @@ jobs:
         with:
           version: v0.16.0
       - name: Install cargo-nextest
-        if: runner.os == 'Linux'
         uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d
         with:
           tool: cargo-nextest@0.9.143
@@ -152,20 +151,15 @@ jobs:
           test -f marty-test-wallet/Cargo.toml
           cargo metadata --locked --no-deps --format-version 1 >/dev/null
       - name: Run workspace tests with build reuse
-        if: runner.os == 'Linux'
         run: >-
           cargo nextest run --locked --workspace
           --exclude marty-zkp --exclude marty-bindings
           --features test-fixtures
       - name: Retain Rust documentation tests
-        if: runner.os == 'Linux'
         run: >-
           cargo test --locked --doc --workspace
           --exclude marty-zkp --exclude marty-bindings
           --features test-fixtures
-      - name: Run workspace tests
-        if: runner.os != 'Linux'
-        run: cargo test --locked --workspace --exclude marty-zkp --exclude marty-bindings --features test-fixtures
       - name: Run binding tests without extension-module linking
         run: cargo test --locked -p marty-bindings --no-default-features
       - name: Run marty-zkp tests
@@ -418,6 +412,9 @@ jobs:
       - python-conformance
       - wasm-tests
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     env:
       EVENT_NAME: ${{ github.event_name }}
       PREFLIGHT: ${{ needs.preflight.result }}
@@ -450,3 +447,33 @@ jobs:
               test "$result" = success
             done
           fi
+      - name: Summarize CI performance
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const {data: run} = await github.rest.actions.getWorkflowRun({
+              owner, repo, run_id: context.runId,
+            });
+            const {data} = await github.rest.actions.listJobsForWorkflowRun({
+              owner, repo, run_id: context.runId, filter: 'latest', per_page: 100,
+            });
+            const created = new Date(run.created_at);
+            const rows = data.jobs
+              .filter(job => job.started_at && job.completed_at)
+              .map(job => ({
+                name: job.name,
+                queue: Math.max(0, Math.round((new Date(job.started_at) - created) / 1000)),
+                run: Math.max(0, Math.round((new Date(job.completed_at) - new Date(job.started_at)) / 1000)),
+              }))
+              .sort((a, b) => b.run - a.run);
+            const maxQueue = Math.max(0, ...rows.map(row => row.queue));
+            core.summary
+              .addHeading('CI performance')
+              .addTable([
+                [{data: 'Longest jobs', header: true}, {data: 'Queue', header: true}, {data: 'Runtime', header: true}],
+                ...rows.slice(0, 10).map(row => [row.name, `${row.queue}s`, `${row.run}s`]),
+              ])
+              .addRaw(`Longest observed queue delay: ${maxQueue}s.`);
+            if (maxQueue > 300) core.warning(`Runner queue delay reached ${maxQueue}s.`);
+            await core.summary.write();
