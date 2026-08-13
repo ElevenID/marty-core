@@ -99,7 +99,7 @@ jobs:
             case "$gate_status" in
               0) exit 0 ;;
               1) exit 1 ;;
-              2) sleep 20 ;;
+              2) echo "Waiting for exact-main gates ($attempt/180)"; sleep 20 ;;
               *) echo "::error::Unexpected stable-tag gate status: $gate_status"; exit 1 ;;
             esac
           done
@@ -141,8 +141,8 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          test "$(git rev-parse HEAD^{commit})" = "$COMMIT"
-          test "$(git rev-parse refs/remotes/origin/main^{commit})" = "$COMMIT"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$COMMIT"
+          test "$(git rev-parse 'refs/remotes/origin/main^{commit}')" = "$COMMIT"
           version="${TAG#v}"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
