@@ -280,16 +280,21 @@ fn select_formats(
             "descriptor {descriptor_id} has no credential formats"
         )));
     }
-    let mut families = HashSet::new();
-    for format in template_formats {
-        families.insert(format_family(format)?);
+    // A DCQL credential query names one format. Credential templates may
+    // advertise several issuance formats in preference order, so select the
+    // first family and include only wallet aliases from that family. Emitting
+    // other families in Presentation Exchange would make the two artifacts
+    // describe different acceptable credentials.
+    let preferred_family = format_family(&template_formats[0])?;
+    for format in &template_formats[1..] {
+        format_family(format)?;
     }
     let selected: Vec<String> = wallet_formats
         .iter()
         .filter_map(|format| {
             format_family(format)
                 .ok()
-                .filter(|family| families.contains(family))
+                .filter(|family| *family == preferred_family)
                 .map(|_| format.clone())
         })
         .collect();
@@ -660,6 +665,27 @@ mod tests {
             result.dcql_query["credentials"][0]["claims"],
             json!([{"id": "claim_email", "path": ["email"]}])
         );
+    }
+
+    #[test]
+    fn multiple_template_formats_use_the_preferred_family_for_both_artifacts() {
+        let mut multi_format = requirement("jwt_vc");
+        multi_format.supported_formats = vec!["jwt_vc".into(), "sd_jwt_vc".into()];
+        let result = build_presentation_request(PresentationRequestBuildInput {
+            id: "pd-multi".into(),
+            requirements: vec![multi_format],
+            wallet_formats: vec!["dc+sd-jwt".into(), "jwt_vc_json".into(), "jwt_vp".into()],
+        })
+        .unwrap();
+
+        let formats = result.presentation_definition["input_descriptors"][0]["format"]
+            .as_object()
+            .unwrap();
+        assert_eq!(
+            formats.keys().cloned().collect::<Vec<_>>(),
+            vec!["jwt_vc_json", "jwt_vp"]
+        );
+        assert_eq!(result.dcql_query["credentials"][0]["format"], "jwt_vc_json");
     }
 
     #[test]
