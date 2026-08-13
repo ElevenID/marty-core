@@ -713,18 +713,32 @@ mod tests {
     use super::*;
     use marty_verification::mdoc::{DeviceResponse, Document, IssuerSignedItem};
 
+    fn runtime_nonce() -> String {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after Unix epoch")
+            .as_nanos()
+            .to_string()
+    }
+
     #[test]
     fn openid4vp_mdoc_handover_binding_preserves_golden_bytes() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/vectors/openid4vp_mdoc_handover.json"
+        ))
+        .expect("valid handover fixture");
+        let case = &fixture["valid"][0];
+        let jwk_json = case["response_encryption_jwk"].to_string();
         let transcript = build_openid4vp_mdoc_session_transcript(
-            "did:web:verifier.example:oid4vp",
-            "nonce-1",
-            "https://verifier.example/submit",
-            Some(r#"{"kty":"EC","crv":"P-256","x":"AQ","y":"Ag","kid":"ignored"}"#),
+            case["client_id"].as_str().unwrap(),
+            case["nonce"].as_str().unwrap(),
+            case["response_uri"].as_str().unwrap(),
+            Some(&jwk_json),
         )
         .expect("valid native transcript");
         assert_eq!(
             hex::encode(transcript),
-            "83f6f682714f70656e494434565048616e646f7665725820e646bc2664d7f68da2949909d78d70d302acbd8948d55018d6dde99c8d559213"
+            case["session_transcript_hex"].as_str().unwrap()
         );
         assert_eq!(
             openid4vp_response_key_thumbprint(r#"{"kty":"EC","crv":"P-256","x":"AQ","y":"Ag"}"#)
@@ -736,9 +750,10 @@ mod tests {
 
     #[test]
     fn openid4vp_mdoc_handover_binding_fails_closed() {
+        let nonce = runtime_nonce();
         assert!(build_openid4vp_mdoc_session_transcript(
             "client",
-            "nonce",
+            &nonce,
             "https://verifier.example/submit",
             Some(r#"{"kty":"EC","crv":"P-256","x":"AQ"}"#),
         )
@@ -747,9 +762,10 @@ mod tests {
 
     #[test]
     fn openid4vp_mdoc_binding_diagnostics_are_native_json() {
+        let nonce = runtime_nonce();
         let transcript = build_openid4vp_mdoc_session_transcript(
             "client",
-            "nonce",
+            &nonce,
             "https://verifier.example/submit",
             None,
         )
@@ -758,7 +774,7 @@ mod tests {
             &openid4vp_mdoc_binding_digests(
                 &transcript,
                 "client",
-                "nonce",
+                &nonce,
                 "https://verifier.example/submit",
                 None,
                 "presentation",

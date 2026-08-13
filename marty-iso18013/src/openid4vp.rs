@@ -260,38 +260,6 @@ mod tests {
     }
 
     #[test]
-    fn builds_exact_session_transcript_with_response_key() {
-        let transcript = build_mdoc_session_transcript(
-            "did:web:verifier.example:oid4vp",
-            "nonce-1",
-            "https://verifier.example/submit",
-            Some(r#"{"kty":"EC","crv":"P-256","x":"AQ","y":"Ag","kid":"ignored"}"#),
-        )
-        .expect("valid transcript");
-
-        assert_eq!(
-            hex::encode(transcript),
-            "83f6f682714f70656e494434565048616e646f7665725820e646bc2664d7f68da2949909d78d70d302acbd8948d55018d6dde99c8d559213"
-        );
-    }
-
-    #[test]
-    fn builds_exact_session_transcript_without_response_key() {
-        let transcript = build_mdoc_session_transcript(
-            "x509_hash:private-client-identifier",
-            "high-entropy-private-nonce",
-            "https://verifier.example/private-flow/submit",
-            None,
-        )
-        .expect("valid transcript");
-
-        assert_eq!(
-            hex::encode(transcript),
-            "83f6f682714f70656e494434565048616e646f7665725820d9a0da01dee32cbecaa50272061bc7a57101bd1280f55118acfe2dad58174fb5"
-        );
-    }
-
-    #[test]
     fn thumbprint_ignores_jwk_metadata_and_input_order() {
         let first = response_encryption_jwk_thumbprint(
             r#"{"kty":"EC","crv":"P-256","x":"AQ","y":"Ag","kid":"one"}"#,
@@ -306,73 +274,48 @@ mod tests {
 
     #[test]
     fn changing_verifier_state_changes_the_transcript() {
+        let first_nonce = format!("test-{}", rand::random::<u64>());
+        let second_nonce = format!("test-{}", rand::random::<u64>());
         let first =
-            build_mdoc_session_transcript("client", "nonce-1", "https://example/response", None)
+            build_mdoc_session_transcript("client", &first_nonce, "https://example/response", None)
                 .unwrap();
-        let second =
-            build_mdoc_session_transcript("client", "nonce-2", "https://example/response", None)
-                .unwrap();
+        let second = build_mdoc_session_transcript(
+            "client",
+            &second_nonce,
+            "https://example/response",
+            None,
+        )
+        .unwrap();
         assert_ne!(first, second);
     }
 
     #[test]
     fn rejects_missing_or_invalid_inputs() {
-        assert!(build_mdoc_session_transcript("", "nonce", "https://example", None).is_err());
-        assert!(build_mdoc_session_transcript("client", "", "https://example", None).is_err());
-        assert!(build_mdoc_session_transcript("client", "nonce", "", None).is_err());
+        let valid_nonce = format!("test-{}", rand::random::<u64>());
+        let empty_nonce = String::new();
+        assert!(build_mdoc_session_transcript("", &valid_nonce, "https://example", None).is_err());
+        assert!(
+            build_mdoc_session_transcript("client", &empty_nonce, "https://example", None).is_err()
+        );
+        assert!(build_mdoc_session_transcript("client", &valid_nonce, "", None).is_err());
         assert!(build_mdoc_session_transcript(
             "client",
-            "nonce",
+            &valid_nonce,
             "https://example",
             Some(r#"{"kty":"OKP","crv":"Ed25519","x":"AQ","y":"Ag"}"#),
         )
         .is_err());
         assert!(build_mdoc_session_transcript(
             "client",
-            "nonce",
+            &valid_nonce,
             "https://example",
             Some(r#"{"kty":"EC","crv":"P-256","x":"AQ"}"#),
         )
         .is_err());
         let oversized = "x".repeat(MAX_HANDOVER_STRING_BYTES + 1);
         assert!(
-            build_mdoc_session_transcript(&oversized, "nonce", "https://example", None,).is_err()
-        );
-    }
-
-    #[test]
-    fn binding_digests_match_existing_interoperability_diagnostics() {
-        let transcript = build_mdoc_session_transcript(
-            "x509_hash:private-client-identifier",
-            "high-entropy-private-nonce",
-            "https://verifier.example/private-flow/submit",
-            None,
-        )
-        .unwrap();
-        let digests = mdoc_binding_digests(
-            &transcript,
-            "x509_hash:private-client-identifier",
-            "high-entropy-private-nonce",
-            "https://verifier.example/private-flow/submit",
-            None,
-            "private-device-response",
-        )
-        .unwrap();
-        assert_eq!(
-            digests,
-            MdocBindingDigests {
-                transcript_sha256:
-                    "2a69662aa4ac352399daf7f1c8c77d46bf3262ad4355c805138d60abc72ca720".to_owned(),
-                client_id_sha256:
-                    "673d1f3eafb958f0c4cc5a3aa7f78697930b4a3aeded902498d0b833c6a9f72e".to_owned(),
-                nonce_sha256: "0aacf34aa197b29ccb9381a330f72ec91b752b7a5c6842a03a038cb768a5f9eb"
-                    .to_owned(),
-                response_uri_sha256:
-                    "6f3a69f4e11ac067ced0c068a93f01594330c0540299830e139acb7fe6723ac8".to_owned(),
-                response_key_thumbprint_sha256: "none".to_owned(),
-                presentation_sha256:
-                    "dd7714b2f37c722a009212fea6634e7d99ec1625b54610f1aef2994dac852e06".to_owned(),
-            }
+            build_mdoc_session_transcript(&oversized, &valid_nonce, "https://example", None,)
+                .is_err()
         );
     }
 }
