@@ -31,18 +31,28 @@ jobs:
             const closedNumber = context.eventName === 'pull_request'
               ? context.payload.pull_request.number
               : null;
-            const caches = [];
-            for (let page = 1; ; page += 1) {
-              const {data} = await github.request('GET /repos/{owner}/{repo}/actions/caches', {
-                owner,
-                repo,
-                per_page: 100,
-                page,
-              });
-              const pageCaches = (data.actions_caches || []).filter(Boolean);
-              caches.push(...pageCaches);
-              if (pageCaches.length < 100) break;
-            }
+            const listCaches = async (ref = null) => {
+              const caches = [];
+              for (let page = 1; ; page += 1) {
+                const {data} = await github.request('GET /repos/{owner}/{repo}/actions/caches', {
+                  owner,
+                  repo,
+                  per_page: 100,
+                  page,
+                  ...(ref ? {ref} : {}),
+                });
+                const pageCaches = (data.actions_caches || []).filter(Boolean);
+                caches.push(...pageCaches);
+                if (pageCaches.length < 100) break;
+              }
+              return caches;
+            };
+            // Closing a PR has an exact cache ref, so avoid scanning a repository
+            // that may contain tens of thousands of sccache objects. Scheduled and
+            // manual runs perform the full sweep, including stale merge-queue refs.
+            const caches = closedNumber === null
+              ? await listCaches()
+              : await listCaches(`refs/pull/${closedNumber}/merge`);
             const candidates = caches.flatMap(cache => {
               const match = cache.ref.match(/^refs\/pull\/(\d+)\/merge$/)
                 || cache.ref.match(/^refs\/heads\/gh-readonly-queue\/[^/]+\/pr-(\d+)-/);
@@ -50,8 +60,9 @@ jobs:
             });
             const pullStates = new Map();
             const seenCacheIds = new Set();
-            const maxDeletions = 500;
-            let removed = 0;
+            const maxDeletions = 2000;
+            const deleteConcurrency = 10;
+            const selected = [];
             for (const {cache, number} of candidates) {
               if (seenCacheIds.has(cache.id)) continue;
               seenCacheIds.add(cache.id);
@@ -63,20 +74,27 @@ jobs:
                 }
                 if (pullStates.get(number) !== 'closed') continue;
               }
-              try {
-                await github.rest.actions.deleteActionsCacheById({owner, repo, cache_id: cache.id});
-              } catch (error) {
-                if (error.status === 404) {
-                  core.info(`Cache ${cache.id} was already removed; continuing.`);
-                  continue;
+              selected.push(cache);
+              if (selected.length >= maxDeletions) break;
+            }
+            let removed = 0;
+            let alreadyRemoved = 0;
+            for (let offset = 0; offset < selected.length; offset += deleteConcurrency) {
+              const batch = selected.slice(offset, offset + deleteConcurrency);
+              const results = await Promise.all(batch.map(async cache => {
+                try {
+                  await github.rest.actions.deleteActionsCacheById({owner, repo, cache_id: cache.id});
+                  return 'removed';
+                } catch (error) {
+                  if (error.status === 404) return 'missing';
+                  throw error;
                 }
-                throw error;
-              }
-              core.info(`Removed cache ${cache.id} scoped to ${cache.ref}`);
-              removed += 1;
-              if (removed >= maxDeletions) break;
+              }));
+              removed += results.filter(result => result === 'removed').length;
+              alreadyRemoved += results.filter(result => result === 'missing').length;
+              core.info(`Processed ${Math.min(offset + batch.length, selected.length)} of ${selected.length} cache entries.`);
             }
             core.summary
               .addHeading('CI cache cleanup')
-              .addRaw(`Removed ${removed} cache entries for closed pull requests (limit ${maxDeletions} per run).`);
+              .addRaw(`Removed ${removed} cache entries for closed pull requests; ${alreadyRemoved} were already absent (limit ${maxDeletions} per run).`);
             await core.summary.write();

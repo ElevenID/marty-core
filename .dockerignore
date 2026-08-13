@@ -1,0 +1,16 @@
+# The development image only pre-builds a small manifest subset. Keep the
+# context allowlisted so generated bindings, native modules, vendor sources,
+# and local build outputs are never transferred to the daemon.
+**
+!Cargo.toml
+!Cargo.lock
+!docker/
+!docker/Dockerfile.dev
+!marty-crypto/
+!marty-crypto/Cargo.toml
+!marty-verification/
+!marty-verification/Cargo.toml
+!marty-secure-storage/
+!marty-secure-storage/Cargo.toml
+!marty-biometrics/
+!marty-biometrics/Cargo.toml
