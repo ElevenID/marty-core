@@ -17,6 +17,7 @@ crate-type = ["cdylib", "rlib"]
 marty-crypto = { version = "0.1.5", path = "../marty-crypto" }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", features = ["lti"] }
 marty-didcomm = { version = "0.1.5", path = "../marty-didcomm" }
+marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013" }
 marty-verification = { version = "0.1.5", path = "../marty-verification" }
 marty-types = { version = "0.1.5", path = "../marty-types" }
 marty-status = { version = "0.1.45", path = "../marty-status" }

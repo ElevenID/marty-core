@@ -16,6 +16,53 @@ use std::collections::HashMap;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+/// Build verifier-bound ISO 18013-7 OpenID4VP `SessionTranscript` bytes.
+#[pyfunction]
+pub(crate) fn build_openid4vp_mdoc_session_transcript(
+    client_id: &str,
+    nonce: &str,
+    response_uri: &str,
+    response_encryption_jwk_json: Option<&str>,
+) -> PyResult<Vec<u8>> {
+    marty_iso18013::openid4vp::build_mdoc_session_transcript(
+        client_id,
+        nonce,
+        response_uri,
+        response_encryption_jwk_json,
+    )
+    .map_err(|error| value_error(error.to_string()))
+}
+
+/// Return the raw RFC 7638 thumbprint used by OpenID4VP `HandoverInfo`.
+#[pyfunction]
+pub(crate) fn openid4vp_response_key_thumbprint(jwk_json: &str) -> PyResult<Vec<u8>> {
+    marty_iso18013::openid4vp::response_encryption_jwk_thumbprint(jwk_json)
+        .map(|thumbprint| thumbprint.to_vec())
+        .map_err(|error| value_error(error.to_string()))
+}
+
+/// Return canonical non-reversible diagnostics for an mdoc request binding.
+#[pyfunction]
+pub(crate) fn openid4vp_mdoc_binding_digests(
+    session_transcript: &[u8],
+    client_id: &str,
+    nonce: &str,
+    response_uri: &str,
+    response_encryption_jwk_json: Option<&str>,
+    presentation: &str,
+) -> PyResult<String> {
+    let result = marty_iso18013::openid4vp::mdoc_binding_digests(
+        session_transcript,
+        client_id,
+        nonce,
+        response_uri,
+        response_encryption_jwk_json,
+        presentation,
+    )
+    .map_err(|error| value_error(error.to_string()))?;
+    serde_json::to_string(&result).map_err(|error| value_error(error.to_string()))
+}
+
 /// Parse a DeviceResponse and fail if its envelope is not ISO-compatible.
 ///
 /// The UI uses this only for format detection. Authentication is performed by
@@ -665,6 +712,79 @@ fn value_error(error: impl Into<String>) -> PyErr {
 mod tests {
     use super::*;
     use marty_verification::mdoc::{DeviceResponse, Document, IssuerSignedItem};
+
+    fn runtime_nonce() -> String {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time after Unix epoch")
+            .as_nanos()
+            .to_string()
+    }
+
+    #[test]
+    fn openid4vp_mdoc_handover_binding_preserves_golden_bytes() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/vectors/openid4vp_mdoc_handover.json"
+        ))
+        .expect("valid handover fixture");
+        let case = &fixture["valid"][0];
+        let jwk_json = case["response_encryption_jwk"].to_string();
+        let transcript = build_openid4vp_mdoc_session_transcript(
+            case["client_id"].as_str().unwrap(),
+            case["nonce"].as_str().unwrap(),
+            case["response_uri"].as_str().unwrap(),
+            Some(&jwk_json),
+        )
+        .expect("valid native transcript");
+        assert_eq!(
+            hex::encode(transcript),
+            case["session_transcript_hex"].as_str().unwrap()
+        );
+        assert_eq!(
+            openid4vp_response_key_thumbprint(r#"{"kty":"EC","crv":"P-256","x":"AQ","y":"Ag"}"#)
+                .expect("valid thumbprint")
+                .len(),
+            32
+        );
+    }
+
+    #[test]
+    fn openid4vp_mdoc_handover_binding_fails_closed() {
+        let nonce = runtime_nonce();
+        assert!(build_openid4vp_mdoc_session_transcript(
+            "client",
+            &nonce,
+            "https://verifier.example/submit",
+            Some(r#"{"kty":"EC","crv":"P-256","x":"AQ"}"#),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn openid4vp_mdoc_binding_diagnostics_are_native_json() {
+        let nonce = runtime_nonce();
+        let transcript = build_openid4vp_mdoc_session_transcript(
+            "client",
+            &nonce,
+            "https://verifier.example/submit",
+            None,
+        )
+        .unwrap();
+        let diagnostics: serde_json::Value = serde_json::from_str(
+            &openid4vp_mdoc_binding_digests(
+                &transcript,
+                "client",
+                &nonce,
+                "https://verifier.example/submit",
+                None,
+                "presentation",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(diagnostics["response_key_thumbprint_sha256"], "none");
+        assert_eq!(diagnostics.as_object().unwrap().len(), 6);
+    }
 
     #[test]
     fn certificate_chain_accepts_single_or_multiple_der_certificates() {
