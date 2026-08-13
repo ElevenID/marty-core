@@ -1,0 +1,75 @@
+name: Cleanup CI Caches
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: cleanup-ci-caches
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Remove caches for closed pull requests
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const closedNumber = context.eventName === 'pull_request'
+              ? context.payload.pull_request.number
+              : null;
+            const caches = [];
+            for (let page = 1; ; page += 1) {
+              const {data} = await github.request('GET /repos/{owner}/{repo}/actions/caches', {
+                owner,
+                repo,
+                per_page: 100,
+                page,
+              });
+              const pageCaches = (data.actions_caches || []).filter(Boolean);
+              caches.push(...pageCaches);
+              if (pageCaches.length < 100) break;
+            }
+            const candidates = caches.flatMap(cache => {
+              const match = cache.ref.match(/^refs\/pull\/(\d+)\/merge$/)
+                || cache.ref.match(/^refs\/heads\/gh-readonly-queue\/[^/]+\/pr-(\d+)-/);
+              return match ? [{cache, number: Number(match[1])}] : [];
+            });
+            const pullStates = new Map();
+            const maxDeletions = 500;
+            let removed = 0;
+            for (const {cache, number} of candidates) {
+              if (closedNumber !== null && number !== closedNumber) continue;
+              if (closedNumber === null) {
+                if (!pullStates.has(number)) {
+                  const {data: pull} = await github.rest.pulls.get({owner, repo, pull_number: number});
+                  pullStates.set(number, pull.state);
+                }
+                if (pullStates.get(number) !== 'closed') continue;
+              }
+              await github.rest.actions.deleteActionsCacheById({
+                owner,
+                repo,
+                cache_id: cache.id,
+              });
+              core.info(`Removed cache ${cache.id} scoped to ${cache.ref}`);
+              removed += 1;
+              if (removed >= maxDeletions) break;
+            }
+            core.summary
+              .addHeading('CI cache cleanup')
+              .addRaw(`Removed ${removed} cache entries for closed pull requests (limit ${maxDeletions} per run).`);
+            await core.summary.write();

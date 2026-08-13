@@ -20,6 +20,9 @@ env:
   RUSTUP_TOOLCHAIN: 1.97.1
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
+  # Merge-queue and Dependabot refs create large, short-lived cache namespaces.
+  # They still read the default/PR cache but do not duplicate compiler objects.
+  SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
 
 jobs:
   preflight:
@@ -61,7 +64,6 @@ jobs:
   affected-tests:
     name: Affected Rust Tests
     if: github.event_name == 'pull_request'
-    needs: preflight
     runs-on: ubuntu-latest
     env:
       USE_ZK_MOCK: "1"
@@ -115,7 +117,6 @@ jobs:
   platform-tests:
     name: Platform Tests (${{ matrix.os }})
     if: github.event_name != 'pull_request'
-    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -175,7 +176,6 @@ jobs:
   security:
     name: Rust and Python Security
     if: github.event_name != 'pull_request'
-    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -222,7 +222,6 @@ jobs:
   feature-matrix:
     name: Feature Matrix (${{ matrix.shard }})
     if: github.event_name != 'pull_request'
-    needs: preflight
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -263,7 +262,6 @@ jobs:
   feature-combinations:
     name: Feature Combinations
     if: github.event_name != 'pull_request'
-    needs: preflight
     runs-on: ubuntu-latest
     env:
       MATRIX_CARGO_TARGET_DIR: target/feature-matrix
@@ -285,7 +283,6 @@ jobs:
   python-tests:
     name: Python Tests (${{ matrix.os }})
     if: github.event_name != 'pull_request'
-    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -349,7 +346,6 @@ jobs:
   python-conformance:
     name: Python and Rust Conformance
     if: github.event_name != 'pull_request'
-    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -385,7 +381,6 @@ jobs:
   wasm-tests:
     name: WASM Tests
     if: github.event_name != 'pull_request'
-    needs: preflight
     runs-on: ubuntu-latest
     defaults:
       run:
