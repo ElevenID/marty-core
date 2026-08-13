@@ -1,0 +1,55 @@
+{
+  "valid": [
+    {
+      "name": "response-encryption-key",
+      "client_id": "did:web:verifier.example:oid4vp",
+      "nonce": "nonce-1",
+      "response_uri": "https://verifier.example/submit",
+      "response_encryption_jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "AQ",
+        "y": "Ag",
+        "kid": "ignored"
+      },
+      "session_transcript_hex": "83f6f682714f70656e494434565048616e646f7665725820e646bc2664d7f68da2949909d78d70d302acbd8948d55018d6dde99c8d559213"
+    },
+    {
+      "name": "no-response-encryption-key",
+      "client_id": "x509_hash:private-client-identifier",
+      "nonce": "high-entropy-private-nonce",
+      "response_uri": "https://verifier.example/private-flow/submit",
+      "response_encryption_jwk": null,
+      "session_transcript_hex": "83f6f682714f70656e494434565048616e646f7665725820d9a0da01dee32cbecaa50272061bc7a57101bd1280f55118acfe2dad58174fb5",
+      "presentation": "private-device-response",
+      "binding_digests": {
+        "transcript_sha256": "2a69662aa4ac352399daf7f1c8c77d46bf3262ad4355c805138d60abc72ca720",
+        "client_id_sha256": "673d1f3eafb958f0c4cc5a3aa7f78697930b4a3aeded902498d0b833c6a9f72e",
+        "nonce_sha256": "0aacf34aa197b29ccb9381a330f72ec91b752b7a5c6842a03a038cb768a5f9eb",
+        "response_uri_sha256": "6f3a69f4e11ac067ced0c068a93f01594330c0540299830e139acb7fe6723ac8",
+        "response_key_thumbprint_sha256": "none",
+        "presentation_sha256": "dd7714b2f37c722a009212fea6634e7d99ec1625b54610f1aef2994dac852e06"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "empty-client-id",
+      "client_id": "",
+      "nonce": "nonce",
+      "response_uri": "https://verifier.example/submit",
+      "response_encryption_jwk": null
+    },
+    {
+      "name": "incomplete-response-key",
+      "client_id": "client",
+      "nonce": "nonce",
+      "response_uri": "https://verifier.example/submit",
+      "response_encryption_jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "AQ"
+      }
+    }
+  ]
+}

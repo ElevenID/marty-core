@@ -796,6 +796,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "device_authentication",
             "flow_state_machine",
             "did_resolution",
+            "openid4vp_mdoc_handover",
             "vds_nc_profile",
             "status_list"
         ]
@@ -2252,6 +2253,15 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_cbor, m)?)?;
     m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_issuer, m)?)?;
     m.add_function(wrap_pyfunction!(mdoc::verify_mdoc_presentation, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        mdoc::build_openid4vp_mdoc_session_transcript,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        mdoc::openid4vp_response_key_thumbprint,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(mdoc::openid4vp_mdoc_binding_digests, m)?)?;
 
     // Verifiable Credentials
     m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
@@ -2836,11 +2846,15 @@ mod tests {
         let diagnostics: serde_json::Value =
             serde_json::from_str(&native_backend_diagnostics().expect("native diagnostics"))
                 .expect("diagnostics JSON");
-        assert!(diagnostics["capabilities"]
+        let capabilities = diagnostics["capabilities"]
             .as_array()
-            .expect("capability array")
+            .expect("capability array");
+        assert!(capabilities
             .iter()
             .any(|capability| capability == "did_resolution"));
+        assert!(capabilities
+            .iter()
+            .any(|capability| capability == "openid4vp_mdoc_handover"));
     }
 
     #[test]
