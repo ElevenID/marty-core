@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.55] - 2026-08-13
+
+### Fixed
+
+- Restore ISO 18013-5 mobile-document value digests to the encoded
+  `IssuerSignedItem` bytes carried by `IssuerSignedItemBytes`, matching the
+  unchanged EUDI/Multipaz verifier calculation in direct and externally signed
+  issuance paths.
+
+### Security
+
+- Preserve operating-system CSPRNG salts while preventing standards-compliant
+  wallets from rejecting issued mdoc credentials because the digest included
+  the surrounding tag-24 wrapper.
+
 ## [0.1.54] - 2026-08-13
 
 ### Fixed
