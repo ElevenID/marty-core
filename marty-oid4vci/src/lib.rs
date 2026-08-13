@@ -54,6 +54,7 @@ pub mod jose;
 pub mod lti;
 pub mod metadata;
 pub mod oidc;
+pub mod presentation_request;
 pub mod proof;
 pub mod signer;
 pub mod types;
