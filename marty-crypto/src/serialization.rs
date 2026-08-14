@@ -475,6 +475,8 @@ pub fn detect_private_key_type(der_data: &[u8]) -> CryptoResult<String> {
         Ok("RSA".to_string())
     } else if oid == const_oid::db::rfc8410::ID_ED_25519 {
         Ok("Ed25519".to_string())
+    } else if oid == const_oid::db::rfc8410::ID_ED_448 {
+        Ok("Ed448".to_string())
     } else if oid == const_oid::db::rfc8410::ID_X_25519 {
         Ok("X25519".to_string())
     } else {
@@ -506,6 +508,8 @@ pub fn detect_public_key_type(der_data: &[u8]) -> CryptoResult<String> {
         Ok("RSA".to_string())
     } else if oid == const_oid::db::rfc8410::ID_ED_25519 {
         Ok("Ed25519".to_string())
+    } else if oid == const_oid::db::rfc8410::ID_ED_448 {
+        Ok("Ed448".to_string())
     } else if oid == const_oid::db::rfc8410::ID_X_25519 {
         Ok("X25519".to_string())
     } else {

@@ -27,9 +27,9 @@ pub fn public_key_der_to_jwk(spki: &[u8]) -> VerificationResult<Jwk> {
         "EC_P256" => jwk_from_ec("P-256", &raw),
         "EC_P384" => jwk_from_ec("P-384", &raw),
         "EC_P521" => jwk_from_ec("P-521", &raw),
-        "Ed25519" => Ok(Jwk {
+        "Ed25519" | "Ed448" => Ok(Jwk {
             kty: "OKP".to_string(),
-            crv: Some("Ed25519".to_string()),
+            crv: Some(key_type),
             x: Some(base64url_encode(&raw)),
             ..Jwk::default()
         }),

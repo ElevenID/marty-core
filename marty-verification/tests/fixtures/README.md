@@ -11,7 +11,7 @@ repeatable verification. The upstream suite is licensed under
 
 `public_key_jwk_vectors.json` is a language-neutral behavioral contract for
 the signing-key/KMS migration. It contains SubjectPublicKeyInfo PEM and DER
-representations for RSA-2048, P-256, P-384, and Ed25519 public keys, the exact
+representations for RSA-2048, P-256, P-384, Ed25519, and Ed448 public keys, the exact
 RFC 7517 public JWK expected for each key, one X.509 certificate extraction
 vector, and malformed DER cases. The fixture contains public material only and
 can be consumed by Rust services and compatibility-wrapper tests alike.

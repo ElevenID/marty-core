@@ -181,6 +181,7 @@ impl Jwk {
             },
             "OKP" => match self.crv.as_deref() {
                 Some("Ed25519") => KeyType::Ed25519,
+                Some("Ed448") => KeyType::Ed448,
                 Some("X25519") => KeyType::X25519,
                 _ => KeyType::Unknown,
             },
@@ -293,6 +294,8 @@ pub enum KeyType {
     EcP521,
     /// Ed25519 (EdDSA)
     Ed25519,
+    /// Ed448 (EdDSA)
+    Ed448,
     /// X25519 (key agreement)
     X25519,
     /// RSA
