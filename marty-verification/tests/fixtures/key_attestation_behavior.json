@@ -1,0 +1,163 @@
+{
+  "policy_cases": [
+    {
+      "name": "missing policy is disabled",
+      "request": {
+        "issuer_context": {"organization_id": "org-a", "issuer_profile": {}},
+        "organization_id": "org-a"
+      },
+      "expected": {
+        "mode": "disabled",
+        "trusted_root_certificates_pem": [],
+        "allowed_algorithms": [],
+        "required_key_storage": [],
+        "required_user_authentication": [],
+        "max_age_seconds": 300,
+        "require_nonce": true,
+        "status_validation": "required",
+        "status_list_allowed_origins": [],
+        "status_list_trusted_root_certificates_pem": [],
+        "status_list_allowed_algorithms": [],
+        "status_list_max_age_seconds": 86400,
+        "status_list_allow_private_hosts": false,
+        "status_list_tls_ca_certificates_pem": []
+      }
+    },
+    {
+      "name": "enabled policy normalizes and inherits status trust",
+      "request": {
+        "issuer_context": {
+          "organization_id": "org-a",
+          "issuer_profile": {
+            "key_attestation_policy": {
+              "mode": "required",
+              "trusted_root_certificates_pem": ["ROOT"],
+              "allowed_algorithms": ["ES256"],
+              "required_key_storage": ["iso_18045_high"],
+              "required_user_authentication": ["pin"],
+              "max_age_seconds": 120,
+              "status_validation": "if_present",
+              "status_list_allowed_origins": ["https://status.example:443/"],
+              "status_list_max_age_seconds": 7200,
+              "status_list_allow_private_hosts": true,
+              "status_list_tls_ca_certificates_pem": ["TLS ROOT"]
+            }
+          }
+        },
+        "organization_id": "org-a"
+      },
+      "expected": {
+        "mode": "required",
+        "trusted_root_certificates_pem": ["ROOT"],
+        "allowed_algorithms": ["ES256"],
+        "required_key_storage": ["iso_18045_high"],
+        "required_user_authentication": ["pin"],
+        "max_age_seconds": 120,
+        "require_nonce": true,
+        "status_validation": "if_present",
+        "status_list_allowed_origins": ["https://status.example"],
+        "status_list_trusted_root_certificates_pem": ["ROOT"],
+        "status_list_allowed_algorithms": ["ES256"],
+        "status_list_max_age_seconds": 7200,
+        "status_list_allow_private_hosts": true,
+        "status_list_tls_ca_certificates_pem": ["TLS ROOT"]
+      }
+    },
+    {
+      "name": "tenant mismatch fails closed",
+      "request": {
+        "issuer_context": {"organization_id": "org-b", "issuer_profile": {}},
+        "organization_id": "org-a"
+      },
+      "error": "Issuer-profile key attestation policy is not tenant-bound"
+    },
+    {
+      "name": "enabled policy needs trust configuration",
+      "request": {
+        "issuer_context": {
+          "organization_id": "org-a",
+          "issuer_profile": {"key_attestation_policy": {"mode": "required"}}
+        },
+        "organization_id": "org-a"
+      },
+      "error": "Enabled key attestation policy requires trusted roots and allowed algorithms"
+    }
+  ],
+  "route_cases": [
+    {
+      "name": "ordinary proof without issuer context",
+      "request": {
+        "proof_jwt": "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9wZW5pZDR2Y2ktcHJvb2Yrand0In0.payload.signature",
+        "issuer_context": null,
+        "organization_id": "org-a"
+      },
+      "expected": {"action": "ordinary", "key_attestation": null, "policy": null}
+    },
+    {
+      "name": "required policy rejects ordinary proof",
+      "request": {
+        "proof_jwt": "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9wZW5pZDR2Y2ktcHJvb2Yrand0In0.payload.signature",
+        "issuer_context": {
+          "organization_id": "org-a",
+          "issuer_profile": {
+            "key_attestation_policy": {
+              "mode": "required",
+              "trusted_root_certificates_pem": ["ROOT"],
+              "allowed_algorithms": ["ES256"],
+              "status_validation": "disabled"
+            }
+          }
+        },
+        "organization_id": "org-a"
+      },
+      "error": "Issuer profile requires a key-attestation-bound proof"
+    },
+    {
+      "name": "bound proof cannot supply its own policy",
+      "request": {
+        "proof_jwt": "eyJhbGciOiJFUzI1NiIsInR5cCI6Im9wZW5pZDR2Y2ktcHJvb2Yrand0Iiwia2V5X2F0dGVzdGF0aW9uIjoiYXR0Lmp3dC52YWx1ZSJ9.payload.signature",
+        "issuer_context": null,
+        "organization_id": "org-a"
+      },
+      "error": "Key-attestation-bound proof has no resolved tenant issuer policy"
+    },
+    {
+      "name": "non-string attestation is rejected",
+      "request": {
+        "proof_jwt": "eyJhbGciOiJFUzI1NiIsImtleV9hdHRlc3RhdGlvbiI6N30.payload.signature",
+        "issuer_context": null,
+        "organization_id": "org-a"
+      },
+      "error": "Proof key_attestation header must be a compact JWT"
+    }
+  ],
+  "status_reference_cases": [
+    {
+      "name": "allowed reference is normalized for network checks",
+      "status": {"status_list": {"idx": 17, "uri": "https://status.example/lists/1?version=2"}},
+      "allowed_origins": ["https://status.example"],
+      "allow_private_hosts": false,
+      "expected": {
+        "uri": "https://status.example/lists/1?version=2",
+        "index": 17,
+        "hostname": "status.example",
+        "port": 443,
+        "allow_private_hosts": false
+      }
+    },
+    {
+      "name": "unapproved origin fails before network access",
+      "status": {"status_list": {"idx": 0, "uri": "https://other.example/list"}},
+      "allowed_origins": ["https://status.example"],
+      "allow_private_hosts": false,
+      "error": "Status-list uri origin is not allowed by issuer profile"
+    },
+    {
+      "name": "negative index fails closed",
+      "status": {"status_list": {"idx": -1, "uri": "https://status.example/list"}},
+      "allowed_origins": ["https://status.example"],
+      "allow_private_hosts": false,
+      "error": "Status-list idx must be a non-negative integer"
+    }
+  ]
+}

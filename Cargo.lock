@@ -3885,6 +3885,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-error",
+ "url",
  "uuid",
  "x509-cert",
  "zeroize",

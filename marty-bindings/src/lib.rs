@@ -61,6 +61,47 @@ fn verification_build_decision_result(input_json: &str) -> PyResult<String> {
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+/// Resolve and validate the tenant-bound OID4VCI key-attestation policy.
+#[pyfunction]
+fn key_attestation_policy(request_json: &str) -> PyResult<String> {
+    marty_verification::key_attestation::policy_from_issuer_context_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Select ordinary or key-attestation-bound OID4VCI proof verification.
+#[pyfunction]
+fn key_attestation_route_proof(request_json: &str) -> PyResult<String> {
+    marty_verification::key_attestation::route_proof_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Verify the key-attestation JWT, certificate chain, signature, and claims.
+#[pyfunction]
+fn key_attestation_validate(request_json: &str) -> PyResult<String> {
+    marty_verification::key_attestation::validate_attestation_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Validate and normalize a Token Status List reference before network access.
+#[pyfunction]
+fn key_attestation_validate_status_reference(request_json: &str) -> PyResult<String> {
+    marty_verification::key_attestation::validate_status_reference_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Verify a signed Token Status List and return the referenced status value.
+#[pyfunction]
+fn key_attestation_validate_status_token(request_json: &str) -> PyResult<u8> {
+    marty_verification::key_attestation::validate_status_token_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Return the language-neutral behavioral vectors consumed by wrapper tests.
+#[pyfunction]
+fn key_attestation_behavior_fixture() -> &'static str {
+    include_str!("../../marty-verification/tests/fixtures/key_attestation_behavior.json")
+}
+
 // ============================================================================
 // Key Generation
 // ============================================================================
@@ -2250,6 +2291,15 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(verify_open_badge_v3_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(verification_build_decision_result, m)?)?;
+    m.add_function(wrap_pyfunction!(key_attestation_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(key_attestation_route_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(key_attestation_validate, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        key_attestation_validate_status_reference,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(key_attestation_validate_status_token, m)?)?;
+    m.add_function(wrap_pyfunction!(key_attestation_behavior_fixture, m)?)?;
     m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
     m.add_function(wrap_pyfunction!(
         complete_vcdm_data_integrity_credential,

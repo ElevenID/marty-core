@@ -36,6 +36,7 @@ pub mod dtc;
 pub mod error;
 pub mod flow;
 pub mod jwk;
+pub mod key_attestation;
 pub mod mdoc;
 pub mod mrz;
 pub mod oid4vp;
