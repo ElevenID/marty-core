@@ -1758,7 +1758,31 @@ fn save_public_key_pem(public_key_der: &[u8]) -> PyResult<String> {
 /// Convert a supported SubjectPublicKeyInfo PEM public key to a public JWK.
 #[pyfunction]
 fn public_key_pem_to_jwk(public_key_pem: &str) -> PyResult<String> {
-    crate::open_badges::jwk_from_pem(public_key_pem)
+    crate::jwk::public_key_pem_to_jwk(public_key_pem)
+        .and_then(|jwk| jwk.to_json())
+        .map_err(to_pyerr)
+}
+
+/// Convert a supported SubjectPublicKeyInfo DER public key to a public JWK.
+#[pyfunction]
+fn public_key_der_to_jwk(public_key_der: &[u8]) -> PyResult<String> {
+    crate::jwk::public_key_der_to_jwk(public_key_der)
+        .and_then(|jwk| jwk.to_json())
+        .map_err(to_pyerr)
+}
+
+/// Extract a public JWK from a PEM X.509 certificate.
+#[pyfunction]
+fn certificate_pem_to_jwk(certificate_pem: &str) -> PyResult<String> {
+    crate::jwk::certificate_pem_to_jwk(certificate_pem)
+        .and_then(|jwk| jwk.to_json())
+        .map_err(to_pyerr)
+}
+
+/// Extract a public JWK from a DER X.509 certificate.
+#[pyfunction]
+fn certificate_der_to_jwk(certificate_der: &[u8]) -> PyResult<String> {
+    crate::jwk::certificate_der_to_jwk(certificate_der)
         .and_then(|jwk| jwk.to_json())
         .map_err(to_pyerr)
 }
@@ -3489,6 +3513,9 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_public_key_der, m)?)?;
     m.add_function(wrap_pyfunction!(save_public_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(public_key_pem_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(public_key_der_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(certificate_pem_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(certificate_der_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(p256_public_jwk_to_pem, m)?)?;
     m.add_function(wrap_pyfunction!(extract_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(detect_private_key_type, m)?)?;
@@ -3696,6 +3723,9 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_public_key_der, m)?)?;
     m.add_function(wrap_pyfunction!(save_public_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(public_key_pem_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(public_key_der_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(certificate_pem_to_jwk, m)?)?;
+    m.add_function(wrap_pyfunction!(certificate_der_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(p256_public_jwk_to_pem, m)?)?;
     m.add_function(wrap_pyfunction!(extract_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(detect_private_key_type, m)?)?;
