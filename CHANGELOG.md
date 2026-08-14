@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.56] - 2026-08-14
+
+### Fixed
+
+- Correct the `0.1.55` mobile-document issuance regression by computing each
+  MSO value digest over the complete serialized tag-24
+  `IssuerSignedItemBytes`, matching Marty verification and interoperable wallet
+  implementations in both direct and externally signed issuance paths.
+
+### Security
+
+- Keep verification fail-closed while ensuring issuer-authenticated mdoc
+  disclosures bind the exact bytes delivered to wallets; the former inner-item
+  commitment produced credentials whose disclosures failed standards-aligned
+  digest verification.
+
 ## [0.1.55] - 2026-08-13
 
 ### Fixed
