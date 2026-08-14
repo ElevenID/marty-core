@@ -1,0 +1,203 @@
+{
+  "schema": "marty.vcdm-issuance-behavior/v1",
+  "document_cases": [
+    {
+      "name": "minimal valid v2 credential",
+      "issuer_did": "did:web:issuer.example.test",
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"}
+      },
+      "expected_error": null
+    },
+    {
+      "name": "known examples context term and multiple subjects",
+      "issuer_did": "did:web:issuer.example.test",
+      "credential": {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          "https://www.w3.org/ns/credentials/examples/v2"
+        ],
+        "type": ["VerifiableCredential", "RelationshipCredential"],
+        "issuer": {
+          "id": "did:web:issuer.example.test",
+          "name": {"@value": "Issuer", "@language": "en"}
+        },
+        "credentialSubject": [
+          {"id": "did:example:subject"},
+          {"id": "did:example:other"}
+        ],
+        "name": [
+          {"@value": "Dog", "@language": "en"},
+          {"@value": "Chien", "@language": "fr"}
+        ]
+      },
+      "expected_error": null
+    },
+    {
+      "name": "context must be an ordered array",
+      "issuer_did": null,
+      "credential": {
+        "@context": "https://www.w3.org/ns/credentials/v2",
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"}
+      },
+      "expected_error": "invalid_context"
+    },
+    {
+      "name": "empty subjects fail",
+      "issuer_did": null,
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": []
+      },
+      "expected_error": "invalid_subject"
+    },
+    {
+      "name": "invalid credential id fails",
+      "issuer_did": null,
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "id": null,
+        "credentialSubject": {"id": "did:example:subject"}
+      },
+      "expected_error": "invalid_id"
+    },
+    {
+      "name": "status requires a type",
+      "issuer_did": null,
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"},
+        "credentialStatus": {"id": "did:example:status"}
+      },
+      "expected_error": "invalid_type"
+    },
+    {
+      "name": "schema requires an absolute id",
+      "issuer_did": null,
+      "credential": {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          {"JsonSchema": "https://example.test/JsonSchema"}
+        ],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"},
+        "credentialSchema": {"type": "JsonSchema"}
+      },
+      "expected_error": "invalid_resource"
+    },
+    {
+      "name": "language value must contain text",
+      "issuer_did": null,
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"},
+        "name": {"@value": 4}
+      },
+      "expected_error": "invalid_language_value"
+    },
+    {
+      "name": "invalid date fails",
+      "issuer_did": null,
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"},
+        "validFrom": "not-a-date"
+      },
+      "expected_error": "invalid_validity"
+    },
+    {
+      "name": "reversed validity fails",
+      "issuer_did": null,
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"},
+        "validFrom": "2030-01-01T00:00:00Z",
+        "validUntil": "2020-01-01T00:00:00Z"
+      },
+      "expected_error": "invalid_validity"
+    },
+    {
+      "name": "protected context term cannot be redefined",
+      "issuer_did": null,
+      "credential": {
+        "@context": [
+          "https://www.w3.org/ns/credentials/v2",
+          {"VerifiableCredential": "https://example.test/bad"}
+        ],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"}
+      },
+      "expected_error": "invalid_context"
+    },
+    {
+      "name": "issuance input must be unsigned",
+      "issuer_did": null,
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"},
+        "proof": {}
+      },
+      "expected_error": "credential_must_be_unsigned"
+    },
+    {
+      "name": "issuer is bound to resolved DID",
+      "issuer_did": "did:web:other.example.test",
+      "credential": {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "issuer": "did:web:issuer.example.test",
+        "credentialSubject": {"id": "did:example:subject"}
+      },
+      "expected_error": "issuer_did_mismatch"
+    }
+  ],
+  "digest_cases": [
+    {
+      "name": "sha384 SRI matches fetched bytes",
+      "credential": {
+        "relatedResource": {
+          "id": "https://www.w3.org/ns/credentials/v2",
+          "digestSRI": "sha384-aQz545VsenoZu3bVIhIBDlZ764hUR4oH+hW9blwJFv0hUIlODgYOJ/YcA84oitMC"
+        }
+      },
+      "resource_contents": {
+        "https://www.w3.org/ns/credentials/v2": "b2ZmaWNpYWwgY29udGV4dCBieXRlcw=="
+      },
+      "expected_error": null
+    },
+    {
+      "name": "altered related resource fails",
+      "credential": {
+        "relatedResource": {
+          "id": "https://www.w3.org/ns/credentials/v2",
+          "digestSRI": "sha384-aQz545VsenoZu3bVIhIBDlZ764hUR4oH+hW9blwJFv0hUIlODgYOJ/YcA84oitMC"
+        }
+      },
+      "resource_contents": {
+        "https://www.w3.org/ns/credentials/v2": "YWx0ZXJlZA=="
+      },
+      "expected_error": "related_resource_digest_mismatch"
+    },
+    {
+      "name": "missing fetched resource fails closed",
+      "credential": {
+        "relatedResource": {
+          "id": "https://www.w3.org/ns/credentials/v2",
+          "digestSRI": "sha256-any"
+        }
+      },
+      "resource_contents": {},
+      "expected_error": "related_resource_unavailable"
+    }
+  ]
+}
