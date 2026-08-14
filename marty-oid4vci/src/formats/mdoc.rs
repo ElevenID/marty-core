@@ -369,10 +369,10 @@ fn build_issuer_signed_item(
 
 /// Build the ISO `IssuerSignedItemBytes` value and its MSO commitment.
 ///
-/// The MSO digest commits the encoded `IssuerSignedItem` carried by the
-/// tag-24 byte string. The tag and byte-string wrapper are transport framing,
-/// not part of the committed bytes. Keeping construction and hashing in one
-/// helper prevents issuance and disclosure verification from drifting apart.
+/// The MSO digest commits the complete serialized `IssuerSignedItemBytes`:
+/// tag 24, its byte-string wrapper, and the encoded `IssuerSignedItem`. Keeping
+/// construction and hashing in one helper prevents issuance and disclosure
+/// verification from drifting apart.
 fn build_issuer_signed_item_bytes(
     digest_id: u64,
     random: &[u8],
@@ -385,7 +385,8 @@ fn build_issuer_signed_item_bytes(
         CBOR_TAG_ENCODED_CBOR,
         Box::new(CborValue::Bytes(encoded_item.clone())),
     );
-    let digest = Sha256::digest(encoded_item).to_vec();
+    let encoded_issuer_signed_item_bytes = cbor_encode(&issuer_signed_item_bytes)?;
+    let digest = Sha256::digest(encoded_issuer_signed_item_bytes).to_vec();
     Ok((issuer_signed_item_bytes, digest))
 }
 
@@ -867,13 +868,13 @@ mod tests {
                 else {
                     panic!("issuer value digest must be a byte string");
                 };
-                let encoded_item = isomdl::cbor::to_vec(tagged_item.as_ref()).unwrap();
-                let computed = Sha256::digest(encoded_item);
+                let encoded_wrapper = isomdl::cbor::to_vec(tagged_item).unwrap();
+                let computed = Sha256::digest(encoded_wrapper);
                 assert_eq!(computed.as_slice(), expected);
 
-                let encoded_wrapper = isomdl::cbor::to_vec(tagged_item).unwrap();
-                let wrapper_digest = Sha256::digest(encoded_wrapper);
-                assert_ne!(wrapper_digest.as_slice(), expected);
+                let encoded_item = isomdl::cbor::to_vec(tagged_item.as_ref()).unwrap();
+                let inner_item_digest = Sha256::digest(encoded_item);
+                assert_ne!(inner_item_digest.as_slice(), expected);
             }
         }
     }
@@ -914,6 +915,25 @@ mod tests {
         } else {
             panic!("Expected CBOR map");
         }
+    }
+
+    #[test]
+    fn test_issuer_signed_item_digest_commits_tagged_wrapper() {
+        let salt: [u8; 32] = rand::thread_rng().gen();
+        let (tagged_item, digest) =
+            build_issuer_signed_item_bytes(3, &salt, "family_name", &serde_json::json!("Smith"))
+                .unwrap();
+
+        let encoded_wrapper = cbor_encode(&tagged_item).unwrap();
+        assert_eq!(Sha256::digest(encoded_wrapper).as_slice(), digest);
+
+        let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, wrapped_item) = tagged_item else {
+            panic!("IssuerSignedItemBytes must use tag 24");
+        };
+        let CborValue::Bytes(encoded_item) = *wrapped_item else {
+            panic!("IssuerSignedItemBytes must contain an encoded CBOR byte string");
+        };
+        assert_ne!(Sha256::digest(encoded_item).as_slice(), digest);
     }
 
     #[test]
