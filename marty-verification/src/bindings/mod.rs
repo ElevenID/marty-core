@@ -2495,6 +2495,12 @@ fn open_badge_ob3_verify(request_json: &str) -> PyResult<String> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+#[pyfunction]
+fn compare_passport_hashes_json(request_json: &str) -> PyResult<String> {
+    crate::passport_integrity::compare_json(request_json)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+}
+
 /// Encrypt data and create a JWE.
 #[pyfunction]
 fn jwe_encrypt(plaintext: &[u8], recipient_key: &PyJwk, encryption: &str) -> PyResult<String> {
@@ -3592,6 +3598,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
 
     // DTC helpers (JSON in/out)
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
@@ -3799,6 +3806,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
 
     // DTC helpers (JSON in/out)
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;

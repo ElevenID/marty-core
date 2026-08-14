@@ -40,6 +40,7 @@ pub mod mdoc;
 pub mod mrz;
 pub mod oid4vp;
 pub mod open_badges;
+pub mod passport_integrity;
 pub mod policy;
 pub mod trust_anchor;
 pub mod vcdm;
