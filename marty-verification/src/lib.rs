@@ -35,6 +35,7 @@ pub mod device_auth;
 pub mod dtc;
 pub mod error;
 pub mod evidence_policy;
+pub mod evidence_reconciliation;
 pub mod flow;
 pub mod governance;
 pub mod jwk;

@@ -1,0 +1,23 @@
+{
+  "plan_base": {
+    "policy": {"allowed": true, "errors": []},
+    "policy_freshly_evaluated": false,
+    "issuance_transaction": null,
+    "application_issuance_transaction_id": null,
+    "issue_on_permit": true,
+    "dry_run": false
+  },
+  "plan_cases": [
+    {"name": "fresh denial classifies policy metrics", "patch": {"policy": {"allowed": false, "errors": ["denied"]}, "policy_freshly_evaluated": true}, "expected": {"next": "complete", "action": "policy_denied", "metric_increments": {"evaluated_policies": 1, "policy_denies": 1}, "policy_event": "denied", "issuance_transaction_id": null, "errors": ["denied"]}},
+    {"name": "live pending transaction is reused", "patch": {"issuance_transaction": {"id": "tx-1", "status": "pending", "is_expired": false}}, "expected": {"next": "complete", "action": "issuance_transaction_already_pending", "metric_increments": {}, "policy_event": null, "issuance_transaction_id": "tx-1", "errors": []}},
+    {"name": "dry run reports intended issuance", "patch": {"dry_run": true, "application_issuance_transaction_id": "tx-old"}, "expected": {"next": "complete", "action": "would_create_or_refresh_issuance_transaction", "metric_increments": {}, "policy_event": null, "issuance_transaction_id": "tx-old", "errors": []}},
+    {"name": "fresh permit requests approval", "patch": {"policy_freshly_evaluated": true}, "expected": {"next": "approve", "action": "approval_issuance_succeeded", "metric_increments": {"evaluated_policies": 1, "policy_permits": 1}, "policy_event": "permitted", "issuance_transaction_id": null, "errors": []}},
+    {"name": "existing permit requests recovery approval", "patch": {}, "expected": {"next": "approve", "action": "approval_issuance_recovered_from_policy_permit", "metric_increments": {}, "policy_event": null, "issuance_transaction_id": null, "errors": []}}
+  ],
+  "stale_cases": [
+    {"name": "missing application id", "request": {"issuance_response": {}, "receipt_issuance_transaction_id": null, "application": null}, "expected": ["receipt_missing_application_id"]},
+    {"name": "deleted application", "request": {"issuance_response": {"application_id": "app-1"}, "receipt_issuance_transaction_id": null, "application": null}, "expected": ["receipt_application_missing"]},
+    {"name": "missing evidence and policy", "request": {"issuance_response": {"application_id": "app-1", "evidence_facts": []}, "receipt_issuance_transaction_id": null, "application": {"policy": null, "issuance_transaction_id": null}}, "expected": ["receipt_without_evidence_fact_metadata", "receipt_without_policy_decision"]},
+    {"name": "permit without transaction", "request": {"issuance_response": {"application_id": "app-1", "evidence_facts": ["fact-1"], "policy_decision": {"allowed": true}}, "receipt_issuance_transaction_id": null, "application": {"policy": null, "issuance_transaction_id": null}}, "expected": ["policy_permit_without_issuance_transaction"]}
+  ]
+}

@@ -371,11 +371,26 @@ fn current_evidence_heads(request_json: &str) -> PyResult<String> {
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+#[pyfunction]
+fn evidence_reconciliation_plan(request_json: &str) -> PyResult<String> {
+    marty_verification::evidence_reconciliation::reconciliation_plan_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn evidence_reconciliation_stale_reasons(request_json: &str) -> PyResult<String> {
+    marty_verification::evidence_reconciliation::stale_receipt_reasons_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Return one canonical language-neutral behavior fixture for adapter tests.
 #[pyfunction]
 fn verification_behavior_fixture(name: &str) -> PyResult<String> {
     let fixture = match name {
         "evidence_policy" => marty_verification::evidence_policy::behavior_fixture_json(),
+        "evidence_reconciliation" => {
+            marty_verification::evidence_reconciliation::behavior_fixture_json()
+        }
         "governance" => marty_verification::governance::behavior_fixture_json(),
         "vcdm_issuance" => marty_verification::vcdm::issuance_behavior_fixture_json(),
         _ => {
@@ -2354,6 +2369,8 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(governance_validate_request, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_application_evidence_policy, m)?)?;
     m.add_function(wrap_pyfunction!(current_evidence_heads, m)?)?;
+    m.add_function(wrap_pyfunction!(evidence_reconciliation_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(evidence_reconciliation_stale_reasons, m)?)?;
     m.add_function(wrap_pyfunction!(verification_behavior_fixture, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_inspect, m)?)?;
