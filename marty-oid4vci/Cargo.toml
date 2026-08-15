@@ -26,6 +26,8 @@ mso_mdoc = []       # ISO 18013-5 mDoc credential format
 zk_mdoc = ["dep:marty-zkp"]  # ZK proof support for mDoc (Longfellow/Ligero)
 
 [dependencies]
+marty-crypto = { workspace = true }
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }

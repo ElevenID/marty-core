@@ -43,6 +43,7 @@ pub mod ed448;
 pub mod error;
 pub mod hashing;
 pub mod iso9796;
+pub mod jwk;
 pub mod kdf;
 pub mod keygen;
 pub mod ocsp;

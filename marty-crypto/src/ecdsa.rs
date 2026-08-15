@@ -313,6 +313,31 @@ pub fn extract_ec_point_from_spki(spki_der: &[u8]) -> CryptoResult<Vec<u8>> {
     Ok(spki.subject_public_key.raw_bytes().to_vec())
 }
 
+/// Normalize an ES256 or ES384 signature to fixed-width IEEE P1363/JOSE form.
+///
+/// Provider APIs commonly return ASN.1 DER while JWS and COSE use `r || s`.
+/// Already-normalized signatures are accepted only at the exact curve width;
+/// malformed DER and unsupported algorithms fail closed.
+pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Vec<u8>> {
+    match algorithm {
+        "ES256" if signature.len() == 64 => Ok(signature.to_vec()),
+        "ES256" => p256::ecdsa::Signature::from_der(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES256 signature encoding: {error}"))
+            }),
+        "ES384" if signature.len() == 96 => Ok(signature.to_vec()),
+        "ES384" => p384::ecdsa::Signature::from_der(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES384 signature encoding: {error}"))
+            }),
+        _ => Err(CryptoError::unsupported_algorithm(format!(
+            "Unsupported ECDSA signature algorithm: {algorithm}"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +464,22 @@ mod tests {
         // Placeholder test - full tests need actual SPKI data
         let empty_spki: &[u8] = &[];
         assert!(extract_ec_point_from_spki(empty_spki).is_err());
+    }
+
+    #[test]
+    fn normalizes_raw_and_der_signatures_and_rejects_invalid_input() {
+        use p256::ecdsa::signature::Signer;
+
+        let signing_key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let signature: p256::ecdsa::Signature = signing_key.sign(b"normalization vector");
+        let raw = signature.to_bytes();
+
+        assert_eq!(normalize_signature(&raw, "ES256").unwrap(), raw.as_slice());
+        assert_eq!(
+            normalize_signature(signature.to_der().as_bytes(), "ES256").unwrap(),
+            raw.as_slice()
+        );
+        assert!(normalize_signature(&[0, 1, 2], "ES256").is_err());
+        assert!(normalize_signature(&raw, "RS256").is_err());
     }
 }
