@@ -729,6 +729,121 @@ impl PacePassword {
     }
 }
 
+/// Native state for the pre-v1 two-message PACE compatibility API.
+///
+/// This preserves the established application contract while ensuring its
+/// password processing, nonce decryption, ECDH, and session derivation have a
+/// single Rust implementation. New protocol integrations should use the full
+/// [`PaceSession`] state machine as it evolves rather than reproducing these
+/// compatibility steps in another language.
+pub struct PaceCompatibilityHandshake {
+    private_key: [u8; 32],
+    public_key: Vec<u8>,
+    nonce: Vec<u8>,
+}
+
+impl PaceCompatibilityHandshake {
+    pub fn begin(password: &str, encrypted_nonce: &[u8]) -> VerificationResult<Self> {
+        let (private_key, _) = marty_crypto::ecdh::p256_generate_keypair();
+        Self::begin_with_private_key(password, encrypted_nonce, &private_key)
+    }
+
+    pub fn begin_with_private_key(
+        password: &str,
+        encrypted_nonce: &[u8],
+        private_key: &[u8],
+    ) -> VerificationResult<Self> {
+        if encrypted_nonce.is_empty() || !encrypted_nonce.len().is_multiple_of(8) {
+            return Err(VerificationError::internal(
+                "PACE encrypted nonce must be non-empty and block aligned",
+            ));
+        }
+        let private_key: [u8; 32] = private_key
+            .try_into()
+            .map_err(|_| VerificationError::internal("PACE P-256 private key must be 32 bytes"))?;
+        let key = derive_compatibility_pace_password_key(password)?;
+        let decrypted = marty_crypto::des::tdes_cbc_decrypt(
+            &extend_to_24_bytes(&key),
+            &[0u8; 8],
+            encrypted_nonce,
+        )
+        .map_err(|error| VerificationError::internal(format!("PACE nonce decrypt: {error}")))?;
+        let nonce = iso7816_unpad(&decrypted)?;
+        if nonce.is_empty() {
+            return Err(VerificationError::internal(
+                "PACE decrypted nonce must not be empty",
+            ));
+        }
+        let key_pair = marty_crypto::ecdh::P256KeyPair::from_secret_key(&private_key)?;
+        Ok(Self {
+            private_key,
+            public_key: key_pair.public_key_uncompressed(),
+            nonce,
+        })
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    pub fn decrypted_nonce(&self) -> &[u8] {
+        &self.nonce
+    }
+
+    pub fn complete(mut self, chip_public_key: &[u8]) -> VerificationResult<BacSession> {
+        use sha2::{Digest, Sha256};
+        use zeroize::Zeroize;
+
+        let shared_secret = marty_crypto::ecdh::p256_agree(&self.private_key, chip_public_key)?;
+        self.private_key.zeroize();
+        let mut input = shared_secret;
+        input.extend_from_slice(&self.nonce);
+        let digest = Sha256::digest(&input);
+        let seed = &digest[..16];
+        let k_enc = bac_kdf_16(seed, 1)?;
+        let k_mac = bac_kdf_16(seed, 2)?;
+        let mut ssc = [0u8; 8];
+        ssc.copy_from_slice(&digest[digest.len() - 8..]);
+        Ok(BacSession { k_enc, k_mac, ssc })
+    }
+}
+
+/// Derive the 3DES password key used by the established compatibility API.
+pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationResult<[u8; 16]> {
+    use sha1::{Digest, Sha1};
+
+    let seed = if password.chars().all(|value| value.is_ascii_digit())
+        && (6..=10).contains(&password.len())
+    {
+        Sha1::digest(password.as_bytes())[..16].to_vec()
+    } else {
+        let parsed = crate::mrz::parser::parse_mrz_string(password).map_err(|error| {
+            VerificationError::internal(format!("Unsupported PACE password format: {error}"))
+        })?;
+        let normalized: String = parsed
+            .document_number
+            .to_ascii_uppercase()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(9)
+            .collect();
+        let document_number = format!("{normalized:<9}").replace(' ', "<");
+        let information = format!(
+            "{}{}{}{}{}{}",
+            document_number,
+            mrz_check_digit(document_number.as_bytes()) as char,
+            parsed.date_of_birth,
+            mrz_check_digit(parsed.date_of_birth.as_bytes()) as char,
+            parsed.date_of_expiry,
+            mrz_check_digit(parsed.date_of_expiry.as_bytes()) as char,
+        );
+        Sha1::digest(information.as_bytes())[..16].to_vec()
+    };
+    let mut key: [u8; 16] = seed.try_into().expect("SHA-1 prefix is 16 bytes");
+    adjust_des_parity(&mut key);
+    Ok(key)
+}
+
 /// PACE-specific symmetric keys.
 #[derive(Clone)]
 pub struct PaceKeys {

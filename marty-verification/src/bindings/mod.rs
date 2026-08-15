@@ -2695,6 +2695,84 @@ impl PyNativeBacSession {
 }
 
 #[cfg(feature = "csca")]
+#[pyclass(name = "NativePaceSession")]
+struct PyNativePaceSession {
+    handshake: Option<crate::chip_io::PaceCompatibilityHandshake>,
+}
+
+#[cfg(feature = "csca")]
+#[pymethods]
+impl PyNativePaceSession {
+    #[new]
+    fn new() -> Self {
+        Self { handshake: None }
+    }
+
+    fn derive_password_key<'py>(
+        &self,
+        py: Python<'py>,
+        password: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let key =
+            crate::chip_io::derive_compatibility_pace_password_key(password).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &key))
+    }
+
+    #[pyo3(signature = (password, encrypted_nonce, curve="p256"))]
+    fn start_pace<'py>(
+        &mut self,
+        py: Python<'py>,
+        password: &str,
+        encrypted_nonce: &[u8],
+        curve: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        if curve != "p256" {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "PACE compatibility session supports only p256",
+            ));
+        }
+        let handshake =
+            crate::chip_io::PaceCompatibilityHandshake::begin(password, encrypted_nonce)
+                .map_err(to_pyerr)?;
+        let public_key = handshake.public_key().to_vec();
+        self.handshake = Some(handshake);
+        Ok(PyBytes::new(py, &public_key))
+    }
+
+    fn start_pace_with_private_key<'py>(
+        &mut self,
+        py: Python<'py>,
+        password: &str,
+        encrypted_nonce: &[u8],
+        private_key: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let handshake = crate::chip_io::PaceCompatibilityHandshake::begin_with_private_key(
+            password,
+            encrypted_nonce,
+            private_key,
+        )
+        .map_err(to_pyerr)?;
+        let public_key = handshake.public_key().to_vec();
+        self.handshake = Some(handshake);
+        Ok(PyBytes::new(py, &public_key))
+    }
+
+    fn complete_pace<'py>(
+        &mut self,
+        py: Python<'py>,
+        chip_public_key: &[u8],
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let handshake = self.handshake.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(
+                "PACE state unavailable - call start_pace first",
+            )
+        })?;
+        let session = handshake.complete(chip_public_key).map_err(to_pyerr)?;
+        bac_session_dict(py, &session)
+    }
+}
+
+#[cfg(feature = "csca")]
 fn bac_mrz(
     passport_number: &str,
     date_of_birth: &str,
@@ -3960,6 +4038,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     {
         m.add_class::<PyCscaRegistry>()?;
         m.add_class::<PyNativeBacSession>()?;
+        m.add_class::<PyNativePaceSession>()?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
@@ -4205,6 +4284,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     {
         m.add_class::<PyCscaRegistry>()?;
         m.add_class::<PyNativeBacSession>()?;
+        m.add_class::<PyNativePaceSession>()?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 

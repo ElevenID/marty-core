@@ -5,6 +5,21 @@ use serde::Deserialize;
 struct Fixture {
     bac_annex_d: BacVector,
     active_authentication: ActiveAuthenticationVector,
+    pace_compatibility: PaceCompatibilityVector,
+}
+
+#[derive(Deserialize)]
+struct PaceCompatibilityVector {
+    password: String,
+    password_key: String,
+    nonce: String,
+    encrypted_nonce: String,
+    reader_private_key: String,
+    reader_public_key: String,
+    chip_public_key: String,
+    session_encryption_key: String,
+    session_mac_key: String,
+    ssc: String,
 }
 
 #[derive(Deserialize)]
@@ -113,4 +128,42 @@ fn rust_matches_shared_active_authentication_behavior() {
     for key_size in vector.invalid_challenge_sizes_bits {
         assert!(generate_challenge(key_size).is_err());
     }
+}
+
+#[test]
+fn rust_matches_shared_pace_compatibility_behavior() {
+    use marty_verification::chip_io::{
+        derive_compatibility_pace_password_key, PaceCompatibilityHandshake,
+    };
+
+    let fixture: Fixture =
+        serde_json::from_str(include_str!("fixtures/passport_chip_behavior.json")).unwrap();
+    let vector = fixture.pace_compatibility;
+    assert_eq!(
+        hex::encode_upper(derive_compatibility_pace_password_key(&vector.password).unwrap()),
+        vector.password_key
+    );
+    let handshake = PaceCompatibilityHandshake::begin_with_private_key(
+        &vector.password,
+        &hex::decode(vector.encrypted_nonce).unwrap(),
+        &hex::decode(vector.reader_private_key).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        hex::encode_upper(handshake.public_key()),
+        vector.reader_public_key
+    );
+    assert_eq!(hex::encode_upper(handshake.decrypted_nonce()), vector.nonce);
+    let session = handshake
+        .complete(&hex::decode(vector.chip_public_key).unwrap())
+        .unwrap();
+    assert_eq!(
+        hex::encode_upper(session.encryption_key()),
+        vector.session_encryption_key
+    );
+    assert_eq!(hex::encode_upper(session.mac_key()), vector.session_mac_key);
+    assert_eq!(
+        hex::encode_upper(session.send_sequence_counter()),
+        vector.ssc
+    );
 }
