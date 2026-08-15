@@ -60,7 +60,7 @@ x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 ed448-goldilocks-plus = "0.16"
 
 # BBS+ signatures (BLS12-381)
-zkryptium = { version = "0.4", features = ["bbsplus"] }
+zkryptium = { version = "0.6", features = ["bbsplus"] }
 
 # PKCS#12 (for key/cert bundle parsing)
 p12 = "0.6"

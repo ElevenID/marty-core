@@ -8768,9 +8768,9 @@ dependencies = [
 
 [[package]]
 name = "zkryptium"
-version = "0.4.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14be09edf2acce2a8d1dc925330e42e4b106c94caa5ce8f44a42525668ba2931"
+checksum = "28c16be498c95443e699ca442d212eaf738d36432e5eaf0055525d9fd1de9640"
 dependencies = [
  "bls12_381_plus",
  "digest 0.10.7",
