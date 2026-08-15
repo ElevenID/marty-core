@@ -5,10 +5,14 @@
 //! presentation proofs, binds their challenge and domain, and independently
 //! verifies every embedded credential rather than trusting a valid outer proof.
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use iref::IriBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use ssi_claims::data_integrity::{
     AnyProtocol, AnySignatureAlgorithm, AnySuite, CryptographicSuite, DataIntegrity, ProofOptions,
 };
@@ -27,7 +31,7 @@ use ssi_verification_methods::{
 };
 use std::{
     borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 
@@ -35,6 +39,34 @@ use crate::open_badges::open_badges_context_loader;
 
 type AnyCredential = DataIntegrity<AnyJsonCredential, AnySuite>;
 type AnyPresentation = DataIntegrity<AnyJsonPresentation, AnySuite>;
+
+const VCDM_V2_BASE_CONTEXT: &str = "https://www.w3.org/ns/credentials/v2";
+const VCDM_V2_EXAMPLES_CONTEXT: &str = "https://www.w3.org/ns/credentials/examples/v2";
+const PROTECTED_VCDM_TERMS: &[&str] = &[
+    "VerifiableCredential",
+    "VerifiablePresentation",
+    "credentialSubject",
+    "issuer",
+    "proof",
+    "type",
+    "id",
+    "@context",
+];
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidateIssuanceDocumentRequest {
+    credential: Value,
+    #[serde(default)]
+    issuer_did: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidateRelatedResourceDigestsRequest {
+    credential: Value,
+    resource_contents: HashMap<String, String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct VerifyRequest {
@@ -130,6 +162,379 @@ struct CaptureMessageSigner {
 struct ResolvedDidResolver {
     methods: HashMap<IriBuf, AnyMethod>,
     did_key: VerificationMethodDIDResolver<DIDKey, AnyMethod>,
+}
+
+/// Validate an unsigned VCDM v2 credential at the issuance boundary.
+///
+/// The JSON boundary is intentionally narrow and returns the stable error
+/// codes consumed by the service API. Fetching related resources remains a
+/// caller responsibility; their bytes are checked by
+/// [`validate_vcdm_related_resource_digests_json`].
+pub fn validate_vcdm_issuance_document_json(request_json: &str) -> Result<(), String> {
+    let request: ValidateIssuanceDocumentRequest =
+        serde_json::from_str(request_json).map_err(|_| "invalid_credential".to_string())?;
+    validate_vcdm_issuance_document(&request.credential, request.issuer_did.as_deref())
+}
+
+/// Validate already-fetched related-resource bytes against every digest in a
+/// VCDM v2 credential. Resource bytes are supplied as base64 so this kernel is
+/// deterministic and independent of any HTTP client or runtime.
+pub fn validate_vcdm_related_resource_digests_json(request_json: &str) -> Result<(), String> {
+    let request: ValidateRelatedResourceDigestsRequest =
+        serde_json::from_str(request_json).map_err(|_| "invalid_related_resource".to_string())?;
+    validate_vcdm_related_resource_digests(&request.credential, &request.resource_contents)
+}
+
+/// Language-neutral conformance vectors used by native and adapter tests.
+pub fn issuance_behavior_fixture_json() -> &'static str {
+    include_str!("../tests/fixtures/vcdm_issuance_behavior.json")
+}
+
+fn validate_vcdm_issuance_document(
+    credential: &Value,
+    issuer_did: Option<&str>,
+) -> Result<(), String> {
+    let object = credential
+        .as_object()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "invalid_credential".to_string())?;
+    if object.contains_key("proof") {
+        return Err("credential_must_be_unsigned".to_string());
+    }
+
+    let context = object
+        .get("@context")
+        .and_then(Value::as_array)
+        .filter(|values| {
+            values
+                .first()
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == VCDM_V2_BASE_CONTEXT)
+        })
+        .ok_or_else(|| "invalid_context".to_string())?;
+    let terms = context_term_map(context)?;
+    validate_issuance_type(object.get("type"), &terms, Some("VerifiableCredential"))?;
+
+    if object
+        .get("id")
+        .is_some_and(|value| !is_absolute_uri(value))
+    {
+        return Err("invalid_id".to_string());
+    }
+
+    if let Some(issuer) = object.get("issuer") {
+        let issuer_id = issuer
+            .as_object()
+            .and_then(|value| value.get("id"))
+            .unwrap_or(issuer);
+        if !is_absolute_uri(issuer_id) {
+            return Err("invalid_issuer".to_string());
+        }
+        if issuer_did.is_some_and(|expected| issuer_id.as_str() != Some(expected)) {
+            return Err("issuer_did_mismatch".to_string());
+        }
+    }
+
+    let subjects = object
+        .get("credentialSubject")
+        .ok_or_else(|| "invalid_subject".to_string())?;
+    let subject_values: Vec<&Value> = match subjects {
+        Value::Array(values) => values.iter().collect(),
+        value => vec![value],
+    };
+    if subject_values.is_empty()
+        || subject_values
+            .iter()
+            .any(|subject| subject.as_object().is_none_or(|value| value.is_empty()))
+    {
+        return Err("invalid_subject".to_string());
+    }
+    for subject in subject_values {
+        if subject
+            .get("id")
+            .is_some_and(|value| !is_absolute_uri(value))
+        {
+            return Err("invalid_subject".to_string());
+        }
+    }
+
+    for name in ["validFrom", "validUntil"] {
+        if object
+            .get(name)
+            .is_some_and(|value| !is_rfc3339_datetime(value))
+        {
+            return Err("invalid_validity".to_string());
+        }
+    }
+    if let (Some(valid_from), Some(valid_until)) = (
+        object.get("validFrom").and_then(Value::as_str),
+        object.get("validUntil").and_then(Value::as_str),
+    ) {
+        let valid_from = chrono::DateTime::parse_from_rfc3339(valid_from)
+            .map_err(|_| "invalid_validity".to_string())?;
+        let valid_until = chrono::DateTime::parse_from_rfc3339(valid_until)
+            .map_err(|_| "invalid_validity".to_string())?;
+        if valid_from > valid_until {
+            return Err("invalid_validity".to_string());
+        }
+    }
+
+    if let Some(statuses) = object.get("credentialStatus") {
+        validate_typed_resource(statuses, &terms, false)?;
+        for status in one_or_many(statuses) {
+            if status
+                .get("id")
+                .is_some_and(|value| !is_absolute_uri(value))
+            {
+                return Err("invalid_status".to_string());
+            }
+        }
+    }
+    if let Some(schema) = object.get("credentialSchema") {
+        validate_typed_resource(schema, &terms, true)?;
+    }
+    for name in ["termsOfUse", "refreshService", "evidence"] {
+        if let Some(resource) = object.get(name) {
+            validate_typed_resource(resource, &terms, false)?;
+        }
+    }
+
+    if let Some(resources) = object.get("relatedResource") {
+        let mut seen = HashSet::new();
+        let resources = one_or_many(resources);
+        if resources.is_empty() {
+            return Err("invalid_related_resource".to_string());
+        }
+        for resource in resources {
+            let Some(resource) = resource.as_object() else {
+                return Err("invalid_related_resource".to_string());
+            };
+            let Some(resource_id) = resource.get("id").and_then(Value::as_str) else {
+                return Err("invalid_related_resource".to_string());
+            };
+            if !is_absolute_uri(&Value::String(resource_id.to_string()))
+                || !seen.insert(resource_id)
+            {
+                return Err("invalid_related_resource".to_string());
+            }
+            let has_digest = resource
+                .get("digestSRI")
+                .or_else(|| resource.get("digestMultibase"))
+                .is_some_and(Value::is_string);
+            if !has_digest {
+                return Err("invalid_related_resource".to_string());
+            }
+        }
+    }
+
+    for name in ["name", "description"] {
+        if object
+            .get(name)
+            .is_some_and(|value| !is_language_value(value))
+        {
+            return Err("invalid_language_value".to_string());
+        }
+    }
+    if let Some(issuer) = object.get("issuer").and_then(Value::as_object) {
+        for name in ["name", "description"] {
+            if issuer
+                .get(name)
+                .is_some_and(|value| !is_language_value(value))
+            {
+                return Err("invalid_language_value".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_vcdm_related_resource_digests(
+    credential: &Value,
+    resource_contents: &HashMap<String, String>,
+) -> Result<(), String> {
+    let Some(resources) = credential.get("relatedResource") else {
+        return Ok(());
+    };
+    for resource in one_or_many(resources) {
+        let resource = resource
+            .as_object()
+            .ok_or_else(|| "invalid_related_resource".to_string())?;
+        let resource_id = resource
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "invalid_related_resource".to_string())?;
+        let encoded_content = resource_contents
+            .get(resource_id)
+            .ok_or_else(|| "related_resource_unavailable".to_string())?;
+        let content = STANDARD
+            .decode(encoded_content)
+            .map_err(|_| "related_resource_unavailable".to_string())?;
+
+        if let Some(digest_sri) = resource.get("digestSRI").and_then(Value::as_str) {
+            let (algorithm, expected) = digest_sri
+                .split_once('-')
+                .ok_or_else(|| "invalid_related_resource".to_string())?;
+            let actual = match algorithm {
+                "sha256" => STANDARD.encode(Sha256::digest(&content)),
+                "sha384" => STANDARD.encode(Sha384::digest(&content)),
+                "sha512" => STANDARD.encode(Sha512::digest(&content)),
+                _ => return Err("invalid_related_resource".to_string()),
+            };
+            if actual.as_bytes() != expected.as_bytes() {
+                return Err("related_resource_digest_mismatch".to_string());
+            }
+        }
+
+        if let Some(expected) = resource.get("digestMultibase").and_then(Value::as_str) {
+            let actual = format!("u{}", URL_SAFE_NO_PAD.encode(Sha256::digest(&content)));
+            if actual.as_bytes() != expected.as_bytes() {
+                return Err("related_resource_digest_mismatch".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_absolute_uri(value: &Value) -> bool {
+    let Some(value) = value.as_str() else {
+        return false;
+    };
+    if value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((scheme, rest)) = value.split_once(':') else {
+        return false;
+    };
+    !rest.is_empty()
+        && scheme
+            .chars()
+            .next()
+            .is_some_and(|value| value.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '+' | '.' | '-'))
+}
+
+fn context_term_map(context: &[Value]) -> Result<HashMap<String, String>, String> {
+    let mut terms = HashMap::new();
+    for item in context.iter().skip(1) {
+        match item {
+            Value::String(value) => {
+                if !is_absolute_uri(item) {
+                    return Err("invalid_context".to_string());
+                }
+                if value == VCDM_V2_EXAMPLES_CONTEXT {
+                    terms.insert(
+                        "RelationshipCredential".to_string(),
+                        "https://www.w3.org/ns/credentials/examples#RelationshipCredential"
+                            .to_string(),
+                    );
+                }
+            }
+            Value::Object(values) => {
+                for (term, target) in values {
+                    if PROTECTED_VCDM_TERMS.contains(&term.as_str()) {
+                        return Err("invalid_context".to_string());
+                    }
+                    if term.starts_with('@') {
+                        continue;
+                    }
+                    let target = target
+                        .as_object()
+                        .and_then(|value| value.get("@id"))
+                        .unwrap_or(target);
+                    if !is_absolute_uri(target) {
+                        return Err("invalid_context".to_string());
+                    }
+                    terms.insert(
+                        term.clone(),
+                        target.as_str().unwrap_or_default().to_string(),
+                    );
+                }
+            }
+            _ => return Err("invalid_context".to_string()),
+        }
+    }
+    Ok(terms)
+}
+
+fn validate_issuance_type(
+    value: Option<&Value>,
+    terms: &HashMap<String, String>,
+    required: Option<&str>,
+) -> Result<(), String> {
+    let values = value.map(one_or_many).unwrap_or_default();
+    if values.is_empty()
+        || values
+            .iter()
+            .any(|item| item.as_str().is_none_or(str::is_empty))
+    {
+        return Err("invalid_type".to_string());
+    }
+    if required.is_some_and(|required| !values.iter().any(|item| item.as_str() == Some(required))) {
+        return Err("invalid_type".to_string());
+    }
+    for item in values {
+        let item = item.as_str().unwrap_or_default();
+        if !is_absolute_uri(&Value::String(item.to_string()))
+            && !PROTECTED_VCDM_TERMS.contains(&item)
+            && !terms.contains_key(item)
+        {
+            return Err("invalid_type".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_typed_resource(
+    value: &Value,
+    terms: &HashMap<String, String>,
+    require_id: bool,
+) -> Result<(), String> {
+    let values = one_or_many(value);
+    if values.is_empty() || values.iter().any(|item| !item.is_object()) {
+        return Err("invalid_resource".to_string());
+    }
+    for item in values {
+        validate_issuance_type(item.get("type"), terms, None)?;
+        if require_id && item.get("id").is_none_or(|value| !is_absolute_uri(value)) {
+            return Err("invalid_resource".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn is_language_value(value: &Value) -> bool {
+    match value {
+        Value::String(_) => true,
+        Value::Array(values) => {
+            !values.is_empty()
+                && values
+                    .iter()
+                    .all(|item| !item.is_array() && is_language_value(item))
+        }
+        Value::Object(values) => {
+            values.get("@value").is_some_and(Value::is_string)
+                && values.iter().all(|(key, value)| {
+                    matches!(key.as_str(), "@value" | "@language" | "@direction")
+                        && (key == "@value" || value.is_string())
+                })
+        }
+        _ => false,
+    }
+}
+
+fn is_rfc3339_datetime(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok())
+}
+
+fn one_or_many(value: &Value) -> Vec<&Value> {
+    match value {
+        Value::Array(values) => values.iter().collect(),
+        value => vec![value],
+    }
 }
 
 impl VerificationMethodResolver for ResolvedDidResolver {
@@ -1143,6 +1548,47 @@ mod tests {
 
     const OFFICIAL_SUITE_PRESENTATION: &str =
         include_str!("../tests/fixtures/w3c_vcdm_v2_official_suite_presentation.json");
+    const ISSUANCE_BEHAVIOR: &str = include_str!("../tests/fixtures/vcdm_issuance_behavior.json");
+
+    #[test]
+    fn issuance_boundary_matches_language_neutral_behavior_vectors() {
+        let fixture: Value = serde_json::from_str(ISSUANCE_BEHAVIOR).unwrap();
+        for case in fixture["document_cases"].as_array().unwrap() {
+            let request = json!({
+                "credential": case["credential"],
+                "issuer_did": case["issuer_did"],
+            });
+            let result = validate_vcdm_issuance_document_json(&request.to_string());
+            match case["expected_error"].as_str() {
+                Some(expected) => {
+                    assert_eq!(result.unwrap_err(), expected, "case {}", case["name"])
+                }
+                None => result.unwrap_or_else(|error| {
+                    panic!("case {} unexpectedly failed: {error}", case["name"])
+                }),
+            }
+        }
+    }
+
+    #[test]
+    fn related_resource_digests_match_language_neutral_behavior_vectors() {
+        let fixture: Value = serde_json::from_str(ISSUANCE_BEHAVIOR).unwrap();
+        for case in fixture["digest_cases"].as_array().unwrap() {
+            let request = json!({
+                "credential": case["credential"],
+                "resource_contents": case["resource_contents"],
+            });
+            let result = validate_vcdm_related_resource_digests_json(&request.to_string());
+            match case["expected_error"].as_str() {
+                Some(expected) => {
+                    assert_eq!(result.unwrap_err(), expected, "case {}", case["name"])
+                }
+                None => result.unwrap_or_else(|error| {
+                    panic!("case {} unexpectedly failed: {error}", case["name"])
+                }),
+            }
+        }
+    }
 
     const OFFICIAL_SUITE_PRESENTATION_WITHOUT_HOLDER: &str = r#"{
       "@context": ["https://www.w3.org/ns/credentials/v2"],

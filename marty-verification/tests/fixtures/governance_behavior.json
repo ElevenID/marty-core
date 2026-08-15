@@ -1,0 +1,91 @@
+{
+  "schema": "marty.verification-governance-behavior/v1",
+  "definition": {
+    "id": "pd-1",
+    "input_descriptors": [{"id": "employee"}]
+  },
+  "governance": {
+    "component": {
+      "component_id": "marty-credentials",
+      "version": "0.1.56",
+      "artifact_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "adapter_id": "verification-service",
+      "adapter_version": "1.0.0"
+    },
+    "policies": [{
+      "organization_id": "123e4567-e89b-42d3-a456-426614174000",
+      "id": "policy:employee",
+      "version": "1.0.0",
+      "content_digest": "sha256:0020b4a262aa3a2c86e6d3865e799d981507863559b0d5e9e05b9eeab2a325ec",
+      "content": {
+        "verifier_id": "did:web:verifier.example",
+        "presentation_definition_digest": "sha256:ff8f0de41dcc7ff7d3bffe0c2f30671f12e38125c96fa26481f4369edffacdb1",
+        "required_checks": [
+          "presentation.structure",
+          "presentation.proof",
+          "credential.proof",
+          "issuer.trust",
+          "credential.status",
+          "holder.binding",
+          "transaction.binding",
+          "claim.constraints"
+        ]
+      }
+    }],
+    "trust_profiles": [{
+      "organization_id": "123e4567-e89b-42d3-a456-426614174000",
+      "id": "trust:employee",
+      "version": "1.0.0",
+      "content_digest": "sha256:a7cf26e16b2891ba1a5e220857d51b864d79f11c1674ff645ff817fe5fb59253",
+      "content": {
+        "trusted_issuers": ["did:web:issuer.example"],
+        "allow_public_did_fallback": false
+      }
+    }],
+    "clients": [{
+      "client_id": "employee-verifier",
+      "api_key_sha256": "36045b4978db4f47cab3669ea765e26ad254fc51b969a74d10ccc78252ab8d68",
+      "organization_id": "123e4567-e89b-42d3-a456-426614174000",
+      "purposes": {
+        "verification.direct": {
+          "policy_id": "policy:employee",
+          "trust_profile_id": "trust:employee"
+        },
+        "verification.session.create": {
+          "policy_id": "policy:employee",
+          "trust_profile_id": "trust:employee"
+        }
+      }
+    }]
+  },
+  "authorization_cases": [
+    {
+      "name": "authorized direct verification",
+      "api_key": "purpose-scoped-test-key",
+      "purpose": "verification.direct",
+      "expected_client_id": "employee-verifier",
+      "expected_error": null
+    },
+    {
+      "name": "wrong API key fails closed",
+      "api_key": "wrong",
+      "purpose": "verification.direct",
+      "expected_client_id": null,
+      "expected_error": "Invalid or unauthorized API key"
+    },
+    {
+      "name": "ungranted purpose fails closed",
+      "api_key": "purpose-scoped-test-key",
+      "purpose": "verification.vds-nc",
+      "expected_client_id": null,
+      "expected_error": "Invalid or unauthorized API key"
+    },
+    {
+      "name": "unsupported purpose fails closed",
+      "api_key": "purpose-scoped-test-key",
+      "purpose": "verification.unsupported",
+      "expected_client_id": null,
+      "expected_error": "Unsupported verification purpose"
+    }
+  ]
+}
