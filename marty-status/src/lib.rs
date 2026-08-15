@@ -294,6 +294,50 @@ impl BitstringStatusList {
         Self::from_compressed(&compressed, size)
     }
 
+    /// Decode a W3C Bitstring Status List when its entry count is not carried
+    /// alongside `encodedList`.
+    ///
+    /// W3C status-list credentials encode a whole-byte bitstring and do not
+    /// advertise its length separately. This decoder derives the entry count
+    /// from bounded GZIP output, enforces the W3C privacy floor, and refuses
+    /// output above Marty's global status-list limit.
+    pub fn from_base64url_bounded(encoded: &str) -> Result<Self> {
+        let payload = encoded
+            .strip_prefix('u')
+            .ok_or(StatusListError::InvalidMultibase)?;
+        let maximum_bytes = bitstring_byte_len(MAX_STATUS_LIST_ENTRIES);
+        validate_encoded_len(payload.len(), maximum_bytes)?;
+        let compressed = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .map_err(|error| StatusListError::InvalidBase64(error.to_string()))?;
+
+        let limit = u64::try_from(maximum_bytes.saturating_add(1)).map_err(|_| {
+            StatusListError::SizeLimit {
+                size: MAX_STATUS_LIST_ENTRIES,
+                maximum: MAX_STATUS_LIST_ENTRIES,
+            }
+        })?;
+        let mut data = Vec::new();
+        GzDecoder::new(compressed.as_slice())
+            .take(limit)
+            .read_to_end(&mut data)
+            .map_err(compression_error)?;
+        if data.len() > maximum_bytes {
+            return Err(StatusListError::SizeLimit {
+                size: data.len().saturating_mul(8),
+                maximum: MAX_STATUS_LIST_ENTRIES,
+            });
+        }
+
+        let size = data.len().saturating_mul(8);
+        if size < W3C_MIN_STATUS_LIST_BITS {
+            return Err(StatusListError::PrivacyFloor {
+                minimum: W3C_MIN_STATUS_LIST_BITS,
+            });
+        }
+        Self::from_bytes(data, size)
+    }
+
     pub fn credential_subject(
         &self,
         id: impl Into<String>,
@@ -469,6 +513,37 @@ mod tests {
         assert_eq!(list.len(), W3C_MIN_STATUS_LIST_BITS);
         assert_eq!(hex::encode(&list.as_bytes()[..8]), vector["raw_hex_prefix"]);
         assert_eq!(list.count_revoked(), 0);
+    }
+
+    #[test]
+    fn w3c_bounded_decoder_derives_size_from_language_neutral_vector() {
+        let vector = &vectors()["vectors"][1];
+        let encoded = vector["encoded"].as_str().unwrap();
+        let list = BitstringStatusList::from_base64url_bounded(encoded).unwrap();
+        assert_eq!(list.len(), W3C_MIN_STATUS_LIST_BITS);
+        assert_eq!(hex::encode(&list.as_bytes()[..8]), vector["raw_hex_prefix"]);
+    }
+
+    #[test]
+    fn w3c_bounded_decoder_rejects_below_floor_and_above_limit() {
+        let below_floor = BitstringStatusList::new(W3C_MIN_STATUS_LIST_BITS - 8).unwrap();
+        assert!(matches!(
+            BitstringStatusList::from_base64url_bounded(&below_floor.to_base64url().unwrap()),
+            Err(StatusListError::PrivacyFloor { .. })
+        ));
+
+        let oversized_bytes = bitstring_byte_len(MAX_STATUS_LIST_ENTRIES) + 1;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+        encoder.write_all(&vec![0; oversized_bytes]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let encoded = format!(
+            "u{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(compressed)
+        );
+        assert!(matches!(
+            BitstringStatusList::from_base64url_bounded(&encoded),
+            Err(StatusListError::SizeLimit { .. })
+        ));
     }
 
     #[test]
