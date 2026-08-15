@@ -27,6 +27,8 @@
 //! assert!(result.is_valid());
 //! ```
 
+#[cfg(feature = "csca")]
+pub mod active_authentication;
 pub mod asn1;
 #[cfg(feature = "csca")]
 pub mod chip_io;

@@ -4,6 +4,17 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Fixture {
     bac_annex_d: BacVector,
+    active_authentication: ActiveAuthenticationVector,
+}
+
+#[derive(Deserialize)]
+struct ActiveAuthenticationVector {
+    challenge_hex: String,
+    expected_command_apdu: String,
+    successful_response: String,
+    expected_signature: String,
+    error_responses: Vec<String>,
+    invalid_challenge_sizes_bits: Vec<usize>,
 }
 
 #[derive(Deserialize)]
@@ -73,4 +84,33 @@ fn rust_matches_shared_icao_bac_vector() {
         hex::encode_upper(session.protect_command(&command).unwrap().to_bytes()),
         vector.protected_select_ef_com
     );
+}
+
+#[test]
+fn rust_matches_shared_active_authentication_behavior() {
+    use marty_verification::active_authentication::{
+        build_internal_authenticate_apdu, generate_challenge, parse_internal_authenticate_response,
+    };
+
+    let fixture: Fixture =
+        serde_json::from_str(include_str!("fixtures/passport_chip_behavior.json")).unwrap();
+    let vector = fixture.active_authentication;
+    let challenge = hex::decode(vector.challenge_hex).unwrap();
+    assert_eq!(
+        hex::encode_upper(build_internal_authenticate_apdu(&challenge).unwrap()),
+        vector.expected_command_apdu
+    );
+    assert_eq!(
+        hex::encode_upper(
+            parse_internal_authenticate_response(&hex::decode(vector.successful_response).unwrap())
+                .unwrap()
+        ),
+        vector.expected_signature
+    );
+    for response in vector.error_responses {
+        assert!(parse_internal_authenticate_response(&hex::decode(response).unwrap()).is_err());
+    }
+    for key_size in vector.invalid_challenge_sizes_bits {
+        assert!(generate_challenge(key_size).is_err());
+    }
 }

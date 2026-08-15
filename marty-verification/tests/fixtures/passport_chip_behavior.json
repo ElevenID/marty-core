@@ -16,5 +16,13 @@
     "initial_ssc": "887022120C06C226",
     "plain_select_ef_com": "00A4020C02011E",
     "protected_select_ef_com": "0CA4020C158709016375432908C044F68E08BF8B92D635FF24F800"
+  },
+  "active_authentication": {
+    "challenge_hex": "00112233445566778899AABBCCDDEEFF",
+    "expected_command_apdu": "008800001000112233445566778899AABBCCDDEEFF00",
+    "successful_response": "AABBCC9000",
+    "expected_signature": "AABBCC",
+    "error_responses": ["9000", "AABBCC6982", "90"],
+    "invalid_challenge_sizes_bits": [0, 7, 2048]
   }
 }

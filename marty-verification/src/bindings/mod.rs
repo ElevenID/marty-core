@@ -3006,6 +3006,107 @@ fn iso9796_recover<'py>(
     Ok(PyBytes::new(py, &recovered))
 }
 
+/// Create a Scheme 1 signature for passport-chip simulators and tests.
+#[pyfunction]
+fn iso9796_scheme1_sign<'py>(
+    py: Python<'py>,
+    private_key_der: &[u8],
+    message: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signature =
+        marty_crypto::iso9796::iso9796_scheme1_sign(private_key_der, message).map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &signature))
+}
+
+fn parse_iso9796_hash_algorithm(
+    hash_algorithm: &str,
+) -> PyResult<marty_crypto::iso9796::Iso9796HashAlgorithm> {
+    use marty_crypto::iso9796::Iso9796HashAlgorithm;
+    match hash_algorithm
+        .to_ascii_lowercase()
+        .replace('-', "")
+        .as_str()
+    {
+        "sha1" => Ok(Iso9796HashAlgorithm::Sha1),
+        "sha224" => Ok(Iso9796HashAlgorithm::Sha224),
+        "sha256" => Ok(Iso9796HashAlgorithm::Sha256),
+        "sha384" => Ok(Iso9796HashAlgorithm::Sha384),
+        "sha512" => Ok(Iso9796HashAlgorithm::Sha512),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Unsupported Active Authentication hash algorithm: {hash_algorithm}"
+        ))),
+    }
+}
+
+/// Generate a native Active Authentication challenge.
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (key_size_bits=128, hash_algorithm="SHA-256"))]
+fn active_authentication_generate_challenge<'py>(
+    py: Python<'py>,
+    key_size_bits: usize,
+    hash_algorithm: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    parse_iso9796_hash_algorithm(hash_algorithm)?;
+    let challenge =
+        crate::active_authentication::generate_challenge(key_size_bits).map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &challenge))
+}
+
+/// Build an INTERNAL AUTHENTICATE command APDU.
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn active_authentication_build_apdu<'py>(
+    py: Python<'py>,
+    challenge: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let command = crate::active_authentication::build_internal_authenticate_apdu(challenge)
+        .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &command))
+}
+
+/// Parse a successful INTERNAL AUTHENTICATE response APDU.
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn active_authentication_parse_response<'py>(
+    py: Python<'py>,
+    response: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signature = crate::active_authentication::parse_internal_authenticate_response(response)
+        .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &signature))
+}
+
+/// Verify an Active Authentication response against the exact challenge.
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (public_key_der, challenge, signature, hash_algorithm="SHA-256"))]
+fn active_authentication_verify<'py>(
+    py: Python<'py>,
+    public_key_der: &[u8],
+    challenge: &[u8],
+    signature: &[u8],
+    hash_algorithm: &str,
+) -> PyResult<Py<PyDict>> {
+    let result = crate::active_authentication::verify_challenge(
+        public_key_der,
+        challenge,
+        signature,
+        parse_iso9796_hash_algorithm(hash_algorithm)?,
+    )
+    .map_err(to_pyerr)?;
+    let output = PyDict::new(py);
+    output.set_item("is_valid", result.is_valid)?;
+    output.set_item(
+        "recovered_message",
+        result
+            .recovered_message
+            .as_deref()
+            .map(|value| PyBytes::new(py, value)),
+    )?;
+    Ok(output.unbind())
+}
+
 // ============================================================================
 // OCSP Client Bindings
 // ============================================================================
@@ -3712,6 +3813,17 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Crypto Operations - ISO 9796-2
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+    }
 
     // Crypto Operations - Certificate
     m.add_function(wrap_pyfunction!(load_certificate_pem, m)?)?;
@@ -3822,6 +3934,17 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // ISO 9796-2 Operations
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+    }
 
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
@@ -3921,6 +4044,17 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Crypto Operations - ISO 9796-2
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+    }
 
     // Crypto Operations - Certificate
     m.add_function(wrap_pyfunction!(load_certificate_pem, m)?)?;
@@ -4031,6 +4165,17 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // ISO 9796-2 Operations
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+    }
 
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
