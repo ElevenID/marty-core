@@ -202,6 +202,71 @@ pub fn decide_import(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PublicSyncQueryPlan {
+    pub since_sequence: Option<u64>,
+    pub current_only: bool,
+}
+
+pub fn plan_public_sync_query(since: Option<&str>) -> TrustSyncResult<PublicSyncQueryPlan> {
+    let since_sequence = since
+        .map(|raw| {
+            raw.trim()
+                .parse::<u64>()
+                .map_err(|_| TrustSyncError::new("INVALID_SYNC_TOKEN", "Invalid sync token"))
+        })
+        .transpose()?;
+    Ok(PublicSyncQueryPlan {
+        current_only: since_sequence.is_none(),
+        since_sequence,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PublicSyncMetadata {
+    pub sync_token: String,
+    pub sequence: u64,
+    pub has_more: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+pub fn public_sync_metadata(
+    current_sequence: u64,
+    generated_at: DateTime<Utc>,
+) -> PublicSyncMetadata {
+    PublicSyncMetadata {
+        sync_token: current_sequence.to_string(),
+        sequence: current_sequence,
+        has_more: false,
+        generated_at,
+    }
+}
+
+pub fn sync_is_due(
+    last_synchronized_at: Option<DateTime<Utc>>,
+    refresh_interval_hours: u16,
+    now: DateTime<Utc>,
+) -> TrustSyncResult<bool> {
+    if !(1..=8760).contains(&refresh_interval_hours) {
+        return Err(TrustSyncError::new(
+            "INVALID_SYNC_INTERVAL",
+            "registry sync interval must be between 1 and 8760 hours",
+        ));
+    }
+    let Some(last_synchronized_at) = last_synchronized_at else {
+        return Ok(true);
+    };
+    let refresh_seconds = i64::from(refresh_interval_hours) * 60 * 60;
+    let due_after_seconds = refresh_seconds
+        .checked_mul(4)
+        .and_then(|value| value.checked_div(5))
+        .ok_or_else(|| TrustSyncError::new("TIME_OVERFLOW", "sync schedule overflowed"))?;
+    let due_at = last_synchronized_at
+        .checked_add_signed(chrono::Duration::seconds(due_after_seconds))
+        .ok_or_else(|| TrustSyncError::new("TIME_OVERFLOW", "sync schedule overflowed"))?;
+    Ok(now >= due_at)
+}
+
 pub fn validate_registry_url(url: &str) -> TrustSyncResult<String> {
     let parsed = Url::parse(url)
         .map_err(|_| TrustSyncError::new("INVALID_URL", "registry URL is invalid"))?;
@@ -941,6 +1006,60 @@ pub fn import_decision_json(
         registry_type,
         requested_formats,
         sync_interval_hours,
+        now,
+    )?)
+}
+
+/// Plan the public sync-feed repository query from an opaque numeric token.
+pub fn public_sync_query_json(since: Option<&str>) -> TrustSyncResult<String> {
+    to_json(&plan_public_sync_query(since)?)
+}
+
+/// Build the canonical token and pagination metadata for a public sync feed.
+pub fn public_sync_metadata_json(
+    current_sequence: u64,
+    generated_at_rfc3339: &str,
+) -> TrustSyncResult<String> {
+    let generated_at = DateTime::parse_from_rfc3339(generated_at_rfc3339)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|_| {
+            TrustSyncError::new(
+                "INVALID_TIME",
+                "registry feed generation time must be RFC 3339 with an offset",
+            )
+        })?;
+    to_json(&public_sync_metadata(current_sequence, generated_at))
+}
+
+/// Decide whether a configured source is due at the supplied instant.
+pub fn sync_is_due_json(
+    last_synchronized_at_rfc3339: Option<&str>,
+    refresh_interval_hours: u16,
+    now_rfc3339: &str,
+) -> TrustSyncResult<String> {
+    let last_synchronized_at = last_synchronized_at_rfc3339
+        .map(|raw| {
+            DateTime::parse_from_rfc3339(raw)
+                .map(|value| value.with_timezone(&Utc))
+                .map_err(|_| {
+                    TrustSyncError::new(
+                        "INVALID_TIME",
+                        "last registry synchronization time must be RFC 3339 with an offset",
+                    )
+                })
+        })
+        .transpose()?;
+    let now = DateTime::parse_from_rfc3339(now_rfc3339)
+        .map(|value| value.with_timezone(&Utc))
+        .map_err(|_| {
+            TrustSyncError::new(
+                "INVALID_TIME",
+                "registry scheduling time must be RFC 3339 with an offset",
+            )
+        })?;
+    to_json(&sync_is_due(
+        last_synchronized_at,
+        refresh_interval_hours,
         now,
     )?)
 }

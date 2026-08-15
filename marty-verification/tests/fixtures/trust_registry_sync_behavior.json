@@ -33,6 +33,43 @@
       "error_contains": "does not support"
     }
   ],
+  "public_sync_query_cases": [
+    {
+      "since": null,
+      "expected_since_sequence": null,
+      "expected_current_only": true
+    },
+    {
+      "since": " 42 ",
+      "expected_since_sequence": 42,
+      "expected_current_only": false
+    },
+    {
+      "since": "-1",
+      "error_contains": "Invalid sync token"
+    },
+    {
+      "since": "cursor",
+      "error_contains": "Invalid sync token"
+    }
+  ],
+  "schedule_cases": [
+    {
+      "last_synchronized_at": null,
+      "interval": 24,
+      "expected_due": true
+    },
+    {
+      "last_synchronized_at": "2026-08-06T16:48:00Z",
+      "interval": 24,
+      "expected_due": true
+    },
+    {
+      "last_synchronized_at": "2026-08-06T17:00:00Z",
+      "interval": 24,
+      "expected_due": false
+    }
+  ],
   "url_cases": [
     {
       "url": "https://registry.example/v1/trust-registry/sync",

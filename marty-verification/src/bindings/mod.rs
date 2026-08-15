@@ -4284,6 +4284,36 @@ fn trust_registry_import_decision_json(
 }
 
 #[pyfunction]
+#[pyo3(signature = (since=None))]
+fn trust_registry_public_sync_query_json(since: Option<&str>) -> PyResult<String> {
+    crate::trust_sync::public_sync_query_json(since).map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_public_sync_metadata_json(
+    current_sequence: u64,
+    generated_at_rfc3339: &str,
+) -> PyResult<String> {
+    crate::trust_sync::public_sync_metadata_json(current_sequence, generated_at_rfc3339)
+        .map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+#[pyo3(signature = (refresh_interval_hours, now_rfc3339, last_synchronized_at_rfc3339=None))]
+fn trust_registry_sync_is_due_json(
+    refresh_interval_hours: u16,
+    now_rfc3339: &str,
+    last_synchronized_at_rfc3339: Option<&str>,
+) -> PyResult<String> {
+    crate::trust_sync::sync_is_due_json(
+        last_synchronized_at_rfc3339,
+        refresh_interval_hours,
+        now_rfc3339,
+    )
+    .map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
 fn trust_registry_validate_url(url: &str) -> PyResult<String> {
     crate::trust_sync::validate_registry_url(url).map_err(trust_sync_pyerr)
 }
@@ -4340,6 +4370,12 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trust_registry_catalog_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_behavior_fixture_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_import_decision_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_public_sync_query_json, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        trust_registry_public_sync_metadata_json,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_sync_is_due_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_validate_url, m)?)?;
     m.add_function(wrap_pyfunction!(
         trust_registry_destination_decision_json,
@@ -4619,6 +4655,12 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trust_registry_catalog_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_behavior_fixture_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_import_decision_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_public_sync_query_json, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        trust_registry_public_sync_metadata_json,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_sync_is_due_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_validate_url, m)?)?;
     m.add_function(wrap_pyfunction!(
         trust_registry_destination_decision_json,

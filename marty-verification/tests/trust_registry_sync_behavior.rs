@@ -49,6 +49,42 @@ fn catalog_and_import_vectors_are_canonical() {
 }
 
 #[test]
+fn public_token_and_schedule_vectors_are_canonical() {
+    let fixture = fixture();
+    for case in fixture["public_sync_query_cases"].as_array().unwrap() {
+        let result = trust_sync::public_sync_query_json(case["since"].as_str());
+        if let Some(error) = case["error_contains"].as_str() {
+            assert!(result.unwrap_err().to_string().contains(error));
+        } else {
+            let output: Value = serde_json::from_str(&result.unwrap()).unwrap();
+            assert_eq!(output["since_sequence"], case["expected_since_sequence"]);
+            assert_eq!(output["current_only"], case["expected_current_only"]);
+        }
+    }
+
+    for case in fixture["schedule_cases"].as_array().unwrap() {
+        let output: bool = serde_json::from_str(
+            &trust_sync::sync_is_due_json(
+                case["last_synchronized_at"].as_str(),
+                case["interval"].as_u64().unwrap() as u16,
+                fixture["now"].as_str().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(output, case["expected_due"]);
+    }
+
+    let metadata: Value = serde_json::from_str(
+        &trust_sync::public_sync_metadata_json(42, fixture["now"].as_str().unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(metadata["sync_token"], "42");
+    assert_eq!(metadata["sequence"], 42);
+    assert_eq!(metadata["has_more"], false);
+}
+
+#[test]
 fn url_destination_and_request_vectors_are_canonical() {
     let fixture = fixture();
     for case in fixture["url_cases"].as_array().unwrap() {
