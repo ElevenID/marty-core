@@ -5,7 +5,6 @@
 //! agreement, session-key derivation, and protected-message processing live
 //! here so callers cannot substitute placeholder cryptography.
 
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{VerificationError, VerificationResult};
@@ -245,11 +244,14 @@ impl EacSecureMessaging {
                 "EAC shared secret must not be empty",
             ));
         }
-        let derive = |salt: &[u8], info: &[u8]| {
+        // These labels are public HKDF domain separators, not secret or
+        // randomized salts. Keeping them distinct prevents key reuse between
+        // authentication and encryption.
+        let derive = |domain_separator: &[u8], info: &[u8]| {
             if algorithm.uses_sha384() {
-                marty_crypto::kdf::hkdf_sha384(shared_secret, salt, info, 32)
+                marty_crypto::kdf::hkdf_sha384(shared_secret, domain_separator, info, 32)
             } else {
-                marty_crypto::kdf::hkdf_sha256(shared_secret, salt, info, 32)
+                marty_crypto::kdf::hkdf_sha256(shared_secret, domain_separator, info, 32)
             }
         };
         let mac_key: [u8; 32] = derive(b"EAC_MAC_KEY", b"MAC_DERIVATION")?
@@ -275,8 +277,7 @@ impl EacSecureMessaging {
     }
 
     pub fn encrypt(&mut self, plaintext: &[u8]) -> VerificationResult<Vec<u8>> {
-        let mut iv = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut iv);
+        let iv: [u8; 16] = rand::random();
         self.encrypt_with_iv(plaintext, &iv)
     }
 

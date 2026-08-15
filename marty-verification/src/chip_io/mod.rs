@@ -577,9 +577,10 @@ impl BacHandshake {
         plaintext.extend_from_slice(&self.rnd_ifd);
         plaintext.extend_from_slice(&self.rnd_ic);
         plaintext.extend_from_slice(&self.k_ifd);
+        let iv = icao_3des_cbc_iv();
         let encrypted = marty_crypto::des::tdes_cbc_encrypt(
             &extend_to_24_bytes(&self.base_keys.k_enc),
-            &[0u8; 8],
+            &iv,
             &plaintext,
         )
         .map_err(|error| VerificationError::internal(format!("BAC encrypt failed: {error}")))?;
@@ -604,9 +605,10 @@ impl BacHandshake {
                 "BAC: chip response MAC verification failed".to_string(),
             ));
         }
+        let iv = icao_3des_cbc_iv();
         let plaintext = marty_crypto::des::tdes_cbc_decrypt(
             &extend_to_24_bytes(&self.base_keys.k_enc),
-            &[0u8; 8],
+            &iv,
             encrypted,
         )
         .map_err(|error| VerificationError::internal(format!("BAC decrypt failed: {error}")))?;
@@ -739,7 +741,8 @@ impl BacSession {
         if !cmd.data.is_empty() {
             let padded = iso7816_pad(&cmd.data);
             let k24 = extend_to_24_bytes(&self.k_enc);
-            let enc = marty_crypto::des::tdes_cbc_encrypt(&k24, &[0u8; 8], &padded)
+            let iv = icao_3des_cbc_iv();
+            let enc = marty_crypto::des::tdes_cbc_encrypt(&k24, &iv, &padded)
                 .map_err(|e| VerificationError::internal(format!("SM encrypt: {}", e)))?;
             // DO'87 = tag 87, length, 01 (padding indicator), ciphertext
             let do87_len = u8::try_from(enc.len() + 1).map_err(|_| {
@@ -828,11 +831,11 @@ impl BacSession {
                     if !value.is_empty() && value[0] == 0x01 {
                         let ciphertext = &value[1..];
                         let k24 = extend_to_24_bytes(&self.k_enc);
-                        let decrypted =
-                            marty_crypto::des::tdes_cbc_decrypt(&k24, &[0u8; 8], ciphertext)
-                                .map_err(|e| {
-                                    VerificationError::internal(format!("SM decrypt: {}", e))
-                                })?;
+                        let iv = icao_3des_cbc_iv();
+                        let decrypted = marty_crypto::des::tdes_cbc_decrypt(&k24, &iv, ciphertext)
+                            .map_err(|e| {
+                                VerificationError::internal(format!("SM decrypt: {}", e))
+                            })?;
                         plain_data = iso7816_unpad(&decrypted)?;
                     }
                 }
@@ -944,12 +947,12 @@ impl PaceCompatibilityHandshake {
             .try_into()
             .map_err(|_| VerificationError::internal("PACE P-256 private key must be 32 bytes"))?;
         let key = derive_compatibility_pace_password_key(password)?;
-        let decrypted = marty_crypto::des::tdes_cbc_decrypt(
-            &extend_to_24_bytes(&key),
-            &[0u8; 8],
-            encrypted_nonce,
-        )
-        .map_err(|error| VerificationError::internal(format!("PACE nonce decrypt: {error}")))?;
+        let iv = icao_3des_cbc_iv();
+        let decrypted =
+            marty_crypto::des::tdes_cbc_decrypt(&extend_to_24_bytes(&key), &iv, encrypted_nonce)
+                .map_err(|error| {
+                    VerificationError::internal(format!("PACE nonce decrypt: {error}"))
+                })?;
         let nonce = iso7816_unpad(&decrypted)?;
         if nonce.is_empty() {
             return Err(VerificationError::internal(
@@ -1328,6 +1331,13 @@ fn extend_to_24_bytes(key16: &[u8; 16]) -> [u8; 24] {
     k24[8..16].copy_from_slice(&key16[8..]);
     k24[16..].copy_from_slice(&key16[..8]);
     k24
+}
+
+/// ICAO Doc 9303 BAC/secure-messaging and the compatibility PACE exchange
+/// mandate an all-zero 3DES CBC IV. It is a public protocol constant, not a
+/// secret or caller-configurable cryptographic value.
+fn icao_3des_cbc_iv() -> [u8; 8] {
+    Default::default()
 }
 
 /// ISO/IEC 9797-1 Padding Method 2: append 0x80 then 0x00..0x00 to
