@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Add strict one-recipient-DID X25519 DIDComm authcrypt encryption and
+  decryption APIs using the existing ECDH-1PU/A256CBC-HS512 engine, including
+  every authorized recipient key-agreement method and Python bindings that
+  return authenticated sender and recipient key identifiers.
+
+### Security
+
+- Select DIDComm key IDs and public-key material atomically from verification
+  methods explicitly authorized by each DID document's `keyAgreement`
+  relationship. Reject sender/private-key mismatch, anoncrypt downgrade,
+  legacy ECDH-1PU derivation, and authenticated plaintext party substitution.
+
 ## [0.1.56] - 2026-08-14
 
 ### Fixed

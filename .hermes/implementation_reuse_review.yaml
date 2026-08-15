@@ -1,0 +1,44 @@
+status: complete
+search_scope:
+  - current_module_or_crate
+  - current_repository
+  - workspace_crates_packages_and_services
+  - bindings_adapters_ffi_and_api_layers
+  - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
+search_queries:
+  - "marty-didcomm authcrypt anoncrypt encrypted envelope"
+  - "affinidi-messaging-didcomm 0.14.0 ECDH-1PU authcrypt decrypt"
+  - "DIDComm Messaging 2.1 keyAgreement sender authenticated encryption"
+  - "marty-credentials DIDComm delivery wrappers"
+  - "marty-integration-tests independent DIDComm interoperability"
+candidate_implementations:
+  - path: marty-didcomm/src/encrypted_envelope.rs
+    language: Rust
+    disposition: extend_existing_canonical_envelope_boundary
+  - path: marty-didcomm/src/types.rs
+    language: Rust
+    disposition: consolidate_atomic_authorized_key_selection
+  - path: marty-bindings/src/lib.rs
+    language: Rust/Python FFI
+    disposition: extend_existing_binding_surface
+  - path: affinidi-messaging-didcomm@0.14.0
+    language: Rust dependency
+    disposition: reuse_pinned_jose_and_ecdh_1pu_engine
+  - path: marty-integration-tests/scripts/public_boundary_lane.py
+    language: Python
+    disposition: future_owned_cross_implementation_evidence_consumer
+no_match_statement: ""
+decision: reuse_existing
+canonical_implementation:
+  path: marty-didcomm/src/encrypted_envelope.rs
+  language: Rust
+rust_disposition: rust_canonical
+non_rust_rationale: ""
+non_rust_exception_approval: ""
+intentional_duplicate_exception:
+  rationale: ""
+  divergence_owner: ""
+  synchronization_or_compatibility_strategy: ""
+  retirement_or_convergence_plan: ""
+  architecture_decision_ref: ""
+  human_approval: ""

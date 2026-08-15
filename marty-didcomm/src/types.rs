@@ -40,73 +40,66 @@ impl DidDocument {
         None
     }
 
-    /// Find the first X25519 key agreement key (raw public key bytes).
-    pub fn x25519_key_agreement(&self) -> Option<Vec<u8>> {
-        for vm in &self.verification_method {
-            if vm.r#type == "X25519KeyAgreementKey2020"
-                || vm.r#type == "JsonWebKey2020"
-                || vm.r#type == "X25519KeyAgreementKey2019"
-            {
-                if let Some(ref jwk) = vm.public_key_jwk {
-                    if jwk.crv.as_deref() == Some("X25519") {
-                        if let Some(ref x) = jwk.x {
-                            return base64_url_decode(x).ok();
+    /// Find all X25519 methods explicitly authorized by `keyAgreement`.
+    ///
+    /// The method ID and public key are selected atomically so a JWE `kid`
+    /// cannot identify a different verification method than the key material
+    /// used for encryption. Verification methods that merely appear in
+    /// `verificationMethod` are not authorized for key agreement.
+    pub fn x25519_key_agreement_methods(&self) -> Vec<(String, [u8; 32])> {
+        let mut methods = Vec::new();
+        for relationship in &self.key_agreement {
+            let method = if let Some(reference) = relationship.as_str() {
+                let Some(reference) = canonical_method_id(&self.id, reference) else {
+                    continue;
+                };
+                let Some(method) = self.verification_method.iter().find(|candidate| {
+                    canonical_method_id(&self.id, &candidate.id).as_deref()
+                        == Some(reference.as_str())
+                }) else {
+                    continue;
+                };
+                method
+            } else {
+                // Inline relationship entries are themselves verification
+                // methods; malformed entries are not authorization grants.
+                match serde_json::from_value::<VerificationMethod>(relationship.clone()) {
+                    Ok(method) => {
+                        if let Some(result) = authorized_x25519_method(&self.id, &method) {
+                            if !methods.iter().any(|(id, _)| id == &result.0) {
+                                methods.push(result);
+                            }
                         }
+                        continue;
                     }
+                    Err(_) => continue,
                 }
-                if let Some(ref mb) = vm.public_key_multibase {
-                    return decode_multibase_x25519(mb);
+            };
+
+            if let Some(result) = authorized_x25519_method(&self.id, method) {
+                if !methods.iter().any(|(id, _)| id == &result.0) {
+                    methods.push(result);
                 }
             }
         }
 
-        // Also check inline keyAgreement entries
-        for ka in &self.key_agreement {
-            if let Ok(vm) = serde_json::from_value::<VerificationMethod>(ka.clone()) {
-                if let Some(ref jwk) = vm.public_key_jwk {
-                    if jwk.crv.as_deref() == Some("X25519") {
-                        if let Some(ref x) = jwk.x {
-                            return base64_url_decode(x).ok();
-                        }
-                    }
-                }
-            }
-        }
-
-        None
+        methods
     }
 
-    /// Get the key ID for the first X25519 key agreement key.
+    /// Find the first X25519 method explicitly authorized by `keyAgreement`.
+    pub fn x25519_key_agreement_method(&self) -> Option<(String, [u8; 32])> {
+        self.x25519_key_agreement_methods().into_iter().next()
+    }
+
+    /// Find the first authorized X25519 key agreement key (raw public key bytes).
+    pub fn x25519_key_agreement(&self) -> Option<Vec<u8>> {
+        self.x25519_key_agreement_method()
+            .map(|(_, key)| key.to_vec())
+    }
+
+    /// Get the key ID for the first authorized X25519 key agreement key.
     pub fn x25519_key_id(&self) -> Option<String> {
-        for vm in &self.verification_method {
-            if vm.r#type == "X25519KeyAgreementKey2020"
-                || vm.r#type == "JsonWebKey2020"
-                || vm.r#type == "X25519KeyAgreementKey2019"
-            {
-                if let Some(ref jwk) = vm.public_key_jwk {
-                    if jwk.crv.as_deref() == Some("X25519") {
-                        return Some(vm.id.clone());
-                    }
-                }
-                if vm.public_key_multibase.is_some() {
-                    return Some(vm.id.clone());
-                }
-            }
-        }
-        // Check inline keyAgreement
-        for ka in &self.key_agreement {
-            if let Some(s) = ka.as_str() {
-                return Some(s.to_string());
-            }
-            if let Ok(vm) = serde_json::from_value::<VerificationMethod>(ka.clone()) {
-                if let Some(ref jwk) = vm.public_key_jwk {
-                    if jwk.crv.as_deref() == Some("X25519") {
-                        return Some(vm.id.clone());
-                    }
-                }
-            }
-        }
-        None
+        self.x25519_key_agreement_method().map(|(id, _)| id)
     }
 }
 
@@ -241,6 +234,52 @@ fn base64_url_decode(s: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("base64url decode error: {e}"))
 }
 
+fn canonical_method_id(document_id: &str, method_id: &str) -> Option<String> {
+    if document_id.is_empty() || method_id.is_empty() {
+        return None;
+    }
+    if method_id.starts_with('#') {
+        return Some(format!("{document_id}{method_id}"));
+    }
+    if method_id
+        .strip_prefix(document_id)
+        .is_some_and(|suffix| suffix.starts_with('#') && suffix.len() > 1)
+    {
+        return Some(method_id.to_string());
+    }
+    None
+}
+
+fn authorized_x25519_method(
+    document_id: &str,
+    method: &VerificationMethod,
+) -> Option<(String, [u8; 32])> {
+    let method_id = canonical_method_id(document_id, &method.id)?;
+    if method.controller != document_id
+        || !matches!(
+            method.r#type.as_str(),
+            "JsonWebKey2020" | "X25519KeyAgreementKey2019" | "X25519KeyAgreementKey2020"
+        )
+    {
+        return None;
+    }
+
+    let bytes = if let Some(jwk) = &method.public_key_jwk {
+        if jwk.kty != "OKP" || jwk.crv.as_deref() != Some("X25519") {
+            return None;
+        }
+        base64_url_decode(jwk.x.as_deref()?).ok()?
+    } else if let Some(multibase) = &method.public_key_multibase {
+        decode_multibase_x25519(multibase)?
+    } else if let Some(base58) = &method.public_key_base58 {
+        bs58::decode(base58).into_vec().ok()?
+    } else {
+        return None;
+    };
+    let key: [u8; 32] = bytes.try_into().ok()?;
+    Some((method_id, key))
+}
+
 fn decode_multibase_x25519(mb: &str) -> Option<Vec<u8>> {
     // Multibase z-prefix = base58btc
     if !mb.starts_with('z') {
@@ -248,7 +287,7 @@ fn decode_multibase_x25519(mb: &str) -> Option<Vec<u8>> {
     }
     let decoded = bs58::decode(&mb[1..]).into_vec().ok()?;
     // Multicodec prefix for X25519: 0xEC01
-    if decoded.len() >= 34 && decoded[0] == 0xEC && decoded[1] == 0x01 {
+    if decoded.len() == 34 && decoded[0] == 0xEC && decoded[1] == 0x01 {
         Some(decoded[2..].to_vec())
     } else {
         None
