@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.57] - 2026-08-15
+
 ### Added
 
 - Add strict one-recipient-DID X25519 DIDComm authcrypt encryption and
