@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "ef_com": {
+    "hex": "60185F0104303130385F36063034303030305C06617563766F70",
+    "lds_version": "0108",
+    "unicode_version": "040000",
+    "data_groups": ["DG1", "DG2", "DG3", "DG4", "DG15", "DG16"]
+  },
+  "dg1": [
+    {
+      "name": "td3_passport",
+      "mrz": "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<L898902C36UTO7408122F1204159ZE184226B<<<<<10",
+      "expected": {
+        "document_code": "P",
+        "issuing_country": "UTO",
+        "surname": "ERIKSSON",
+        "given_names": "ANNA MARIA",
+        "passport_number": "L898902C3",
+        "nationality": "UTO",
+        "date_of_birth": "740812",
+        "sex": "F",
+        "date_of_expiry": "120415",
+        "personal_number": "ZE184226B",
+        "check_digit_composite": "0"
+      }
+    },
+    {
+      "name": "td2_identity_document",
+      "mrz": "I<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<D231458907UTO7408122F1204159<<<<<<<6",
+      "expected": {
+        "document_code": "I",
+        "issuing_country": "UTO",
+        "surname": "ERIKSSON",
+        "given_names": "ANNA MARIA",
+        "passport_number": "D23145890",
+        "nationality": "UTO",
+        "date_of_birth": "740812",
+        "sex": "F",
+        "date_of_expiry": "120415",
+        "personal_number": null,
+        "check_digit_composite": "6"
+      }
+    }
+  ],
+  "dg2": {
+    "hex": "75177F2E1482010283010087020101880200085F2E03FFD8FF",
+    "expected": {
+      "biometric_type": 2,
+      "biometric_subtype": 0,
+      "format_owner": 257,
+      "format_type": 8,
+      "data_hex": "FFD8FF"
+    }
+  },
+  "biometric_templates": [
+    {
+      "type": "facial_image",
+      "hex": "0101000802000000000000000000012C019000010001000200500000FFD8FFD9",
+      "expected": {
+        "width": 300,
+        "height": 400,
+        "quality": 80,
+        "image_format": "jpeg",
+        "image_hex": "FFD8FFD9",
+        "overall_quality": 0.8,
+        "issue_count": 0
+      }
+    },
+    {
+      "type": "fingerprint",
+      "hex": "0101000208000000000000000000005A020001F402BC01F401F40100ABCD",
+      "expected": {
+        "width": 500,
+        "height": 700,
+        "quality": 90,
+        "image_hex": "ABCD",
+        "overall_quality": 0.54,
+        "issue_count": 1
+      }
+    },
+    {
+      "type": "iris",
+      "hex": "01010006100000000000000000000201028001E008012C0005014000F0003CFF4FFF51",
+      "expected": {
+        "width": 640,
+        "height": 480,
+        "image_format": "jpeg2000",
+        "iris_radius": 60,
+        "image_hex": "FF4FFF51",
+        "overall_quality": 0.8,
+        "issue_count": 0
+      }
+    }
+  ],
+  "dg15": {
+    "hex": "6F81A230819F300D06092A864886F70D010101050003818D00308189028181008130E120BB785A45D8D87E6F1A89EF4C6B655A555F58887DC6F78C293E71B028621B464C7B3123DF8896449ACB2A6E0219B7A43141BA617AE0E94CB5372EB6D964A1DBF2A43BD0CE659E962AC2CE9CEDF681CA1E3C74EA23C62D9ABFB81371D2602E39162EB578F9DED459C758EFD6A27A755B8C0E0E31E040D4D37A276939090203010001",
+    "algorithm_oid": "1.2.840.113549.1.1.1",
+    "key_size": 1024,
+    "public_exponent": 65537,
+    "modulus": "90720959865975587166603625561976594921621174779535569789372699334586631905153720873201583713407982250831042547851484242747666081682056049634145216006405791393620080999060286754007679183204489930226332930795689688819387142433451742545038911615065545598901360285413610314013146332952545551112493332507476441353",
+    "fingerprint_sha256": "c083f46d09d7fc65388661f4e4deaefebab3d8d8c689a8fa30b7564cb68c609c"
+  },
+  "invalid": [
+    {"operation": "tlv", "hex": "", "code": "EMRTD_DATA.EMPTY"},
+    {"operation": "tlv", "hex": "5F", "code": "EMRTD_DATA.TRUNCATED"},
+    {"operation": "tlv", "hex": "6180", "code": "EMRTD_DATA.INVALID_TLV"},
+    {"operation": "tlv", "hex": "61810100", "code": "EMRTD_DATA.INVALID_TLV"},
+    {"operation": "dg1", "hex": "6200", "code": "EMRTD_DATA.INVALID_FORMAT"},
+    {"operation": "dg2", "hex": "75027F2E", "code": "EMRTD_DATA.TRUNCATED"},
+    {"operation": "facial_image", "hex": "0101000802000000000000000000", "code": "EMRTD_DATA.TRUNCATED"},
+    {"operation": "dg15", "hex": "6F0130", "code": "EMRTD_DATA.ENCODING"}
+  ]
+}
