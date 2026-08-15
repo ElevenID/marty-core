@@ -1,0 +1,194 @@
+{
+  "now": "2026-08-07T12:00:00Z",
+  "catalog_cases": [
+    {
+      "framework": null,
+      "expected_types": ["ICAO_PKD", "EU_TRUST_LIST", "AAMVA"]
+    },
+    {
+      "framework": "ICAO",
+      "expected_types": ["ICAO_PKD"]
+    },
+    {
+      "framework": "EUDI",
+      "expected_types": ["EU_TRUST_LIST"]
+    },
+    {
+      "framework": "AAMVA",
+      "expected_types": ["AAMVA"]
+    }
+  ],
+  "import_cases": [
+    {
+      "registry_type": "AAMVA",
+      "formats": ["MDOC", "MDOC", "SD_JWT_VC"],
+      "interval": 12,
+      "expected_formats": ["MDOC", "SD_JWT_VC"],
+      "expected_next_sync_at": "2026-08-08T00:00:00Z"
+    },
+    {
+      "registry_type": "ICAO_PKD",
+      "formats": ["VC_JWT"],
+      "interval": 24,
+      "error_contains": "does not support"
+    }
+  ],
+  "url_cases": [
+    {
+      "url": "https://registry.example/v1/trust-registry/sync",
+      "valid": true
+    },
+    {
+      "url": "https://registry.example:443/sync",
+      "valid": true
+    },
+    {
+      "url": "http://registry.example/sync",
+      "valid": false,
+      "error_contains": "HTTPS"
+    },
+    {
+      "url": "https://user:secret@registry.example/sync",
+      "valid": false,
+      "error_contains": "credentials"
+    },
+    {
+      "url": "https://registry.example:8443/sync",
+      "valid": false,
+      "error_contains": "standard HTTPS port"
+    },
+    {
+      "url": "https://registry.example/sync?token=secret",
+      "valid": false,
+      "error_contains": "query or fragment"
+    }
+  ],
+  "destination_cases": [
+    {
+      "url": "https://registry.example/sync",
+      "addresses": ["8.8.8.8", "1.1.1.1"],
+      "allowlist": "",
+      "expected_address": "1.1.1.1"
+    },
+    {
+      "url": "https://private-registry.example/sync",
+      "addresses": ["10.20.30.40"],
+      "allowlist": "private-registry.example",
+      "expected_address": "10.20.30.40"
+    },
+    {
+      "url": "https://registry.example/sync",
+      "addresses": ["127.0.0.1"],
+      "allowlist": "registry.example",
+      "error_contains": "non-public"
+    }
+  ],
+  "request_cases": [
+    {
+      "url": "https://registry.example/v1/sync",
+      "token": "cursor-1",
+      "address": "203.0.113.9",
+      "expected_request_url": "https://203.0.113.9/v1/sync?since=cursor-1",
+      "expected_host_header": "registry.example",
+      "expected_sni_hostname": "registry.example"
+    }
+  ],
+  "evaluation_cases": [
+    {
+      "name": "initial-empty-snapshot",
+      "previous": {
+        "sync_token": null,
+        "sequence": 0,
+        "entries": {},
+        "synchronized_at": null
+      },
+      "pages": [
+        {
+          "sync_token": "1",
+          "sequence": 1,
+          "entries": [],
+          "has_more": false,
+          "generated_at": "2026-08-07T11:59:00Z"
+        }
+      ],
+      "expected_complete": true,
+      "expected_token": "1",
+      "expected_sequence": 1,
+      "expected_pages": 1
+    },
+    {
+      "name": "two-page-empty-delta",
+      "previous": {
+        "sync_token": "current",
+        "sequence": 5,
+        "entries": {},
+        "synchronized_at": "2026-08-06T12:00:00Z"
+      },
+      "pages": [
+        {
+          "sync_token": "cursor-1",
+          "sequence": 6,
+          "entries": [],
+          "has_more": true,
+          "generated_at": "2026-08-07T11:58:00Z"
+        },
+        {
+          "sync_token": "cursor-2",
+          "sequence": 7,
+          "entries": [],
+          "has_more": false,
+          "generated_at": "2026-08-07T11:59:00Z"
+        }
+      ],
+      "expected_complete": true,
+      "expected_token": "cursor-2",
+      "expected_sequence": 7,
+      "expected_pages": 2
+    },
+    {
+      "name": "sequence-rollback",
+      "previous": {
+        "sync_token": "5",
+        "sequence": 5,
+        "entries": {},
+        "synchronized_at": null
+      },
+      "pages": [
+        {
+          "sync_token": "old",
+          "sequence": 4,
+          "entries": [],
+          "has_more": false,
+          "generated_at": "2026-08-07T11:59:00Z"
+        }
+      ],
+      "error_contains": "sequence rollback"
+    },
+    {
+      "name": "repeated-pagination-token",
+      "previous": {
+        "sync_token": null,
+        "sequence": 0,
+        "entries": {},
+        "synchronized_at": null
+      },
+      "pages": [
+        {
+          "sync_token": "same",
+          "sequence": 1,
+          "entries": [],
+          "has_more": true,
+          "generated_at": "2026-08-07T11:58:00Z"
+        },
+        {
+          "sync_token": "same",
+          "sequence": 2,
+          "entries": [],
+          "has_more": true,
+          "generated_at": "2026-08-07T11:59:00Z"
+        }
+      ],
+      "error_contains": "repeated a pagination token"
+    }
+  ]
+}

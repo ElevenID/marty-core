@@ -955,10 +955,92 @@ fn native_backend_diagnostics() -> PyResult<String> {
             "did_identifier_derivation",
             "openid4vp_mdoc_handover",
             "vds_nc_profile",
+            "trust_registry_sync",
             "status_list"
         ]
     }))
     .map_err(to_pyerr)
+}
+
+#[pyfunction]
+#[pyo3(signature = (framework=None))]
+fn trust_registry_catalog_json(framework: Option<&str>) -> PyResult<String> {
+    marty_verification::trust_sync::registry_catalog_json(framework).map_err(to_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_behavior_fixture_json() -> &'static str {
+    marty_verification::trust_sync::behavior_fixture_json()
+}
+
+#[pyfunction]
+#[pyo3(signature = (registry_type, now_rfc3339, requested_formats_json=None, sync_interval_hours=None))]
+fn trust_registry_import_decision_json(
+    registry_type: &str,
+    now_rfc3339: &str,
+    requested_formats_json: Option<&str>,
+    sync_interval_hours: Option<u16>,
+) -> PyResult<String> {
+    marty_verification::trust_sync::import_decision_json(
+        registry_type,
+        requested_formats_json,
+        sync_interval_hours,
+        now_rfc3339,
+    )
+    .map_err(to_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_validate_url(url: &str) -> PyResult<String> {
+    marty_verification::trust_sync::validate_registry_url(url).map_err(to_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_destination_decision_json(
+    url: &str,
+    addresses_json: &str,
+    private_host_allowlist: &str,
+) -> PyResult<String> {
+    marty_verification::trust_sync::destination_decision_json(
+        url,
+        addresses_json,
+        private_host_allowlist,
+    )
+    .map_err(to_pyerr)
+}
+
+#[pyfunction]
+#[pyo3(signature = (url, token=None, address=None))]
+fn trust_registry_request_plan_json(
+    url: &str,
+    token: Option<&str>,
+    address: Option<&str>,
+) -> PyResult<String> {
+    marty_verification::trust_sync::request_plan_json(url, token, address).map_err(to_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_validate_feed_json(feed_json: &str) -> PyResult<String> {
+    marty_verification::trust_sync::validate_feed_json(feed_json).map_err(to_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_evaluate_pages_json(
+    previous_state_json: &str,
+    pages_json: &str,
+    now_rfc3339: &str,
+) -> PyResult<String> {
+    marty_verification::trust_sync::evaluate_pages_json(
+        previous_state_json,
+        pages_json,
+        now_rfc3339,
+    )
+    .map_err(to_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_revalidate_state_json(state_json: &str, now_rfc3339: &str) -> PyResult<String> {
+    marty_verification::trust_sync::revalidate_state_json(state_json, now_rfc3339).map_err(to_pyerr)
 }
 
 /// Verify a detached provider/KMS signature using a public JWK.
@@ -2475,6 +2557,18 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(native_backend_diagnostics, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_catalog_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_behavior_fixture_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_import_decision_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_validate_url, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        trust_registry_destination_decision_json,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_request_plan_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_validate_feed_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_evaluate_pages_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_revalidate_state_json, m)?)?;
     device_auth::register_device_auth_bindings(m)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;

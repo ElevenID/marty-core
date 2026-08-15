@@ -53,6 +53,7 @@ pub mod open_badges;
 pub mod passport_integrity;
 pub mod policy;
 pub mod trust_anchor;
+pub mod trust_sync;
 pub mod vcdm;
 pub mod verification;
 

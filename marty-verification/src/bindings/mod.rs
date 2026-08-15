@@ -4251,9 +4251,100 @@ fn emrtd_rsa_public_key_spki(modulus: &str, public_exponent: u64) -> PyResult<Ve
     crate::emrtd_data::rsa_public_key_spki(modulus, public_exponent).map_err(emrtd_data_pyerr)
 }
 
+fn trust_sync_pyerr(error: crate::trust_sync::TrustSyncError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(error.to_string())
+}
+
+#[pyfunction]
+#[pyo3(signature = (framework=None))]
+fn trust_registry_catalog_json(framework: Option<&str>) -> PyResult<String> {
+    crate::trust_sync::registry_catalog_json(framework).map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_behavior_fixture_json() -> &'static str {
+    crate::trust_sync::behavior_fixture_json()
+}
+
+#[pyfunction]
+#[pyo3(signature = (registry_type, now_rfc3339, requested_formats_json=None, sync_interval_hours=None))]
+fn trust_registry_import_decision_json(
+    registry_type: &str,
+    now_rfc3339: &str,
+    requested_formats_json: Option<&str>,
+    sync_interval_hours: Option<u16>,
+) -> PyResult<String> {
+    crate::trust_sync::import_decision_json(
+        registry_type,
+        requested_formats_json,
+        sync_interval_hours,
+        now_rfc3339,
+    )
+    .map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_validate_url(url: &str) -> PyResult<String> {
+    crate::trust_sync::validate_registry_url(url).map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_destination_decision_json(
+    url: &str,
+    addresses_json: &str,
+    private_host_allowlist: &str,
+) -> PyResult<String> {
+    crate::trust_sync::destination_decision_json(url, addresses_json, private_host_allowlist)
+        .map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+#[pyo3(signature = (url, token=None, address=None))]
+fn trust_registry_request_plan_json(
+    url: &str,
+    token: Option<&str>,
+    address: Option<&str>,
+) -> PyResult<String> {
+    crate::trust_sync::request_plan_json(url, token, address).map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_validate_feed_json(feed_json: &str) -> PyResult<String> {
+    crate::trust_sync::validate_feed_json(feed_json).map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_evaluate_pages_json(
+    previous_state_json: &str,
+    pages_json: &str,
+    now_rfc3339: &str,
+) -> PyResult<String> {
+    crate::trust_sync::evaluate_pages_json(previous_state_json, pages_json, now_rfc3339)
+        .map_err(trust_sync_pyerr)
+}
+
+#[pyfunction]
+fn trust_registry_revalidate_state_json(state_json: &str, now_rfc3339: &str) -> PyResult<String> {
+    crate::trust_sync::revalidate_state_json(state_json, now_rfc3339).map_err(trust_sync_pyerr)
+}
+
 /// Create the Python module for marty_verification.
 #[pymodule]
 pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Trust-registry synchronization kernel
+    m.add_function(wrap_pyfunction!(trust_registry_catalog_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_behavior_fixture_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_import_decision_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_validate_url, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        trust_registry_destination_decision_json,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_request_plan_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_validate_feed_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_evaluate_pages_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_revalidate_state_json, m)?)?;
+
     // MDL Verification
     m.add_class::<PyMdlVerificationResult>()?;
     m.add_class::<PyIacaRegistry>()?;
@@ -4518,6 +4609,20 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 ///
 /// Called from marty-rs to add verification functions directly.
 pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Trust-registry synchronization kernel
+    m.add_function(wrap_pyfunction!(trust_registry_catalog_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_behavior_fixture_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_import_decision_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_validate_url, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        trust_registry_destination_decision_json,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_request_plan_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_validate_feed_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_evaluate_pages_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_revalidate_state_json, m)?)?;
+
     // MDL Verification
     m.add_class::<PyMdlVerificationResult>()?;
     m.add_class::<PyIacaRegistry>()?;
