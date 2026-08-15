@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add canonical credential evidence, reconciliation, governance, VCDM,
+  key-attestation, and status-token decisions for fail-closed service adapters.
+- Add canonical passport-chip active-authentication, EAC, APDU, DG14/DG15,
+  MRZ, SOD, and LDS parsing kernels, plus trust-registry synchronization
+  planning and verification.
+- Add SPKI and X.509 public-key-to-JWK conversion and DER-to-P1363 ECDSA
+  normalization for signing, JWKS, DID, and OID4VCI consumers.
+- Add bounded W3C Bitstring Status List decoding that derives list length from
+  GZIP output while enforcing the privacy floor and global size limit.
 - Add strict one-recipient-DID X25519 DIDComm authcrypt encryption and
   decryption APIs using the existing ECDH-1PU/A256CBC-HS512 engine, including
   every authorized recipient key-agreement method and Python bindings that
@@ -18,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Reject malformed credential decisions, attestations, document data,
+  certificates, public keys, signatures, trust synchronization inputs, and
+  compressed status lists without falling back to non-Rust implementations.
 - Select DIDComm key IDs and public-key material atomically from verification
   methods explicitly authorized by each DID document's `keyAgreement`
   relationship. Reject sender/private-key mismatch, anoncrypt downgrade,
