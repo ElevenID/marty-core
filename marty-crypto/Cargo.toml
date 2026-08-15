@@ -26,7 +26,8 @@ jwk = []             # Public SPKI/certificate to RFC 7517 conversion
 ecdh = []            # P-256/P-384/X25519 agreement
 hashing = []         # SHA-1/SHA-2 and HMAC helpers
 signature-verification = ["ecdsa", "eddsa", "rsa"]
-x509 = ["hashing", "signature-verification"]
+x509-parsing = ["hashing"]
+x509 = ["x509-parsing", "signature-verification"]
 crl = ["x509", "cert-builder"]
 ocsp = ["x509", "cert-builder"]
 symmetric = []       # AES-GCM, AES-CBC, 3DES
@@ -137,3 +138,31 @@ hex = "0.4"
 [dev-dependencies]
 tempfile = { workspace = true }
 rcgen = { workspace = true }
+
+[[test]]
+name = "cavp_aes_gcm"
+required-features = ["symmetric"]
+
+[[test]]
+name = "cavp_ecdh"
+required-features = ["ecdh", "kdf"]
+
+[[test]]
+name = "cavp_ecdsa"
+required-features = ["ecdh", "ecdsa"]
+
+[[test]]
+name = "cavp_rsa"
+required-features = ["rsa"]
+
+[[test]]
+name = "cavp_sha_hmac"
+required-features = ["hashing"]
+
+[[test]]
+name = "public_jwk_vectors"
+required-features = ["jwk"]
+
+[[test]]
+name = "rfc5869_hkdf"
+required-features = ["kdf"]

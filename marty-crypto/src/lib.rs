@@ -35,7 +35,7 @@
 pub mod bbs;
 #[cfg(feature = "cert-builder")]
 pub mod cert_builder;
-#[cfg(feature = "x509")]
+#[cfg(feature = "x509-parsing")]
 pub mod certificate;
 #[cfg(feature = "crl")]
 pub mod crl;
