@@ -2013,6 +2013,38 @@ fn didcomm_encrypt(plaintext_json: &str, recipient_did_document_json: &str) -> P
     marty_didcomm::encrypt_for_recipient(plaintext_json, &did_doc).map_err(to_pyerr)
 }
 
+/// Encrypt a DIDComm Messaging 2.1 plaintext message with sender authentication.
+///
+/// The sender private key must match an X25519 method authorized by the sender
+/// DID document's `keyAgreement` relationship. The plaintext `from` and `to`
+/// values must identify the supplied sender and recipient documents.
+#[pyfunction]
+fn didcomm_encrypt_authcrypt(
+    plaintext_json: &str,
+    sender_did_document_json: &str,
+    sender_x25519_private_key: &[u8],
+    recipient_did_document_json: &str,
+) -> PyResult<String> {
+    if sender_x25519_private_key.len() != 32 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "X25519 private key must be exactly 32 bytes",
+        ));
+    }
+    let sender_doc: marty_didcomm::DidDocument =
+        serde_json::from_str(sender_did_document_json).map_err(to_pyerr)?;
+    let recipient_doc: marty_didcomm::DidDocument =
+        serde_json::from_str(recipient_did_document_json).map_err(to_pyerr)?;
+    let mut sender_key = [0u8; 32];
+    sender_key.copy_from_slice(sender_x25519_private_key);
+    marty_didcomm::encrypt_for_recipient_authenticated(
+        plaintext_json,
+        &sender_doc,
+        &sender_key,
+        &recipient_doc,
+    )
+    .map_err(to_pyerr)
+}
+
 /// Decrypt a DIDComm v2 JWE (anoncrypt) message using the recipient's X25519 private key.
 ///
 /// Args:
@@ -2031,6 +2063,39 @@ fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyRes
     let mut key = [0u8; 32];
     key.copy_from_slice(recipient_x25519_private_key);
     marty_didcomm::decrypt_jwe(jwe_json, &key).map_err(to_pyerr)
+}
+
+/// Decrypt a one-recipient DIDComm authcrypt envelope and authenticate its sender.
+///
+/// Returns JSON containing `plaintext`, `sender_kid`, and `recipient_kid`.
+/// Anoncrypt, legacy ECDH-1PU derivation, unauthorized methods, key/document
+/// mismatch, and plaintext party substitution are rejected.
+#[pyfunction]
+fn didcomm_decrypt_authcrypt(
+    jwe_json: &str,
+    recipient_x25519_private_key: &[u8],
+    recipient_did_document_json: &str,
+    sender_did_document_json: &str,
+) -> PyResult<String> {
+    if recipient_x25519_private_key.len() != 32 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "X25519 private key must be exactly 32 bytes",
+        ));
+    }
+    let recipient_doc: marty_didcomm::DidDocument =
+        serde_json::from_str(recipient_did_document_json).map_err(to_pyerr)?;
+    let sender_doc: marty_didcomm::DidDocument =
+        serde_json::from_str(sender_did_document_json).map_err(to_pyerr)?;
+    let mut recipient_key = [0u8; 32];
+    recipient_key.copy_from_slice(recipient_x25519_private_key);
+    let result = marty_didcomm::decrypt_authenticated_jwe(
+        jwe_json,
+        &recipient_key,
+        &recipient_doc,
+        &sender_doc,
+    )
+    .map_err(to_pyerr)?;
+    serde_json::to_string(&result).map_err(to_pyerr)
 }
 
 // ============================================================================
@@ -2656,7 +2721,9 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(didcomm_pack_credential, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_unpack_message, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_encrypt_authcrypt, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_decrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(didcomm_decrypt_authcrypt, m)?)?;
     Ok(())
 }
 
