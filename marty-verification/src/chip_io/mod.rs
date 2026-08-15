@@ -42,22 +42,155 @@ pub struct ApduCommand {
 }
 
 impl ApduCommand {
+    /// Parse an ISO/IEC 7816-4 short command APDU.
+    pub fn from_bytes(raw: &[u8]) -> VerificationResult<Self> {
+        if raw.len() < 4 {
+            return Err(VerificationError::internal(
+                "APDU command must contain CLA INS P1 P2".to_string(),
+            ));
+        }
+        let (cla, ins, p1, p2) = (raw[0], raw[1], raw[2], raw[3]);
+        if raw.len() == 4 {
+            return Ok(Self {
+                cla,
+                ins,
+                p1,
+                p2,
+                data: Vec::new(),
+                le: None,
+            });
+        }
+        if raw.len() == 5 {
+            return Ok(Self {
+                cla,
+                ins,
+                p1,
+                p2,
+                data: Vec::new(),
+                le: Some(raw[4] as usize),
+            });
+        }
+        if raw[4] != 0 {
+            let lc = raw[4] as usize;
+            let data_end = 5usize.checked_add(lc).ok_or_else(|| {
+                VerificationError::internal("APDU command length overflow".to_string())
+            })?;
+            if raw.len() != data_end && raw.len() != data_end + 1 {
+                return Err(VerificationError::internal(
+                    "APDU command has inconsistent short-form Lc/Le".to_string(),
+                ));
+            }
+            return Ok(Self {
+                cla,
+                ins,
+                p1,
+                p2,
+                data: raw[5..data_end].to_vec(),
+                le: (raw.len() == data_end + 1).then(|| raw[data_end] as usize),
+            });
+        }
+        if raw.len() == 7 {
+            return Ok(Self {
+                cla,
+                ins,
+                p1,
+                p2,
+                data: Vec::new(),
+                le: Some(u16::from_be_bytes([raw[5], raw[6]]) as usize),
+            });
+        }
+        if raw.len() < 7 {
+            return Err(VerificationError::internal(
+                "Extended APDU is missing its two-byte length",
+            ));
+        }
+        let lc = u16::from_be_bytes([raw[5], raw[6]]) as usize;
+        let data_end = 7usize
+            .checked_add(lc)
+            .ok_or_else(|| VerificationError::internal("Extended APDU command length overflow"))?;
+        if raw.len() != data_end && raw.len() != data_end + 2 {
+            return Err(VerificationError::internal(
+                "APDU command has inconsistent extended Lc/Le",
+            ));
+        }
+        Ok(Self {
+            cla,
+            ins,
+            p1,
+            p2,
+            data: raw[7..data_end].to_vec(),
+            le: (raw.len() == data_end + 2)
+                .then(|| u16::from_be_bytes([raw[data_end], raw[data_end + 1]]) as usize),
+        })
+    }
+
     /// Serialise to ISO/IEC 7816-4 byte wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![self.cla, self.ins, self.p1, self.p2];
-        if !self.data.is_empty() {
-            debug_assert!(
-                self.data.len() <= 255,
-                "APDU data exceeds short-form Lc limit"
-            );
-            buf.push(self.data.len() as u8);
-            buf.extend_from_slice(&self.data);
-        }
-        if let Some(le) = self.le {
-            buf.push(le as u8);
-        }
-        buf
+        encode_apdu_command(
+            self.cla,
+            self.ins,
+            self.p1,
+            self.p2,
+            (!self.data.is_empty()).then_some(self.data.as_slice()),
+            self.le,
+        )
+        .expect("validated APDU command")
     }
+}
+
+/// Encode short or extended ISO/IEC 7816-4 command APDU fields.
+pub fn encode_apdu_command(
+    cla: u8,
+    ins: u8,
+    p1: u8,
+    p2: u8,
+    data: Option<&[u8]>,
+    le: Option<usize>,
+) -> VerificationResult<Vec<u8>> {
+    let data_len = data.map_or(0, <[u8]>::len);
+    if data_len > u16::MAX as usize {
+        return Err(VerificationError::internal(
+            "APDU command data exceeds extended-length capacity",
+        ));
+    }
+    if le.is_some_and(|value| value > u16::MAX as usize) {
+        return Err(VerificationError::internal(
+            "APDU Le exceeds extended-length capacity",
+        ));
+    }
+
+    let mut encoded = vec![cla, ins, p1, p2];
+    match (data, le) {
+        (None, None) => {}
+        (None, Some(expected)) if expected <= u8::MAX as usize => {
+            encoded.push(expected as u8);
+        }
+        (None, Some(expected)) => {
+            encoded.push(0);
+            encoded.extend_from_slice(&(expected as u16).to_be_bytes());
+        }
+        (Some(value), expected) if value.len() <= u8::MAX as usize => {
+            encoded.push(value.len() as u8);
+            encoded.extend_from_slice(value);
+            if let Some(expected) = expected {
+                if expected > u8::MAX as usize {
+                    return Err(VerificationError::internal(
+                        "Short APDU data cannot be combined with extended Le",
+                    ));
+                }
+                encoded.push(expected as u8);
+            }
+        }
+        (Some(value), expected) => {
+            encoded.push(0);
+            encoded.extend_from_slice(&(value.len() as u16).to_be_bytes());
+            encoded.extend_from_slice(value);
+            if let Some(expected) = expected {
+                encoded.extend_from_slice(&(expected as u16).to_be_bytes());
+            }
+        }
+    }
+    Ok(encoded)
 }
 
 /// ISO/IEC 7816-4 response APDU.
@@ -95,6 +228,102 @@ impl ApduResponse {
     #[inline]
     pub fn is_success(&self) -> bool {
         self.status_word() == 0x9000
+    }
+
+    pub fn is_warning(&self) -> bool {
+        matches!(self.sw1, 0x62 | 0x63)
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.sw1 >= 0x64
+    }
+
+    pub fn status_description(&self) -> String {
+        let description = match self.status_word() {
+            0x9000 => Some("Success"),
+            0x6100 => Some("Response bytes available"),
+            0x6281 => Some("Part of returned data corrupted"),
+            0x6282 => Some("End of file reached"),
+            0x6283 => Some("Selected file invalidated"),
+            0x6284 => Some("File control information not formatted"),
+            0x6300 => Some("Authentication failed"),
+            0x6381 => Some("File filled up by last write"),
+            0x6400 => Some("Execution error"),
+            0x6581 => Some("Memory failure"),
+            0x6700 => Some("Wrong length"),
+            0x6800 => Some("Functions in CLA not supported"),
+            0x6900 => Some("Command not allowed"),
+            0x6A00 => Some("Wrong parameters P1-P2"),
+            0x6A80 => Some("Incorrect parameters in data field"),
+            0x6A81 => Some("Function not supported"),
+            0x6A82 => Some("File not found"),
+            0x6A83 => Some("Record not found"),
+            0x6A84 => Some("Not enough memory space"),
+            0x6A86 => Some("Incorrect parameters P1-P2"),
+            0x6A88 => Some("Referenced data not found"),
+            0x6B00 => Some("Wrong parameters P1-P2"),
+            0x6C00 => Some("Wrong Le field"),
+            0x6D00 => Some("Instruction code not supported"),
+            0x6E00 => Some("Class not supported"),
+            0x6F00 => Some("No precise diagnosis"),
+            _ => None,
+        };
+        if let Some(description) = description {
+            return description.to_string();
+        }
+        let masked = self.status_word() & 0xFF00;
+        let masked_description = match masked {
+            0x6100 => Some("Response bytes available"),
+            0x6200 => Some("Warning: state unchanged"),
+            0x6300 => Some("Warning: state changed"),
+            0x6C00 => Some("Wrong Le field"),
+            _ => None,
+        };
+        masked_description.map_or_else(
+            || format!("Unknown status: 0x{:04X}", self.status_word()),
+            |value| format!("{value} (0x{:04X})", self.status_word()),
+        )
+    }
+}
+
+pub fn build_read_binary_commands(
+    length: usize,
+    offset: usize,
+) -> VerificationResult<Vec<ApduCommand>> {
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| VerificationError::internal("APDU read range overflow"))?;
+    if end > u16::MAX as usize + 1 {
+        return Err(VerificationError::internal(
+            "APDU read range exceeds READ BINARY offset capacity",
+        ));
+    }
+    let mut commands = Vec::with_capacity(length.div_ceil(255));
+    let mut bytes_read = 0;
+    while bytes_read < length {
+        let chunk = (length - bytes_read).min(255);
+        let current = offset + bytes_read;
+        commands.push(ApduCommand {
+            cla: 0,
+            ins: 0xB0,
+            p1: (current >> 8) as u8,
+            p2: current as u8,
+            data: Vec::new(),
+            le: Some(chunk),
+        });
+        bytes_read += chunk;
+    }
+    Ok(commands)
+}
+
+pub fn passport_data_group_file_id(data_group: u8) -> VerificationResult<u16> {
+    match data_group {
+        1..=4 => Ok(0x0100 + u16::from(data_group)),
+        14 => Ok(0x010E),
+        15 => Ok(0x010F),
+        _ => Err(VerificationError::internal(format!(
+            "Unsupported passport data group: {data_group}"
+        ))),
     }
 }
 
@@ -250,11 +479,23 @@ pub struct BacKeys {
     pub k_enc: [u8; 16],
     /// 16-byte 3DES MAC key (K1‖K2).
     pub k_mac: [u8; 16],
+    /// First 16 bytes of SHA-1(MRZ information).
+    pub k_seed: [u8; 16],
 }
 
 impl std::fmt::Debug for BacKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("BacKeys { … }")
+    }
+}
+
+impl BacKeys {
+    pub fn from_parts(k_enc: [u8; 16], k_mac: [u8; 16], k_seed: [u8; 16]) -> Self {
+        Self {
+            k_enc,
+            k_mac,
+            k_seed,
+        }
     }
 }
 
@@ -273,7 +514,136 @@ pub struct BacSession {
     ssc: [u8; 8],
 }
 
+/// In-progress BAC mutual-authentication exchange.
+pub struct BacHandshake {
+    base_keys: BacKeys,
+    rnd_ifd: [u8; 8],
+    k_ifd: [u8; 16],
+    rnd_ic: [u8; 8],
+}
+
+impl BacHandshake {
+    /// Start a BAC exchange with cryptographically random reader material.
+    pub fn begin(mrz: &MrzKeyInfo, rnd_ic: &[u8]) -> VerificationResult<Self> {
+        use rand::RngCore;
+
+        let mut rnd_ifd = [0u8; 8];
+        let mut k_ifd = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut rnd_ifd);
+        rand::rngs::OsRng.fill_bytes(&mut k_ifd);
+        Self::begin_with_random(mrz, rnd_ic, rnd_ifd, k_ifd)
+    }
+
+    /// Start a BAC exchange from previously derived base keys.
+    pub fn begin_with_keys(base_keys: BacKeys, rnd_ic: &[u8]) -> VerificationResult<Self> {
+        use rand::RngCore;
+
+        let mut rnd_ifd = [0u8; 8];
+        let mut k_ifd = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut rnd_ifd);
+        rand::rngs::OsRng.fill_bytes(&mut k_ifd);
+        let rnd_ic = rnd_ic.try_into().map_err(|_| {
+            VerificationError::internal("BAC: chip challenge must be exactly 8 bytes".to_string())
+        })?;
+        Ok(Self {
+            base_keys,
+            rnd_ifd,
+            k_ifd,
+            rnd_ic,
+        })
+    }
+
+    /// Start a deterministic BAC exchange for conformance-vector testing.
+    pub fn begin_with_random(
+        mrz: &MrzKeyInfo,
+        rnd_ic: &[u8],
+        rnd_ifd: [u8; 8],
+        k_ifd: [u8; 16],
+    ) -> VerificationResult<Self> {
+        let rnd_ic: [u8; 8] = rnd_ic.try_into().map_err(|_| {
+            VerificationError::internal("BAC: chip challenge must be exactly 8 bytes".to_string())
+        })?;
+        Ok(Self {
+            base_keys: derive_bac_base_keys(mrz)?,
+            rnd_ifd,
+            k_ifd,
+            rnd_ic,
+        })
+    }
+
+    /// Build `E.IFD || M.IFD`, the 40-byte EXTERNAL AUTHENTICATE data field.
+    pub fn command_data(&self) -> VerificationResult<Vec<u8>> {
+        let mut plaintext = Vec::with_capacity(32);
+        plaintext.extend_from_slice(&self.rnd_ifd);
+        plaintext.extend_from_slice(&self.rnd_ic);
+        plaintext.extend_from_slice(&self.k_ifd);
+        let iv = icao_3des_cbc_iv();
+        let encrypted = marty_crypto::des::tdes_cbc_encrypt(
+            &extend_to_24_bytes(&self.base_keys.k_enc),
+            &iv,
+            &plaintext,
+        )
+        .map_err(|error| VerificationError::internal(format!("BAC encrypt failed: {error}")))?;
+        let mac = retail_mac_3des(&self.base_keys.k_mac, &encrypted)?;
+        let mut result = encrypted;
+        result.extend_from_slice(&mac);
+        Ok(result)
+    }
+
+    /// Verify the chip response and establish secure-messaging keys.
+    pub fn complete(self, response: &[u8]) -> VerificationResult<BacSession> {
+        if response.len() != 40 {
+            return Err(VerificationError::internal(format!(
+                "BAC: response must be exactly 40 bytes, got {}",
+                response.len()
+            )));
+        }
+        let (encrypted, received_mac) = response.split_at(32);
+        let expected_mac = retail_mac_3des(&self.base_keys.k_mac, encrypted)?;
+        if !constant_time_eq(&expected_mac, received_mac) {
+            return Err(VerificationError::internal(
+                "BAC: chip response MAC verification failed".to_string(),
+            ));
+        }
+        let iv = icao_3des_cbc_iv();
+        let plaintext = marty_crypto::des::tdes_cbc_decrypt(
+            &extend_to_24_bytes(&self.base_keys.k_enc),
+            &iv,
+            encrypted,
+        )
+        .map_err(|error| VerificationError::internal(format!("BAC decrypt failed: {error}")))?;
+        if plaintext[..8] != self.rnd_ic {
+            return Err(VerificationError::internal(
+                "BAC: reflected Rnd.IC mismatch".to_string(),
+            ));
+        }
+        if plaintext[8..16] != self.rnd_ifd {
+            return Err(VerificationError::internal(
+                "BAC: reflected Rnd.IFD mismatch".to_string(),
+            ));
+        }
+        derive_bac_session_keys(&self.k_ifd, &plaintext[16..32], &self.rnd_ic, &self.rnd_ifd)
+    }
+}
+
 impl BacSession {
+    /// Restore a BAC secure-messaging session from established key material.
+    pub fn from_session_keys(k_enc: [u8; 16], k_mac: [u8; 16], ssc: [u8; 8]) -> Self {
+        Self { k_enc, k_mac, ssc }
+    }
+
+    pub fn encryption_key(&self) -> &[u8; 16] {
+        &self.k_enc
+    }
+
+    pub fn mac_key(&self) -> &[u8; 16] {
+        &self.k_mac
+    }
+
+    pub fn send_sequence_counter(&self) -> &[u8; 8] {
+        &self.ssc
+    }
+
     /// Perform the full BAC handshake with the chip.
     ///
     /// Sends `GET CHALLENGE` followed by `EXTERNAL AUTHENTICATE` to the chip,
@@ -285,10 +655,6 @@ impl BacSession {
     /// - The chip's response MAC is invalid.
     /// - The reflected nonces don't match.
     pub fn establish(chip: &mut dyn PassportChip, mrz: &MrzKeyInfo) -> VerificationResult<Self> {
-        use rand::RngCore;
-
-        let base_keys = derive_bac_base_keys(mrz)?;
-
         // ── Step 1: Select eMRTD AID ─────────────────────────────────────────
         let aid: &[u8] = &[0xA0, 0x00, 0x00, 0x02, 0x47, 0x10, 0x01];
         let select = ApduCommand {
@@ -324,32 +690,16 @@ impl BacSession {
                 resp.data.len()
             )));
         }
-        let mut rnd_ic = [0u8; 8];
-        rnd_ic.copy_from_slice(&resp.data);
+        let handshake = BacHandshake::begin(mrz, &resp.data)?;
 
         // ── Step 3: Generate Rnd.IFD + KID.IFD ───────────────────────────────
-        let mut rnd_ifd = [0u8; 8];
-        let mut kid_ifd = [0u8; 8];
-        rand::rngs::OsRng.fill_bytes(&mut rnd_ifd);
-        rand::rngs::OsRng.fill_bytes(&mut kid_ifd);
 
         // ── Step 4: E_IFD = 3DES-CBC(K_ENC, 0, Rnd.IFD‖Rnd.IC‖KID.IFD) ─────
-        let mut m1 = [0u8; 24];
-        m1[..8].copy_from_slice(&rnd_ifd);
-        m1[8..16].copy_from_slice(&rnd_ic);
-        m1[16..].copy_from_slice(&kid_ifd);
-
-        let k_enc_24 = extend_to_24_bytes(&base_keys.k_enc);
-        let e_ifd = marty_crypto::des::tdes_cbc_encrypt(&k_enc_24, &[0u8; 8], &m1)
-            .map_err(|e| VerificationError::internal(format!("BAC encrypt failed: {}", e)))?;
 
         // ── Step 5: M_IFD = Retail-MAC(K_MAC, E_IFD) ─────────────────────────
-        let m_ifd = retail_mac_3des(&base_keys.k_mac, &e_ifd)?;
 
         // ── Step 6: EXTERNAL AUTHENTICATE ────────────────────────────────────
-        let mut auth_data = Vec::with_capacity(32);
-        auth_data.extend_from_slice(&e_ifd);
-        auth_data.extend_from_slice(&m_ifd);
+        let auth_data = handshake.command_data()?;
 
         let ext_auth = ApduCommand {
             cla: 0x00,
@@ -374,57 +724,9 @@ impl BacSession {
         }
 
         // ── Step 7: Verify and decrypt chip response ──────────────────────────
-        let e_ic = &resp.data[..32];
-        let m_ic = &resp.data[32..40];
-
-        let expected_mac = retail_mac_3des(&base_keys.k_mac, e_ic)?;
-        if !constant_time_eq(&expected_mac, m_ic) {
-            return Err(VerificationError::internal(
-                "BAC: chip response MAC verification failed".to_string(),
-            ));
-        }
-
-        let k_enc_24 = extend_to_24_bytes(&base_keys.k_enc);
-        let m2 = marty_crypto::des::tdes_cbc_decrypt(&k_enc_24, &[0u8; 8], e_ic)
-            .map_err(|e| VerificationError::internal(format!("BAC decrypt failed: {}", e)))?;
-
-        if m2[0..8] != rnd_ic {
-            return Err(VerificationError::internal(
-                "BAC: reflected Rnd.IC mismatch — possible man-in-the-middle".to_string(),
-            ));
-        }
-        if m2[8..16] != rnd_ifd {
-            return Err(VerificationError::internal(
-                "BAC: reflected Rnd.IFD mismatch — possible man-in-the-middle".to_string(),
-            ));
-        }
+        handshake.complete(&resp.data)
 
         // ── Step 8: Derive session keys ───────────────────────────────────────
-        let ks_enc;
-        let ks_mac;
-        let ssc;
-        {
-            let mut seed = [0u8; 8];
-            for i in 0..8 {
-                seed[i] = rnd_ifd[i] ^ rnd_ic[i];
-            }
-            ks_enc = bac_kdf_16(&seed, 1)?;
-            ks_mac = bac_kdf_16(&seed, 2)?;
-
-            // SSC = last 4 bytes of Rnd.IC || last 4 bytes of Rnd.IFD
-            ssc = {
-                let mut s = [0u8; 8];
-                s[..4].copy_from_slice(&rnd_ic[4..]);
-                s[4..].copy_from_slice(&rnd_ifd[4..]);
-                s
-            };
-        }
-
-        Ok(Self {
-            k_enc: ks_enc,
-            k_mac: ks_mac,
-            ssc,
-        })
     }
 
     /// Protect a plaintext command APDU with 3DES-CBC + Retail-MAC secure messaging.
@@ -439,7 +741,7 @@ impl BacSession {
         if !cmd.data.is_empty() {
             let padded = iso7816_pad(&cmd.data);
             let k24 = extend_to_24_bytes(&self.k_enc);
-            let iv = compute_3des_iv_from_ssc(&self.k_enc, &self.ssc)?;
+            let iv = icao_3des_cbc_iv();
             let enc = marty_crypto::des::tdes_cbc_encrypt(&k24, &iv, &padded)
                 .map_err(|e| VerificationError::internal(format!("SM encrypt: {}", e)))?;
             // DO'87 = tag 87, length, 01 (padding indicator), ciphertext
@@ -507,6 +809,9 @@ impl BacSession {
         let mut plain_data = Vec::new();
         let mut received_mac = [0u8; 8];
         let mut do87_bytes = Vec::<u8>::new();
+        let mut do99_bytes = Vec::<u8>::new();
+        let mut status = None;
+        let mut has_mac = false;
 
         let mut i = 0;
         while i < data.len() {
@@ -526,7 +831,7 @@ impl BacSession {
                     if !value.is_empty() && value[0] == 0x01 {
                         let ciphertext = &value[1..];
                         let k24 = extend_to_24_bytes(&self.k_enc);
-                        let iv = compute_3des_iv_from_ssc(&self.k_enc, &self.ssc)?;
+                        let iv = icao_3des_cbc_iv();
                         let decrypted = marty_crypto::des::tdes_cbc_decrypt(&k24, &iv, ciphertext)
                             .map_err(|e| {
                                 VerificationError::internal(format!("SM decrypt: {}", e))
@@ -534,18 +839,29 @@ impl BacSession {
                         plain_data = iso7816_unpad(&decrypted)?;
                     }
                 }
-                0x8E if len == 8 => received_mac.copy_from_slice(value),
+                0x99 if len == 2 => {
+                    do99_bytes = data[i..i + 2 + len].to_vec();
+                    status = Some((value[0], value[1]));
+                }
+                0x8E if len == 8 => {
+                    received_mac.copy_from_slice(value);
+                    has_mac = true;
+                }
                 _ => {}
             }
             i += 2 + len;
         }
 
-        // Verify MAC: SSC || DO'87 || SW1SW2
-        let sw_bytes = [resp.sw1, resp.sw2];
+        if !has_mac || do99_bytes.is_empty() {
+            return Err(VerificationError::internal(
+                "BAC SM: protected response missing DO99 or DO8E".to_string(),
+            ));
+        }
+        // Verify MAC: SSC || DO'87 || DO'99
         let mut mac_input = Vec::new();
         mac_input.extend_from_slice(&self.ssc);
         mac_input.extend_from_slice(&do87_bytes);
-        mac_input.extend_from_slice(&sw_bytes);
+        mac_input.extend_from_slice(&do99_bytes);
 
         let expected = retail_mac_3des(&self.k_mac, &mac_input)?;
         if !constant_time_eq(&expected, &received_mac) {
@@ -554,10 +870,11 @@ impl BacSession {
             ));
         }
 
+        let (sw1, sw2) = status.expect("status checked above");
         Ok(ApduResponse {
             data: plain_data,
-            sw1: resp.sw1,
-            sw2: resp.sw2,
+            sw1,
+            sw2,
         })
     }
 }
@@ -595,6 +912,121 @@ impl PacePassword {
             PacePassword::Can(s) | PacePassword::Mrz(s) | PacePassword::Pin(s) => s.as_bytes(),
         }
     }
+}
+
+/// Native state for the pre-v1 two-message PACE compatibility API.
+///
+/// This preserves the established application contract while ensuring its
+/// password processing, nonce decryption, ECDH, and session derivation have a
+/// single Rust implementation. New protocol integrations should use the full
+/// [`PaceSession`] state machine as it evolves rather than reproducing these
+/// compatibility steps in another language.
+pub struct PaceCompatibilityHandshake {
+    private_key: [u8; 32],
+    public_key: Vec<u8>,
+    nonce: Vec<u8>,
+}
+
+impl PaceCompatibilityHandshake {
+    pub fn begin(password: &str, encrypted_nonce: &[u8]) -> VerificationResult<Self> {
+        let (private_key, _) = marty_crypto::ecdh::p256_generate_keypair();
+        Self::begin_with_private_key(password, encrypted_nonce, &private_key)
+    }
+
+    pub fn begin_with_private_key(
+        password: &str,
+        encrypted_nonce: &[u8],
+        private_key: &[u8],
+    ) -> VerificationResult<Self> {
+        if encrypted_nonce.is_empty() || !encrypted_nonce.len().is_multiple_of(8) {
+            return Err(VerificationError::internal(
+                "PACE encrypted nonce must be non-empty and block aligned",
+            ));
+        }
+        let private_key: [u8; 32] = private_key
+            .try_into()
+            .map_err(|_| VerificationError::internal("PACE P-256 private key must be 32 bytes"))?;
+        let key = derive_compatibility_pace_password_key(password)?;
+        let iv = icao_3des_cbc_iv();
+        let decrypted =
+            marty_crypto::des::tdes_cbc_decrypt(&extend_to_24_bytes(&key), &iv, encrypted_nonce)
+                .map_err(|error| {
+                    VerificationError::internal(format!("PACE nonce decrypt: {error}"))
+                })?;
+        let nonce = iso7816_unpad(&decrypted)?;
+        if nonce.is_empty() {
+            return Err(VerificationError::internal(
+                "PACE decrypted nonce must not be empty",
+            ));
+        }
+        let key_pair = marty_crypto::ecdh::P256KeyPair::from_secret_key(&private_key)?;
+        Ok(Self {
+            private_key,
+            public_key: key_pair.public_key_uncompressed(),
+            nonce,
+        })
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    pub fn decrypted_nonce(&self) -> &[u8] {
+        &self.nonce
+    }
+
+    pub fn complete(mut self, chip_public_key: &[u8]) -> VerificationResult<BacSession> {
+        use sha2::{Digest, Sha256};
+        use zeroize::Zeroize;
+
+        let shared_secret = marty_crypto::ecdh::p256_agree(&self.private_key, chip_public_key)?;
+        self.private_key.zeroize();
+        let mut input = shared_secret;
+        input.extend_from_slice(&self.nonce);
+        let digest = Sha256::digest(&input);
+        let seed = &digest[..16];
+        let k_enc = bac_kdf_16(seed, 1)?;
+        let k_mac = bac_kdf_16(seed, 2)?;
+        let mut ssc = [0u8; 8];
+        ssc.copy_from_slice(&digest[digest.len() - 8..]);
+        Ok(BacSession { k_enc, k_mac, ssc })
+    }
+}
+
+/// Derive the 3DES password key used by the established compatibility API.
+pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationResult<[u8; 16]> {
+    use sha1::{Digest, Sha1};
+
+    let seed = if password.chars().all(|value| value.is_ascii_digit())
+        && (6..=10).contains(&password.len())
+    {
+        Sha1::digest(password.as_bytes())[..16].to_vec()
+    } else {
+        let parsed = crate::mrz::parser::parse_mrz_string(password).map_err(|error| {
+            VerificationError::internal(format!("Unsupported PACE password format: {error}"))
+        })?;
+        let normalized: String = parsed
+            .document_number
+            .to_ascii_uppercase()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(9)
+            .collect();
+        let document_number = format!("{normalized:<9}").replace(' ', "<");
+        let information = format!(
+            "{}{}{}{}{}{}",
+            document_number,
+            mrz_check_digit(document_number.as_bytes()) as char,
+            parsed.date_of_birth,
+            mrz_check_digit(parsed.date_of_birth.as_bytes()) as char,
+            parsed.date_of_expiry,
+            mrz_check_digit(parsed.date_of_expiry.as_bytes()) as char,
+        );
+        Sha1::digest(information.as_bytes())[..16].to_vec()
+    };
+    let mut key: [u8; 16] = seed.try_into().expect("SHA-1 prefix is 16 bytes");
+    adjust_des_parity(&mut key);
+    Ok(key)
 }
 
 /// PACE-specific symmetric keys.
@@ -817,7 +1249,44 @@ pub fn derive_bac_base_keys(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
     let k_enc = bac_kdf_16(kseed, 1)?;
     let k_mac = bac_kdf_16(kseed, 2)?;
 
-    Ok(BacKeys { k_enc, k_mac })
+    let mut k_seed = [0u8; 16];
+    k_seed.copy_from_slice(kseed);
+    Ok(BacKeys {
+        k_enc,
+        k_mac,
+        k_seed,
+    })
+}
+
+/// Derive BAC secure-messaging keys from authenticated reader/chip material.
+pub fn derive_bac_session_keys(
+    k_ifd: &[u8],
+    k_ic: &[u8],
+    rnd_ic: &[u8],
+    rnd_ifd: &[u8],
+) -> VerificationResult<BacSession> {
+    let k_ifd: [u8; 16] = k_ifd.try_into().map_err(|_| {
+        VerificationError::internal("BAC: K.IFD must be exactly 16 bytes".to_string())
+    })?;
+    let k_ic: [u8; 16] = k_ic.try_into().map_err(|_| {
+        VerificationError::internal("BAC: K.ICC must be exactly 16 bytes".to_string())
+    })?;
+    let rnd_ic: [u8; 8] = rnd_ic.try_into().map_err(|_| {
+        VerificationError::internal("BAC: Rnd.IC must be exactly 8 bytes".to_string())
+    })?;
+    let rnd_ifd: [u8; 8] = rnd_ifd.try_into().map_err(|_| {
+        VerificationError::internal("BAC: Rnd.IFD must be exactly 8 bytes".to_string())
+    })?;
+    let mut seed = [0u8; 16];
+    for index in 0..16 {
+        seed[index] = k_ifd[index] ^ k_ic[index];
+    }
+    let k_enc = bac_kdf_16(&seed, 1)?;
+    let k_mac = bac_kdf_16(&seed, 2)?;
+    let mut ssc = [0u8; 8];
+    ssc[..4].copy_from_slice(&rnd_ic[4..]);
+    ssc[4..].copy_from_slice(&rnd_ifd[4..]);
+    Ok(BacSession { k_enc, k_mac, ssc })
 }
 
 /// BAC / PACE KDF — derives a 16-byte key.
@@ -862,6 +1331,13 @@ fn extend_to_24_bytes(key16: &[u8; 16]) -> [u8; 24] {
     k24[8..16].copy_from_slice(&key16[8..]);
     k24[16..].copy_from_slice(&key16[..8]);
     k24
+}
+
+/// ICAO Doc 9303 BAC/secure-messaging and the compatibility PACE exchange
+/// mandate an all-zero 3DES CBC IV. It is a public protocol constant, not a
+/// secret or caller-configurable cryptographic value.
+fn icao_3des_cbc_iv() -> [u8; 8] {
+    Default::default()
 }
 
 /// ISO/IEC 9797-1 Padding Method 2: append 0x80 then 0x00..0x00 to
@@ -936,18 +1412,6 @@ fn extend_single_des(k8: &[u8]) -> [u8; 24] {
     out[8..16].copy_from_slice(k8);
     out[16..].copy_from_slice(k8);
     out
-}
-
-/// Compute the 3DES IV from the Send Sequence Counter (BAC).
-///
-/// IV = 3DES-CBC-encrypt(KSenc, 0, SSC)
-fn compute_3des_iv_from_ssc(k_enc: &[u8; 16], ssc: &[u8; 8]) -> VerificationResult<[u8; 8]> {
-    let k24 = extend_to_24_bytes(k_enc);
-    let out = marty_crypto::des::tdes_cbc_encrypt(&k24, &[0u8; 8], ssc)
-        .map_err(|e| VerificationError::internal(format!("SSC IV compute: {}", e)))?;
-    let mut iv = [0u8; 8];
-    iv.copy_from_slice(&out[..8]);
-    Ok(iv)
 }
 
 /// Increment an 8-byte big-endian counter.
@@ -1032,17 +1496,69 @@ mod tests {
     fn test_bac_key_derivation_icao_sample() {
         // ICAO 9303-11 Annex D sample values
         let mrz = MrzKeyInfo {
-            doc_number_with_check: "L898902C36".to_string(),
-            dob_with_check: "7408125".to_string(),
-            expiry_with_check: "1204159".to_string(),
+            doc_number_with_check: "L898902C<3".to_string(),
+            dob_with_check: "6908061".to_string(),
+            expiry_with_check: "9406236".to_string(),
         };
         let keys = derive_bac_base_keys(&mrz).unwrap();
-        // Keys should be non-zero and length 16
-        assert_eq!(keys.k_enc.len(), 16);
-        assert_eq!(keys.k_mac.len(), 16);
-        assert_ne!(keys.k_enc, [0u8; 16]);
-        assert_ne!(keys.k_mac, [0u8; 16]);
-        assert_ne!(keys.k_enc, keys.k_mac);
+        assert_eq!(
+            hex::encode_upper(keys.k_seed),
+            "239AB9CB282DAF66231DC5A4DF6BFBAE"
+        );
+        assert_eq!(
+            hex::encode_upper(keys.k_enc),
+            "AB94FDECF2674FDFB9B391F85D7F76F2"
+        );
+        assert_eq!(
+            hex::encode_upper(keys.k_mac),
+            "7962D9ECE03D1ACD4C76089DCE131543"
+        );
+    }
+
+    #[test]
+    fn bac_handshake_matches_icao_annex_d() {
+        let mrz = MrzKeyInfo {
+            doc_number_with_check: "L898902C<3".to_string(),
+            dob_with_check: "6908061".to_string(),
+            expiry_with_check: "9406236".to_string(),
+        };
+        let handshake = BacHandshake::begin_with_random(
+            &mrz,
+            &hex::decode("4608F91988702212").unwrap(),
+            hex::decode("781723860C06C226").unwrap().try_into().unwrap(),
+            hex::decode("0B795240CB7049B01C19B33E32804F0B")
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            hex::encode_upper(handshake.command_data().unwrap()),
+            "72C29C2371CC9BDB65B779B8E8D37B29ECC154AA56A8799FAE2F498F76ED92F25F1448EEA8AD90A7"
+        );
+        let response = hex::decode(
+            "46B9342A41396CD7386BF5803104D7CEDC122B9132139BAF2EEDC94EE178534F2F2D235D074D7449",
+        )
+        .unwrap();
+        let mut session = handshake.complete(&response).unwrap();
+        assert_eq!(
+            hex::encode_upper(session.encryption_key()),
+            "979EC13B1CBFE9DCD01AB0FED307EAE5"
+        );
+        assert_eq!(
+            hex::encode_upper(session.mac_key()),
+            "F1CB1F1FB5ADF208806B89DC579DC1F8"
+        );
+        assert_eq!(
+            hex::encode_upper(session.send_sequence_counter()),
+            "887022120C06C226"
+        );
+        let select_ef_com =
+            ApduCommand::from_bytes(&hex::decode("00A4020C02011E").unwrap()).unwrap();
+        assert_eq!(
+            hex::encode_upper(session.protect_command(&select_ef_com).unwrap().to_bytes()),
+            "0CA4020C158709016375432908C044F68E08BF8B92D635FF24F800"
+        );
     }
 
     #[test]

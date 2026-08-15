@@ -2519,6 +2519,422 @@ fn open_badge_ob3_verify(request_json: &str) -> PyResult<String> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+#[pyfunction]
+fn compare_passport_hashes_json(request_json: &str) -> PyResult<String> {
+    crate::passport_integrity::compare_json(request_json)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+}
+
+#[cfg(feature = "csca")]
+#[pyclass(name = "NativeBacSession")]
+struct PyNativeBacSession {
+    handshake: Option<crate::chip_io::BacHandshake>,
+    session: Option<crate::chip_io::BacSession>,
+}
+
+#[cfg(feature = "csca")]
+#[pymethods]
+impl PyNativeBacSession {
+    #[new]
+    fn new() -> Self {
+        Self {
+            handshake: None,
+            session: None,
+        }
+    }
+
+    fn derive_bac_keys<'py>(
+        &self,
+        py: Python<'py>,
+        passport_number: &str,
+        date_of_birth: &str,
+        date_of_expiry: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
+        let keys = crate::chip_io::derive_bac_base_keys(&mrz).map_err(to_pyerr)?;
+        let result = PyDict::new(py);
+        result.set_item("k_enc", PyBytes::new(py, &keys.k_enc))?;
+        result.set_item("k_mac", PyBytes::new(py, &keys.k_mac))?;
+        result.set_item("k_seed", PyBytes::new(py, &keys.k_seed))?;
+        Ok(result)
+    }
+
+    fn start_bac<'py>(
+        &mut self,
+        py: Python<'py>,
+        passport_number: &str,
+        date_of_birth: &str,
+        date_of_expiry: &str,
+        chip_challenge: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
+        let handshake =
+            crate::chip_io::BacHandshake::begin(&mrz, chip_challenge).map_err(to_pyerr)?;
+        let command = handshake.command_data().map_err(to_pyerr)?;
+        self.handshake = Some(handshake);
+        self.session = None;
+        Ok(PyBytes::new(py, &command))
+    }
+
+    fn start_bac_with_keys<'py>(
+        &mut self,
+        py: Python<'py>,
+        k_enc: &[u8],
+        k_mac: &[u8],
+        k_seed: &[u8],
+        chip_challenge: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let k_enc: [u8; 16] = k_enc.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC encryption key must be 16 bytes")
+        })?;
+        let k_mac: [u8; 16] = k_mac
+            .try_into()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC MAC key must be 16 bytes"))?;
+        let k_seed: [u8; 16] = k_seed
+            .try_into()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC seed must be 16 bytes"))?;
+        let keys = crate::chip_io::BacKeys::from_parts(k_enc, k_mac, k_seed);
+        let handshake = crate::chip_io::BacHandshake::begin_with_keys(keys, chip_challenge)
+            .map_err(to_pyerr)?;
+        let command = handshake.command_data().map_err(to_pyerr)?;
+        self.handshake = Some(handshake);
+        self.session = None;
+        Ok(PyBytes::new(py, &command))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_bac_with_random<'py>(
+        &mut self,
+        py: Python<'py>,
+        passport_number: &str,
+        date_of_birth: &str,
+        date_of_expiry: &str,
+        chip_challenge: &[u8],
+        reader_challenge: &[u8],
+        reader_key: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
+        let reader_challenge: [u8; 8] = reader_challenge.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC reader challenge must be 8 bytes")
+        })?;
+        let reader_key: [u8; 16] = reader_key.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC reader key must be 16 bytes")
+        })?;
+        let handshake = crate::chip_io::BacHandshake::begin_with_random(
+            &mrz,
+            chip_challenge,
+            reader_challenge,
+            reader_key,
+        )
+        .map_err(to_pyerr)?;
+        let command = handshake.command_data().map_err(to_pyerr)?;
+        self.handshake = Some(handshake);
+        self.session = None;
+        Ok(PyBytes::new(py, &command))
+    }
+
+    fn finish_bac<'py>(
+        &mut self,
+        py: Python<'py>,
+        chip_response: &[u8],
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let handshake = self.handshake.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("BAC mutual authentication state missing")
+        })?;
+        let session = handshake.complete(chip_response).map_err(to_pyerr)?;
+        let result = bac_session_dict(py, &session)?;
+        self.session = Some(session);
+        Ok(result)
+    }
+
+    fn derive_session_keys<'py>(
+        &mut self,
+        py: Python<'py>,
+        k_ifd: &[u8],
+        k_ic: &[u8],
+        rnd_ic: &[u8],
+        rnd_ifd: &[u8],
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let session = crate::chip_io::derive_bac_session_keys(k_ifd, k_ic, rnd_ic, rnd_ifd)
+            .map_err(to_pyerr)?;
+        let result = bac_session_dict(py, &session)?;
+        self.session = Some(session);
+        Ok(result)
+    }
+
+    fn set_session_keys(&mut self, k_enc: &[u8], k_mac: &[u8], ssc: u64) -> PyResult<()> {
+        let k_enc: [u8; 16] = k_enc.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC encryption key must be 16 bytes")
+        })?;
+        let k_mac: [u8; 16] = k_mac
+            .try_into()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC MAC key must be 16 bytes"))?;
+        self.session = Some(crate::chip_io::BacSession::from_session_keys(
+            k_enc,
+            k_mac,
+            ssc.to_be_bytes(),
+        ));
+        Ok(())
+    }
+
+    fn protect_command<'py>(
+        &mut self,
+        py: Python<'py>,
+        command: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let command = crate::chip_io::ApduCommand::from_bytes(command).map_err(to_pyerr)?;
+        let session = self.session.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("Session keys not established")
+        })?;
+        let protected = session.protect_command(&command).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &protected.to_bytes()))
+    }
+
+    fn unprotect_response<'py>(
+        &mut self,
+        py: Python<'py>,
+        response: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let response = crate::chip_io::ApduResponse::from_bytes(response).map_err(to_pyerr)?;
+        let session = self.session.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("Session keys not established")
+        })?;
+        let plaintext = session.unprotect_response(&response).map_err(to_pyerr)?;
+        let mut raw = plaintext.data;
+        raw.extend_from_slice(&[plaintext.sw1, plaintext.sw2]);
+        Ok(PyBytes::new(py, &raw))
+    }
+
+    #[getter]
+    fn session_established(&self) -> bool {
+        self.session.is_some()
+    }
+
+    fn session_keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let session = self.session.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("Session keys not established")
+        })?;
+        bac_session_dict(py, session)
+    }
+}
+
+#[cfg(feature = "csca")]
+#[pyclass(name = "NativePaceSession")]
+struct PyNativePaceSession {
+    handshake: Option<crate::chip_io::PaceCompatibilityHandshake>,
+}
+
+#[cfg(feature = "csca")]
+#[pymethods]
+impl PyNativePaceSession {
+    #[new]
+    fn new() -> Self {
+        Self { handshake: None }
+    }
+
+    fn derive_password_key<'py>(
+        &self,
+        py: Python<'py>,
+        password: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let key =
+            crate::chip_io::derive_compatibility_pace_password_key(password).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &key))
+    }
+
+    #[pyo3(signature = (password, encrypted_nonce, curve="p256"))]
+    fn start_pace<'py>(
+        &mut self,
+        py: Python<'py>,
+        password: &str,
+        encrypted_nonce: &[u8],
+        curve: &str,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        if curve != "p256" {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "PACE compatibility session supports only p256",
+            ));
+        }
+        let handshake =
+            crate::chip_io::PaceCompatibilityHandshake::begin(password, encrypted_nonce)
+                .map_err(to_pyerr)?;
+        let public_key = handshake.public_key().to_vec();
+        self.handshake = Some(handshake);
+        Ok(PyBytes::new(py, &public_key))
+    }
+
+    fn start_pace_with_private_key<'py>(
+        &mut self,
+        py: Python<'py>,
+        password: &str,
+        encrypted_nonce: &[u8],
+        private_key: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let handshake = crate::chip_io::PaceCompatibilityHandshake::begin_with_private_key(
+            password,
+            encrypted_nonce,
+            private_key,
+        )
+        .map_err(to_pyerr)?;
+        let public_key = handshake.public_key().to_vec();
+        self.handshake = Some(handshake);
+        Ok(PyBytes::new(py, &public_key))
+    }
+
+    fn complete_pace<'py>(
+        &mut self,
+        py: Python<'py>,
+        chip_public_key: &[u8],
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let handshake = self.handshake.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(
+                "PACE state unavailable - call start_pace first",
+            )
+        })?;
+        let session = handshake.complete(chip_public_key).map_err(to_pyerr)?;
+        bac_session_dict(py, &session)
+    }
+}
+
+#[cfg(feature = "csca")]
+fn apdu_byte(name: &str, value: i64) -> PyResult<u8> {
+    u8::try_from(value).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid {name}: expected an unsigned byte"
+        ))
+    })
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (cla, ins, p1, p2, data=None, le=None))]
+fn apdu_encode<'py>(
+    py: Python<'py>,
+    cla: i64,
+    ins: i64,
+    p1: i64,
+    p2: i64,
+    data: Option<&[u8]>,
+    le: Option<i64>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let le = le
+        .map(|value| {
+            usize::try_from(value).map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "Invalid Le: expected a non-negative integer",
+                )
+            })
+        })
+        .transpose()?;
+    let encoded = crate::chip_io::encode_apdu_command(
+        apdu_byte("CLA", cla)?,
+        apdu_byte("INS", ins)?,
+        apdu_byte("P1", p1)?,
+        apdu_byte("P2", p2)?,
+        data,
+        le,
+    )
+    .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &encoded))
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn apdu_parse_response<'py>(py: Python<'py>, response: &[u8]) -> PyResult<Py<PyDict>> {
+    let response = crate::chip_io::ApduResponse::from_bytes(response).map_err(to_pyerr)?;
+    let output = PyDict::new(py);
+    output.set_item("data", PyBytes::new(py, &response.data))?;
+    output.set_item("sw1", response.sw1)?;
+    output.set_item("sw2", response.sw2)?;
+    output.set_item("sw", response.status_word())?;
+    output.set_item("is_success", response.is_success())?;
+    output.set_item("is_warning", response.is_warning())?;
+    output.set_item("is_error", response.is_error())?;
+    output.set_item("status_description", response.status_description())?;
+    Ok(output.unbind())
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn apdu_parse_command<'py>(py: Python<'py>, command: &[u8]) -> PyResult<Py<PyDict>> {
+    let command = crate::chip_io::ApduCommand::from_bytes(command).map_err(to_pyerr)?;
+    let output = PyDict::new(py);
+    output.set_item("cla", command.cla)?;
+    output.set_item("ins", command.ins)?;
+    output.set_item("p1", command.p1)?;
+    output.set_item("p2", command.p2)?;
+    output.set_item(
+        "data",
+        (!command.data.is_empty()).then(|| PyBytes::new(py, &command.data)),
+    )?;
+    output.set_item("le", command.le)?;
+    Ok(output.unbind())
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (length, offset=0))]
+fn apdu_build_read_binary_commands<'py>(
+    py: Python<'py>,
+    length: usize,
+    offset: usize,
+) -> PyResult<Vec<Bound<'py, PyBytes>>> {
+    crate::chip_io::build_read_binary_commands(length, offset)
+        .map_err(to_pyerr)?
+        .iter()
+        .map(|command| Ok(PyBytes::new(py, &command.to_bytes())))
+        .collect()
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn passport_data_group_file_id(data_group: u8) -> PyResult<u16> {
+    crate::chip_io::passport_data_group_file_id(data_group).map_err(to_pyerr)
+}
+
+#[cfg(feature = "csca")]
+fn bac_mrz(
+    passport_number: &str,
+    date_of_birth: &str,
+    date_of_expiry: &str,
+) -> PyResult<crate::chip_io::MrzKeyInfo> {
+    let mut document: String = passport_number
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_uppercase())
+        .take(9)
+        .collect();
+    while document.len() < 9 {
+        document.push('<');
+    }
+    if date_of_birth.len() != 6
+        || date_of_expiry.len() != 6
+        || !date_of_birth.bytes().all(|value| value.is_ascii_digit())
+        || !date_of_expiry.bytes().all(|value| value.is_ascii_digit())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "BAC dates must be six ASCII digits (YYMMDD)",
+        ));
+    }
+    Ok(crate::chip_io::MrzKeyInfo::from_mrz_fields(
+        &document,
+        date_of_birth,
+        date_of_expiry,
+    ))
+}
+
+#[cfg(feature = "csca")]
+fn bac_session_dict<'py>(
+    py: Python<'py>,
+    session: &crate::chip_io::BacSession,
+) -> PyResult<Bound<'py, PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item("k_s_enc", PyBytes::new(py, session.encryption_key()))?;
+    result.set_item("k_s_mac", PyBytes::new(py, session.mac_key()))?;
+    result.set_item("ssc", u64::from_be_bytes(*session.send_sequence_counter()))?;
+    Ok(result)
+}
+
 /// Encrypt data and create a JWE.
 #[pyfunction]
 fn jwe_encrypt(plaintext: &[u8], recipient_key: &PyJwk, encryption: &str) -> PyResult<String> {
@@ -2786,6 +3202,293 @@ fn iso9796_recover<'py>(
             .map_err(to_pyerr)?;
 
     Ok(PyBytes::new(py, &recovered))
+}
+
+/// Create a Scheme 1 signature for passport-chip simulators and tests.
+#[pyfunction]
+fn iso9796_scheme1_sign<'py>(
+    py: Python<'py>,
+    private_key_der: &[u8],
+    message: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signature =
+        marty_crypto::iso9796::iso9796_scheme1_sign(private_key_der, message).map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &signature))
+}
+
+fn parse_iso9796_hash_algorithm(
+    hash_algorithm: &str,
+) -> PyResult<marty_crypto::iso9796::Iso9796HashAlgorithm> {
+    use marty_crypto::iso9796::Iso9796HashAlgorithm;
+    match hash_algorithm
+        .to_ascii_lowercase()
+        .replace('-', "")
+        .as_str()
+    {
+        "sha1" => Ok(Iso9796HashAlgorithm::Sha1),
+        "sha224" => Ok(Iso9796HashAlgorithm::Sha224),
+        "sha256" => Ok(Iso9796HashAlgorithm::Sha256),
+        "sha384" => Ok(Iso9796HashAlgorithm::Sha384),
+        "sha512" => Ok(Iso9796HashAlgorithm::Sha512),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Unsupported Active Authentication hash algorithm: {hash_algorithm}"
+        ))),
+    }
+}
+
+/// Generate a native Active Authentication challenge.
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (key_size_bits=128, hash_algorithm="SHA-256"))]
+fn active_authentication_generate_challenge<'py>(
+    py: Python<'py>,
+    key_size_bits: usize,
+    hash_algorithm: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    parse_iso9796_hash_algorithm(hash_algorithm)?;
+    let challenge =
+        crate::active_authentication::generate_challenge(key_size_bits).map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &challenge))
+}
+
+/// Build an INTERNAL AUTHENTICATE command APDU.
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn active_authentication_build_apdu<'py>(
+    py: Python<'py>,
+    challenge: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let command = crate::active_authentication::build_internal_authenticate_apdu(challenge)
+        .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &command))
+}
+
+/// Parse a successful INTERNAL AUTHENTICATE response APDU.
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn active_authentication_parse_response<'py>(
+    py: Python<'py>,
+    response: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signature = crate::active_authentication::parse_internal_authenticate_response(response)
+        .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &signature))
+}
+
+/// Verify an Active Authentication response against the exact challenge.
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (public_key_der, challenge, signature, hash_algorithm="SHA-256"))]
+fn active_authentication_verify<'py>(
+    py: Python<'py>,
+    public_key_der: &[u8],
+    challenge: &[u8],
+    signature: &[u8],
+    hash_algorithm: &str,
+) -> PyResult<Py<PyDict>> {
+    let result = crate::active_authentication::verify_challenge(
+        public_key_der,
+        challenge,
+        signature,
+        parse_iso9796_hash_algorithm(hash_algorithm)?,
+    )
+    .map_err(to_pyerr)?;
+    let output = PyDict::new(py);
+    output.set_item("is_valid", result.is_valid)?;
+    output.set_item(
+        "recovered_message",
+        result
+            .recovered_message
+            .as_deref()
+            .map(|value| PyBytes::new(py, value)),
+    )?;
+    Ok(output.unbind())
+}
+
+// ============================================================================
+// EAC Bindings
+// ============================================================================
+
+#[cfg(feature = "csca")]
+#[pyclass(name = "NativeEacChipAuthentication")]
+struct PyNativeEacChipAuthentication {
+    algorithm: crate::eac::EacAlgorithm,
+    private_key: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "csca")]
+#[pymethods]
+impl PyNativeEacChipAuthentication {
+    #[new]
+    fn new(algorithm: &str) -> PyResult<Self> {
+        Ok(Self {
+            algorithm: crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?,
+            private_key: None,
+        })
+    }
+
+    fn generate_ephemeral_keypair<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+        let (private_key, public_key) =
+            crate::eac::generate_ephemeral_keypair(self.algorithm).map_err(to_pyerr)?;
+        let private_key_der =
+            crate::eac::encode_private_key(self.algorithm, &private_key).map_err(to_pyerr)?;
+        self.private_key = Some(private_key);
+        Ok((
+            PyBytes::new(py, &public_key),
+            PyBytes::new(py, &private_key_der),
+        ))
+    }
+
+    fn perform_chip_authentication<'py>(
+        &mut self,
+        py: Python<'py>,
+        chip_public_key: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let private_key = self.private_key.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("EAC ephemeral keypair has not been generated")
+        })?;
+        let shared =
+            crate::eac::agree(self.algorithm, &private_key, chip_public_key).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &shared))
+    }
+}
+
+#[cfg(feature = "csca")]
+#[pyclass(name = "NativeEacSecureMessaging")]
+struct PyNativeEacSecureMessaging {
+    inner: crate::eac::EacSecureMessaging,
+    algorithm: String,
+}
+
+#[cfg(feature = "csca")]
+#[pymethods]
+impl PyNativeEacSecureMessaging {
+    #[new]
+    fn new(shared_secret: &[u8], algorithm: &str) -> PyResult<Self> {
+        let parsed = crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?;
+        Ok(Self {
+            inner: crate::eac::EacSecureMessaging::new(shared_secret, parsed).map_err(to_pyerr)?,
+            algorithm: algorithm.to_string(),
+        })
+    }
+
+    fn encrypt_apdu<'py>(
+        &mut self,
+        py: Python<'py>,
+        plaintext: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let protected = self.inner.encrypt(plaintext).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &protected))
+    }
+
+    fn encrypt_apdu_with_iv<'py>(
+        &mut self,
+        py: Python<'py>,
+        plaintext: &[u8],
+        iv: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let protected = self
+            .inner
+            .encrypt_with_iv(plaintext, iv)
+            .map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &protected))
+    }
+
+    fn decrypt_apdu<'py>(
+        &mut self,
+        py: Python<'py>,
+        protected: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let plaintext = self.inner.decrypt(protected).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &plaintext))
+    }
+
+    fn state<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        let output = PyDict::new(py);
+        let (mac_key, encryption_key) = self.inner.keys();
+        let (send_counter, receive_counter) = self.inner.counters();
+        output.set_item("mac_key", PyBytes::new(py, mac_key))?;
+        output.set_item("encryption_key", PyBytes::new(py, encryption_key))?;
+        output.set_item("send_sequence_counter", send_counter)?;
+        output.set_item("receive_sequence_counter", receive_counter)?;
+        output.set_item("algorithm", &self.algorithm)?;
+        Ok(output.unbind())
+    }
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn eac_sign_terminal_challenge<'py>(
+    py: Python<'py>,
+    algorithm: &str,
+    private_key_der: &[u8],
+    challenge: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let signature = crate::eac::sign_terminal_challenge(
+        crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?,
+        private_key_der,
+        challenge,
+    )
+    .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &signature))
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn eac_verify_certificate_signature(
+    algorithm: &str,
+    signer_public_key_der: &[u8],
+    certificate_body: &[u8],
+    signature: &[u8],
+) -> PyResult<bool> {
+    crate::eac::verify_certificate_signature(
+        crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?,
+        signer_public_key_der,
+        certificate_body,
+        signature,
+    )
+    .map_err(to_pyerr)
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn eac_certificate_fingerprint(data: &[u8]) -> String {
+    crate::eac::certificate_fingerprint(data)
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn eac_serialize_certificate<'py>(
+    py: Python<'py>,
+    holder: &str,
+    authority: &str,
+    authorization: u32,
+    effective: &str,
+    expiration: &str,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let encoded = crate::eac::serialize_certificate_metadata(
+        holder,
+        authority,
+        authorization,
+        effective,
+        expiration,
+    )
+    .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &encoded))
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn eac_calculate_mac<'py>(
+    py: Python<'py>,
+    key: &[u8],
+    data: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let mac = crate::eac::calculate_mac(key, data).map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &mac))
 }
 
 // ============================================================================
@@ -3454,6 +4157,13 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        m.add_class::<PyNativeBacSession>()?;
+        m.add_class::<PyNativePaceSession>()?;
+        m.add_function(wrap_pyfunction!(apdu_encode, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_command, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_build_read_binary_commands, m)?)?;
+        m.add_function(wrap_pyfunction!(passport_data_group_file_id, m)?)?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
@@ -3493,6 +4203,24 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Crypto Operations - ISO 9796-2
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+        m.add_class::<PyNativeEacChipAuthentication>()?;
+        m.add_class::<PyNativeEacSecureMessaging>()?;
+        m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
+    }
 
     // Crypto Operations - Certificate
     m.add_function(wrap_pyfunction!(load_certificate_pem, m)?)?;
@@ -3606,6 +4334,24 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // ISO 9796-2 Operations
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+        m.add_class::<PyNativeEacChipAuthentication>()?;
+        m.add_class::<PyNativeEacSecureMessaging>()?;
+        m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
+    }
 
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
@@ -3619,6 +4365,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
 
     // DTC helpers (JSON in/out)
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
@@ -3664,6 +4411,13 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        m.add_class::<PyNativeBacSession>()?;
+        m.add_class::<PyNativePaceSession>()?;
+        m.add_function(wrap_pyfunction!(apdu_encode, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_command, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_build_read_binary_commands, m)?)?;
+        m.add_function(wrap_pyfunction!(passport_data_group_file_id, m)?)?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
@@ -3703,6 +4457,24 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Crypto Operations - ISO 9796-2
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+        m.add_class::<PyNativeEacChipAuthentication>()?;
+        m.add_class::<PyNativeEacSecureMessaging>()?;
+        m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
+    }
 
     // Crypto Operations - Certificate
     m.add_function(wrap_pyfunction!(load_certificate_pem, m)?)?;
@@ -3816,6 +4588,24 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // ISO 9796-2 Operations
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
+    #[cfg(feature = "csca")]
+    {
+        m.add_function(wrap_pyfunction!(
+            active_authentication_generate_challenge,
+            m
+        )?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+        m.add_class::<PyNativeEacChipAuthentication>()?;
+        m.add_class::<PyNativeEacSecureMessaging>()?;
+        m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
+        m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
+    }
 
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
@@ -3829,6 +4619,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
 
     // DTC helpers (JSON in/out)
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
