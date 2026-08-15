@@ -1,0 +1,20 @@
+{
+  "bac_annex_d": {
+    "passport_number": "L898902C<",
+    "date_of_birth": "690806",
+    "date_of_expiry": "940623",
+    "chip_challenge": "4608F91988702212",
+    "reader_challenge": "781723860C06C226",
+    "reader_key": "0B795240CB7049B01C19B33E32804F0B",
+    "base_seed": "239AB9CB282DAF66231DC5A4DF6BFBAE",
+    "base_encryption_key": "AB94FDECF2674FDFB9B391F85D7F76F2",
+    "base_mac_key": "7962D9ECE03D1ACD4C76089DCE131543",
+    "authentication_command_data": "72C29C2371CC9BDB65B779B8E8D37B29ECC154AA56A8799FAE2F498F76ED92F25F1448EEA8AD90A7",
+    "authentication_response_data": "46B9342A41396CD7386BF5803104D7CEDC122B9132139BAF2EEDC94EE178534F2F2D235D074D7449",
+    "session_encryption_key": "979EC13B1CBFE9DCD01AB0FED307EAE5",
+    "session_mac_key": "F1CB1F1FB5ADF208806B89DC579DC1F8",
+    "initial_ssc": "887022120C06C226",
+    "plain_select_ef_com": "00A4020C02011E",
+    "protected_select_ef_com": "0CA4020C158709016375432908C044F68E08BF8B92D635FF24F800"
+  }
+}

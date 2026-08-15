@@ -2501,6 +2501,242 @@ fn compare_passport_hashes_json(request_json: &str) -> PyResult<String> {
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
 }
 
+#[cfg(feature = "csca")]
+#[pyclass(name = "NativeBacSession")]
+struct PyNativeBacSession {
+    handshake: Option<crate::chip_io::BacHandshake>,
+    session: Option<crate::chip_io::BacSession>,
+}
+
+#[cfg(feature = "csca")]
+#[pymethods]
+impl PyNativeBacSession {
+    #[new]
+    fn new() -> Self {
+        Self {
+            handshake: None,
+            session: None,
+        }
+    }
+
+    fn derive_bac_keys<'py>(
+        &self,
+        py: Python<'py>,
+        passport_number: &str,
+        date_of_birth: &str,
+        date_of_expiry: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
+        let keys = crate::chip_io::derive_bac_base_keys(&mrz).map_err(to_pyerr)?;
+        let result = PyDict::new(py);
+        result.set_item("k_enc", PyBytes::new(py, &keys.k_enc))?;
+        result.set_item("k_mac", PyBytes::new(py, &keys.k_mac))?;
+        result.set_item("k_seed", PyBytes::new(py, &keys.k_seed))?;
+        Ok(result)
+    }
+
+    fn start_bac<'py>(
+        &mut self,
+        py: Python<'py>,
+        passport_number: &str,
+        date_of_birth: &str,
+        date_of_expiry: &str,
+        chip_challenge: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
+        let handshake =
+            crate::chip_io::BacHandshake::begin(&mrz, chip_challenge).map_err(to_pyerr)?;
+        let command = handshake.command_data().map_err(to_pyerr)?;
+        self.handshake = Some(handshake);
+        self.session = None;
+        Ok(PyBytes::new(py, &command))
+    }
+
+    fn start_bac_with_keys<'py>(
+        &mut self,
+        py: Python<'py>,
+        k_enc: &[u8],
+        k_mac: &[u8],
+        k_seed: &[u8],
+        chip_challenge: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let k_enc: [u8; 16] = k_enc.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC encryption key must be 16 bytes")
+        })?;
+        let k_mac: [u8; 16] = k_mac
+            .try_into()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC MAC key must be 16 bytes"))?;
+        let k_seed: [u8; 16] = k_seed
+            .try_into()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC seed must be 16 bytes"))?;
+        let keys = crate::chip_io::BacKeys::from_parts(k_enc, k_mac, k_seed);
+        let handshake = crate::chip_io::BacHandshake::begin_with_keys(keys, chip_challenge)
+            .map_err(to_pyerr)?;
+        let command = handshake.command_data().map_err(to_pyerr)?;
+        self.handshake = Some(handshake);
+        self.session = None;
+        Ok(PyBytes::new(py, &command))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_bac_with_random<'py>(
+        &mut self,
+        py: Python<'py>,
+        passport_number: &str,
+        date_of_birth: &str,
+        date_of_expiry: &str,
+        chip_challenge: &[u8],
+        reader_challenge: &[u8],
+        reader_key: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
+        let reader_challenge: [u8; 8] = reader_challenge.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC reader challenge must be 8 bytes")
+        })?;
+        let reader_key: [u8; 16] = reader_key.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC reader key must be 16 bytes")
+        })?;
+        let handshake = crate::chip_io::BacHandshake::begin_with_random(
+            &mrz,
+            chip_challenge,
+            reader_challenge,
+            reader_key,
+        )
+        .map_err(to_pyerr)?;
+        let command = handshake.command_data().map_err(to_pyerr)?;
+        self.handshake = Some(handshake);
+        self.session = None;
+        Ok(PyBytes::new(py, &command))
+    }
+
+    fn finish_bac<'py>(
+        &mut self,
+        py: Python<'py>,
+        chip_response: &[u8],
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let handshake = self.handshake.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("BAC mutual authentication state missing")
+        })?;
+        let session = handshake.complete(chip_response).map_err(to_pyerr)?;
+        let result = bac_session_dict(py, &session)?;
+        self.session = Some(session);
+        Ok(result)
+    }
+
+    fn derive_session_keys<'py>(
+        &mut self,
+        py: Python<'py>,
+        k_ifd: &[u8],
+        k_ic: &[u8],
+        rnd_ic: &[u8],
+        rnd_ifd: &[u8],
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let session = crate::chip_io::derive_bac_session_keys(k_ifd, k_ic, rnd_ic, rnd_ifd)
+            .map_err(to_pyerr)?;
+        let result = bac_session_dict(py, &session)?;
+        self.session = Some(session);
+        Ok(result)
+    }
+
+    fn set_session_keys(&mut self, k_enc: &[u8], k_mac: &[u8], ssc: u64) -> PyResult<()> {
+        let k_enc: [u8; 16] = k_enc.try_into().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("BAC encryption key must be 16 bytes")
+        })?;
+        let k_mac: [u8; 16] = k_mac
+            .try_into()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC MAC key must be 16 bytes"))?;
+        self.session = Some(crate::chip_io::BacSession::from_session_keys(
+            k_enc,
+            k_mac,
+            ssc.to_be_bytes(),
+        ));
+        Ok(())
+    }
+
+    fn protect_command<'py>(
+        &mut self,
+        py: Python<'py>,
+        command: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let command = crate::chip_io::ApduCommand::from_bytes(command).map_err(to_pyerr)?;
+        let session = self.session.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("Session keys not established")
+        })?;
+        let protected = session.protect_command(&command).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &protected.to_bytes()))
+    }
+
+    fn unprotect_response<'py>(
+        &mut self,
+        py: Python<'py>,
+        response: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let response = crate::chip_io::ApduResponse::from_bytes(response).map_err(to_pyerr)?;
+        let session = self.session.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("Session keys not established")
+        })?;
+        let plaintext = session.unprotect_response(&response).map_err(to_pyerr)?;
+        let mut raw = plaintext.data;
+        raw.extend_from_slice(&[plaintext.sw1, plaintext.sw2]);
+        Ok(PyBytes::new(py, &raw))
+    }
+
+    #[getter]
+    fn session_established(&self) -> bool {
+        self.session.is_some()
+    }
+
+    fn session_keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let session = self.session.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("Session keys not established")
+        })?;
+        bac_session_dict(py, session)
+    }
+}
+
+#[cfg(feature = "csca")]
+fn bac_mrz(
+    passport_number: &str,
+    date_of_birth: &str,
+    date_of_expiry: &str,
+) -> PyResult<crate::chip_io::MrzKeyInfo> {
+    let mut document: String = passport_number
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_uppercase())
+        .take(9)
+        .collect();
+    while document.len() < 9 {
+        document.push('<');
+    }
+    if date_of_birth.len() != 6
+        || date_of_expiry.len() != 6
+        || !date_of_birth.bytes().all(|value| value.is_ascii_digit())
+        || !date_of_expiry.bytes().all(|value| value.is_ascii_digit())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "BAC dates must be six ASCII digits (YYMMDD)",
+        ));
+    }
+    Ok(crate::chip_io::MrzKeyInfo::from_mrz_fields(
+        &document,
+        date_of_birth,
+        date_of_expiry,
+    ))
+}
+
+#[cfg(feature = "csca")]
+fn bac_session_dict<'py>(
+    py: Python<'py>,
+    session: &crate::chip_io::BacSession,
+) -> PyResult<Bound<'py, PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item("k_s_enc", PyBytes::new(py, session.encryption_key()))?;
+    result.set_item("k_s_mac", PyBytes::new(py, session.mac_key()))?;
+    result.set_item("ssc", u64::from_be_bytes(*session.send_sequence_counter()))?;
+    Ok(result)
+}
+
 /// Encrypt data and create a JWE.
 #[pyfunction]
 fn jwe_encrypt(plaintext: &[u8], recipient_key: &PyJwk, encryption: &str) -> PyResult<String> {
@@ -3436,6 +3672,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        m.add_class::<PyNativeBacSession>()?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
@@ -3644,6 +3881,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        m.add_class::<PyNativeBacSession>()?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
