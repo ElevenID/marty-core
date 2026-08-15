@@ -35,6 +35,8 @@ pub mod chip_io;
 pub mod credential_format;
 pub mod device_auth;
 pub mod dtc;
+#[cfg(feature = "csca")]
+pub mod eac;
 pub mod error;
 pub mod flow;
 pub mod jwk;
