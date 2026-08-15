@@ -1025,6 +1025,11 @@ fn trust_registry_validate_feed_json(feed_json: &str) -> PyResult<String> {
 }
 
 #[pyfunction]
+fn trust_registry_validate_state_json(state_json: &str) -> PyResult<String> {
+    marty_verification::trust_sync::validate_state_json(state_json).map_err(to_pyerr)
+}
+
+#[pyfunction]
 fn trust_registry_evaluate_pages_json(
     previous_state_json: &str,
     pages_json: &str,
@@ -2567,6 +2572,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(trust_registry_request_plan_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_validate_feed_json, m)?)?;
+    m.add_function(wrap_pyfunction!(trust_registry_validate_state_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_evaluate_pages_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_revalidate_state_json, m)?)?;
     device_auth::register_device_auth_bindings(m)?;

@@ -978,6 +978,11 @@ pub fn validate_feed_json(raw: &str) -> TrustSyncResult<String> {
     to_json(&parse_feed_json(raw)?)
 }
 
+/// Parse persisted state with the strict native schema and normalize it.
+pub fn validate_state_json(raw: &str) -> TrustSyncResult<String> {
+    to_json(&parse_state_json(raw)?)
+}
+
 /// Evaluate all fetched pages against the previous state without mutating it.
 pub fn evaluate_pages_json(
     previous_state_json: &str,
