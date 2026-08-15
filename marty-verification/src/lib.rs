@@ -27,12 +27,16 @@
 //! assert!(result.is_valid());
 //! ```
 
+#[cfg(feature = "csca")]
+pub mod active_authentication;
 pub mod asn1;
 #[cfg(feature = "csca")]
 pub mod chip_io;
 pub mod credential_format;
 pub mod device_auth;
 pub mod dtc;
+#[cfg(feature = "csca")]
+pub mod eac;
 pub mod error;
 pub mod evidence_policy;
 pub mod evidence_reconciliation;
@@ -44,6 +48,7 @@ pub mod mdoc;
 pub mod mrz;
 pub mod oid4vp;
 pub mod open_badges;
+pub mod passport_integrity;
 pub mod policy;
 pub mod trust_anchor;
 pub mod vcdm;

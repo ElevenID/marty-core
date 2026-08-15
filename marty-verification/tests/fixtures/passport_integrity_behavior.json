@@ -1,0 +1,106 @@
+{
+  "cases": [
+    {
+      "name": "all-present-hashes-match",
+      "request": {
+        "algorithm": "sha256",
+        "expected_hashes": {
+          "1": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+          "2": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+        },
+        "computed_hashes": [
+          {
+            "data_group": 1,
+            "hash": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+            "algorithm": "sha256"
+          },
+          {
+            "data_group": 2,
+            "hash": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+            "algorithm": "sha256"
+          }
+        ]
+      },
+      "expected": {
+        "is_passport_valid": true,
+        "successful_verifications": 2,
+        "failed_verifications": 0,
+        "critical_errors": 0,
+        "warnings": 0,
+        "overall_status": "PASSED - All verifications successful",
+        "results": ["match", "match"],
+        "risk_level": null
+      }
+    },
+    {
+      "name": "mandatory-mismatch-fails-closed",
+      "request": {
+        "algorithm": "sha256",
+        "expected_hashes": {
+          "1": "0000000000000000000000000000000000000000000000000000000000000000",
+          "7": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "computed_hashes": [
+          {
+            "data_group": 1,
+            "hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "algorithm": "sha256"
+          },
+          {
+            "data_group": 7,
+            "hash": "1111111111111111111111111111111111111111111111111111111111111111",
+            "algorithm": "sha256"
+          }
+        ]
+      },
+      "expected": {
+        "is_passport_valid": false,
+        "successful_verifications": 1,
+        "failed_verifications": 1,
+        "critical_errors": 1,
+        "warnings": 0,
+        "overall_status": "FAILED - Critical errors detected",
+        "results": ["mismatch", "match"],
+        "risk_level": "HIGH"
+      }
+    },
+    {
+      "name": "missing-and-algorithm-mismatch",
+      "request": {
+        "algorithm": "sha256",
+        "expected_hashes": {
+          "1": "0000000000000000000000000000000000000000000000000000000000000000",
+          "3": "1111111111111111111111111111111111111111111111111111111111111111",
+          "7": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "computed_hashes": [
+          {
+            "data_group": 1,
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "algorithm": "sha256"
+          },
+          {
+            "data_group": 3,
+            "hash": "1111111111111111111111111111111111111111",
+            "algorithm": "sha1"
+          },
+          {
+            "data_group": 15,
+            "hash": "3333333333333333333333333333333333333333333333333333333333333333",
+            "algorithm": "sha256"
+          }
+        ]
+      },
+      "expected": {
+        "is_passport_valid": false,
+        "successful_verifications": 1,
+        "failed_verifications": 2,
+        "critical_errors": 0,
+        "warnings": 2,
+        "overall_status": "FAILED - More failures than successes",
+        "results": ["match", "algorithm_error", "missing_computed", "missing_expected"],
+        "risk_level": null
+      }
+    }
+  ]
+}
