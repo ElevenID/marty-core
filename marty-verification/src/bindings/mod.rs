@@ -2773,6 +2773,102 @@ impl PyNativePaceSession {
 }
 
 #[cfg(feature = "csca")]
+fn apdu_byte(name: &str, value: i64) -> PyResult<u8> {
+    u8::try_from(value).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid {name}: expected an unsigned byte"
+        ))
+    })
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (cla, ins, p1, p2, data=None, le=None))]
+fn apdu_encode<'py>(
+    py: Python<'py>,
+    cla: i64,
+    ins: i64,
+    p1: i64,
+    p2: i64,
+    data: Option<&[u8]>,
+    le: Option<i64>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let le = le
+        .map(|value| {
+            usize::try_from(value).map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "Invalid Le: expected a non-negative integer",
+                )
+            })
+        })
+        .transpose()?;
+    let encoded = crate::chip_io::encode_apdu_command(
+        apdu_byte("CLA", cla)?,
+        apdu_byte("INS", ins)?,
+        apdu_byte("P1", p1)?,
+        apdu_byte("P2", p2)?,
+        data,
+        le,
+    )
+    .map_err(to_pyerr)?;
+    Ok(PyBytes::new(py, &encoded))
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn apdu_parse_response<'py>(py: Python<'py>, response: &[u8]) -> PyResult<Py<PyDict>> {
+    let response = crate::chip_io::ApduResponse::from_bytes(response).map_err(to_pyerr)?;
+    let output = PyDict::new(py);
+    output.set_item("data", PyBytes::new(py, &response.data))?;
+    output.set_item("sw1", response.sw1)?;
+    output.set_item("sw2", response.sw2)?;
+    output.set_item("sw", response.status_word())?;
+    output.set_item("is_success", response.is_success())?;
+    output.set_item("is_warning", response.is_warning())?;
+    output.set_item("is_error", response.is_error())?;
+    output.set_item("status_description", response.status_description())?;
+    Ok(output.unbind())
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn apdu_parse_command<'py>(py: Python<'py>, command: &[u8]) -> PyResult<Py<PyDict>> {
+    let command = crate::chip_io::ApduCommand::from_bytes(command).map_err(to_pyerr)?;
+    let output = PyDict::new(py);
+    output.set_item("cla", command.cla)?;
+    output.set_item("ins", command.ins)?;
+    output.set_item("p1", command.p1)?;
+    output.set_item("p2", command.p2)?;
+    output.set_item(
+        "data",
+        (!command.data.is_empty()).then(|| PyBytes::new(py, &command.data)),
+    )?;
+    output.set_item("le", command.le)?;
+    Ok(output.unbind())
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+#[pyo3(signature = (length, offset=0))]
+fn apdu_build_read_binary_commands<'py>(
+    py: Python<'py>,
+    length: usize,
+    offset: usize,
+) -> PyResult<Vec<Bound<'py, PyBytes>>> {
+    crate::chip_io::build_read_binary_commands(length, offset)
+        .map_err(to_pyerr)?
+        .iter()
+        .map(|command| Ok(PyBytes::new(py, &command.to_bytes())))
+        .collect()
+}
+
+#[cfg(feature = "csca")]
+#[pyfunction]
+fn passport_data_group_file_id(data_group: u8) -> PyResult<u16> {
+    crate::chip_io::passport_data_group_file_id(data_group).map_err(to_pyerr)
+}
+
+#[cfg(feature = "csca")]
 fn bac_mrz(
     passport_number: &str,
     date_of_birth: &str,
@@ -4039,6 +4135,11 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<PyCscaRegistry>()?;
         m.add_class::<PyNativeBacSession>()?;
         m.add_class::<PyNativePaceSession>()?;
+        m.add_function(wrap_pyfunction!(apdu_encode, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_command, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_build_read_binary_commands, m)?)?;
+        m.add_function(wrap_pyfunction!(passport_data_group_file_id, m)?)?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 
@@ -4285,6 +4386,11 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_class::<PyCscaRegistry>()?;
         m.add_class::<PyNativeBacSession>()?;
         m.add_class::<PyNativePaceSession>()?;
+        m.add_function(wrap_pyfunction!(apdu_encode, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_response, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_parse_command, m)?)?;
+        m.add_function(wrap_pyfunction!(apdu_build_read_binary_commands, m)?)?;
+        m.add_function(wrap_pyfunction!(passport_data_group_file_id, m)?)?;
         m.add_function(wrap_pyfunction!(verify_emrtd, m)?)?;
     }
 

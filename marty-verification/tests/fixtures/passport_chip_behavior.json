@@ -36,5 +36,21 @@
     "session_encryption_key": "64E3543D899145B6AB61459BFE344016",
     "session_mac_key": "51D640CD736164C29B32C7B397E610C8",
     "ssc": "F9B9A3CDCDB102D0"
+  },
+  "apdu": {
+    "commands": [
+      {"cla": 0, "ins": 164, "p1": 2, "p2": 12, "data": "011E", "le": null, "encoded": "00A4020C02011E"},
+      {"cla": 0, "ins": 132, "p1": 0, "p2": 0, "data": null, "le": 8, "encoded": "0084000008"},
+      {"cla": 0, "ins": 202, "p1": 0, "p2": 0, "data": null, "le": 512, "encoded": "00CA0000000200"}
+    ],
+    "extended": {"data_byte": 170, "data_length": 256, "encoded_length": 263, "prefix": "00DA0000000100"},
+    "read_length": 600,
+    "read_offset": 0,
+    "read_commands": ["00B00000FF", "00B000FFFF", "00B001FE5A"],
+    "responses": [
+      {"encoded": "DEADBEEF9000", "success": true, "warning": false, "error": true, "description": "Success"},
+      {"encoded": "6282", "success": false, "warning": true, "error": false, "description": "End of file reached"},
+      {"encoded": "6A82", "success": false, "warning": false, "error": true, "description": "File not found"}
+    ]
   }
 }

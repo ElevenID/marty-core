@@ -70,13 +70,47 @@ impl ApduCommand {
                 le: Some(raw[4] as usize),
             });
         }
-        let lc = raw[4] as usize;
-        let data_end = 5usize.checked_add(lc).ok_or_else(|| {
-            VerificationError::internal("APDU command length overflow".to_string())
-        })?;
-        if raw.len() != data_end && raw.len() != data_end + 1 {
+        if raw[4] != 0 {
+            let lc = raw[4] as usize;
+            let data_end = 5usize.checked_add(lc).ok_or_else(|| {
+                VerificationError::internal("APDU command length overflow".to_string())
+            })?;
+            if raw.len() != data_end && raw.len() != data_end + 1 {
+                return Err(VerificationError::internal(
+                    "APDU command has inconsistent short-form Lc/Le".to_string(),
+                ));
+            }
+            return Ok(Self {
+                cla,
+                ins,
+                p1,
+                p2,
+                data: raw[5..data_end].to_vec(),
+                le: (raw.len() == data_end + 1).then(|| raw[data_end] as usize),
+            });
+        }
+        if raw.len() == 7 {
+            return Ok(Self {
+                cla,
+                ins,
+                p1,
+                p2,
+                data: Vec::new(),
+                le: Some(u16::from_be_bytes([raw[5], raw[6]]) as usize),
+            });
+        }
+        if raw.len() < 7 {
             return Err(VerificationError::internal(
-                "APDU command has inconsistent short-form Lc/Le".to_string(),
+                "Extended APDU is missing its two-byte length",
+            ));
+        }
+        let lc = u16::from_be_bytes([raw[5], raw[6]]) as usize;
+        let data_end = 7usize
+            .checked_add(lc)
+            .ok_or_else(|| VerificationError::internal("Extended APDU command length overflow"))?;
+        if raw.len() != data_end && raw.len() != data_end + 2 {
+            return Err(VerificationError::internal(
+                "APDU command has inconsistent extended Lc/Le",
             ));
         }
         Ok(Self {
@@ -84,27 +118,79 @@ impl ApduCommand {
             ins,
             p1,
             p2,
-            data: raw[5..data_end].to_vec(),
-            le: (raw.len() == data_end + 1).then(|| raw[data_end] as usize),
+            data: raw[7..data_end].to_vec(),
+            le: (raw.len() == data_end + 2)
+                .then(|| u16::from_be_bytes([raw[data_end], raw[data_end + 1]]) as usize),
         })
     }
 
     /// Serialise to ISO/IEC 7816-4 byte wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![self.cla, self.ins, self.p1, self.p2];
-        if !self.data.is_empty() {
-            debug_assert!(
-                self.data.len() <= 255,
-                "APDU data exceeds short-form Lc limit"
-            );
-            buf.push(self.data.len() as u8);
-            buf.extend_from_slice(&self.data);
-        }
-        if let Some(le) = self.le {
-            buf.push(le as u8);
-        }
-        buf
+        encode_apdu_command(
+            self.cla,
+            self.ins,
+            self.p1,
+            self.p2,
+            (!self.data.is_empty()).then_some(self.data.as_slice()),
+            self.le,
+        )
+        .expect("validated APDU command")
     }
+}
+
+/// Encode short or extended ISO/IEC 7816-4 command APDU fields.
+pub fn encode_apdu_command(
+    cla: u8,
+    ins: u8,
+    p1: u8,
+    p2: u8,
+    data: Option<&[u8]>,
+    le: Option<usize>,
+) -> VerificationResult<Vec<u8>> {
+    let data_len = data.map_or(0, <[u8]>::len);
+    if data_len > u16::MAX as usize {
+        return Err(VerificationError::internal(
+            "APDU command data exceeds extended-length capacity",
+        ));
+    }
+    if le.is_some_and(|value| value > u16::MAX as usize) {
+        return Err(VerificationError::internal(
+            "APDU Le exceeds extended-length capacity",
+        ));
+    }
+
+    let mut encoded = vec![cla, ins, p1, p2];
+    match (data, le) {
+        (None, None) => {}
+        (None, Some(expected)) if expected <= u8::MAX as usize => {
+            encoded.push(expected as u8);
+        }
+        (None, Some(expected)) => {
+            encoded.push(0);
+            encoded.extend_from_slice(&(expected as u16).to_be_bytes());
+        }
+        (Some(value), expected) if value.len() <= u8::MAX as usize => {
+            encoded.push(value.len() as u8);
+            encoded.extend_from_slice(value);
+            if let Some(expected) = expected {
+                if expected > u8::MAX as usize {
+                    return Err(VerificationError::internal(
+                        "Short APDU data cannot be combined with extended Le",
+                    ));
+                }
+                encoded.push(expected as u8);
+            }
+        }
+        (Some(value), expected) => {
+            encoded.push(0);
+            encoded.extend_from_slice(&(value.len() as u16).to_be_bytes());
+            encoded.extend_from_slice(value);
+            if let Some(expected) = expected {
+                encoded.extend_from_slice(&(expected as u16).to_be_bytes());
+            }
+        }
+    }
+    Ok(encoded)
 }
 
 /// ISO/IEC 7816-4 response APDU.
@@ -142,6 +228,102 @@ impl ApduResponse {
     #[inline]
     pub fn is_success(&self) -> bool {
         self.status_word() == 0x9000
+    }
+
+    pub fn is_warning(&self) -> bool {
+        matches!(self.sw1, 0x62 | 0x63)
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.sw1 >= 0x64
+    }
+
+    pub fn status_description(&self) -> String {
+        let description = match self.status_word() {
+            0x9000 => Some("Success"),
+            0x6100 => Some("Response bytes available"),
+            0x6281 => Some("Part of returned data corrupted"),
+            0x6282 => Some("End of file reached"),
+            0x6283 => Some("Selected file invalidated"),
+            0x6284 => Some("File control information not formatted"),
+            0x6300 => Some("Authentication failed"),
+            0x6381 => Some("File filled up by last write"),
+            0x6400 => Some("Execution error"),
+            0x6581 => Some("Memory failure"),
+            0x6700 => Some("Wrong length"),
+            0x6800 => Some("Functions in CLA not supported"),
+            0x6900 => Some("Command not allowed"),
+            0x6A00 => Some("Wrong parameters P1-P2"),
+            0x6A80 => Some("Incorrect parameters in data field"),
+            0x6A81 => Some("Function not supported"),
+            0x6A82 => Some("File not found"),
+            0x6A83 => Some("Record not found"),
+            0x6A84 => Some("Not enough memory space"),
+            0x6A86 => Some("Incorrect parameters P1-P2"),
+            0x6A88 => Some("Referenced data not found"),
+            0x6B00 => Some("Wrong parameters P1-P2"),
+            0x6C00 => Some("Wrong Le field"),
+            0x6D00 => Some("Instruction code not supported"),
+            0x6E00 => Some("Class not supported"),
+            0x6F00 => Some("No precise diagnosis"),
+            _ => None,
+        };
+        if let Some(description) = description {
+            return description.to_string();
+        }
+        let masked = self.status_word() & 0xFF00;
+        let masked_description = match masked {
+            0x6100 => Some("Response bytes available"),
+            0x6200 => Some("Warning: state unchanged"),
+            0x6300 => Some("Warning: state changed"),
+            0x6C00 => Some("Wrong Le field"),
+            _ => None,
+        };
+        masked_description.map_or_else(
+            || format!("Unknown status: 0x{:04X}", self.status_word()),
+            |value| format!("{value} (0x{:04X})", self.status_word()),
+        )
+    }
+}
+
+pub fn build_read_binary_commands(
+    length: usize,
+    offset: usize,
+) -> VerificationResult<Vec<ApduCommand>> {
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| VerificationError::internal("APDU read range overflow"))?;
+    if end > u16::MAX as usize + 1 {
+        return Err(VerificationError::internal(
+            "APDU read range exceeds READ BINARY offset capacity",
+        ));
+    }
+    let mut commands = Vec::with_capacity(length.div_ceil(255));
+    let mut bytes_read = 0;
+    while bytes_read < length {
+        let chunk = (length - bytes_read).min(255);
+        let current = offset + bytes_read;
+        commands.push(ApduCommand {
+            cla: 0,
+            ins: 0xB0,
+            p1: (current >> 8) as u8,
+            p2: current as u8,
+            data: Vec::new(),
+            le: Some(chunk),
+        });
+        bytes_read += chunk;
+    }
+    Ok(commands)
+}
+
+pub fn passport_data_group_file_id(data_group: u8) -> VerificationResult<u16> {
+    match data_group {
+        1..=4 => Ok(0x0100 + u16::from(data_group)),
+        14 => Ok(0x010E),
+        15 => Ok(0x010F),
+        _ => Err(VerificationError::internal(format!(
+            "Unsupported passport data group: {data_group}"
+        ))),
     }
 }
 

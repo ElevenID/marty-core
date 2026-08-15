@@ -6,6 +6,45 @@ struct Fixture {
     bac_annex_d: BacVector,
     active_authentication: ActiveAuthenticationVector,
     pace_compatibility: PaceCompatibilityVector,
+    apdu: ApduVector,
+}
+
+#[derive(Deserialize)]
+struct ApduVector {
+    commands: Vec<ApduCommandVector>,
+    extended: ExtendedApduVector,
+    read_length: usize,
+    read_offset: usize,
+    read_commands: Vec<String>,
+    responses: Vec<ApduResponseVector>,
+}
+
+#[derive(Deserialize)]
+struct ApduCommandVector {
+    cla: u8,
+    ins: u8,
+    p1: u8,
+    p2: u8,
+    data: Option<String>,
+    le: Option<usize>,
+    encoded: String,
+}
+
+#[derive(Deserialize)]
+struct ExtendedApduVector {
+    data_byte: u8,
+    data_length: usize,
+    encoded_length: usize,
+    prefix: String,
+}
+
+#[derive(Deserialize)]
+struct ApduResponseVector {
+    encoded: String,
+    success: bool,
+    warning: bool,
+    error: bool,
+    description: String,
 }
 
 #[derive(Deserialize)]
@@ -166,4 +205,50 @@ fn rust_matches_shared_pace_compatibility_behavior() {
         hex::encode_upper(session.send_sequence_counter()),
         vector.ssc
     );
+}
+
+#[test]
+fn rust_matches_shared_apdu_behavior() {
+    use marty_verification::chip_io::{
+        build_read_binary_commands, encode_apdu_command, ApduResponse,
+    };
+
+    let fixture: Fixture =
+        serde_json::from_str(include_str!("fixtures/passport_chip_behavior.json")).unwrap();
+    let vector = fixture.apdu;
+    for command in vector.commands {
+        let data = command.data.map(|value| hex::decode(value).unwrap());
+        let encoded = encode_apdu_command(
+            command.cla,
+            command.ins,
+            command.p1,
+            command.p2,
+            data.as_deref(),
+            command.le,
+        )
+        .unwrap();
+        assert_eq!(hex::encode_upper(encoded), command.encoded);
+    }
+    let extended_data = vec![vector.extended.data_byte; vector.extended.data_length];
+    let encoded = encode_apdu_command(0, 0xDA, 0, 0, Some(&extended_data), None).unwrap();
+    assert_eq!(encoded.len(), vector.extended.encoded_length);
+    assert_eq!(
+        hex::encode_upper(&encoded[..vector.extended.prefix.len() / 2]),
+        vector.extended.prefix
+    );
+    assert_eq!(
+        build_read_binary_commands(vector.read_length, vector.read_offset)
+            .unwrap()
+            .iter()
+            .map(|command| hex::encode_upper(command.to_bytes()))
+            .collect::<Vec<_>>(),
+        vector.read_commands
+    );
+    for expected in vector.responses {
+        let response = ApduResponse::from_bytes(&hex::decode(expected.encoded).unwrap()).unwrap();
+        assert_eq!(response.is_success(), expected.success);
+        assert_eq!(response.is_warning(), expected.warning);
+        assert_eq!(response.is_error(), expected.error);
+        assert_eq!(response.status_description(), expected.description);
+    }
 }
