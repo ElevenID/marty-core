@@ -37,6 +37,8 @@ pub mod device_auth;
 pub mod dtc;
 #[cfg(feature = "csca")]
 pub mod eac;
+#[cfg(feature = "csca")]
+pub mod emrtd_data;
 pub mod error;
 pub mod evidence_policy;
 pub mod evidence_reconciliation;
