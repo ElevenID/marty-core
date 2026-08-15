@@ -235,23 +235,8 @@ pub fn normalize_ecdsa_signature(
     signature: &[u8],
     expected_algorithm: &str,
 ) -> Oid4vciResult<Vec<u8>> {
-    match expected_algorithm {
-        "ES256" if signature.len() == 64 => Ok(signature.to_vec()),
-        "ES256" => p256::ecdsa::Signature::from_der(signature)
-            .map(|value| value.to_bytes().to_vec())
-            .map_err(|error| {
-                Oid4vciError::JwtError(format!("Invalid ES256 signature encoding: {error}"))
-            }),
-        "ES384" if signature.len() == 96 => Ok(signature.to_vec()),
-        "ES384" => p384::ecdsa::Signature::from_der(signature)
-            .map(|value| value.to_bytes().to_vec())
-            .map_err(|error| {
-                Oid4vciError::JwtError(format!("Invalid ES384 signature encoding: {error}"))
-            }),
-        _ => Err(Oid4vciError::JwtError(format!(
-            "Unsupported ECDSA signature algorithm: {expected_algorithm}"
-        ))),
-    }
+    marty_crypto::ecdsa::normalize_signature(signature, expected_algorithm)
+        .map_err(|error| Oid4vciError::JwtError(error.to_string()))
 }
 
 #[cfg(test)]

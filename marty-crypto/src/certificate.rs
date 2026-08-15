@@ -361,6 +361,7 @@ fn format_x509_time(time: &x509_cert::time::Time) -> String {
 }
 
 /// Verify that a certificate was signed by another certificate (issuer).
+#[cfg(feature = "x509")]
 pub fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -> CryptoResult<bool> {
     let cert = load_certificate_der(cert_der)?;
     let issuer = load_certificate_der(issuer_der)?;

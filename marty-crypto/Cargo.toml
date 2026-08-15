@@ -15,21 +15,49 @@ name = "marty_crypto"
 crate-type = ["rlib"]
 
 [features]
-default = ["ecdsa", "eddsa", "rsa", "x509"]
+# Preserve the historical feature-complete default while allowing consumers
+# with a narrow security boundary to compile only the primitives they use.
+default = ["full"]
 ecdsa = []           # ECDSA with P-256/P-384/P-521
 eddsa = []           # Ed25519 and Ed448
-rsa = []             # RSA PKCS#1 v1.5 and PSS
-bbs = []             # BBS+ with BLS12-381 (SHA-256/SHAKE-256)
-x509 = []            # X.509 certificate parsing
+rsa = ["dep:rsa"]   # RSA PKCS#1 v1.5 and PSS
+bbs = ["dep:zkryptium"] # BBS+ with BLS12-381 (SHA-256/SHAKE-256)
+jwk = []             # Public SPKI/certificate to RFC 7517 conversion
+ecdh = []            # P-256/P-384/X25519 agreement
+hashing = []         # SHA-1/SHA-2 and HMAC helpers
+signature-verification = ["ecdsa", "eddsa", "rsa"]
+x509-parsing = ["hashing"]
+x509 = ["x509-parsing", "signature-verification"]
+crl = ["x509", "cert-builder"]
+ocsp = ["x509", "cert-builder"]
 symmetric = []       # AES-GCM, AES-CBC, 3DES
-kdf = []             # HKDF, PBKDF2
+kdf = ["hashing"]    # HKDF, PBKDF2, and transcript-bound mDoc key derivation
 pkcs12 = []          # PKCS#12 bundle parsing
-cert-builder = []    # Certificate builder functionality
-sod-builder = ["cms/builder"]  # EF.SOD DER builder for ICAO 9303 eMRTDs
+serialization = ["rsa"]
+keygen = ["bbs", "ecdh", "eddsa", "rsa"]
+cert-builder = ["keygen", "x509"]
+sod-builder = ["dep:cms", "cms/builder", "cert-builder"]
 # These features are defined for cfg guards but require external crates when used
 aamva-client = []    # AAMVA OCSP client (needs reqwest externally)
 ocsp-client = []     # OCSP client functionality (needs reqwest externally)
-full = ["ecdsa", "eddsa", "rsa", "x509", "symmetric", "kdf", "pkcs12", "cert-builder"]
+full = [
+    "bbs",
+    "cert-builder",
+    "crl",
+    "ecdh",
+    "ecdsa",
+    "eddsa",
+    "hashing",
+    "jwk",
+    "kdf",
+    "ocsp",
+    "pkcs12",
+    "rsa",
+    "serialization",
+    "sod-builder",
+    "symmetric",
+    "x509",
+]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("reqwest"))'] }
@@ -50,7 +78,7 @@ pem-rfc7468 = { workspace = true }
 signature = { workspace = true }
 
 # RSA support
-rsa = { workspace = true }
+rsa = { workspace = true, optional = true }
 
 # PKCS standards
 pkcs8 = { workspace = true }
@@ -58,7 +86,7 @@ pkcs5 = { workspace = true }
 spki = { workspace = true }
 
 # CMS/CRL/OCSP
-cms = { workspace = true }
+cms = { workspace = true, optional = true }
 x509-ocsp = { workspace = true }
 
 # Symmetric encryption
@@ -82,7 +110,7 @@ x25519-dalek = { workspace = true }
 ed448-goldilocks-plus = { workspace = true }
 
 # BBS+ signatures
-zkryptium = { workspace = true }
+zkryptium = { workspace = true, optional = true }
 
 # Time
 chrono = { workspace = true }
@@ -99,6 +127,7 @@ rand_core = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -109,3 +138,31 @@ hex = "0.4"
 [dev-dependencies]
 tempfile = { workspace = true }
 rcgen = { workspace = true }
+
+[[test]]
+name = "cavp_aes_gcm"
+required-features = ["symmetric"]
+
+[[test]]
+name = "cavp_ecdh"
+required-features = ["ecdh", "kdf"]
+
+[[test]]
+name = "cavp_ecdsa"
+required-features = ["ecdh", "ecdsa"]
+
+[[test]]
+name = "cavp_rsa"
+required-features = ["rsa"]
+
+[[test]]
+name = "cavp_sha_hmac"
+required-features = ["hashing"]
+
+[[test]]
+name = "public_jwk_vectors"
+required-features = ["jwk"]
+
+[[test]]
+name = "rfc5869_hkdf"
+required-features = ["kdf"]
