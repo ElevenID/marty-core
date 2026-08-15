@@ -1083,6 +1083,11 @@ pub fn destination_decision_json(
     )?)
 }
 
+/// Validate operator-owned private registry host configuration.
+pub fn private_host_allowlist_json(configured: &str) -> TrustSyncResult<String> {
+    to_json(&parse_private_host_allowlist(configured)?)
+}
+
 /// Return the HTTPS request URL, original Host header, and SNI hostname.
 pub fn request_plan_json(
     url: &str,

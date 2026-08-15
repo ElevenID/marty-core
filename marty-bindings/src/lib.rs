@@ -1043,6 +1043,11 @@ fn trust_registry_destination_decision_json(
 }
 
 #[pyfunction]
+fn trust_registry_private_host_allowlist_json(configured: &str) -> PyResult<String> {
+    marty_verification::trust_sync::private_host_allowlist_json(configured).map_err(to_pyerr)
+}
+
+#[pyfunction]
 #[pyo3(signature = (url, token=None, address=None))]
 fn trust_registry_request_plan_json(
     url: &str,
@@ -2607,6 +2612,10 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trust_registry_validate_url, m)?)?;
     m.add_function(wrap_pyfunction!(
         trust_registry_destination_decision_json,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        trust_registry_private_host_allowlist_json,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(trust_registry_request_plan_json, m)?)?;

@@ -120,6 +120,20 @@
       "error_contains": "non-public"
     }
   ],
+  "allowlist_cases": [
+    {
+      "configured": " Private-Registry.Example. ,second.example",
+      "expected": ["private-registry.example", "second.example"]
+    },
+    {
+      "configured": "10.0.0.8",
+      "error_contains": "DNS hostnames"
+    },
+    {
+      "configured": "bad_host.example",
+      "error_contains": "invalid DNS hostname"
+    }
+  ],
   "request_cases": [
     {
       "url": "https://registry.example/v1/sync",

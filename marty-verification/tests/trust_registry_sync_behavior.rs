@@ -114,6 +114,16 @@ fn url_destination_and_request_vectors_are_canonical() {
         }
     }
 
+    for case in fixture["allowlist_cases"].as_array().unwrap() {
+        let result = trust_sync::private_host_allowlist_json(case["configured"].as_str().unwrap());
+        if let Some(error) = case["error_contains"].as_str() {
+            assert!(result.unwrap_err().to_string().contains(error));
+        } else {
+            let output: Value = serde_json::from_str(&result.unwrap()).unwrap();
+            assert_eq!(output, case["expected"]);
+        }
+    }
+
     for case in fixture["request_cases"].as_array().unwrap() {
         let output: Value = serde_json::from_str(
             &trust_sync::request_plan_json(
