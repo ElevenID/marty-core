@@ -46,7 +46,7 @@ jobs:
           toolchain: 1.97.1
           components: clippy, rustfmt
       - name: Cache Cargo inputs
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry/cache
@@ -130,7 +130,7 @@ jobs:
         with:
           toolchain: 1.97.1
       - name: Cache Cargo inputs
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry/cache
@@ -188,7 +188,7 @@ jobs:
           cache: pip
           cache-dependency-path: marty-biometrics/pyproject.toml
       - name: Cache security tools
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/bin/cargo-audit
@@ -448,7 +448,7 @@ jobs:
             done
           fi
       - name: Summarize CI performance
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const {owner, repo} = context.repo;
