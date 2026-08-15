@@ -2,8 +2,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
-use crate::jwk::{base64url_encode, jws_sign, jws_verify, Jwk, JwsHeader};
-use marty_crypto::serialization::{load_public_key_pem, spki_to_raw_public_key};
+use crate::jwk::{jws_sign, jws_verify, public_key_pem_to_jwk, Jwk, JwsHeader};
 
 use super::contexts::ob2_context_uri;
 use super::types::{DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult};
@@ -331,12 +330,12 @@ fn extract_public_jwk(value: &Value) -> VerificationResult<Jwk> {
     }
 
     if let Some(pem) = value.get("publicKeyPem").and_then(|v| v.as_str()) {
-        return jwk_from_pem(pem);
+        return public_key_pem_to_jwk(pem);
     }
 
     if let Some(public_key) = value.get("publicKey") {
         if let Some(pem) = public_key.as_str() {
-            return jwk_from_pem(pem);
+            return public_key_pem_to_jwk(pem);
         }
         let jwk_json = serde_json::to_string(public_key)
             .map_err(|e| VerificationError::open_badges(format!("Invalid publicKey: {}", e)))?;
@@ -346,102 +345,6 @@ fn extract_public_jwk(value: &Value) -> VerificationResult<Jwk> {
     Err(VerificationError::open_badges_unsupported(
         "Unsupported verification key format".to_string(),
     ))
-}
-
-pub(crate) fn jwk_from_pem(pem: &str) -> VerificationResult<Jwk> {
-    let spki = load_public_key_pem(pem)?;
-    jwk_from_spki(&spki)
-}
-
-fn jwk_from_spki(spki: &[u8]) -> VerificationResult<Jwk> {
-    let (raw, key_type) = spki_to_raw_public_key(spki)?;
-
-    match key_type.as_str() {
-        "EC_P256" => jwk_from_ec("P-256", &raw),
-        "EC_P384" => jwk_from_ec("P-384", &raw),
-        "EC_P521" => jwk_from_ec("P-521", &raw),
-        "Ed25519" => Ok(Jwk {
-            kty: "OKP".to_string(),
-            crv: Some("Ed25519".to_string()),
-            x: Some(base64url_encode(&raw)),
-            ..Jwk::default()
-        }),
-        "RSA" => jwk_from_rsa(&raw),
-        _ => Err(VerificationError::open_badges_unsupported(format!(
-            "Unsupported public key type: {}",
-            key_type
-        ))),
-    }
-}
-
-fn jwk_from_ec(curve: &str, raw: &[u8]) -> VerificationResult<Jwk> {
-    let (x, y) = match curve {
-        "P-256" => {
-            let point = p256::EncodedPoint::from_bytes(raw)
-                .map_err(|e| VerificationError::open_badges(format!("Invalid P-256 key: {}", e)))?;
-            let x = point
-                .x()
-                .ok_or_else(|| VerificationError::open_badges("Missing P-256 x".to_string()))?;
-            let y = point
-                .y()
-                .ok_or_else(|| VerificationError::open_badges("Missing P-256 y".to_string()))?;
-            (x.to_vec(), y.to_vec())
-        }
-        "P-384" => {
-            let point = p384::EncodedPoint::from_bytes(raw)
-                .map_err(|e| VerificationError::open_badges(format!("Invalid P-384 key: {}", e)))?;
-            let x = point
-                .x()
-                .ok_or_else(|| VerificationError::open_badges("Missing P-384 x".to_string()))?;
-            let y = point
-                .y()
-                .ok_or_else(|| VerificationError::open_badges("Missing P-384 y".to_string()))?;
-            (x.to_vec(), y.to_vec())
-        }
-        "P-521" => {
-            let point = p521::EncodedPoint::from_bytes(raw)
-                .map_err(|e| VerificationError::open_badges(format!("Invalid P-521 key: {}", e)))?;
-            let x = point
-                .x()
-                .ok_or_else(|| VerificationError::open_badges("Missing P-521 x".to_string()))?;
-            let y = point
-                .y()
-                .ok_or_else(|| VerificationError::open_badges("Missing P-521 y".to_string()))?;
-            (x.to_vec(), y.to_vec())
-        }
-        _ => {
-            return Err(VerificationError::open_badges_unsupported(format!(
-                "Unsupported EC curve: {}",
-                curve
-            )))
-        }
-    };
-
-    Ok(Jwk {
-        kty: "EC".to_string(),
-        crv: Some(curve.to_string()),
-        x: Some(base64url_encode(&x)),
-        y: Some(base64url_encode(&y)),
-        ..Jwk::default()
-    })
-}
-
-fn jwk_from_rsa(raw: &[u8]) -> VerificationResult<Jwk> {
-    use rsa::pkcs1::DecodeRsaPublicKey;
-    use rsa::traits::PublicKeyParts;
-
-    let key = rsa::RsaPublicKey::from_pkcs1_der(raw)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid RSA public key: {}", e)))?;
-
-    let n = key.n().to_bytes_be();
-    let e = key.e().to_bytes_be();
-
-    Ok(Jwk {
-        kty: "RSA".to_string(),
-        n: Some(base64url_encode(&n)),
-        e: Some(base64url_encode(&e)),
-        ..Jwk::default()
-    })
 }
 
 fn verify_recipient_hash(

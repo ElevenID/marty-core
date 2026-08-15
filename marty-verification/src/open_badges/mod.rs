@@ -47,8 +47,6 @@ use serde_json::Value;
 
 pub use contexts::{ob2_context_uri, ob3_context_uri, open_badges_context_loader};
 pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
-#[cfg(feature = "python")]
-pub(crate) use ob2::jwk_from_pem;
 pub use ob2::{issue_ob2_json, verify_ob2_json};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ob3::{issue_ob3_json, verify_ob3_json, verify_ob3_json_with_status_lists};

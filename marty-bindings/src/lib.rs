@@ -340,6 +340,109 @@ fn complete_vcdm_data_integrity_credential(request_json: &str) -> PyResult<Strin
         .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
+/// Validate an unsigned VCDM v2 credential at the production issuance
+/// boundary. Validation failures are stable machine-readable error codes.
+#[pyfunction]
+fn validate_vcdm_issuance_document(request_json: &str) -> PyResult<()> {
+    marty_verification::vcdm::validate_vcdm_issuance_document_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Validate caller-fetched related-resource bytes against the credential's
+/// SRI and multibase digests in Rust.
+#[pyfunction]
+fn validate_vcdm_related_resource_digests(request_json: &str) -> PyResult<()> {
+    marty_verification::vcdm::validate_vcdm_related_resource_digests_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn governance_canonical_digest(value_json: &str) -> PyResult<String> {
+    marty_verification::governance::canonical_digest_json(value_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn governance_validate(raw: &str) -> PyResult<()> {
+    marty_verification::governance::validate_governance_json(raw)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn governance_authorize(request_json: &str) -> PyResult<String> {
+    marty_verification::governance::authorize_governance_json(request_json)
+        .map_err(pyo3::exceptions::PyPermissionError::new_err)
+}
+
+#[pyfunction]
+fn governance_from_snapshot(request_json: &str) -> PyResult<String> {
+    marty_verification::governance::governance_from_snapshot_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn governance_resume(request_json: &str) -> PyResult<String> {
+    marty_verification::governance::resume_governance_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn governance_require_purpose(request_json: &str) -> PyResult<()> {
+    marty_verification::governance::require_governance_purpose_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn governance_validate_request(request_json: &str) -> PyResult<()> {
+    marty_verification::governance::validate_governance_request_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Evaluate normalized application evidence using the canonical Rust policy kernel.
+#[pyfunction]
+fn evaluate_application_evidence_policy(request_json: &str) -> PyResult<String> {
+    marty_verification::evidence_policy::evaluate_application_evidence_policy_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Select the newest immutable revision for each logical evidence key.
+#[pyfunction]
+fn current_evidence_heads(request_json: &str) -> PyResult<String> {
+    marty_verification::evidence_policy::current_evidence_heads_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn evidence_reconciliation_plan(request_json: &str) -> PyResult<String> {
+    marty_verification::evidence_reconciliation::reconciliation_plan_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn evidence_reconciliation_stale_reasons(request_json: &str) -> PyResult<String> {
+    marty_verification::evidence_reconciliation::stale_receipt_reasons_json(request_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+/// Return one canonical language-neutral behavior fixture for adapter tests.
+#[pyfunction]
+fn verification_behavior_fixture(name: &str) -> PyResult<String> {
+    let fixture = match name {
+        "evidence_policy" => marty_verification::evidence_policy::behavior_fixture_json(),
+        "evidence_reconciliation" => {
+            marty_verification::evidence_reconciliation::behavior_fixture_json()
+        }
+        "governance" => marty_verification::governance::behavior_fixture_json(),
+        "vcdm_issuance" => marty_verification::vcdm::issuance_behavior_fixture_json(),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "unknown verification behavior fixture",
+            ));
+        }
+    };
+    Ok(fixture.to_string())
+}
+
 /// Helper function to encode bytes as base64url (no padding)
 #[cfg(test)]
 fn base64_url_encode(data: &[u8]) -> String {
@@ -2305,6 +2408,20 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
         complete_vcdm_data_integrity_credential,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(validate_vcdm_issuance_document, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_vcdm_related_resource_digests, m)?)?;
+    m.add_function(wrap_pyfunction!(governance_canonical_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(governance_validate, m)?)?;
+    m.add_function(wrap_pyfunction!(governance_authorize, m)?)?;
+    m.add_function(wrap_pyfunction!(governance_from_snapshot, m)?)?;
+    m.add_function(wrap_pyfunction!(governance_resume, m)?)?;
+    m.add_function(wrap_pyfunction!(governance_require_purpose, m)?)?;
+    m.add_function(wrap_pyfunction!(governance_validate_request, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate_application_evidence_policy, m)?)?;
+    m.add_function(wrap_pyfunction!(current_evidence_heads, m)?)?;
+    m.add_function(wrap_pyfunction!(evidence_reconciliation_plan, m)?)?;
+    m.add_function(wrap_pyfunction!(evidence_reconciliation_stale_reasons, m)?)?;
+    m.add_function(wrap_pyfunction!(verification_behavior_fixture, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_inspect, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify_profile, m)?)?;

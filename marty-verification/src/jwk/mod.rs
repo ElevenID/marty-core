@@ -10,7 +10,9 @@
 mod jwe;
 mod jws;
 mod key;
+mod public_key;
 
 pub use jwe::*;
 pub use jws::*;
 pub use key::*;
+pub use public_key::*;
