@@ -79,6 +79,7 @@ tracing = { workspace = true }
 tracing-error = { workspace = true }
 regex = { version = "1", default-features = false, features = ["std"] }
 cedar-policy = { version = "=4.8.1", default-features = false }
+url = "2"
 
 # Time
 chrono = { workspace = true }
