@@ -31,26 +31,46 @@
 //! ecdsa::verify_p256(&public_key, message, &signature)?;
 //! ```
 
+#[cfg(feature = "bbs")]
 pub mod bbs;
+#[cfg(feature = "cert-builder")]
 pub mod cert_builder;
+#[cfg(feature = "x509")]
 pub mod certificate;
+#[cfg(feature = "crl")]
 pub mod crl;
+#[cfg(feature = "symmetric")]
 pub mod des;
+#[cfg(feature = "ecdh")]
 pub mod ecdh;
+#[cfg(feature = "ecdsa")]
 pub mod ecdsa;
+#[cfg(feature = "eddsa")]
 pub mod ed25519;
+#[cfg(feature = "eddsa")]
 pub mod ed448;
 pub mod error;
+#[cfg(feature = "hashing")]
 pub mod hashing;
+#[cfg(feature = "rsa")]
 pub mod iso9796;
+#[cfg(feature = "jwk")]
 pub mod jwk;
+#[cfg(feature = "kdf")]
 pub mod kdf;
+#[cfg(feature = "keygen")]
 pub mod keygen;
+#[cfg(feature = "ocsp")]
 pub mod ocsp;
+#[cfg(feature = "pkcs12")]
 pub mod pkcs12;
+#[cfg(feature = "rsa")]
 pub mod rsa;
+#[cfg(feature = "serialization")]
 pub mod serialization;
+#[cfg(feature = "sod-builder")]
 pub mod sod_builder;
+#[cfg(feature = "symmetric")]
 pub mod symmetric;
 
 pub use error::{CryptoError, CryptoResult};
@@ -257,6 +277,7 @@ impl HashAlgorithm {
 ///
 /// `Ok(true)` if signature is valid, `Ok(false)` if invalid,
 /// or `Err` if verification cannot be performed.
+#[cfg(feature = "signature-verification")]
 #[allow(deprecated)]
 pub fn verify_signature(
     algorithm: SignatureAlgorithm,

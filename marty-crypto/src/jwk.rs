@@ -8,10 +8,12 @@ use std::collections::HashMap;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use der::asn1::UintRef;
+use der::{Decode, DecodePem, Sequence};
 use serde::{Deserialize, Serialize};
+use spki::SubjectPublicKeyInfoOwned;
+use x509_cert::Certificate;
 
-use crate::certificate::{get_certificate_public_key, load_certificate_pem};
-use crate::serialization::{load_public_key_pem, spki_to_raw_public_key};
 use crate::{CryptoError, CryptoResult};
 
 /// Public-only RFC 7517 JSON Web Key parameters.
@@ -74,24 +76,38 @@ impl PublicJwk {
 
 /// Convert a PEM SubjectPublicKeyInfo public key to a public JWK.
 pub fn public_key_pem_to_jwk(pem: &str) -> CryptoResult<PublicJwk> {
-    public_key_der_to_jwk(&load_public_key_pem(pem)?)
+    let info = SubjectPublicKeyInfoOwned::from_pem(pem).map_err(|error| {
+        CryptoError::pem_error(format!("Failed to parse public key PEM: {error}"))
+    })?;
+    public_key_info_to_jwk(&info)
 }
 
 /// Convert a DER SubjectPublicKeyInfo public key to a public JWK.
 pub fn public_key_der_to_jwk(spki: &[u8]) -> CryptoResult<PublicJwk> {
-    let (raw, key_type) = spki_to_raw_public_key(spki)?;
+    let info = SubjectPublicKeyInfoOwned::from_der(spki).map_err(|error| {
+        CryptoError::der_error(format!("Failed to parse public key DER: {error}"))
+    })?;
+    public_key_info_to_jwk(&info)
+}
+
+fn public_key_info_to_jwk(info: &SubjectPublicKeyInfoOwned) -> CryptoResult<PublicJwk> {
+    let raw = info
+        .subject_public_key
+        .as_bytes()
+        .ok_or_else(|| CryptoError::key_error("Invalid public key bit string"))?;
+    let key_type = detect_public_key_type(info)?;
 
     match key_type.as_str() {
-        "EC_P256" => jwk_from_ec("P-256", &raw),
-        "EC_P384" => jwk_from_ec("P-384", &raw),
-        "EC_P521" => jwk_from_ec("P-521", &raw),
+        "EC_P256" => jwk_from_ec("P-256", raw),
+        "EC_P384" => jwk_from_ec("P-384", raw),
+        "EC_P521" => jwk_from_ec("P-521", raw),
         "Ed25519" | "Ed448" => Ok(PublicJwk {
             kty: "OKP".to_string(),
             crv: Some(key_type),
             x: Some(URL_SAFE_NO_PAD.encode(raw)),
             ..PublicJwk::default()
         }),
-        "RSA" => jwk_from_rsa(&raw),
+        "RSA" => jwk_from_rsa(raw),
         _ => Err(CryptoError::key_error(format!(
             "Unsupported public key type: {key_type}"
         ))),
@@ -100,12 +116,52 @@ pub fn public_key_der_to_jwk(spki: &[u8]) -> CryptoResult<PublicJwk> {
 
 /// Extract a PEM X.509 certificate public key and convert it to JWK.
 pub fn certificate_pem_to_jwk(pem: &str) -> CryptoResult<PublicJwk> {
-    certificate_der_to_jwk(&load_certificate_pem(pem)?)
+    let certificate = Certificate::from_pem(pem).map_err(|error| {
+        CryptoError::pem_error(format!("Failed to parse certificate PEM: {error}"))
+    })?;
+    public_key_info_to_jwk(&certificate.tbs_certificate.subject_public_key_info)
 }
 
 /// Extract a DER X.509 certificate public key and convert it to JWK.
 pub fn certificate_der_to_jwk(der: &[u8]) -> CryptoResult<PublicJwk> {
-    public_key_der_to_jwk(&get_certificate_public_key(der)?)
+    let certificate = Certificate::from_der(der).map_err(|error| {
+        CryptoError::der_error(format!("Failed to parse certificate DER: {error}"))
+    })?;
+    public_key_info_to_jwk(&certificate.tbs_certificate.subject_public_key_info)
+}
+
+fn detect_public_key_type(info: &SubjectPublicKeyInfoOwned) -> CryptoResult<String> {
+    let oid = info.algorithm.oid;
+    if oid == const_oid::db::rfc5912::ID_EC_PUBLIC_KEY {
+        let curve = info
+            .algorithm
+            .parameters
+            .as_ref()
+            .and_then(|parameters| parameters.decode_as::<const_oid::ObjectIdentifier>().ok());
+        return match curve {
+            Some(value) if value == const_oid::db::rfc5912::SECP_256_R_1 => Ok("EC_P256".into()),
+            Some(value) if value == const_oid::db::rfc5912::SECP_384_R_1 => Ok("EC_P384".into()),
+            Some(value) if value == const_oid::db::rfc5912::SECP_521_R_1 => Ok("EC_P521".into()),
+            Some(value) => Err(CryptoError::unsupported_algorithm(format!(
+                "Unsupported EC curve OID: {value}"
+            ))),
+            None => Err(CryptoError::key_error(
+                "EC public key is missing curve parameters",
+            )),
+        };
+    }
+    if oid == const_oid::db::rfc5912::RSA_ENCRYPTION {
+        return Ok("RSA".into());
+    }
+    if oid == const_oid::db::rfc8410::ID_ED_25519 {
+        return Ok("Ed25519".into());
+    }
+    if oid == const_oid::db::rfc8410::ID_ED_448 {
+        return Ok("Ed448".into());
+    }
+    Err(CryptoError::unsupported_algorithm(format!(
+        "Unsupported public key algorithm OID: {oid}"
+    )))
 }
 
 fn jwk_from_ec(curve: &str, raw: &[u8]) -> CryptoResult<PublicJwk> {
@@ -146,16 +202,19 @@ where
 }
 
 fn jwk_from_rsa(raw: &[u8]) -> CryptoResult<PublicJwk> {
-    use rsa::pkcs1::DecodeRsaPublicKey;
-    use rsa::traits::PublicKeyParts;
-
-    let key = rsa::RsaPublicKey::from_pkcs1_der(raw)
+    let key = RsaPublicKey::from_der(raw)
         .map_err(|error| CryptoError::key_error(format!("Invalid RSA public key: {error}")))?;
 
     Ok(PublicJwk {
         kty: "RSA".to_string(),
-        n: Some(URL_SAFE_NO_PAD.encode(key.n().to_bytes_be())),
-        e: Some(URL_SAFE_NO_PAD.encode(key.e().to_bytes_be())),
+        n: Some(URL_SAFE_NO_PAD.encode(key.modulus.as_bytes())),
+        e: Some(URL_SAFE_NO_PAD.encode(key.public_exponent.as_bytes())),
         ..PublicJwk::default()
     })
+}
+
+#[derive(Sequence)]
+struct RsaPublicKey<'a> {
+    modulus: UintRef<'a>,
+    public_exponent: UintRef<'a>,
 }
