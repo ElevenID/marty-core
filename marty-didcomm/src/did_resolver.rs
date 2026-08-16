@@ -35,7 +35,8 @@ pub struct DidResolver {
     /// standard path without contacting the public DID host.
     #[cfg(feature = "did_web")]
     did_web_internal_base_urls: Vec<String>,
-    /// Exact hosts that may be contacted directly for `did:web` resolution.
+    /// Exact HTTPS authorities that may be contacted directly for `did:web`
+    /// resolution. Non-default ports must be listed as `host:port`.
     /// Empty by default so resolving untrusted DIDs cannot create ambient egress.
     #[cfg(feature = "did_web")]
     did_web_allowed_hosts: HashSet<String>,
@@ -82,7 +83,8 @@ impl DidResolver {
         self
     }
 
-    /// Permit direct `did:web` resolution for an exact set of deployment-owned hosts.
+    /// Permit direct `did:web` resolution for an exact set of deployment-owned
+    /// HTTPS authorities. Non-default ports must be listed as `host:port`.
     ///
     /// Public network access is denied unless a host is explicitly listed. Prefer a
     /// deployment-managed Universal Resolver when arbitrary holder DIDs are accepted.
@@ -95,7 +97,8 @@ impl DidResolver {
         Self::new().allow_did_web_hosts(hosts)
     }
 
-    /// Add exact direct-resolution hosts to an existing resolver configuration.
+    /// Add exact direct-resolution HTTPS authorities to an existing resolver
+    /// configuration. Non-default ports must be listed as `host:port`.
     #[cfg(feature = "did_web")]
     pub fn allow_did_web_hosts<I, S>(mut self, hosts: I) -> Self
     where
@@ -133,8 +136,8 @@ impl DidResolver {
                         return Ok((document, "configured_internal_resolver"));
                     }
                 }
-                let host = did_web_host(did)?;
-                if self.did_web_allowed_hosts.contains(&host) {
+                let allowlist_key = did_web_authority(did)?.allowlist_key;
+                if self.did_web_allowed_hosts.contains(&allowlist_key) {
                     resolve_did_web(did, &self.did_web_allowed_hosts)
                         .await
                         .map(|document| (document, "allowlisted_public_did_web"))
@@ -616,17 +619,77 @@ fn resolve_did_peer_2(did: &str, elements: &str) -> DidcommResult<DidDocument> {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "did_web")]
-fn did_web_host(did: &str) -> DidcommResult<String> {
+#[derive(Debug)]
+struct DidWebAuthority {
+    url: url::Url,
+    allowlist_key: String,
+}
+
+#[cfg(feature = "did_web")]
+fn did_web_authority(did: &str) -> DidcommResult<DidWebAuthority> {
     let stripped = did
         .strip_prefix("did:web:")
         .ok_or_else(|| DidcommError::InvalidDid(did.to_string()))?;
-    let authority = decode_did_web_component(stripped.split(':').next().unwrap_or_default(), did)?;
+    let encoded_authority = stripped.split(':').next().unwrap_or_default();
+    let bytes = encoded_authority.as_bytes();
+    let mut encoded_port_delimiters = 0_u8;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        if index + 2 >= bytes.len()
+            || bytes[index + 1] != b'3'
+            || !matches!(bytes[index + 2], b'A' | b'a')
+        {
+            return Err(DidcommError::InvalidDid(format!(
+                "did:web contains an unsafe authority: {did}"
+            )));
+        }
+        encoded_port_delimiters += 1;
+        index += 3;
+    }
+    if encoded_port_delimiters > 1 {
+        return Err(DidcommError::InvalidDid(format!(
+            "did:web contains an unsafe authority: {did}"
+        )));
+    }
+
+    let authority = decode_did_web_component(encoded_authority, did)?;
+    if authority.is_empty() || !authority.is_ascii() {
+        return Err(DidcommError::InvalidDid(format!(
+            "did:web contains an unsafe authority: {did}"
+        )));
+    }
+
+    let explicit_port = if encoded_port_delimiters == 1 {
+        let (_, port) = authority.rsplit_once(':').ok_or_else(|| {
+            DidcommError::InvalidDid(format!("did:web contains an invalid authority: {did}"))
+        })?;
+        if port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(DidcommError::InvalidDid(format!(
+                "did:web contains an unsafe authority: {did}"
+            )));
+        }
+        let port = port.parse::<u16>().map_err(|_| {
+            DidcommError::InvalidDid(format!("did:web contains an unsafe authority: {did}"))
+        })?;
+        if port == 0 {
+            return Err(DidcommError::InvalidDid(format!(
+                "did:web contains an unsafe authority: {did}"
+            )));
+        }
+        Some(port)
+    } else {
+        None
+    };
+
     let authority_url = url::Url::parse(&format!("https://{authority}/")).map_err(|_| {
         DidcommError::InvalidDid(format!("did:web contains an invalid authority: {did}"))
     })?;
     if !authority_url.username().is_empty()
         || authority_url.password().is_some()
-        || authority_url.port_or_known_default() != Some(443)
         || authority_url.path() != "/"
         || authority_url.query().is_some()
         || authority_url.fragment().is_some()
@@ -635,10 +698,34 @@ fn did_web_host(did: &str) -> DidcommResult<String> {
             "did:web contains an unsafe authority: {did}"
         )));
     }
-    authority_url
-        .host_str()
-        .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
-        .ok_or_else(|| DidcommError::InvalidDid(format!("did:web has no host: {did}")))
+    let host = match authority_url.host() {
+        Some(url::Host::Domain(host)) => host.trim_end_matches('.').to_ascii_lowercase(),
+        Some(url::Host::Ipv4(_) | url::Host::Ipv6(_)) => {
+            return Err(DidcommError::InvalidDid(format!(
+                "did:web contains an unsafe authority: {did}"
+            )))
+        }
+        None => {
+            return Err(DidcommError::InvalidDid(format!(
+                "did:web has no host: {did}"
+            )))
+        }
+    };
+    let port = explicit_port.unwrap_or(443);
+    if authority_url.port_or_known_default() != Some(port) {
+        return Err(DidcommError::InvalidDid(format!(
+            "did:web contains an unsafe authority: {did}"
+        )));
+    }
+    let allowlist_key = if port == 443 {
+        host
+    } else {
+        format!("{host}:{port}")
+    };
+    Ok(DidWebAuthority {
+        url: authority_url,
+        allowlist_key,
+    })
 }
 
 #[cfg(feature = "did_web")]
@@ -670,35 +757,19 @@ fn did_web_path_parts(did: &str) -> DidcommResult<Vec<String>> {
 
 #[cfg(feature = "did_web")]
 async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommResult<DidDocument> {
-    let stripped = did
-        .strip_prefix("did:web:")
-        .ok_or_else(|| DidcommError::InvalidDid(did.to_string()))?;
-
     // did:web:example.com → https://example.com/.well-known/did.json
     // did:web:example.com:path:to → https://example.com/path/to/did.json
-    let authority = decode_did_web_component(stripped.split(':').next().unwrap_or_default(), did)?;
-    let authority_url = url::Url::parse(&format!("https://{authority}/")).map_err(|_| {
-        DidcommError::InvalidDid(format!("did:web contains an invalid authority: {did}"))
-    })?;
-    let host = did_web_host(did)?;
-
-    if !authority_url.username().is_empty()
-        || authority_url.password().is_some()
-        || authority_url.port_or_known_default() != Some(443)
-        || authority_url.path() != "/"
-        || authority_url.query().is_some()
-        || authority_url.fragment().is_some()
-        || !allowed_hosts.contains(&host)
-    {
+    let authority = did_web_authority(did)?;
+    if !allowed_hosts.contains(&authority.allowlist_key) {
         return Err(DidcommError::ResolutionFailed {
             did: did.to_string(),
-            reason: "did:web host is not in the exact deployment allowlist".to_string(),
+            reason: "did:web HTTPS authority is not in the exact deployment allowlist".to_string(),
         });
     }
 
     let path_parts = did_web_path_parts(did)?;
 
-    let mut document_url = authority_url;
+    let mut document_url = authority.url;
     if path_parts.is_empty() {
         document_url.set_path("/.well-known/did.json");
     } else {
@@ -717,7 +788,7 @@ async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommR
 
 #[cfg(feature = "did_web")]
 fn internal_did_web_url(base_url: &str, did: &str) -> DidcommResult<url::Url> {
-    did_web_host(did)?;
+    did_web_authority(did)?;
     let path_parts = did_web_path_parts(did)?;
     let mut url = url::Url::parse(base_url).map_err(|_| DidcommError::ResolutionFailed {
         did: did.to_string(),
@@ -1405,7 +1476,7 @@ mod tests {
     async fn internal_did_web_base_preserves_path_and_reports_actual_source() {
         use std::io::{Read, Write};
 
-        let did = "did:web:issuer.example:orgs:tenant-a";
+        let did = "did:web:marty-oidf.test%3A18443:orgs:tenant-a";
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let document = serde_json::json!({
@@ -1469,6 +1540,52 @@ mod tests {
         ] {
             let error = resolver.resolve(did).await.unwrap_err();
             assert!(error.to_string().contains("unsafe authority"), "{error}");
+        }
+    }
+
+    #[cfg(feature = "did_web")]
+    #[test]
+    fn did_web_accepts_percent_encoded_non_default_port() {
+        let authority = did_web_authority("did:web:marty-oidf.test%3A18443:orgs:test-org").unwrap();
+
+        assert_eq!(authority.url.as_str(), "https://marty-oidf.test:18443/");
+        assert_eq!(authority.allowlist_key, "marty-oidf.test:18443");
+
+        let lowercase_escape = did_web_authority("did:web:example.com%3a3000").unwrap();
+        assert_eq!(lowercase_escape.url.as_str(), "https://example.com:3000/");
+        assert_eq!(lowercase_escape.allowlist_key, "example.com:3000");
+
+        let default_port = did_web_authority("did:web:example.com%3A443").unwrap();
+        assert_eq!(default_port.allowlist_key, "example.com");
+    }
+
+    #[cfg(feature = "did_web")]
+    #[tokio::test]
+    async fn did_web_non_default_port_requires_exact_authority_allowlist() {
+        let allowed_hosts = HashSet::from(["example.com".to_string()]);
+        let error = resolve_did_web("did:web:example.com%3A3000", &allowed_hosts)
+            .await
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("HTTPS authority is not in the exact deployment allowlist"));
+    }
+
+    #[cfg(feature = "did_web")]
+    #[test]
+    fn did_web_rejects_unsafe_or_ambiguous_authorities() {
+        for did in [
+            "did:web:127.0.0.1",
+            "did:web:example.com%40attacker.example",
+            "did:web:example.com%3A0",
+            "did:web:example.com%3A65536",
+            "did:web:example.com%3Anot-a-port",
+            "did:web:example.com%3A3000%3A4000",
+            "did:web:example.com%253A3000",
+        ] {
+            let error = did_web_authority(did).unwrap_err();
+            assert!(error.to_string().contains("authority"), "{did}: {error}");
         }
     }
 
