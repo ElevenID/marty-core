@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Resolve standards-conformant `did:web` identifiers with percent-encoded
+  non-default ports through configured managed resolvers and direct HTTPS
+  resolution.
+
+### Security
+
+- Restrict decoded `did:web` authorities to domain names and a single valid
+  `%3Aport` delimiter, and require an exact `host:port` allowlist entry before
+  direct resolution on a non-default port.
+
 ## [0.1.57] - 2026-08-15
 
 ### Added

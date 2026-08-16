@@ -6,31 +6,24 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "marty-didcomm authcrypt anoncrypt encrypted envelope"
-  - "affinidi-messaging-didcomm 0.14.0 ECDH-1PU authcrypt decrypt"
-  - "DIDComm Messaging 2.1 keyAgreement sender authenticated encryption"
-  - "marty-credentials DIDComm delivery wrappers"
-  - "marty-integration-tests independent DIDComm interoperability"
+  - "marty-didcomm did_web_host did_web_authority unsafe authority"
+  - "did:web percent-encoded port %3A URL resolution"
+  - "marty-credentials resolve_did_web unquote port"
+  - "did_web_allowed_hosts allow_did_web_hosts exact egress allowlist"
 candidate_implementations:
-  - path: marty-didcomm/src/encrypted_envelope.rs
+  - path: marty-didcomm/src/did_resolver.rs
     language: Rust
-    disposition: extend_existing_canonical_envelope_boundary
-  - path: marty-didcomm/src/types.rs
-    language: Rust
-    disposition: consolidate_atomic_authorized_key_selection
-  - path: marty-bindings/src/lib.rs
-    language: Rust/Python FFI
-    disposition: extend_existing_binding_surface
-  - path: affinidi-messaging-didcomm@0.14.0
-    language: Rust dependency
-    disposition: reuse_pinned_jose_and_ecdh_1pu_engine
-  - path: marty-integration-tests/scripts/public_boundary_lane.py
+    disposition: extend_existing_canonical_controlled_resolver
+  - path: marty-credentials/services/verification/application/did_resolver.py
     language: Python
-    disposition: future_owned_cross_implementation_evidence_consumer
+    disposition: do_not_reuse_legacy_uncontrolled_egress_adapter
+  - path: url@2.5
+    language: Rust dependency
+    disposition: reuse_pinned_authority_and_host_parser
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: marty-didcomm/src/encrypted_envelope.rs
+  path: marty-didcomm/src/did_resolver.rs
   language: Rust
 rust_disposition: rust_canonical
 non_rust_rationale: ""
