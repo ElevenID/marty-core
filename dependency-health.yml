@@ -34,8 +34,8 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2022-0040, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-08-17
-    rationale: The umbrella crate was removed. Narrow SSI crates remain required for DID, VC, SD-JWT, and Open Badges verification; ssi-jwt is temporarily patched by exact revision pending spruceid/ssi#706.
+    review-after: 2026-09-20
+    rationale: Re-reviewed 2026-08-20. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification; spruceid/ssi#706 remains open and upstream main 89630368438c81b55335362b21621d3aadd48d93 still declares unused serde_with 2.3.2. The exact ElevenID ssi-jwt revision remains necessary, and the lock contains only serde_with 3.x.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID
