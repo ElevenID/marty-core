@@ -30,10 +30,13 @@ use der::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use x509_cert::crl::{CertificateList, RevokedCert, TbsCertList};
 use x509_cert::ext::pkix::{BasicConstraints, KeyUsage};
+#[cfg(feature = "crl-builder")]
 use x509_cert::name::Name;
+#[cfg(feature = "crl-builder")]
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::time::Time;
 use x509_cert::Certificate;
+#[cfg(feature = "crl-builder")]
 use x509_cert::Version;
 
 use crate::{CryptoError, CryptoResult};
@@ -45,6 +48,7 @@ use crate::{CryptoError, CryptoResult};
 /// Convert a Unix duration to x509_cert::time::Time.
 ///
 /// Uses GeneralizedTime for simplicity (valid for all dates).
+#[cfg(any(test, feature = "crl-builder"))]
 fn duration_to_x509_time(duration: std::time::Duration) -> CryptoResult<Time> {
     use der::asn1::GeneralizedTime;
 
@@ -496,6 +500,7 @@ fn extract_revocation_reason(cert: &RevokedCert) -> Option<RevocationReason> {
 // ============================================================================
 
 /// Entry for a revoked certificate.
+#[cfg(feature = "crl-builder")]
 #[derive(Debug, Clone)]
 pub struct RevokedEntry {
     pub serial_hex: String,
@@ -503,6 +508,7 @@ pub struct RevokedEntry {
 }
 
 /// Builder for creating CRLs.
+#[cfg(feature = "crl-builder")]
 pub struct CrlBuilder {
     issuer: crate::cert_builder::DistinguishedName,
     validity_days: u32,
@@ -510,6 +516,7 @@ pub struct CrlBuilder {
     revoked_entries: Vec<RevokedEntry>,
 }
 
+#[cfg(feature = "crl-builder")]
 impl Default for CrlBuilder {
     fn default() -> Self {
         Self {
@@ -521,6 +528,7 @@ impl Default for CrlBuilder {
     }
 }
 
+#[cfg(feature = "crl-builder")]
 impl CrlBuilder {
     /// Create a new CRL builder.
     pub fn new() -> Self {
@@ -900,9 +908,12 @@ impl CrlBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "crl-builder")]
     use crate::cert_builder::{create_ca_certificate, create_signed_certificate};
+    #[cfg(feature = "crl-builder")]
     use crate::keygen::KeyType;
 
+    #[cfg(feature = "crl-builder")]
     #[test]
     fn test_crl_builder() {
         // Create a CA certificate first
@@ -929,6 +940,7 @@ mod tests {
         assert!(crl_info.revoked_serials.contains(&"0102030405".to_string()));
     }
 
+    #[cfg(feature = "crl-builder")]
     #[test]
     fn test_is_certificate_revoked() {
         let (_, ca_key_pem) = create_ca_certificate("Revocation CA", None, 365, KeyType::EcdsaP256)
@@ -944,6 +956,7 @@ mod tests {
         assert!(!is_certificate_revoked(&crl_der, "cafebabe").unwrap());
     }
 
+    #[cfg(feature = "crl-builder")]
     #[test]
     fn authenticated_crl_is_bound_to_certificate_issuer_and_signature() {
         let (ca_der, ca_key) =

@@ -40,6 +40,7 @@ jobs:
       - name: Verify Python versions and release-asset retention
         run: |
           python scripts/check_release_contract.py
+          python scripts/check_verification_feature_boundary.py
           python -m unittest discover -s scripts -p "test_*.py"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
@@ -247,6 +248,14 @@ jobs:
         run: |
           cargo build --locked -p marty-verification --no-default-features
           cargo build --locked -p marty-verification
+          cargo check --locked -p marty-verification --no-default-features --features authority-issuance
+          for package in marty-verification marty-bindings; do
+            default_crypto_tree="$(cargo tree --locked -p "$package" -e features,no-dev -i marty-crypto)"
+            if grep -Eq 'marty-crypto feature "(default|full|cert-builder|crl-builder|keygen|sod-builder)"' <<<"$default_crypto_tree"; then
+              printf '%s\n' "$default_crypto_tree"
+              exit 1
+            fi
+          done
           cargo test --locked -p marty-verification --features test-fixtures
           cargo check --locked -p marty-oid4vci --no-default-features
           cargo test --locked -p marty-oid4vci
