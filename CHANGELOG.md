@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.59] - 2026-08-20
+
+### Changed
+
+- Require the explicit `authority-issuance` feature for CSCA and document-signer
+  authority APIs while retaining eMRTD verification in the default verifier.
+- Separate CRL verification from CRL construction and narrow the normal crypto
+  feature composition used by Verification, Bindings, OID4VCI, and ISO 18013.
+
+### Security
+
+- Exclude certificate, CRL, SOD, and key-generation builder features from the
+  default verifier and released Python verifier wheel dependency graphs.
+
 ## [0.1.58] - 2026-08-15
 
 ### Fixed
