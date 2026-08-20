@@ -9,8 +9,13 @@ Python bindings for the `marty-verification` Rust library, providing cryptograph
 - **mDoc/mDL Verification**: Verify mobile driver's licenses (ISO 18013-5)
 - **eMRTD Verification**: Verify electronic machine-readable travel documents
 - **MRZ Parsing**: Parse and validate machine-readable zone data
-- **Certificate Operations**: Build and verify X.509 certificate chains
+- **Certificate Operations**: Parse and verify X.509 certificate chains
 - **Cryptographic Primitives**: Ed25519, P-256, RSA, hashing, JWK/JWS/JWE
+
+The released verifier wheel intentionally excludes CSCA/DSC key generation,
+certificate/SOD construction, and passport personalization. Rust development
+and authority tooling can select the explicit `authority-issuance` feature to
+compile those APIs; ordinary `csca` enables eMRTD verification only.
 
 ## Installation
 

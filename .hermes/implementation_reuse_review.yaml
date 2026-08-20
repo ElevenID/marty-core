@@ -6,26 +6,33 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "dependency-health ssi temporary-exception review-after"
-  - "spruceid ssi pull 706 serde_with 2.3.2"
-  - "ssi-jwt-elevenid exact revision Cargo.lock serde_with"
+  - "marty-verification issuance CscaAuthority DocumentSignerAuthority PassportPersonalizer"
+  - "marty-crypto sod-builder cert-builder keygen crl ocsp feature graph"
+  - "marty-bindings marty-iso18013 marty-oid4vci marty-crypto dependency features"
+  - "verification feature combinations no-default full python bindings"
 candidate_implementations:
-  - path: dependency-health.yml
-    language: YAML
-    disposition: update_existing_canonical_health_record
-  - path: Cargo.toml
+  - path: marty-verification/src/issuance/mod.rs
+    language: Rust
+    disposition: retain_existing_canonical_authority_implementation_behind_explicit_feature
+  - path: marty-verification/Cargo.toml
     language: TOML
-    disposition: retain_existing_exact_security_patch
-  - path: Cargo.lock
+    disposition: extend_existing_feature_boundary_and_narrow_normal_crypto_graph
+  - path: marty-crypto/Cargo.toml
     language: TOML
-    disposition: verify_existing_lock_without_modification
+    disposition: separate_existing_crl_verification_from_crl_construction
+  - path: marty-bindings/Cargo.toml
+    language: TOML
+    disposition: narrow_existing_binding_composition_to_used_crypto_modules
+  - path: scripts/test-feature-combinations.sh
+    language: Shell
+    disposition: extend_existing_canonical_feature_matrix
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: dependency-health.yml
-  language: YAML
-rust_disposition: not_applicable_governance_metadata_only
-non_rust_rationale: "This task renews an existing dependency-governance review; it adds no implementation."
+  path: marty-verification/src/issuance/mod.rs
+  language: Rust
+rust_disposition: reuse_and_feature_gate_existing_canonical_implementation
+non_rust_rationale: "Cargo manifests and owned feature checks enforce composition around the retained Rust implementation."
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

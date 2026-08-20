@@ -98,6 +98,10 @@ run_check \
     cargo test -p marty-crypto --no-default-features --features ecdsa,rsa,x509
 
 run_check \
+    "marty-crypto: CRL verification without builders" \
+    cargo check -p marty-crypto --no-default-features --features crl
+
+run_check \
     "marty-crypto: full feature set" \
     cargo test -p marty-crypto --no-default-features --features full
 
@@ -125,6 +129,10 @@ run_check \
 run_check \
     "marty-verification: default features" \
     cargo build -p marty-verification
+
+run_check \
+    "marty-verification: explicit authority issuance" \
+    cargo test -p marty-verification --no-default-features --features authority-issuance issuance::tests
 
 run_check \
     "marty-verification: full client stack" \

@@ -14,7 +14,7 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 # Internal dependencies
 marty-types = { version = "0.1.5", path = "../marty-types" }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto" }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdh", "kdf", "symmetric"] }
 
 # CBOR and COSE
 ciborium = "0.2"
