@@ -41,7 +41,7 @@ x509-ocsp = "0.2"
 aes-gcm = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
-des = "0.8"
+des = "0.9"
 
 # Key derivation
 hkdf = "0.12"
