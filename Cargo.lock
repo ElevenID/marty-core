@@ -3933,9 +3933,7 @@ dependencies = [
  "bs58 0.5.1",
  "chrono",
  "ciborium",
- "coset",
  "hex",
- "isomdl",
  "marty-crypto",
  "marty-didcomm",
  "marty-iso18013",
@@ -3943,13 +3941,10 @@ dependencies = [
  "marty-status",
  "marty-types",
  "marty-verification",
- "pem-rfc7468 0.7.0",
  "pyo3",
- "rcgen",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
- "time",
  "tokio",
 ]
 
