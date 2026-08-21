@@ -559,6 +559,33 @@ fn certificate_chain_der(value: &CoseValue) -> Result<Vec<Vec<u8>>, &'static str
 mod tests {
     use super::*;
     use crate::mdoc::{DeviceResponse as ParsedDeviceResponse, Document, IssuerSignedItem};
+    use base64::{engine::general_purpose, Engine as _};
+    use isomdl::cose::sign1::PreparedCoseSign1;
+    use isomdl::definitions::device_response::{
+        DeviceResponse as IsoDeviceResponse, Document as IsoDocument, Documents, Status,
+    };
+    use isomdl::definitions::device_signed::{DeviceAuth, DeviceAuthentication, DeviceSigned};
+    use isomdl::definitions::helpers::Tag24 as IsoTag24;
+    use isomdl::definitions::session::SessionTranscript;
+    use isomdl::definitions::IssuerSigned;
+    use marty_oid4vci::{
+        formats::mdoc::{assemble_mdoc, prepare_mdoc_with_credential_id_and_device_key},
+        signer::CredentialSigner,
+        types::{CredentialClaims, IssuerKey, SignedCredential, SigningAlgorithm},
+    };
+    use p256::{
+        ecdsa::{Signature, SigningKey},
+        pkcs8::EncodePrivateKey,
+    };
+    use serde_json::Value as JsonValue;
+    use signature::Signer;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[serde(transparent)]
+    struct FixtureTranscript(ciborium::Value);
+
+    impl SessionTranscript for FixtureTranscript {}
 
     #[test]
     fn certificate_chain_accepts_single_or_multiple_der_certificates() {
@@ -859,6 +886,222 @@ mod tests {
             claims["_mdoc"]["documents"][0]["namespaces"]["example.two"]["document_number"],
             "two"
         );
+    }
+
+    fn authenticated_presentation_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>, String, JsonValue) {
+        let contract: JsonValue = serde_json::from_str(include_str!(
+            "../../../tests/vectors/mdoc_presentation_verification.json"
+        ))
+        .unwrap();
+        let document_type = contract["document_type"].as_str().unwrap();
+        let namespace = contract["namespace"].as_str().unwrap();
+
+        let issuer_jwk = ssi_jwk::JWK::generate_p256();
+        let issuer_jwk_value = serde_json::to_value(&issuer_jwk).unwrap();
+        let issuer_secret = general_purpose::URL_SAFE_NO_PAD
+            .decode(issuer_jwk_value["d"].as_str().unwrap())
+            .unwrap();
+        let issuer_signing_key = SigningKey::from_slice(&issuer_secret).unwrap();
+        let issuer_pkcs8 = issuer_signing_key.to_pkcs8_der().unwrap();
+        let certificate_key = rcgen::KeyPair::try_from(issuer_pkcs8.as_bytes()).unwrap();
+        let mut certificate_params = rcgen::CertificateParams::default();
+        certificate_params.distinguished_name.push(
+            rcgen::DnType::CommonName,
+            "Marty language-neutral mdoc document signer",
+        );
+        certificate_params.is_ca = rcgen::IsCa::ExplicitNoCa;
+        certificate_params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+        let certificate = certificate_params.self_signed(&certificate_key).unwrap();
+        let certificate_der = certificate.der().to_vec();
+        let certificate_pem = certificate.pem();
+        let issuer_key = IssuerKey {
+            issuer_id: "did:example:mdoc-issuer".into(),
+            jwk_json: serde_json::to_string(&issuer_jwk).unwrap(),
+            algorithm: SigningAlgorithm::ES256,
+        };
+
+        let holder_signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
+        let holder_point = holder_signing_key.verifying_key().to_encoded_point(false);
+        let holder_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "x": general_purpose::URL_SAFE_NO_PAD.encode(holder_point.x().unwrap()),
+            "y": general_purpose::URL_SAFE_NO_PAD.encode(holder_point.y().unwrap())
+        });
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: document_type.into(),
+            claims: [
+                (
+                    "family_name".into(),
+                    contract["claims"]["family_name"].clone(),
+                ),
+                (
+                    "given_name".into(),
+                    contract["claims"]["given_name"].clone(),
+                ),
+                (
+                    "_mdoc_x5c".into(),
+                    serde_json::json!([general_purpose::STANDARD.encode(&certificate_der)]),
+                ),
+            ]
+            .into(),
+            expiration_seconds: Some(86_400),
+            selective_disclosure_claims: Vec::new(),
+            mdoc_namespace: Some(namespace.into()),
+            mdoc_doctype: Some(document_type.into()),
+            zk_predicate_claims: Vec::new(),
+            credential_payload_format: Default::default(),
+            w3c_context: Vec::new(),
+            w3c_types: Vec::new(),
+        };
+        let prepared = prepare_mdoc_with_credential_id_and_device_key(
+            &issuer_key,
+            &claims,
+            None,
+            Some(&holder_jwk),
+        )
+        .unwrap();
+        let issuer_signature = issuer_key.sign(&prepared.tbs_data).unwrap();
+        let credential = assemble_mdoc(prepared, &issuer_signature).unwrap();
+        let SignedCredential::MsoMdoc {
+            issuer_signed_b64, ..
+        } = credential
+        else {
+            panic!("fixture must be mso_mdoc");
+        };
+        let issuer_signed_bytes = general_purpose::URL_SAFE_NO_PAD
+            .decode(issuer_signed_b64)
+            .unwrap();
+        let issuer_signed: IssuerSigned = isomdl::cbor::from_slice(&issuer_signed_bytes).unwrap();
+
+        let transcript = FixtureTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".into()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        let transcript_cbor = isomdl::cbor::to_vec(&transcript).unwrap();
+        let namespaces = IsoTag24::new(BTreeMap::new()).unwrap();
+        let device_authentication = IsoTag24::new(DeviceAuthentication::new(
+            transcript,
+            document_type.into(),
+            namespaces.clone(),
+        ))
+        .unwrap();
+        let detached_payload = isomdl::cbor::to_vec(&device_authentication).unwrap();
+        let prepared_device_signature = PreparedCoseSign1::new(
+            coset::CoseSign1Builder::new().protected(
+                coset::HeaderBuilder::new()
+                    .algorithm(coset::iana::Algorithm::ES256)
+                    .build(),
+            ),
+            Some(&detached_payload),
+            None,
+            false,
+        )
+        .unwrap();
+        let device_signature: Signature = holder_signing_key
+            .try_sign(prepared_device_signature.signature_payload())
+            .unwrap();
+        let device_signature_bytes = device_signature.to_vec();
+        let response = IsoDeviceResponse {
+            version: IsoDeviceResponse::VERSION.into(),
+            documents: Some(Documents::new(IsoDocument {
+                doc_type: document_type.into(),
+                issuer_signed,
+                device_signed: DeviceSigned {
+                    namespaces,
+                    device_auth: DeviceAuth::DeviceSignature(
+                        prepared_device_signature.finalize(device_signature_bytes.clone()),
+                    ),
+                },
+                errors: None,
+            })),
+            document_errors: None,
+            status: Status::OK,
+        };
+        (
+            isomdl::cbor::to_vec(&response).unwrap(),
+            transcript_cbor,
+            device_signature_bytes,
+            certificate_pem,
+            contract,
+        )
+    }
+
+    #[test]
+    fn complete_presentation_authentication_matches_the_language_neutral_vector() {
+        let (response, transcript, device_signature, pinned_certificate, contract) =
+            authenticated_presentation_fixture();
+        let result = verify_mdoc_presentation(
+            &response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        let expected = &contract["expected"];
+        assert_eq!(
+            result.issuer_signature_valid,
+            expected["issuer_signature_valid"].as_bool().unwrap()
+        );
+        assert_eq!(
+            result.issuer_trusted,
+            expected["issuer_trusted"].as_bool().unwrap()
+        );
+        assert_eq!(
+            result.device_authentication_valid,
+            expected["device_authentication_valid"].as_bool().unwrap()
+        );
+        assert_eq!(
+            result.document_types.len(),
+            expected["document_count"].as_u64().unwrap() as usize
+        );
+        assert_eq!(result.document_evidence.len(), 1);
+        assert!(!result.revocation_checked);
+        assert_eq!(result.not_revoked, None);
+        assert_eq!(result.error, None);
+        let claims = disclosed_claims(&response).unwrap();
+        assert_eq!(claims["family_name"], contract["claims"]["family_name"]);
+        assert_eq!(claims["given_name"], contract["claims"]["given_name"]);
+
+        let changed_transcript =
+            isomdl::cbor::to_vec(&FixtureTranscript(ciborium::Value::Array(vec![
+                ciborium::Value::Null,
+                ciborium::Value::Null,
+                ciborium::Value::Array(vec![
+                    ciborium::Value::Text("OpenID4VPHandover".into()),
+                    ciborium::Value::Bytes(vec![2_u8; 32]),
+                ]),
+            ])))
+            .unwrap();
+        let changed = verify_mdoc_presentation(
+            &response,
+            &changed_transcript,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        assert!(!changed.device_authentication_valid);
+
+        let signature_offset = response
+            .windows(device_signature.len())
+            .position(|window| window == device_signature)
+            .expect("fixture must contain the device signature bytes");
+        let mut changed_response = response.clone();
+        changed_response[signature_offset] ^= 1;
+        let changed = verify_mdoc_presentation(
+            &changed_response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        assert!(!changed.device_authentication_valid);
+
+        let untrusted = verify_mdoc_presentation(&response, &transcript, &[], &[]);
+        assert!(!untrusted.issuer_trusted);
     }
 
     #[test]
