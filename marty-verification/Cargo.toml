@@ -76,7 +76,7 @@ ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", 
 ssi-jws = { version = "0.5.0", default-features = false, features = ["ed25519", "secp256r1"] }
 ssi-verification-methods = { version = "0.3.0", default-features = false, features = ["ed25519", "secp256r1"] }
 bs58 = "0.4.0"
-iref = "3.2.2"
+iref = "4.2.0"
 futures = "0.3"
 flate2 = "1.0"
 
