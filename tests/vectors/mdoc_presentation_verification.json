@@ -1,0 +1,23 @@
+{
+  "schema": "marty.mdoc-presentation-verification/v1",
+  "document_type": "org.iso.18013.5.1.mDL",
+  "namespace": "org.iso.18013.5.1",
+  "claims": {
+    "family_name": "Lovelace",
+    "given_name": "Ada"
+  },
+  "trust_mode": "PINNED_ISSUER",
+  "expected": {
+    "issuer_signature_valid": true,
+    "issuer_trusted": true,
+    "device_authentication_valid": true,
+    "document_count": 1,
+    "revocation_checked": false,
+    "not_revoked": null
+  },
+  "tamper_cases": [
+    "changed_session_transcript",
+    "changed_device_response",
+    "missing_trust_anchor"
+  ]
+}
