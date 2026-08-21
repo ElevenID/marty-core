@@ -39,7 +39,7 @@ x509-ocsp = "0.2"
 
 # Symmetric encryption
 aes-gcm = "0.10"
-aes = "0.8"
+aes = "0.9"
 cbc = { version = "0.1", features = ["alloc"] }
 des = "0.8"
 
