@@ -213,7 +213,7 @@ run_check \
 
 run_check \
     "marty-biometrics: native + liveness" \
-    cargo check -p marty-biometrics --no-default-features --features native,liveness
+    cargo test -p marty-biometrics --no-default-features --features native,liveness
 
 run_check \
     "marty-biometrics: full inference stack" \
