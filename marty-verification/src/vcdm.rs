@@ -1542,6 +1542,8 @@ fn serialize_jwt_result(result: VerifyJwtResult) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use serde_json::json;
     use ssi_jws::encode_sign;
@@ -1833,6 +1835,47 @@ mod tests {
                     .any(|error| error.contains(expected_error)),
                 "{verification}"
             );
+        }
+    }
+
+    #[test]
+    fn data_integrity_preparation_is_repeatable_and_thread_safe_with_status() {
+        let key = JWK::generate_ed25519().unwrap();
+        let mut request = remote_data_integrity_prepare_request_for_did_web(&key);
+        request["credential"] = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "id": "urn:uuid:2f2e1a96-3f33-4be7-90d9-fca583d23a8b",
+            "type": ["VerifiableCredential"],
+            "issuer": "did:web:issuer.example",
+            "validFrom": "2025-08-01T23:29:30Z",
+            "validUntil": "2027-08-01T23:29:30Z",
+            "credentialSubject": {"id": "did:example:subject"},
+            "credentialStatus": {
+                "id": "https://issuer.example/status/1#42",
+                "type": "BitstringStatusListEntry",
+                "statusPurpose": "revocation",
+                "statusListIndex": "42",
+                "statusListCredential": "https://issuer.example/status/1"
+            }
+        });
+
+        for _ in 0..16 {
+            prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
+        }
+
+        let request = Arc::new(request.to_string());
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let request = Arc::clone(&request);
+                std::thread::spawn(move || {
+                    for _ in 0..8 {
+                        prepare_vcdm_data_integrity_credential_json(&request).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
         }
     }
 

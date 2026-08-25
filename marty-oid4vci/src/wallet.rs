@@ -1132,17 +1132,24 @@ impl WalletEngine {
                 error_description: None,
             })
         } else {
+            let error = body
+                .get("error")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
+            let error_description = ["error_description", "detail", "message"]
+                .iter()
+                .find_map(|field| body.get(field).and_then(|value| value.as_str()))
+                .map(str::to_owned);
+            tracing::warn!(
+                http_status = %status,
+                verifier_error = error.as_deref().unwrap_or("unspecified"),
+                "verifier rejected OID4VP presentation submission"
+            );
             Ok(PresentationResponse {
                 ok: false,
                 redirect_uri: None,
-                error: body
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
-                error_description: body
-                    .get("error_description")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
+                error,
+                error_description,
             })
         }
     }
@@ -1516,6 +1523,32 @@ mod tests {
         (issuer, request_rx)
     }
 
+    async fn json_response_server(
+        status: &str,
+        body: serde_json::Value,
+    ) -> (String, oneshot::Receiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_uri = format!("http://{address}/present");
+        let body = body.to_string();
+        let status = status.to_string();
+        let (request_tx, request_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0; 4096];
+            let length = stream.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..length]);
+            let request_line = request.lines().next().unwrap_or_default().to_string();
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            let _ = request_tx.send(request_line);
+        });
+        (response_uri, request_rx)
+    }
+
     fn encode_query_json(value: &str) -> String {
         url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
     }
@@ -1613,6 +1646,53 @@ mod tests {
     fn credential_request_rejects_empty_selector_or_proof() {
         assert!(WalletEngine::build_credential_request("", "proof.jwt").is_err());
         assert!(WalletEngine::build_credential_request("open_badge", "").is_err());
+    }
+
+    #[tokio::test]
+    async fn presentation_submission_preserves_common_verifier_error_details() {
+        let cases = [
+            (
+                serde_json::json!({
+                    "error": "invalid_request",
+                    "error_description": "standard description",
+                    "detail": "framework detail",
+                    "message": "generic message"
+                }),
+                "standard description",
+            ),
+            (
+                serde_json::json!({
+                    "error": "invalid_request",
+                    "detail": "framework detail",
+                    "message": "generic message"
+                }),
+                "framework detail",
+            ),
+            (
+                serde_json::json!({
+                    "error": "invalid_request",
+                    "message": "generic message"
+                }),
+                "generic message",
+            ),
+        ];
+
+        for (body, expected_description) in cases {
+            let (response_uri, request_rx) = json_response_server("400 Bad Request", body).await;
+
+            let response = WalletEngine::new()
+                .submit_presentation_optional(&response_uri, "vp-token", None)
+                .await
+                .unwrap();
+
+            assert!(!response.ok);
+            assert_eq!(response.error.as_deref(), Some("invalid_request"));
+            assert_eq!(
+                response.error_description.as_deref(),
+                Some(expected_description)
+            );
+            assert_eq!(request_rx.await.unwrap(), "POST /present HTTP/1.1");
+        }
     }
 
     #[tokio::test]
