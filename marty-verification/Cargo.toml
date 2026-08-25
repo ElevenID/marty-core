@@ -17,20 +17,34 @@ default = ["iaca", "csca", "icao-client"]
 iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
 eudi = []           # EU Digital Identity verification
-python = ["pyo3"]   # Python bindings
+python = ["pyo3", "marty-crypto/keygen", "marty-crypto/pkcs12"]   # Python bindings
 aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka", "ldap3"]
 eudi-client = ["reqwest", "tokio", "moka", "quick-xml"]
-cert-builder = []   # Certificate building utilities for Python bindings
+cert-builder = ["marty-crypto/cert-builder"]   # Explicit certificate building utilities for Python bindings
+authority-issuance = ["csca", "marty-crypto/sod-builder"] # CSCA/DSC generation and passport personalization
 cross-validation = []  # OpenSSL cross-validation tests
 serde = []
 test-fixtures = []  # Enable NIST PKITS test fixtures (requires downloading fixtures)
-full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "serde", "cert-builder"]
+full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "serde", "cert-builder", "authority-issuance"]
 
 [dependencies]
 # Internal crate
-marty-crypto = { workspace = true, features = ["sod-builder", "cert-builder"] }
-marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci" }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = [
+    "crl",
+    "ecdh",
+    "ecdsa",
+    "eddsa",
+    "hashing",
+    "jwk",
+    "kdf",
+    "ocsp",
+    "rsa",
+    "serialization",
+    "symmetric",
+    "x509",
+] }
+marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false }
 
 # Re-export crypto types
 x509-cert = { workspace = true }
@@ -78,7 +92,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 regex = { version = "1", default-features = false, features = ["std"] }
-cedar-policy = { version = "=4.8.1", default-features = false }
+cedar-policy = { version = "=4.12.0", default-features = false }
 url = "2"
 
 # Time
@@ -97,10 +111,13 @@ pyo3 = { workspace = true, optional = true }
 
 # mDoc/mDL support
 isomdl = "0.2.0"
+coset = "0.3.8"
+time = { version = "0.3", features = ["formatting"] }
 hex = "0.4"
 zeroize = { workspace = true }
 
 [dev-dependencies]
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["crl-builder"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 rcgen = { workspace = true }
@@ -112,6 +129,7 @@ criterion = { workspace = true }
 [[bench]]
 name = "verification_kernels"
 harness = false
+required-features = ["authority-issuance"]
 
 [target.'cfg(unix)'.dev-dependencies]
 openssl = { version = "0.10", features = ["vendored"] }

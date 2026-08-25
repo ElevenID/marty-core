@@ -451,9 +451,10 @@ pub fn generate_x25519() -> VerificationResult<Jwk> {
 
 /// Generate a new symmetric key JWK.
 pub fn generate_symmetric(size: usize) -> VerificationResult<Jwk> {
-    use marty_crypto::keygen::generate_random_bytes;
+    use rand::RngCore;
 
-    let key = generate_random_bytes(size);
+    let mut key = vec![0u8; size];
+    rand::rngs::OsRng.fill_bytes(&mut key);
 
     Ok(Jwk {
         kty: "oct".to_string(),

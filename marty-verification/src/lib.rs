@@ -10,6 +10,7 @@
 //!
 //! - `iaca` (default): AAMVA mDL trust chain verification
 //! - `csca` (default): ePassport/eMRTD trust chain verification
+//! - `authority-issuance`: Explicit CSCA/DSC generation and passport personalization
 //! - `aamva-client`: Async client for AAMVA Digital Trust Service
 //! - `icao-client`: Async client for ICAO PKD
 //!
@@ -62,11 +63,19 @@ pub mod pkd;
 
 /// eMRTD issuance infrastructure (CSCA, DSC, EF.SOD builder).
 ///
-/// Available when the `csca` feature is enabled.  Requires that the
-/// `marty-crypto` dependency was compiled with the `sod-builder` and
-/// `cert-builder` features (both are enabled by the default `Cargo.toml`).
-#[cfg(feature = "csca")]
+/// Available only when the explicit `authority-issuance` feature is enabled.
+/// Ordinary `csca` verification does not compile authority private-key types
+/// or certificate/SOD builders into the verifier surface.
+#[cfg(feature = "authority-issuance")]
 pub mod issuance;
+
+#[cfg(not(feature = "authority-issuance"))]
+/// The default verifier surface intentionally has no authority issuance API.
+///
+/// ```compile_fail
+/// use marty_verification::issuance::CscaAuthority;
+/// ```
+mod authority_issuance_compile_boundary {}
 
 #[cfg(feature = "python")]
 pub mod bindings;

@@ -3,7 +3,7 @@ members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-st
 resolver = "2"
 
 [workspace.package]
-version = "0.1.56"
+version = "0.1.59"
 edition = "2021"
 authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
@@ -91,7 +91,7 @@ axum = "0.8"
 
 # Database (for marty-secure-storage)
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
-keyring = "3.6"
+keyring = "4.1"
 directories = "6.0"
 blake3 = "1.5"
 

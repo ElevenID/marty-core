@@ -3,7 +3,14 @@
 //! This module provides a UniFFI-compatible wrapper around isomdl for
 //! parsing and validating ISO 18013-5 mDL documents.
 
+mod authentication;
 mod device_response;
+
+pub use authentication::{
+    disclosed_claims, parse_valid_device_response, verify_mdoc_issuer, verify_mdoc_issuer_at,
+    verify_mdoc_presentation, verify_mdoc_presentation_at, MdocDocumentVerificationEvidence,
+    MdocIssuerVerificationResult, MdocPresentationVerificationResult,
+};
 
 pub use device_response::{
     DeviceResponse, Document, IssuerSignedItem, MdlNamespace, MobileSecurityObject, ValidityInfo,

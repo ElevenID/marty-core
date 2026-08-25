@@ -28,8 +28,9 @@ hashing = []         # SHA-1/SHA-2 and HMAC helpers
 signature-verification = ["ecdsa", "eddsa", "rsa"]
 x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
-crl = ["x509", "cert-builder"]
-ocsp = ["x509", "cert-builder"]
+crl = ["x509"]
+crl-builder = ["crl", "cert-builder"]
+ocsp = ["x509"]
 symmetric = []       # AES-GCM, AES-CBC, 3DES
 kdf = ["hashing"]    # HKDF, PBKDF2, and transcript-bound mDoc key derivation
 pkcs12 = []          # PKCS#12 bundle parsing
@@ -44,6 +45,7 @@ full = [
     "bbs",
     "cert-builder",
     "crl",
+    "crl-builder",
     "ecdh",
     "ecdsa",
     "eddsa",
