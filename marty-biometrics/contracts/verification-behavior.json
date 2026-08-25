@@ -1,0 +1,57 @@
+{
+  "schema": "marty.biometric-verification-behavior/v1",
+  "legacy_source": "ElevenID/marty-microservices-framework/mmf/services/biometric",
+  "canonical_implementation": "ElevenID/marty-core/marty-biometrics",
+  "transport": {
+    "legacy_fastapi_status": "retired-unpublished-adapter",
+    "legacy_routes": [
+      "GET /health",
+      "POST /v1/biometrics/verify",
+      "POST /v1/biometrics/quality"
+    ],
+    "supported_surfaces": ["rust-crate", "python-binding", "wasm-binding"]
+  },
+  "mock_provider": {
+    "name": "mock",
+    "similarity": 0.95,
+    "reference_quality": 0.95,
+    "probe_quality": 0.9,
+    "default_threshold": 0.7
+  },
+  "verification_cases": [
+    {
+      "name": "matching-images-pass-at-policy-threshold",
+      "threshold": 0.7,
+      "verified": true
+    },
+    {
+      "name": "matching-images-fail-above-similarity",
+      "threshold": 0.99,
+      "verified": false
+    }
+  ],
+  "quality": {
+    "overall_score": 0.95,
+    "face_detected": true,
+    "face_count": 1,
+    "sharpness": 0.95,
+    "brightness": 0.5,
+    "contrast": 0.85,
+    "face_size": 0.65,
+    "pose": 0.98
+  },
+  "malformed_requests": [
+    {
+      "name": "missing-probe-image",
+      "payload": {
+        "reference_image": "base64-reference"
+      }
+    },
+    {
+      "name": "missing-reference-image",
+      "payload": {
+        "probe_image": "base64-probe"
+      }
+    }
+  ]
+}

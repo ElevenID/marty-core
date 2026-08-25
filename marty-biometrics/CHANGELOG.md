@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a language-neutral verification and quality behavior contract covering
+  the retired unpublished Python MMF biometric adapter.
+
+### Changed
+
+- Run native and liveness feature tests, including malformed-request and mock
+  provider parity cases, in the feature-combination gate.
+
 ## [0.1.0] - 2026-01-07
 
 ### Added
