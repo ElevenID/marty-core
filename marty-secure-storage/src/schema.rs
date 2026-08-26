@@ -142,6 +142,17 @@ CREATE TABLE IF NOT EXISTS offline_queue (
 CREATE INDEX IF NOT EXISTS idx_offline_queue_created 
     ON offline_queue(created_at);
 
+-- Durable delivery lifecycle for the offline reporting queue. This is kept
+-- separate from trust synchronization state so the two clocks cannot be
+-- confused by status consumers.
+CREATE TABLE IF NOT EXISTS offline_queue_state (
+    id TEXT PRIMARY KEY DEFAULT 'current',
+    last_sync_attempt TEXT,
+    last_successful_sync TEXT,
+    last_error TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Audit log
 CREATE TABLE IF NOT EXISTS audit_log (
     id TEXT PRIMARY KEY,
@@ -195,4 +206,4 @@ CREATE TABLE IF NOT EXISTS config (
 "#;
 
 /// Schema version for migrations
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;

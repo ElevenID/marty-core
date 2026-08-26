@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Track offline reporting attempts and acknowledgements independently from trust synchronization, including atomic exact-batch acknowledgement and durable retry metadata.
+
 ## [0.1.40] - 2026-08-10
 
 ### Security
