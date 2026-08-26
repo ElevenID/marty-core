@@ -24,7 +24,7 @@ use p384::ecdsa::{
 };
 use p384::{PublicKey as P384PublicKey, SecretKey as P384SecretKey};
 use pkcs8::PrivateKeyInfo;
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use spki::SubjectPublicKeyInfoRef;
@@ -396,7 +396,9 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 fn canonical_payload(record: &DtcRecord) -> VerificationResult<Vec<u8>> {
-    // Serialize with stable key ordering (BTreeMap) and without signature_info to avoid self-reference
+    // `serde_json::Map` uses insertion order when another dependency enables
+    // `preserve_order` for the shared serde_json build. Sort every object
+    // explicitly so signatures remain portable across Cargo feature graphs.
     let mut map = serde_json::to_value(record).map_err(|e| {
         VerificationError::dtc_invalid(format!("Failed to serialize DTC payload: {}", e))
     })?;
@@ -404,9 +406,64 @@ fn canonical_payload(record: &DtcRecord) -> VerificationResult<Vec<u8>> {
         obj.remove("signature_info");
         obj.remove("is_signed");
     }
+    sort_json_objects(&mut map);
     serde_json::to_vec(&map).map_err(|e| {
         VerificationError::dtc_invalid(format!("Failed to serialize DTC payload: {}", e))
     })
+}
+
+fn legacy_canonical_payload(record: &DtcRecord) -> VerificationResult<Vec<u8>> {
+    serde_json::to_vec(&LegacyUnsignedDtcRecord(record)).map_err(|e| {
+        VerificationError::dtc_invalid(format!("Failed to serialize DTC payload: {}", e))
+    })
+}
+
+/// Reproduce the historical `preserve_order` payload independently of the
+/// serde_json feature graph so already-issued DTCs remain verifiable.
+struct LegacyUnsignedDtcRecord<'a>(&'a DtcRecord);
+
+impl Serialize for LegacyUnsignedDtcRecord<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let record = self.0;
+        let mut state = serializer.serialize_struct("DtcRecord", 18)?;
+        state.serialize_field("dtc_id", &record.dtc_id)?;
+        state.serialize_field("passport_number", &record.passport_number)?;
+        state.serialize_field("issuing_authority", &record.issuing_authority)?;
+        state.serialize_field("issue_date", &record.issue_date)?;
+        state.serialize_field("expiry_date", &record.expiry_date)?;
+        state.serialize_field("personal_details", &record.personal_details)?;
+        state.serialize_field("data_groups", &record.data_groups)?;
+        state.serialize_field("dtc_type", &record.dtc_type)?;
+        state.serialize_field("access_control", &record.access_control)?;
+        state.serialize_field("access_key", &record.access_key)?;
+        state.serialize_field("dtc_valid_from", &record.dtc_valid_from)?;
+        state.serialize_field("dtc_valid_until", &record.dtc_valid_until)?;
+        state.serialize_field("type1_profile", &record.type1_profile)?;
+        state.serialize_field("type2_profile", &record.type2_profile)?;
+        state.serialize_field("type3_profile", &record.type3_profile)?;
+        state.serialize_field("is_revoked", &record.is_revoked)?;
+        state.serialize_field("linked_passport", &record.linked_passport)?;
+        state.serialize_field("creation_date", &record.creation_date)?;
+        state.end()
+    }
+}
+
+fn sort_json_objects(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            let mut entries: Vec<_> = std::mem::take(object).into_iter().collect();
+            entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            for (key, mut child) in entries {
+                sort_json_objects(&mut child);
+                object.insert(key, child);
+            }
+        }
+        Value::Array(values) => values.iter_mut().for_each(sort_json_objects),
+        _ => {}
+    }
 }
 
 fn normalize_base64(value: &mut String) {
@@ -958,10 +1015,10 @@ pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
         .and_then(|v| v.as_str())
         .unwrap_or("rust-dtc");
 
-    let mut record: DtcRecord = serde_json::from_value(value.clone())
+    let record: DtcRecord = serde_json::from_value(value.clone())
         .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
-    let norm = normalize_record(record.clone());
-    let payload = canonical_payload(&norm)?;
+    let mut record = normalize_record(record);
+    let payload = canonical_payload(&record)?;
     let sig_b64 = sign_ecdsa(&payload, &signing_key)?;
 
     record.is_signed = true;
@@ -1025,7 +1082,19 @@ pub fn verify_dtc_json_with_status(
         match canonical_payload(&norm) {
             Ok(payload) => {
                 if let Some(pub_pem) = signer_public_key_pem.as_deref() {
-                    match verify_ecdsa(&payload, &sig_info.signature, pub_pem) {
+                    let verification = verify_ecdsa(&payload, &sig_info.signature, pub_pem)
+                        .and_then(|valid| {
+                            if valid {
+                                return Ok(true);
+                            }
+                            let legacy = legacy_canonical_payload(&norm)?;
+                            if legacy == payload {
+                                Ok(false)
+                            } else {
+                                verify_ecdsa(&legacy, &sig_info.signature, pub_pem)
+                            }
+                        });
+                    match verification {
                         Ok(ok) => {
                             is_valid &= ok;
                             if ok {

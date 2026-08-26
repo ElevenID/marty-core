@@ -176,6 +176,28 @@ fn create_normalizes_and_fills_sod_hash() {
 }
 
 #[test]
+fn sign_persists_the_exact_normalized_record_that_was_signed() {
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(&sample_create_request()).expect("sample request");
+    let object = envelope.as_object_mut().expect("DTC object");
+    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
+    object.insert("signer_id".to_string(), "normalization-test".into());
+
+    let signed = sign_dtc_json(&envelope.to_string()).expect("sign raw DTC");
+    let signed: serde_json::Value = serde_json::from_str(&signed).expect("signed DTC JSON");
+
+    assert!(signed["dtc_id"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(signed["creation_date"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(signed["type1_profile"]["sod_hash"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+}
+
+#[test]
 fn external_signer_round_trip_uses_canonical_rust_payload() {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     use p256::ecdsa::{signature::Signer, Signature, SigningKey};

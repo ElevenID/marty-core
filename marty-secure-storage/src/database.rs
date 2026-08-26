@@ -16,6 +16,8 @@ use crate::models::*;
 use crate::schema::{SCHEMA, SCHEMA_VERSION};
 
 const MAX_PACKAGE_FUTURE_SKEW_SECONDS: i64 = 300;
+const MAX_QUEUE_BATCH_SIZE: usize = 1_000;
+const MAX_QUEUE_ERROR_CHARS: usize = 1_024;
 
 /// Offline queue status
 #[derive(Debug, Serialize)]
@@ -25,6 +27,7 @@ pub struct OfflineQueueStatus {
     pub data_size_bytes: usize,
     pub last_sync_attempt: Option<String>,
     pub last_successful_sync: Option<String>,
+    pub last_error: Option<String>,
 }
 
 /// Verification history entry for API
@@ -198,14 +201,24 @@ impl SecureStorage {
             },
         )?;
 
-        // Get last sync times from sync_state
-        let (last_sync_attempt, last_successful_sync): (Option<String>, Option<String>) = conn
+        // Queue delivery has its own lifecycle. Trust-anchor synchronization
+        // timestamps and errors must never masquerade as audit upload state.
+        let (last_sync_attempt, last_successful_sync, last_error): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = conn
             .query_row(
-                "SELECT last_error, last_iaca_sync FROM sync_state WHERE id = 'current'",
+                r#"
+                SELECT last_sync_attempt, last_successful_sync, last_error
+                FROM offline_queue_state
+                WHERE id = 'current'
+                "#,
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .unwrap_or((None, None));
+            .optional()?
+            .unwrap_or((None, None, None));
 
         Ok(OfflineQueueStatus {
             pending_events,
@@ -213,6 +226,7 @@ impl SecureStorage {
             data_size_bytes,
             last_sync_attempt,
             last_successful_sync,
+            last_error,
         })
     }
 
@@ -1268,6 +1282,91 @@ impl SecureStorage {
         Ok(())
     }
 
+    /// Record one failed delivery cycle for an exact durable batch.
+    ///
+    /// Entry retry metadata and aggregate queue state advance in one
+    /// transaction. A missing or duplicate id rejects the whole transition.
+    pub async fn record_queue_batch_failure(
+        &self,
+        ids: &[String],
+        error: &str,
+    ) -> Result<(), StorageError> {
+        validate_queue_batch(ids)?;
+        let error = bounded_queue_error(error);
+        let now = Utc::now().to_rfc3339();
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        for id in ids {
+            let changed = tx.execute(
+                r#"
+                UPDATE offline_queue
+                SET retry_count = retry_count + 1,
+                    last_retry_at = ?,
+                    error = ?
+                WHERE id = ?
+                "#,
+                rusqlite::params![now, error, id],
+            )?;
+            if changed != 1 {
+                return Err(StorageError::InvalidQueueBatch(format!(
+                    "event {id} is missing"
+                )));
+            }
+        }
+
+        tx.execute(
+            r#"
+            INSERT INTO offline_queue_state
+                (id, last_sync_attempt, last_successful_sync, last_error, updated_at)
+            VALUES ('current', ?, NULL, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                last_sync_attempt = excluded.last_sync_attempt,
+                last_error = excluded.last_error,
+                updated_at = excluded.updated_at
+            "#,
+            rusqlite::params![now, error, now],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Atomically acknowledge and delete an exact remotely accepted batch.
+    ///
+    /// If any id is missing, no event is removed and the successful-delivery
+    /// clock is not advanced.
+    pub async fn acknowledge_queue_batch(&self, ids: &[String]) -> Result<usize, StorageError> {
+        validate_queue_batch(ids)?;
+        let now = Utc::now().to_rfc3339();
+        let mut conn = self.conn.lock().await;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        for id in ids {
+            let changed = tx.execute("DELETE FROM offline_queue WHERE id = ?", [id])?;
+            if changed != 1 {
+                return Err(StorageError::InvalidQueueBatch(format!(
+                    "event {id} is missing"
+                )));
+            }
+        }
+
+        tx.execute(
+            r#"
+            INSERT INTO offline_queue_state
+                (id, last_sync_attempt, last_successful_sync, last_error, updated_at)
+            VALUES ('current', ?, ?, NULL, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                last_sync_attempt = excluded.last_sync_attempt,
+                last_successful_sync = excluded.last_successful_sync,
+                last_error = NULL,
+                updated_at = excluded.updated_at
+            "#,
+            rusqlite::params![now, now, now],
+        )?;
+        tx.commit()?;
+        Ok(ids.len())
+    }
+
     /// Add audit log entry
     pub async fn add_audit_log(
         &self,
@@ -1890,6 +1989,35 @@ fn get_schema_version(conn: &Connection) -> Result<i32, StorageError> {
         )
         .optional()?;
     Ok(version.and_then(|v| v.parse::<i32>().ok()).unwrap_or(0))
+}
+
+fn validate_queue_batch(ids: &[String]) -> Result<(), StorageError> {
+    if ids.is_empty() {
+        return Err(StorageError::InvalidQueueBatch(
+            "at least one event id is required".to_string(),
+        ));
+    }
+    if ids.len() > MAX_QUEUE_BATCH_SIZE {
+        return Err(StorageError::InvalidQueueBatch(format!(
+            "batch contains {} events; maximum is {MAX_QUEUE_BATCH_SIZE}",
+            ids.len()
+        )));
+    }
+    if ids.iter().any(String::is_empty) {
+        return Err(StorageError::InvalidQueueBatch(
+            "event ids cannot be empty".to_string(),
+        ));
+    }
+    if ids.iter().collect::<HashSet<_>>().len() != ids.len() {
+        return Err(StorageError::InvalidQueueBatch(
+            "event ids must be unique".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn bounded_queue_error(error: &str) -> String {
+    error.chars().take(MAX_QUEUE_ERROR_CHARS).collect()
 }
 
 fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), StorageError> {
@@ -3458,6 +3586,115 @@ mod tests {
             let status = storage.get_queue_status().await.unwrap();
             assert_eq!(status.pending_events, 1);
             assert!(status.data_size_bytes > 0);
+            assert!(status.last_sync_attempt.is_none());
+            assert!(status.last_successful_sync.is_none());
+            assert!(status.last_error.is_none());
+        });
+    }
+
+    #[test]
+    fn trust_sync_state_cannot_masquerade_as_queue_delivery_state() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            storage
+                .update_sync_state(&SyncState {
+                    last_iaca_sync: Some(Utc::now()),
+                    last_csca_sync: Some(Utc::now()),
+                    last_crl_sync: None,
+                    iaca_version: Some("trust-v1".to_string()),
+                    csca_version: Some("trust-v1".to_string()),
+                    sync_in_progress: false,
+                    last_error: Some("trust source unavailable".to_string()),
+                })
+                .await
+                .unwrap();
+
+            let status = storage.get_queue_status().await.unwrap();
+            assert!(status.last_sync_attempt.is_none());
+            assert!(status.last_successful_sync.is_none());
+            assert!(status.last_error.is_none());
+        });
+    }
+
+    #[test]
+    fn failed_queue_batch_updates_retry_and_attempt_state_atomically() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let id = storage
+                .queue_event("test", &serde_json::json!({"attempt": 1}))
+                .await
+                .unwrap();
+
+            storage
+                .record_queue_batch_failure(std::slice::from_ref(&id), "HTTP 503")
+                .await
+                .unwrap();
+
+            let pending = storage.get_pending_events(10).await.unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].retry_count, 1);
+            assert_eq!(pending[0].error.as_deref(), Some("HTTP 503"));
+            assert!(pending[0].last_retry_at.is_some());
+            let status = storage.get_queue_status().await.unwrap();
+            assert!(status.last_sync_attempt.is_some());
+            assert!(status.last_successful_sync.is_none());
+            assert_eq!(status.last_error.as_deref(), Some("HTTP 503"));
+        });
+    }
+
+    #[test]
+    fn acknowledged_queue_batch_is_deleted_with_success_state() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let first = storage
+                .queue_event("test", &serde_json::json!({"id": 1}))
+                .await
+                .unwrap();
+            let second = storage
+                .queue_event("test", &serde_json::json!({"id": 2}))
+                .await
+                .unwrap();
+
+            assert_eq!(
+                storage
+                    .acknowledge_queue_batch(&[first, second])
+                    .await
+                    .unwrap(),
+                2
+            );
+
+            let status = storage.get_queue_status().await.unwrap();
+            assert_eq!(status.pending_events, 0);
+            assert_eq!(status.last_sync_attempt, status.last_successful_sync);
+            assert!(status.last_successful_sync.is_some());
+            assert!(status.last_error.is_none());
+        });
+    }
+
+    #[test]
+    fn invalid_acknowledgement_rolls_back_the_entire_batch() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let existing = storage
+                .queue_event("test", &serde_json::json!({"durable": true}))
+                .await
+                .unwrap();
+
+            let error = storage
+                .acknowledge_queue_batch(&[existing.clone(), "missing".to_string()])
+                .await
+                .unwrap_err();
+            assert!(matches!(error, StorageError::InvalidQueueBatch(_)));
+
+            let pending = storage.get_pending_events(10).await.unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].id, existing);
+            let status = storage.get_queue_status().await.unwrap();
+            assert!(status.last_successful_sync.is_none());
         });
     }
 

@@ -22,6 +22,9 @@ pub enum StorageError {
     #[error("Record not found: {0}")]
     NotFound(String),
 
+    #[error("Invalid offline queue batch: {0}")]
+    InvalidQueueBatch(String),
+
     #[error("Invalid trust package: {0}")]
     InvalidTrustPackage(String),
 
