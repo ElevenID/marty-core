@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Route certificate, CRL, SOD, master-list, and eMRTD chain signatures through
+  parameter-aware RSASSA-PSS verification instead of ambiguous OID-only
+  dispatch.
 - Distinguish a DTC's signed issuance-time `is_revoked` claim from current
   lifecycle status. Missing or unusable live evidence is explicit and no longer
   reported as passed; only fresh, exactly bound status from a governed,

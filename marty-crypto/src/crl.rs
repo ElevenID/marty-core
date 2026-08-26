@@ -409,8 +409,12 @@ fn authenticate_crl(crl: &CertificateList, issuer: &Certificate) -> CryptoResult
         .signature
         .as_bytes()
         .ok_or_else(|| CryptoError::crl("CRL signature is not byte aligned"))?;
-    let algorithm = crate::SignatureAlgorithm::from_oid(&crl.signature_algorithm.oid.to_string())?;
-    if !crate::verify_signature(algorithm, &issuer_spki, &tbs_der, signature)? {
+    if !crate::algorithm_identifier::verify_signature_with_algorithm_identifier(
+        &crl.signature_algorithm,
+        &issuer_spki,
+        &tbs_der,
+        signature,
+    )? {
         return Err(CryptoError::crl("invalid CRL signature"));
     }
     validate_crl_freshness(

@@ -259,8 +259,18 @@ pub fn verify_pss_sha256(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
+    verify_pss_sha256_with_salt_len(public_key_der, message, signature, 32)
+}
+
+/// Verify RSA-PSS with SHA-256 and the salt length declared by the protocol.
+pub fn verify_pss_sha256_with_salt_len(
+    public_key_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+    salt_len: usize,
+) -> CryptoResult<bool> {
     let public_key = parse_rsa_public_key(public_key_der)?;
-    let verifying_key = PssVerifyingKey::<Sha256>::new(public_key);
+    let verifying_key = PssVerifyingKey::<Sha256>::new_with_salt_len(public_key, salt_len);
 
     let sig = PssSignature::try_from(signature).map_err(|e| {
         CryptoError::invalid_signature(format!("RSA-PSS: Invalid signature format: {}", e))
@@ -278,8 +288,18 @@ pub fn verify_pss_sha384(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
+    verify_pss_sha384_with_salt_len(public_key_der, message, signature, 48)
+}
+
+/// Verify RSA-PSS with SHA-384 and the salt length declared by the protocol.
+pub fn verify_pss_sha384_with_salt_len(
+    public_key_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+    salt_len: usize,
+) -> CryptoResult<bool> {
     let public_key = parse_rsa_public_key(public_key_der)?;
-    let verifying_key = PssVerifyingKey::<Sha384>::new(public_key);
+    let verifying_key = PssVerifyingKey::<Sha384>::new_with_salt_len(public_key, salt_len);
 
     let sig = PssSignature::try_from(signature).map_err(|e| {
         CryptoError::invalid_signature(format!("RSA-PSS: Invalid signature format: {}", e))
@@ -297,8 +317,18 @@ pub fn verify_pss_sha512(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
+    verify_pss_sha512_with_salt_len(public_key_der, message, signature, 64)
+}
+
+/// Verify RSA-PSS with SHA-512 and the salt length declared by the protocol.
+pub fn verify_pss_sha512_with_salt_len(
+    public_key_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+    salt_len: usize,
+) -> CryptoResult<bool> {
     let public_key = parse_rsa_public_key(public_key_der)?;
-    let verifying_key = PssVerifyingKey::<Sha512>::new(public_key);
+    let verifying_key = PssVerifyingKey::<Sha512>::new_with_salt_len(public_key, salt_len);
 
     let sig = PssSignature::try_from(signature).map_err(|e| {
         CryptoError::invalid_signature(format!("RSA-PSS: Invalid signature format: {}", e))

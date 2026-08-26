@@ -366,6 +366,19 @@ pub fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -> Crypt
     let cert = load_certificate_der(cert_der)?;
     let issuer = load_certificate_der(issuer_der)?;
 
+    verify_parsed_certificate_signature(&cert, &issuer)
+}
+
+/// Verify a parsed certificate signature against a parsed issuer certificate.
+#[cfg(feature = "x509")]
+pub fn verify_parsed_certificate_signature(
+    cert: &Certificate,
+    issuer: &Certificate,
+) -> CryptoResult<bool> {
+    if cert.tbs_certificate.signature != cert.signature_algorithm {
+        return Ok(false);
+    }
+
     // Get the TBS (to-be-signed) certificate data
     let tbs_der = cert
         .tbs_certificate
@@ -388,15 +401,35 @@ pub fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -> Crypt
             CryptoError::der_error(format!("Failed to encode issuer public key: {}", e))
         })?;
 
-    // Convert OID to signature algorithm enum
-    let oid_str = sig_alg.oid.to_string();
-    let algorithm = crate::SignatureAlgorithm::from_oid(&oid_str)?;
-
-    crate::verify_signature(algorithm, &issuer_pubkey_der, &tbs_der, signature)
+    crate::algorithm_identifier::verify_signature_with_algorithm_identifier(
+        sig_alg,
+        &issuer_pubkey_der,
+        &tbs_der,
+        signature,
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "cert-builder")]
+    use der::asn1::{Any, BitString};
+    #[cfg(feature = "cert-builder")]
+    use rand::rngs::OsRng;
+    #[cfg(feature = "cert-builder")]
+    use rsa::pkcs1::RsaPssParams;
+    #[cfg(feature = "cert-builder")]
+    use rsa::pkcs8::DecodePrivateKey;
+    #[cfg(feature = "cert-builder")]
+    use rsa::pss::{Signature as PssSignature, SigningKey as PssSigningKey};
+    #[cfg(feature = "cert-builder")]
+    use rsa::signature::{RandomizedSigner, SignatureEncoding};
+    #[cfg(feature = "cert-builder")]
+    use rsa::RsaPrivateKey;
+    #[cfg(feature = "cert-builder")]
+    use sha2::Sha256;
+    #[cfg(feature = "cert-builder")]
+    use spki::AlgorithmIdentifierOwned;
+
     use super::*;
 
     #[test]
@@ -442,5 +475,52 @@ mod tests {
         assert!(!info.signature_algorithm.is_empty());
         assert_eq!(info.fingerprint_sha1.len(), 40);
         assert_eq!(info.fingerprint_sha256.len(), 64);
+    }
+
+    #[cfg(feature = "cert-builder")]
+    #[test]
+    fn verifies_certificate_with_parameterized_rsa_pss_signature() {
+        use crate::cert_builder::{create_ca_certificate, create_signed_certificate};
+        use crate::keygen::KeyType;
+
+        let (issuer_der, issuer_key_pem) =
+            create_ca_certificate("PSS issuer", None, 30, KeyType::Rsa2048).unwrap();
+        let (subject_der, _) = create_signed_certificate(
+            "PSS subject",
+            &issuer_der,
+            &issuer_key_pem,
+            7,
+            false,
+            KeyType::EcdsaP256,
+        )
+        .unwrap();
+
+        let parameters = RsaPssParams::new::<Sha256>(17).to_der().unwrap();
+        let algorithm = AlgorithmIdentifierOwned {
+            oid: "1.2.840.113549.1.1.10".parse().unwrap(),
+            parameters: Some(Any::from_der(&parameters).unwrap()),
+        };
+        let mut subject = Certificate::from_der(&subject_der).unwrap();
+        subject.tbs_certificate.signature = algorithm.clone();
+        subject.signature_algorithm = algorithm;
+
+        let tbs_der = subject.tbs_certificate.to_der().unwrap();
+        let issuer_key = RsaPrivateKey::from_pkcs8_pem(&issuer_key_pem).unwrap();
+        let signature: PssSignature = PssSigningKey::<Sha256>::new_with_salt_len(issuer_key, 17)
+            .sign_with_rng(&mut OsRng, &tbs_der);
+        subject.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
+        let subject_der = subject.to_der().unwrap();
+
+        assert!(verify_certificate_signature(&subject_der, &issuer_der).unwrap());
+
+        let mut mismatched = Certificate::from_der(&subject_der).unwrap();
+        mismatched.signature_algorithm.oid = "1.2.840.113549.1.1.11".parse().unwrap();
+        assert!(!verify_certificate_signature(&mismatched.to_der().unwrap(), &issuer_der).unwrap());
+
+        let mut tampered = Certificate::from_der(&subject_der).unwrap();
+        let mut signature = tampered.signature.raw_bytes().to_vec();
+        signature[0] ^= 0x01;
+        tampered.signature = BitString::from_bytes(&signature).unwrap();
+        assert!(!verify_certificate_signature(&tampered.to_der().unwrap(), &issuer_der).unwrap());
     }
 }

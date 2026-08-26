@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Validate RSASSA-PSS algorithm parameters across certificate, CRL, OCSP, SOD,
+  master-list, and eMRTD chain verification, including declared salt length
+  and matching MGF1 digest.
+
 ## [0.1.59] - 2026-08-20
 
 ### Changed

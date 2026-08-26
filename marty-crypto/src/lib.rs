@@ -31,6 +31,8 @@
 //! ecdsa::verify_p256(&public_key, message, &signature)?;
 //! ```
 
+#[cfg(feature = "signature-verification")]
+pub mod algorithm_identifier;
 #[cfg(feature = "bbs")]
 pub mod bbs;
 #[cfg(feature = "cert-builder")]

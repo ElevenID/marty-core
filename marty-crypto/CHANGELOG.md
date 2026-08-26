@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Verify RSASSA-PSS ASN.1 hash, MGF1 hash, salt length, digest parameters,
+  and trailer field through one parameter-aware signature boundary.
+- Reject X.509 certificates whose inner and outer signature algorithm
+  identifiers differ.
+
 ## [0.1.0] - 2026-01-03
 
 ### Added

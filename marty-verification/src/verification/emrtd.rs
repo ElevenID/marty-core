@@ -328,64 +328,7 @@ fn verify_certificate_signature(
     subject: &Certificate,
     issuer: &Certificate,
 ) -> VerificationResult<()> {
-    use der::Encode;
-
-    // Get the TBS (to-be-signed) certificate bytes
-    let tbs_bytes = subject.tbs_certificate.to_der().map_err(|e| {
-        VerificationError::der_error(format!("Failed to encode TBS certificate: {}", e))
-    })?;
-
-    // Get the signature bytes
-    let signature_bytes = subject.signature.raw_bytes();
-
-    // Get the public key from the issuer
-    let spki = &issuer.tbs_certificate.subject_public_key_info;
-
-    // Determine the signature algorithm
-    let sig_alg = &subject.signature_algorithm;
-
-    match sig_alg.oid.to_string().as_str() {
-        // ECDSA with SHA-256/384/512 uses the canonical crypto verifier.
-        "1.2.840.10045.4.3.2" | "1.2.840.10045.4.3.3" | "1.2.840.10045.4.3.4" => {
-            verify_certificate_signature_unified(tbs_bytes, signature_bytes, spki, sig_alg)
-        }
-        // RSA with SHA-256/384/512 and RSA-PSS variants are handled via the unified verifier
-        "1.2.840.113549.1.1.11"
-        | "1.2.840.113549.1.1.12"
-        | "1.2.840.113549.1.1.13"
-        | "1.2.840.113549.1.1.10"
-        | "1.2.840.113549.1.1.5" => {
-            verify_certificate_signature_unified(tbs_bytes, signature_bytes, spki, sig_alg)
-        }
-        // EdDSA: Ed25519 (1.3.101.112) and Ed448 (1.3.101.113)
-        // Used by a growing number of countries for DSC signing.
-        "1.3.101.112" | "1.3.101.113" => {
-            verify_certificate_signature_unified(tbs_bytes, signature_bytes, spki, sig_alg)
-        }
-        oid => Err(VerificationError::internal(format!(
-            "Unsupported signature algorithm OID: {}",
-            oid
-        ))),
-    }
-}
-
-/// Verify any supported algorithm using the unified crypto module.
-fn verify_certificate_signature_unified(
-    tbs_bytes: Vec<u8>,
-    signature_bytes: &[u8],
-    spki: &x509_cert::spki::SubjectPublicKeyInfoOwned,
-    sig_alg: &spki::AlgorithmIdentifierOwned,
-) -> VerificationResult<()> {
-    use der::Encode;
-
-    let public_key_der = spki
-        .to_der()
-        .map_err(|e| VerificationError::internal(format!("Failed to encode public key: {}", e)))?;
-
-    let algorithm = marty_crypto::SignatureAlgorithm::from_oid(&sig_alg.oid.to_string())?;
-
-    let valid =
-        marty_crypto::verify_signature(algorithm, &public_key_der, &tbs_bytes, signature_bytes)?;
+    let valid = marty_crypto::certificate::verify_parsed_certificate_signature(subject, issuer)?;
 
     if valid {
         Ok(())

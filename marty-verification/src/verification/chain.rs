@@ -818,29 +818,7 @@ fn verify_certificate_signature(
     subject: &Certificate,
     issuer: &Certificate,
 ) -> VerificationResult<()> {
-    // Get the issuer's public key
-    let issuer_spki = &issuer.tbs_certificate.subject_public_key_info;
-
-    // Get the TBS (to-be-signed) bytes from the subject certificate
-    let tbs_bytes = subject
-        .tbs_certificate
-        .to_der()
-        .map_err(|e| VerificationError::internal(format!("Failed to encode TBS: {}", e)))?;
-
-    // Get the signature bytes
-    let sig_bytes = subject.signature.raw_bytes();
-
-    // Get the algorithm OID
-    let sig_alg = subject.signature_algorithm.oid.to_string();
-
-    // Determine the algorithm and verify
-    let algorithm = marty_crypto::SignatureAlgorithm::from_oid(&sig_alg)?;
-
-    let issuer_pk_der = issuer_spki
-        .to_der()
-        .map_err(|e| VerificationError::internal(format!("Failed to encode public key: {}", e)))?;
-
-    let valid = marty_crypto::verify_signature(algorithm, &issuer_pk_der, &tbs_bytes, sig_bytes)?;
+    let valid = marty_crypto::certificate::verify_parsed_certificate_signature(subject, issuer)?;
 
     if valid {
         Ok(())
