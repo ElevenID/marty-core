@@ -425,9 +425,12 @@ pub fn validate_ocsp_response(
         .signature
         .as_bytes()
         .ok_or_else(|| CryptoError::ocsp("OCSP signature is not byte aligned"))?;
-    let algorithm =
-        crate::SignatureAlgorithm::from_oid(&basic.signature_algorithm.oid.to_string())?;
-    if !crate::verify_signature(algorithm, &responder_spki, &tbs_der, signature)? {
+    if !crate::algorithm_identifier::verify_signature_with_algorithm_identifier(
+        &basic.signature_algorithm,
+        &responder_spki,
+        &tbs_der,
+        signature,
+    )? {
         return Err(CryptoError::ocsp("invalid BasicOCSPResponse signature"));
     }
 

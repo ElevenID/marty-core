@@ -408,11 +408,8 @@ pub fn verify_sod_signature(sod_der: &[u8]) -> VerificationResult<bool> {
         content.to_vec()
     };
 
-    let algorithm = marty_crypto::SignatureAlgorithm::from_oid(
-        &signer_info.signature_algorithm.oid.to_string(),
-    )?;
-    marty_crypto::verify_signature(
-        algorithm,
+    marty_crypto::algorithm_identifier::verify_signature_with_algorithm_identifier(
+        &signer_info.signature_algorithm,
         &public_key_der,
         &data_to_verify,
         signer_info.signature.as_bytes(),

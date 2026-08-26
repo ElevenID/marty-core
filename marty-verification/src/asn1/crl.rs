@@ -180,16 +180,17 @@ pub fn verify_crl_signature(crl_der: &[u8], issuer_public_key: &[u8]) -> Verific
         .to_der()
         .map_err(|e| VerificationError::internal(format!("Failed to encode TBS: {}", e)))?;
 
-    // Get signature algorithm
-    let sig_alg = crl.signature_algorithm.oid.to_string();
-    let algorithm = marty_crypto::SignatureAlgorithm::from_oid(&sig_alg)?;
-
     // Get signature bytes
     let signature = crl.signature.raw_bytes();
 
     // Verify signature
-    marty_crypto::verify_signature(algorithm, issuer_public_key, &tbs_bytes, signature)
-        .map_err(|e| e.into())
+    marty_crypto::algorithm_identifier::verify_signature_with_algorithm_identifier(
+        &crl.signature_algorithm,
+        issuer_public_key,
+        &tbs_bytes,
+        signature,
+    )
+    .map_err(Into::into)
 }
 
 // Helper functions
