@@ -92,6 +92,7 @@ axum = "0.8"
 # Database (for marty-secure-storage)
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring = "4.1"
+keyring-core = "1.0"
 directories = "6.0"
 blake3 = "1.5"
 

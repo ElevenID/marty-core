@@ -4276,6 +4276,7 @@ dependencies = [
  "directories",
  "hex",
  "keyring",
+ "keyring-core",
  "marty-types",
  "rand 0.8.7",
  "rusqlite",
