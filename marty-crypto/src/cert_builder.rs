@@ -10,7 +10,7 @@
 //! - Document Signer Certificates (DSC)
 //! - CSCA/IACA certificates for eMRTD/mDL
 //! - Certificate Signing Requests (CSR)
-//! - Certificate signing with ECDSA (P-256, P-384), RSA, and Ed25519
+//! - Certificate signing with ECDSA (P-256, P-384, P-521), RSA, and Ed25519
 //! - Standard X.509v3 extensions
 //!
 //! # Example
@@ -56,6 +56,8 @@ use x509_cert::{
 
 use super::keygen::KeyType;
 use crate::{CryptoError, CryptoResult};
+
+type P521SigningKey = p521::ecdsa::SigningKey;
 
 // ============================================================================
 // Time Helper Functions
@@ -299,6 +301,7 @@ impl CertificateBuilderConfig {
         match self.key_type {
             KeyType::EcdsaP256 => self.build_self_signed_p256(),
             KeyType::EcdsaP384 => self.build_self_signed_p384(),
+            KeyType::EcdsaP521 => self.build_self_signed_p521(),
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => self.build_self_signed_rsa(),
             KeyType::Ed25519 => self.build_self_signed_ed25519(),
             _ => Err(CryptoError::internal(format!(
@@ -322,11 +325,14 @@ impl CertificateBuilderConfig {
         if private_key_pem.contains("EC PRIVATE KEY")
             || (private_key_pem.contains("PRIVATE KEY") && self.detect_ec_key(private_key_pem))
         {
-            // Try P-256 first, then P-384
+            // Try each supported NIST curve.
             if let Ok(result) = self.build_self_signed_with_p256_key(private_key_pem) {
                 return Ok(result);
             }
-            self.build_self_signed_with_p384_key(private_key_pem)
+            if let Ok(result) = self.build_self_signed_with_p384_key(private_key_pem) {
+                return Ok(result);
+            }
+            self.build_self_signed_with_p521_key(private_key_pem)
         } else if private_key_pem.contains("RSA PRIVATE KEY")
             || (private_key_pem.contains("PRIVATE KEY") && self.detect_rsa_key(private_key_pem))
         {
@@ -361,6 +367,18 @@ impl CertificateBuilderConfig {
         let public_key_bytes = verifying_key.to_sec1_bytes().to_vec();
 
         self.build_certificate_with_ecdsa_p384(&signing_key, &public_key_bytes)
+    }
+
+    fn build_self_signed_with_p521_key(&self, private_key_pem: &str) -> CryptoResult<Vec<u8>> {
+        use p521::pkcs8::DecodePrivateKey;
+
+        let secret_key = p521::SecretKey::from_pkcs8_pem(private_key_pem)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse P-521 key: {e}")))?;
+        let signing_key = P521SigningKey::from_bytes(&secret_key.to_bytes())
+            .map_err(|e| CryptoError::internal(format!("Failed to load P-521 key: {e}")))?;
+        let public_key_bytes = secret_key.public_key().to_sec1_bytes().to_vec();
+
+        self.build_certificate_with_ecdsa_p521(&signing_key, &public_key_bytes)
     }
 
     fn build_self_signed_with_rsa_key(&self, private_key_pem: &str) -> CryptoResult<Vec<u8>> {
@@ -411,11 +429,14 @@ impl CertificateBuilderConfig {
         }
 
         if self.detect_ec_key(issuer_key_pem) {
-            // Try P-256 first, then P-384
+            // Try each supported NIST curve.
             if let Ok(result) = self.build_signed_by_p256(&issuer_cert, issuer_key_pem) {
                 return Ok(result);
             }
-            return self.build_signed_by_p384(&issuer_cert, issuer_key_pem);
+            if let Ok(result) = self.build_signed_by_p384(&issuer_cert, issuer_key_pem) {
+                return Ok(result);
+            }
+            return self.build_signed_by_p521(&issuer_cert, issuer_key_pem);
         }
 
         Err(CryptoError::internal(
@@ -437,6 +458,9 @@ impl CertificateBuilderConfig {
         }
         // Try P-384
         if p384::ecdsa::SigningKey::from_pkcs8_pem(pem).is_ok() {
+            return true;
+        }
+        if p521::SecretKey::from_pkcs8_pem(pem).is_ok() {
             return true;
         }
         false
@@ -503,6 +527,23 @@ impl CertificateBuilderConfig {
 
         // Build the certificate
         let cert_der = self.build_certificate_with_ecdsa_p384(&signing_key, &public_key_der)?;
+
+        Ok((cert_der, private_key_pem))
+    }
+
+    /// Build P-521 ECDSA self-signed certificate.
+    fn build_self_signed_p521(&self) -> CryptoResult<(Vec<u8>, String)> {
+        use p521::pkcs8::EncodePrivateKey as _;
+
+        let secret_key = p521::SecretKey::random(&mut OsRng);
+        let signing_key = P521SigningKey::from_bytes(&secret_key.to_bytes())
+            .map_err(|e| CryptoError::internal(format!("Failed to load P-521 key: {e}")))?;
+        let private_key_pem = secret_key
+            .to_pkcs8_pem(Default::default())
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {e}")))?
+            .to_string();
+        let public_key_der = secret_key.public_key().to_sec1_bytes().to_vec();
+        let cert_der = self.build_certificate_with_ecdsa_p521(&signing_key, &public_key_der)?;
 
         Ok((cert_der, private_key_pem))
     }
@@ -577,23 +618,13 @@ impl CertificateBuilderConfig {
             CryptoError::internal(format!("Failed to parse P-256 issuer key: {}", e))
         })?;
 
-        // Generate new key pair for this certificate
-        let signing_key = P256SigningKey::random(&mut OsRng);
-        let verifying_key = signing_key.verifying_key();
-
-        // Encode private key to PEM
-        let private_key_pem = signing_key
-            .to_pkcs8_pem(Default::default())
-            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
-            .to_string();
-
-        let public_key_bytes = verifying_key.to_sec1_bytes().to_vec();
+        let (subject_spki, private_key_pem) = self.generate_subject_key()?;
 
         // Build certificate signed by issuer
         let cert_der = self.build_certificate_signed_by_p256(
             &issuer_signing_key,
             &issuer_cert.tbs_certificate.subject,
-            &public_key_bytes,
+            subject_spki,
         )?;
 
         Ok((cert_der, private_key_pem))
@@ -606,30 +637,42 @@ impl CertificateBuilderConfig {
         issuer_key_pem: &str,
     ) -> CryptoResult<(Vec<u8>, String)> {
         use p384::ecdsa::SigningKey as P384SigningKey;
-        use p384::pkcs8::{DecodePrivateKey, EncodePrivateKey as _};
+        use p384::pkcs8::DecodePrivateKey;
 
         // Parse issuer private key
         let issuer_signing_key = P384SigningKey::from_pkcs8_pem(issuer_key_pem).map_err(|e| {
             CryptoError::internal(format!("Failed to parse P-384 issuer key: {}", e))
         })?;
 
-        // Generate new key pair for this certificate
-        let signing_key = P384SigningKey::random(&mut OsRng);
-        let verifying_key = signing_key.verifying_key();
-
-        // Encode private key to PEM
-        let private_key_pem = signing_key
-            .to_pkcs8_pem(Default::default())
-            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
-            .to_string();
-
-        let public_key_bytes = verifying_key.to_sec1_bytes().to_vec();
+        let (subject_spki, private_key_pem) = self.generate_subject_key()?;
 
         // Build certificate signed by issuer
         let cert_der = self.build_certificate_signed_by_p384(
             &issuer_signing_key,
             &issuer_cert.tbs_certificate.subject,
-            &public_key_bytes,
+            subject_spki,
+        )?;
+
+        Ok((cert_der, private_key_pem))
+    }
+
+    /// Build a certificate with a new P-521 key, signed by a P-521 issuer.
+    fn build_signed_by_p521(
+        &self,
+        issuer_cert: &Certificate,
+        issuer_key_pem: &str,
+    ) -> CryptoResult<(Vec<u8>, String)> {
+        use p521::pkcs8::DecodePrivateKey;
+
+        let issuer_secret_key = p521::SecretKey::from_pkcs8_pem(issuer_key_pem)
+            .map_err(|e| CryptoError::internal(format!("Failed to parse P-521 issuer key: {e}")))?;
+        let issuer_signing_key = P521SigningKey::from_bytes(&issuer_secret_key.to_bytes())
+            .map_err(|e| CryptoError::internal(format!("Failed to load P-521 issuer key: {e}")))?;
+        let (subject_spki, private_key_pem) = self.generate_subject_key()?;
+        let cert_der = self.build_certificate_signed_by_p521(
+            &issuer_signing_key,
+            &issuer_cert.tbs_certificate.subject,
+            subject_spki,
         )?;
 
         Ok((cert_der, private_key_pem))
@@ -641,34 +684,19 @@ impl CertificateBuilderConfig {
         issuer_cert: &Certificate,
         issuer_key_pem: &str,
     ) -> CryptoResult<(Vec<u8>, String)> {
-        use rsa::{pkcs8::DecodePrivateKey, pkcs8::EncodePrivateKey as _, RsaPrivateKey};
+        use rsa::{pkcs8::DecodePrivateKey, RsaPrivateKey};
 
         // Parse issuer private key
         let issuer_signing_key = RsaPrivateKey::from_pkcs8_pem(issuer_key_pem)
             .map_err(|e| CryptoError::internal(format!("Failed to parse RSA issuer key: {}", e)))?;
 
-        // Generate new RSA key pair for this certificate
-        let bits = match self.key_type {
-            KeyType::Rsa2048 => 2048,
-            KeyType::Rsa3072 => 3072,
-            KeyType::Rsa4096 => 4096,
-            _ => 2048,
-        };
-
-        let private_key = RsaPrivateKey::new(&mut OsRng, bits)
-            .map_err(|e| CryptoError::internal(format!("Failed to generate RSA key: {}", e)))?;
-
-        // Encode private key to PEM
-        let private_key_pem = private_key
-            .to_pkcs8_pem(Default::default())
-            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
-            .to_string();
+        let (subject_spki, private_key_pem) = self.generate_subject_key()?;
 
         // Build certificate signed by issuer
         let cert_der = self.build_certificate_signed_by_rsa(
             &issuer_signing_key,
             &issuer_cert.tbs_certificate.subject,
-            &private_key,
+            subject_spki,
         )?;
 
         Ok((cert_der, private_key_pem))
@@ -680,8 +708,7 @@ impl CertificateBuilderConfig {
         issuer_cert: &Certificate,
         issuer_key_pem: &str,
     ) -> CryptoResult<(Vec<u8>, String)> {
-        use ed25519_dalek::pkcs8::{DecodePrivateKey, EncodePrivateKey as _};
-        use rand::RngCore;
+        use ed25519_dalek::pkcs8::DecodePrivateKey;
 
         // Parse issuer private key
         let issuer_signing_key =
@@ -689,23 +716,13 @@ impl CertificateBuilderConfig {
                 CryptoError::internal(format!("Failed to parse Ed25519 issuer key: {}", e))
             })?;
 
-        // Generate new Ed25519 key pair for this certificate
-        let mut secret_bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut secret_bytes);
-        let signing_key = Ed25519SigningKey::from_bytes(&secret_bytes);
-        let verifying_key = signing_key.verifying_key();
-
-        // Encode private key to PEM
-        let private_key_pem = signing_key
-            .to_pkcs8_pem(Default::default())
-            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {}", e)))?
-            .to_string();
+        let (subject_spki, private_key_pem) = self.generate_subject_key()?;
 
         // Build certificate signed by issuer
         let cert_der = self.build_certificate_signed_by_ed25519(
             &issuer_signing_key,
             &issuer_cert.tbs_certificate.subject,
-            verifying_key.as_bytes(),
+            subject_spki,
         )?;
 
         Ok((cert_der, private_key_pem))
@@ -791,6 +808,34 @@ impl CertificateBuilderConfig {
 
         cert.to_der()
             .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
+    }
+
+    /// Internal: build certificate with P-521.
+    fn build_certificate_with_ecdsa_p521(
+        &self,
+        signing_key: &P521SigningKey,
+        public_key_bytes: &[u8],
+    ) -> CryptoResult<Vec<u8>> {
+        let subject = self.build_name(&self.subject)?;
+        let issuer = self
+            .issuer
+            .as_ref()
+            .map(|issuer| self.build_name(issuer))
+            .transpose()?
+            .unwrap_or_else(|| subject.clone());
+        let validity = self.create_validity()?;
+        let serial = self.generate_serial_number()?;
+        let spki = self.build_ecdsa_p521_spki(public_key_bytes)?;
+        let profile = self.map_profile_to_x509_profile(&issuer);
+        let signer = EcdsaP521Signer::new(signing_key.clone());
+        let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
+            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {e}")))?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {e}")))?;
+
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {e}")))
     }
 
     /// Internal: build certificate with RSA.
@@ -891,19 +936,21 @@ impl CertificateBuilderConfig {
         &self,
         issuer_key: &P256SigningKey,
         issuer_name: &Name,
-        public_key_bytes: &[u8],
+        subject_spki: SubjectPublicKeyInfoOwned,
     ) -> CryptoResult<Vec<u8>> {
         let subject = self.build_name(&self.subject)?;
         let validity = self.create_validity()?;
         let serial = self.generate_serial_number()?;
-        let spki = self.build_ecdsa_p256_spki(public_key_bytes)?;
         let profile = self.map_profile_to_x509_profile(issuer_name);
 
         let signer = EcdsaP256Signer(issuer_key.clone());
 
         // Use issuer's name directly
-        let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
+        let builder =
+            X509CertBuilder::new(profile, serial, validity, subject, subject_spki, &signer)
+                .map_err(|e| {
+                    CryptoError::internal(format!("Failed to create cert builder: {}", e))
+                })?;
 
         let cert = builder
             .build()
@@ -918,18 +965,20 @@ impl CertificateBuilderConfig {
         &self,
         issuer_key: &p384::ecdsa::SigningKey,
         issuer_name: &Name,
-        public_key_bytes: &[u8],
+        subject_spki: SubjectPublicKeyInfoOwned,
     ) -> CryptoResult<Vec<u8>> {
         let subject = self.build_name(&self.subject)?;
         let validity = self.create_validity()?;
         let serial = self.generate_serial_number()?;
-        let spki = self.build_ecdsa_p384_spki(public_key_bytes)?;
         let profile = self.map_profile_to_x509_profile(issuer_name);
 
         let signer = EcdsaP384Signer(issuer_key.clone());
 
-        let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
+        let builder =
+            X509CertBuilder::new(profile, serial, validity, subject, subject_spki, &signer)
+                .map_err(|e| {
+                    CryptoError::internal(format!("Failed to create cert builder: {}", e))
+                })?;
 
         let cert = builder
             .build()
@@ -939,35 +988,52 @@ impl CertificateBuilderConfig {
             .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {}", e)))
     }
 
+    /// Build a subject certificate signed by a P-521 issuer.
+    fn build_certificate_signed_by_p521(
+        &self,
+        issuer_key: &P521SigningKey,
+        issuer_name: &Name,
+        subject_spki: SubjectPublicKeyInfoOwned,
+    ) -> CryptoResult<Vec<u8>> {
+        let subject = self.build_name(&self.subject)?;
+        let validity = self.create_validity()?;
+        let serial = self.generate_serial_number()?;
+        let profile = self.map_profile_to_x509_profile(issuer_name);
+        let signer = EcdsaP521Signer::new(issuer_key.clone());
+        let builder =
+            X509CertBuilder::new(profile, serial, validity, subject, subject_spki, &signer)
+                .map_err(|e| {
+                    CryptoError::internal(format!("Failed to create cert builder: {e}"))
+                })?;
+        let cert = builder
+            .build()
+            .map_err(|e| CryptoError::internal(format!("Failed to build certificate: {e}")))?;
+
+        cert.to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode certificate: {e}")))
+    }
+
     /// Build certificate signed by RSA issuer key.
     fn build_certificate_signed_by_rsa(
         &self,
         issuer_key: &rsa::RsaPrivateKey,
         issuer_name: &Name,
-        subject_key: &rsa::RsaPrivateKey,
+        subject_spki: SubjectPublicKeyInfoOwned,
     ) -> CryptoResult<Vec<u8>> {
-        use rsa::pkcs8::EncodePublicKey;
-
         let subject = self.build_name(&self.subject)?;
         let validity = self.create_validity()?;
         let serial = self.generate_serial_number()?;
-
-        // Build subject's public key SPKI
-        let public_key = subject_key.to_public_key();
-        let spki_der = public_key
-            .to_public_key_der()
-            .map_err(|e| CryptoError::internal(format!("Failed to encode public key: {}", e)))?;
-
-        let spki = SubjectPublicKeyInfoOwned::from_der(spki_der.as_bytes())
-            .map_err(|e| CryptoError::internal(format!("Failed to parse SPKI: {}", e)))?;
 
         let profile = self.map_profile_to_x509_profile(issuer_name);
 
         // Sign with issuer's key
         let signer = RsaSha256Signer::new(issuer_key.clone());
 
-        let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
+        let builder =
+            X509CertBuilder::new(profile, serial, validity, subject, subject_spki, &signer)
+                .map_err(|e| {
+                    CryptoError::internal(format!("Failed to create cert builder: {}", e))
+                })?;
 
         let cert = builder
             .build()
@@ -982,18 +1048,20 @@ impl CertificateBuilderConfig {
         &self,
         issuer_key: &Ed25519SigningKey,
         issuer_name: &Name,
-        public_key_bytes: &[u8],
+        subject_spki: SubjectPublicKeyInfoOwned,
     ) -> CryptoResult<Vec<u8>> {
         let subject = self.build_name(&self.subject)?;
         let validity = self.create_validity()?;
         let serial = self.generate_serial_number()?;
-        let spki = self.build_ed25519_spki(public_key_bytes)?;
         let profile = self.map_profile_to_x509_profile(issuer_name);
 
         let signer = Ed25519Signer::new(issuer_key.clone());
 
-        let builder = X509CertBuilder::new(profile, serial, validity, subject, spki, &signer)
-            .map_err(|e| CryptoError::internal(format!("Failed to create cert builder: {}", e)))?;
+        let builder =
+            X509CertBuilder::new(profile, serial, validity, subject, subject_spki, &signer)
+                .map_err(|e| {
+                    CryptoError::internal(format!("Failed to create cert builder: {}", e))
+                })?;
 
         let cert = builder
             .build()
@@ -1004,6 +1072,102 @@ impl CertificateBuilderConfig {
     }
 
     // Helper methods
+
+    /// Generate the subject key independently from the issuer signing
+    /// algorithm. This is required for cross-algorithm chains such as an RSA
+    /// CSCA signing a P-256 DSC.
+    fn generate_subject_key(&self) -> CryptoResult<(SubjectPublicKeyInfoOwned, String)> {
+        match self.key_type {
+            KeyType::EcdsaP256 => {
+                use p256::pkcs8::EncodePrivateKey as _;
+
+                let signing_key = P256SigningKey::random(&mut OsRng);
+                let private_key_pem = signing_key
+                    .to_pkcs8_pem(Default::default())
+                    .map_err(|e| {
+                        CryptoError::internal(format!("Failed to encode P-256 private key: {e}"))
+                    })?
+                    .to_string();
+                let spki =
+                    self.build_ecdsa_p256_spki(&signing_key.verifying_key().to_sec1_bytes())?;
+                Ok((spki, private_key_pem))
+            }
+            KeyType::EcdsaP384 => {
+                use p384::pkcs8::EncodePrivateKey as _;
+
+                let signing_key = p384::ecdsa::SigningKey::random(&mut OsRng);
+                let private_key_pem = signing_key
+                    .to_pkcs8_pem(Default::default())
+                    .map_err(|e| {
+                        CryptoError::internal(format!("Failed to encode P-384 private key: {e}"))
+                    })?
+                    .to_string();
+                let spki =
+                    self.build_ecdsa_p384_spki(&signing_key.verifying_key().to_sec1_bytes())?;
+                Ok((spki, private_key_pem))
+            }
+            KeyType::EcdsaP521 => {
+                use p521::pkcs8::EncodePrivateKey as _;
+
+                let secret_key = p521::SecretKey::random(&mut OsRng);
+                let private_key_pem = secret_key
+                    .to_pkcs8_pem(Default::default())
+                    .map_err(|e| {
+                        CryptoError::internal(format!("Failed to encode P-521 private key: {e}"))
+                    })?
+                    .to_string();
+                let spki = self.build_ecdsa_p521_spki(&secret_key.public_key().to_sec1_bytes())?;
+                Ok((spki, private_key_pem))
+            }
+            KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => {
+                use rsa::pkcs8::{EncodePrivateKey as _, EncodePublicKey as _};
+
+                let bits = match self.key_type {
+                    KeyType::Rsa2048 => 2048,
+                    KeyType::Rsa3072 => 3072,
+                    KeyType::Rsa4096 => 4096,
+                    _ => unreachable!("matched RSA key type"),
+                };
+                let private_key = rsa::RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| {
+                    CryptoError::internal(format!("Failed to generate RSA key: {e}"))
+                })?;
+                let private_key_pem = private_key
+                    .to_pkcs8_pem(Default::default())
+                    .map_err(|e| {
+                        CryptoError::internal(format!("Failed to encode RSA private key: {e}"))
+                    })?
+                    .to_string();
+                let spki_der = private_key
+                    .to_public_key()
+                    .to_public_key_der()
+                    .map_err(|e| {
+                        CryptoError::internal(format!("Failed to encode RSA public key: {e}"))
+                    })?;
+                let spki = SubjectPublicKeyInfoOwned::from_der(spki_der.as_bytes())
+                    .map_err(|e| CryptoError::internal(format!("Failed to parse RSA SPKI: {e}")))?;
+                Ok((spki, private_key_pem))
+            }
+            KeyType::Ed25519 => {
+                use ed25519_dalek::pkcs8::EncodePrivateKey as _;
+                use rand::RngCore;
+
+                let mut secret_bytes = [0u8; 32];
+                OsRng.fill_bytes(&mut secret_bytes);
+                let signing_key = Ed25519SigningKey::from_bytes(&secret_bytes);
+                let private_key_pem = signing_key
+                    .to_pkcs8_pem(Default::default())
+                    .map_err(|e| {
+                        CryptoError::internal(format!("Failed to encode Ed25519 private key: {e}"))
+                    })?
+                    .to_string();
+                let spki = self.build_ed25519_spki(signing_key.verifying_key().as_bytes())?;
+                Ok((spki, private_key_pem))
+            }
+            unsupported => Err(CryptoError::internal(format!(
+                "Unsupported certificate subject key type: {unsupported:?}"
+            ))),
+        }
+    }
 
     fn build_name(&self, dn: &DistinguishedName) -> CryptoResult<Name> {
         use std::str::FromStr;
@@ -1085,84 +1249,63 @@ impl CertificateBuilderConfig {
         &self,
         public_key_bytes: &[u8],
     ) -> CryptoResult<SubjectPublicKeyInfoOwned> {
-        use der::asn1::{BitString, ObjectIdentifier};
-        use spki::AlgorithmIdentifierOwned;
-
-        // OIDs for ECDSA with P-256
-        let ec_public_key_oid = ObjectIdentifier::new("1.2.840.10045.2.1")
-            .map_err(|e| CryptoError::internal(format!("Invalid OID: {}", e)))?;
-        let secp256r1_oid = ObjectIdentifier::new("1.2.840.10045.3.1.7")
-            .map_err(|e| CryptoError::internal(format!("Invalid curve OID: {}", e)))?;
-
-        // Build parameters (curve OID)
-        let params =
-            der::Any::from_der(&secp256r1_oid.to_der().map_err(|e| {
-                CryptoError::internal(format!("Failed to encode curve OID: {}", e))
-            })?)
-            .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
-
-        let algorithm = AlgorithmIdentifierOwned {
-            oid: ec_public_key_oid,
-            parameters: Some(params),
-        };
-
-        // Build uncompressed point - SEC1 format already includes 0x04 prefix
-        // If already SEC1 format (65 bytes starting with 0x04), use as-is
-        // Otherwise prepend 0x04 for raw x||y coordinates
-        let point_bytes = if public_key_bytes.len() == 65 && public_key_bytes[0] == 0x04 {
-            public_key_bytes.to_vec()
-        } else {
-            let mut bytes = vec![0x04];
-            bytes.extend_from_slice(public_key_bytes);
-            bytes
-        };
-
-        let subject_public_key = BitString::from_bytes(&point_bytes)
-            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
-
-        Ok(SubjectPublicKeyInfoOwned {
-            algorithm,
-            subject_public_key,
-        })
+        self.build_ecdsa_spki(public_key_bytes, "1.2.840.10045.3.1.7", 65)
     }
 
     fn build_ecdsa_p384_spki(
         &self,
         public_key_bytes: &[u8],
     ) -> CryptoResult<SubjectPublicKeyInfoOwned> {
+        self.build_ecdsa_spki(public_key_bytes, "1.3.132.0.34", 97)
+    }
+
+    fn build_ecdsa_p521_spki(
+        &self,
+        public_key_bytes: &[u8],
+    ) -> CryptoResult<SubjectPublicKeyInfoOwned> {
+        self.build_ecdsa_spki(public_key_bytes, "1.3.132.0.35", 133)
+    }
+
+    fn build_ecdsa_spki(
+        &self,
+        public_key_bytes: &[u8],
+        curve_oid: &str,
+        uncompressed_length: usize,
+    ) -> CryptoResult<SubjectPublicKeyInfoOwned> {
         use der::asn1::{BitString, ObjectIdentifier};
         use spki::AlgorithmIdentifierOwned;
 
-        // OIDs for ECDSA with P-384
         let ec_public_key_oid = ObjectIdentifier::new("1.2.840.10045.2.1")
-            .map_err(|e| CryptoError::internal(format!("Invalid OID: {}", e)))?;
-        let secp384r1_oid = ObjectIdentifier::new("1.3.132.0.34")
-            .map_err(|e| CryptoError::internal(format!("Invalid curve OID: {}", e)))?;
-
-        let params =
-            der::Any::from_der(&secp384r1_oid.to_der().map_err(|e| {
-                CryptoError::internal(format!("Failed to encode curve OID: {}", e))
-            })?)
-            .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {}", e)))?;
-
+            .map_err(|e| CryptoError::internal(format!("Invalid OID: {e}")))?;
+        let curve_oid = ObjectIdentifier::new(curve_oid)
+            .map_err(|e| CryptoError::internal(format!("Invalid curve OID: {e}")))?;
+        let params = der::Any::from_der(
+            &curve_oid
+                .to_der()
+                .map_err(|e| CryptoError::internal(format!("Failed to encode curve OID: {e}")))?,
+        )
+        .map_err(|e| CryptoError::internal(format!("Failed to parse curve OID: {e}")))?;
         let algorithm = AlgorithmIdentifierOwned {
             oid: ec_public_key_oid,
             parameters: Some(params),
         };
-
-        // Build uncompressed point - SEC1 format already includes 0x04 prefix
-        // If already SEC1 format (97 bytes starting with 0x04), use as-is
-        // Otherwise prepend 0x04 for raw x||y coordinates
-        let point_bytes = if public_key_bytes.len() == 97 && public_key_bytes[0] == 0x04 {
-            public_key_bytes.to_vec()
-        } else {
-            let mut bytes = vec![0x04];
-            bytes.extend_from_slice(public_key_bytes);
-            bytes
+        let point_bytes = match (public_key_bytes.len(), public_key_bytes.first()) {
+            (length, Some(0x04)) if length == uncompressed_length => public_key_bytes.to_vec(),
+            (length, _) if length + 1 == uncompressed_length => {
+                let mut bytes = vec![0x04];
+                bytes.extend_from_slice(public_key_bytes);
+                bytes
+            }
+            _ => {
+                return Err(CryptoError::internal(format!(
+                    "Invalid EC public key length: expected {} or {} bytes",
+                    uncompressed_length,
+                    uncompressed_length - 1
+                )))
+            }
         };
-
         let subject_public_key = BitString::from_bytes(&point_bytes)
-            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {}", e)))?;
+            .map_err(|e| CryptoError::internal(format!("Failed to create bit string: {e}")))?;
 
         Ok(SubjectPublicKeyInfoOwned {
             algorithm,
@@ -1378,6 +1521,89 @@ impl AsRef<p384::ecdsa::VerifyingKey> for EcdsaP384Signer {
 
 impl signature::KeypairRef for EcdsaP384Signer {
     type VerifyingKey = p384::ecdsa::VerifyingKey;
+}
+
+/// Wrapper for P-521 ECDSA DER signatures.
+#[derive(Clone)]
+struct P521SignatureWrapper(p521::ecdsa::DerSignature);
+
+impl AsRef<[u8]> for P521SignatureWrapper {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl signature::SignatureEncoding for P521SignatureWrapper {
+    type Repr = Box<[u8]>;
+}
+
+impl From<P521SignatureWrapper> for Box<[u8]> {
+    fn from(signature: P521SignatureWrapper) -> Self {
+        signature.0.as_bytes().to_vec().into_boxed_slice()
+    }
+}
+
+impl TryFrom<&[u8]> for P521SignatureWrapper {
+    type Error = signature::Error;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        p521::ecdsa::DerSignature::try_from(bytes)
+            .map(Self)
+            .map_err(|_| signature::Error::new())
+    }
+}
+
+impl spki::SignatureBitStringEncoding for P521SignatureWrapper {
+    fn to_bitstring(&self) -> der::Result<der::asn1::BitString> {
+        der::asn1::BitString::from_bytes(self.0.as_bytes())
+    }
+}
+
+struct EcdsaP521Signer {
+    signing_key: P521SigningKey,
+    verifying_key: p521::PublicKey,
+}
+
+impl EcdsaP521Signer {
+    fn new(signing_key: P521SigningKey) -> Self {
+        let verifying_key = p521::PublicKey::from_secret_scalar(signing_key.as_nonzero_scalar());
+        Self {
+            signing_key,
+            verifying_key,
+        }
+    }
+}
+
+impl signature::Signer<P521SignatureWrapper> for EcdsaP521Signer {
+    fn try_sign(&self, message: &[u8]) -> Result<P521SignatureWrapper, signature::Error> {
+        let signature: p521::ecdsa::Signature = self.signing_key.try_sign(message)?;
+        Ok(P521SignatureWrapper(signature.to_der()))
+    }
+}
+
+impl spki::DynSignatureAlgorithmIdentifier for EcdsaP521Signer {
+    fn signature_algorithm_identifier(
+        &self,
+    ) -> Result<spki::AlgorithmIdentifierOwned, spki::Error> {
+        use der::asn1::ObjectIdentifier;
+
+        let oid =
+            ObjectIdentifier::new("1.2.840.10045.4.3.4").map_err(|_| spki::Error::KeyMalformed)?;
+        Ok(spki::AlgorithmIdentifierOwned {
+            oid,
+            parameters: None,
+        })
+    }
+}
+
+impl AsRef<p521::PublicKey> for EcdsaP521Signer {
+    fn as_ref(&self) -> &p521::PublicKey {
+        &self.verifying_key
+    }
+}
+
+impl signature::KeypairRef for EcdsaP521Signer {
+    type VerifyingKey = p521::PublicKey;
 }
 
 /// Wrapper for RSA PKCS#1 v1.5 signature.
@@ -1806,6 +2032,7 @@ impl CsrBuilderConfig {
         match self.key_type {
             KeyType::EcdsaP256 => self.build_csr_p256(),
             KeyType::EcdsaP384 => self.build_csr_p384(),
+            KeyType::EcdsaP521 => self.build_csr_p521(),
             KeyType::Rsa2048 | KeyType::Rsa3072 | KeyType::Rsa4096 => self.build_csr_rsa(),
             KeyType::Ed25519 => self.build_csr_ed25519(),
             _ => Err(CryptoError::internal(format!(
@@ -1871,6 +2098,30 @@ impl CsrBuilderConfig {
         let csr_der = csr
             .to_der()
             .map_err(|e| CryptoError::internal(format!("Failed to encode CSR: {}", e)))?;
+
+        Ok((csr_der, private_key_pem))
+    }
+
+    fn build_csr_p521(&self) -> CryptoResult<(Vec<u8>, String)> {
+        use p521::pkcs8::EncodePrivateKey as _;
+
+        let secret_key = p521::SecretKey::random(&mut OsRng);
+        let signing_key = P521SigningKey::from_bytes(&secret_key.to_bytes())
+            .map_err(|e| CryptoError::internal(format!("Failed to load P-521 key: {e}")))?;
+        let private_key_pem = secret_key
+            .to_pkcs8_pem(Default::default())
+            .map_err(|e| CryptoError::internal(format!("Failed to encode private key: {e}")))?
+            .to_string();
+        let subject = self.build_name()?;
+        let signer = EcdsaP521Signer::new(signing_key);
+        let builder = RequestBuilder::new(subject, &signer)
+            .map_err(|e| CryptoError::internal(format!("Failed to create CSR builder: {e}")))?;
+        let csr: CertReq = builder
+            .build::<P521SignatureWrapper>()
+            .map_err(|e| CryptoError::internal(format!("Failed to build CSR: {e}")))?;
+        let csr_der = csr
+            .to_der()
+            .map_err(|e| CryptoError::internal(format!("Failed to encode CSR: {e}")))?;
 
         Ok((csr_der, private_key_pem))
     }

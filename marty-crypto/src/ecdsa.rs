@@ -313,7 +313,7 @@ pub fn extract_ec_point_from_spki(spki_der: &[u8]) -> CryptoResult<Vec<u8>> {
     Ok(spki.subject_public_key.raw_bytes().to_vec())
 }
 
-/// Normalize an ES256 or ES384 signature to fixed-width IEEE P1363/JOSE form.
+/// Normalize an ES256, ES384, or ES512 signature to fixed-width IEEE P1363/JOSE form.
 ///
 /// Provider APIs commonly return ASN.1 DER while JWS and COSE use `r || s`.
 /// Already-normalized signatures are accepted only at the exact curve width;
@@ -331,6 +331,12 @@ pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Ve
             .map(|value| value.to_bytes().to_vec())
             .map_err(|error| {
                 CryptoError::invalid_signature(format!("Invalid ES384 signature encoding: {error}"))
+            }),
+        "ES512" if signature.len() == 132 => Ok(signature.to_vec()),
+        "ES512" => p521::ecdsa::Signature::from_der(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES512 signature encoding: {error}"))
             }),
         _ => Err(CryptoError::unsupported_algorithm(format!(
             "Unsupported ECDSA signature algorithm: {algorithm}"
@@ -470,16 +476,44 @@ mod tests {
     fn normalizes_raw_and_der_signatures_and_rejects_invalid_input() {
         use p256::ecdsa::signature::Signer;
 
-        let signing_key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
-        let signature: p256::ecdsa::Signature = signing_key.sign(b"normalization vector");
-        let raw = signature.to_bytes();
+        let p256_key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let p256_signature: p256::ecdsa::Signature = p256_key.sign(b"normalization vector");
+        let p256_raw = p256_signature.to_bytes();
 
-        assert_eq!(normalize_signature(&raw, "ES256").unwrap(), raw.as_slice());
         assert_eq!(
-            normalize_signature(signature.to_der().as_bytes(), "ES256").unwrap(),
-            raw.as_slice()
+            normalize_signature(&p256_raw, "ES256").unwrap(),
+            p256_raw.as_slice()
         );
+        assert_eq!(
+            normalize_signature(p256_signature.to_der().as_bytes(), "ES256").unwrap(),
+            p256_raw.as_slice()
+        );
+
+        let p384_key = p384::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let p384_signature: p384::ecdsa::Signature = p384_key.sign(b"normalization vector");
+        let p384_raw = p384_signature.to_bytes();
+        assert_eq!(
+            normalize_signature(&p384_raw, "ES384").unwrap(),
+            p384_raw.as_slice()
+        );
+        assert_eq!(
+            normalize_signature(p384_signature.to_der().as_bytes(), "ES384").unwrap(),
+            p384_raw.as_slice()
+        );
+
+        let p521_key = p521::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let p521_signature: p521::ecdsa::Signature = p521_key.sign(b"normalization vector");
+        let p521_raw = p521_signature.to_bytes();
+        assert_eq!(
+            normalize_signature(&p521_raw, "ES512").unwrap(),
+            p521_raw.as_slice()
+        );
+        assert_eq!(
+            normalize_signature(p521_signature.to_der().as_bytes(), "ES512").unwrap(),
+            p521_raw.as_slice()
+        );
+
         assert!(normalize_signature(&[0, 1, 2], "ES256").is_err());
-        assert!(normalize_signature(&raw, "RS256").is_err());
+        assert!(normalize_signature(&p256_raw, "RS256").is_err());
     }
 }

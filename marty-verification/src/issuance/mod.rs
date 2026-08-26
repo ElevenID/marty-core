@@ -52,9 +52,10 @@ use crate::{VerificationError, VerificationResult};
 /// The CSCA is a country's root trust anchor for eMRTD.  Per ICAO 9303 Part 12
 /// each country maintains one or more CSCAs with validity up to ~20 years.
 ///
-/// The private key **must never leave the HSM/offline system**.  In production,
-/// replace `new` with an HSM-backed variant and use `from_cert_der_only` when
-/// the private key is managed externally.
+/// The private key **must never leave its controlled offline system**. In
+/// production, keep HSM/KMS-backed key custody in the signing service and use
+/// this type only for offline/bootstrap issuance where the key can be handled
+/// under the applicable ceremony and retention policy.
 pub struct CscaAuthority {
     /// DER-encoded self-signed CSCA certificate (public).
     pub cert_der: Vec<u8>,
@@ -64,6 +65,69 @@ pub struct CscaAuthority {
     pub country: String,
 }
 
+/// Key algorithms supported for CSCA bootstrap generation.
+///
+/// RSA-2048 is the default to preserve the retired CSCA service contract.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum CscaKeyAlgorithm {
+    /// RSA with a 2048-bit modulus (the retired service default).
+    #[default]
+    #[serde(rename = "RSA-2048")]
+    Rsa2048,
+    /// RSA with a 3072-bit modulus.
+    #[serde(rename = "RSA-3072")]
+    Rsa3072,
+    /// RSA with a 4096-bit modulus.
+    #[serde(rename = "RSA-4096")]
+    Rsa4096,
+    /// ECDSA over NIST P-256.
+    #[serde(rename = "ECDSA-P256")]
+    EcdsaP256,
+    /// ECDSA over NIST P-384.
+    #[serde(rename = "ECDSA-P384")]
+    EcdsaP384,
+    /// ECDSA over NIST P-521.
+    #[serde(rename = "ECDSA-P521")]
+    EcdsaP521,
+}
+
+impl CscaKeyAlgorithm {
+    /// Complete supported algorithm set in stable policy order.
+    pub const ALL: [Self; 6] = [
+        Self::Rsa2048,
+        Self::Rsa3072,
+        Self::Rsa4096,
+        Self::EcdsaP256,
+        Self::EcdsaP384,
+        Self::EcdsaP521,
+    ];
+
+    /// Language-neutral policy identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rsa2048 => "RSA-2048",
+            Self::Rsa3072 => "RSA-3072",
+            Self::Rsa4096 => "RSA-4096",
+            Self::EcdsaP256 => "ECDSA-P256",
+            Self::EcdsaP384 => "ECDSA-P384",
+            Self::EcdsaP521 => "ECDSA-P521",
+        }
+    }
+
+    fn key_type(self) -> marty_crypto::keygen::KeyType {
+        use marty_crypto::keygen::KeyType;
+
+        match self {
+            Self::Rsa2048 => KeyType::Rsa2048,
+            Self::Rsa3072 => KeyType::Rsa3072,
+            Self::Rsa4096 => KeyType::Rsa4096,
+            Self::EcdsaP256 => KeyType::EcdsaP256,
+            Self::EcdsaP384 => KeyType::EcdsaP384,
+            Self::EcdsaP521 => KeyType::EcdsaP521,
+        }
+    }
+}
+
 impl CscaAuthority {
     /// Generate a new CSCA: creates keypair + self-signed certificate.
     ///
@@ -71,12 +135,31 @@ impl CscaAuthority {
     /// * `country`       – ISO 3166-1 alpha-3 country code (e.g. `"DEU"`)
     /// * `organization`  – Full organisation name
     /// * `validity_days` – Certificate validity in days (recommend ≥ 10 years)
+    ///
+    /// This backward-compatible constructor uses ECDSA P-256. Use
+    /// [`Self::new_with_algorithm`] when algorithm parity or an explicit policy
+    /// is required.
     pub fn new(country: &str, organization: &str, validity_days: u32) -> VerificationResult<Self> {
+        Self::new_with_algorithm(
+            country,
+            organization,
+            validity_days,
+            CscaKeyAlgorithm::EcdsaP256,
+        )
+    }
+
+    /// Generate a CSCA using an explicit legacy-compatible RSA or ECDSA algorithm.
+    pub fn new_with_algorithm(
+        country: &str,
+        organization: &str,
+        validity_days: u32,
+        algorithm: CscaKeyAlgorithm,
+    ) -> VerificationResult<Self> {
         let (cert_der, private_key_pem) = marty_crypto::cert_builder::create_csca_certificate(
             country,
             organization,
             validity_days,
-            marty_crypto::keygen::KeyType::EcdsaP256,
+            algorithm.key_type(),
         )
         .map_err(|e| VerificationError::internal(e.to_string()))?;
 
@@ -89,7 +172,10 @@ impl CscaAuthority {
 
     /// Load a CSCA from an existing certificate + private key PEM.
     ///
-    /// Use this when the key material was generated externally (e.g. HSM export).
+    /// Use this only for an existing exportable software/offline key that can be
+    /// handled under the applicable key ceremony. Non-exportable HSM/KMS keys
+    /// remain references in the signing service and are not represented by this
+    /// in-memory authority type.
     pub fn from_pem(country: &str, cert_der: Vec<u8>, private_key_pem: String) -> Self {
         Self {
             cert_der,
@@ -301,6 +387,88 @@ mod tests {
         let dsc = csca.issue_dsc("TST DSC Batch 1", 90).unwrap();
         assert!(!dsc.cert_der.is_empty());
         assert_eq!(dsc.csca_cert_der, csca.cert_der);
+    }
+
+    #[test]
+    fn csca_generation_preserves_legacy_rsa_and_ecdsa_algorithm_choices() {
+        use der::Decode as _;
+
+        assert_eq!(CscaKeyAlgorithm::default(), CscaKeyAlgorithm::Rsa2048);
+        for algorithm in CscaKeyAlgorithm::ALL {
+            let encoded = serde_json::to_string(&algorithm).unwrap();
+            assert_eq!(encoded, format!("\"{}\"", algorithm.as_str()));
+            assert_eq!(
+                serde_json::from_str::<CscaKeyAlgorithm>(&encoded).unwrap(),
+                algorithm
+            );
+        }
+        assert_eq!(
+            CscaKeyAlgorithm::ALL.map(CscaKeyAlgorithm::as_str),
+            [
+                "RSA-2048",
+                "RSA-3072",
+                "RSA-4096",
+                "ECDSA-P256",
+                "ECDSA-P384",
+                "ECDSA-P521"
+            ]
+        );
+        for algorithm in CscaKeyAlgorithm::ALL {
+            let csca =
+                CscaAuthority::new_with_algorithm("TST", "Algorithm Parity Test", 365, algorithm)
+                    .unwrap();
+            let info = marty_crypto::certificate::get_certificate_info(csca.cert_der()).unwrap();
+            assert!(info.is_ca, "{algorithm:?}");
+            assert!(marty_crypto::certificate::verify_certificate_signature(
+                csca.cert_der(),
+                csca.cert_der()
+            )
+            .unwrap());
+            let dsc = csca.issue_dsc("Algorithm Parity DSC", 30).unwrap();
+            let dsc_certificate = x509_cert::Certificate::from_der(&dsc.cert_der).unwrap();
+            assert_eq!(
+                dsc_certificate
+                    .tbs_certificate
+                    .subject_public_key_info
+                    .algorithm
+                    .oid
+                    .to_string(),
+                "1.2.840.10045.2.1",
+                "DSC subject key must remain P-256 for {algorithm:?}"
+            );
+            assert!(
+                marty_crypto::certificate::verify_certificate_signature(
+                    &dsc.cert_der,
+                    csca.cert_der()
+                )
+                .unwrap(),
+                "DSC signature failed for {algorithm:?}"
+            );
+            let passport = dsc
+                .personalizer()
+                .set_data_group(1, b"algorithm parity".to_vec())
+                .build()
+                .unwrap();
+            assert!(!passport.sod_der.is_empty(), "{algorithm:?}");
+            let csca_certificate = x509_cert::Certificate::from_der(csca.cert_der()).unwrap();
+            let mut registry = crate::CscaRegistry::new();
+            registry.add_country_csca("TST", csca_certificate).unwrap();
+            let security_object = crate::verification::emrtd::SecurityObject::from_sod_der(
+                &passport.sod_der,
+                Some("TST".to_string()),
+            )
+            .unwrap();
+            let verification = crate::verification::emrtd::verify_emrtd(
+                &security_object,
+                &passport.data_groups,
+                &registry,
+            );
+            assert!(
+                verification.verified,
+                "{algorithm:?}: {:?}",
+                verification.errors
+            );
+        }
     }
 
     #[test]
