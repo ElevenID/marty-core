@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.60] - 2026-08-25
+
+### Added
+
+- Restore the complete retired CSCA bootstrap algorithm set: RSA-2048,
+  RSA-3072, RSA-4096, ECDSA P-256, ECDSA P-384, and ECDSA P-521.
+- Support cross-algorithm CSCA-to-DSC chains while keeping the DSC subject-key
+  algorithm independent from its issuer's signing algorithm.
+
+### Fixed
+
+- Normalize P-521/ES512 signatures for certificate and eMRTD verification and
+  preserve explicit algorithm selection through the authority-issuance API.
+
 ### Security
 
 - Validate RSASSA-PSS algorithm parameters across certificate, CRL, OCSP, SOD,
