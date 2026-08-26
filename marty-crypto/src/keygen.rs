@@ -2,7 +2,7 @@
 //!
 //! This module provides unified key generation for:
 //! - RSA (2048, 3072, 4096 bits)
-//! - ECDSA/ECDH (P-256, P-384)
+//! - ECDSA/ECDH (P-256, P-384, P-521)
 //! - Ed25519 (EdDSA)
 //! - X25519 (key agreement)
 //! - Symmetric (AES-128, AES-256, HMAC)
@@ -37,6 +37,8 @@ pub enum KeyType {
     EcdsaP256,
     /// ECDSA/ECDH P-384 (48 bytes private, 97 bytes public uncompressed)
     EcdsaP384,
+    /// ECDSA P-521 (66 bytes private, 133 bytes public uncompressed)
+    EcdsaP521,
     /// RSA 2048-bit
     Rsa2048,
     /// RSA 3072-bit
@@ -85,6 +87,7 @@ impl GeneratedKey {
             KeyType::Ed25519 | KeyType::X25519 => 256,
             KeyType::EcdsaP256 | KeyType::Aes256 | KeyType::HmacSha256 => 256,
             KeyType::EcdsaP384 | KeyType::HmacSha384 => 384,
+            KeyType::EcdsaP521 => 521,
             KeyType::HmacSha512 => 512,
             KeyType::Aes128 => 128,
             KeyType::Rsa2048 => 2048,
@@ -106,6 +109,7 @@ pub fn generate_keypair(key_type: KeyType) -> CryptoResult<GeneratedKey> {
         KeyType::X25519 => generate_x25519(),
         KeyType::EcdsaP256 => generate_p256(),
         KeyType::EcdsaP384 => generate_p384(),
+        KeyType::EcdsaP521 => generate_p521(),
         KeyType::Rsa2048 => generate_rsa(2048),
         KeyType::Rsa3072 => generate_rsa(3072),
         KeyType::Rsa4096 => generate_rsa(4096),
@@ -285,6 +289,23 @@ fn generate_p384() -> CryptoResult<GeneratedKey> {
 }
 
 // ============================================================================
+// P-521
+// ============================================================================
+
+fn generate_p521() -> CryptoResult<GeneratedKey> {
+    use p521::elliptic_curve::sec1::ToEncodedPoint;
+
+    let secret_key = p521::SecretKey::random(&mut OsRng);
+    let public_key = secret_key.public_key().to_encoded_point(false);
+
+    Ok(GeneratedKey {
+        key_type: KeyType::EcdsaP521,
+        private_key: secret_key.to_bytes().to_vec(),
+        public_key: public_key.as_bytes().to_vec(),
+    })
+}
+
+// ============================================================================
 // RSA
 // ============================================================================
 
@@ -458,6 +479,14 @@ mod tests {
         let keypair = generate_keypair(KeyType::EcdsaP384).unwrap();
         assert_eq!(keypair.private_key.len(), 48);
         assert_eq!(keypair.public_key.len(), 97); // Uncompressed
+    }
+
+    #[test]
+    fn test_generate_p521() {
+        let keypair = generate_keypair(KeyType::EcdsaP521).unwrap();
+        assert_eq!(keypair.private_key.len(), 66);
+        assert_eq!(keypair.public_key.len(), 133); // Uncompressed
+        assert_eq!(keypair.key_size_bits(), 521);
     }
 
     #[test]

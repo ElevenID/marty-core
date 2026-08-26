@@ -6,8 +6,6 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use signature::hazmat::PrehashVerifier;
 use x509_cert::Certificate;
 
 use crate::error::{VerificationError, VerificationResult};
@@ -346,13 +344,11 @@ fn verify_certificate_signature(
     // Determine the signature algorithm
     let sig_alg = &subject.signature_algorithm;
 
-    // For now, support ECDSA with P-256/P-384
-    // This is a simplified implementation - production would need more algorithm support
     match sig_alg.oid.to_string().as_str() {
-        // ecdsa-with-SHA256 (1.2.840.10045.4.3.2)
-        "1.2.840.10045.4.3.2" => verify_ecdsa_p256(&tbs_bytes, signature_bytes, spki),
-        // ecdsa-with-SHA384 (1.2.840.10045.4.3.3)
-        "1.2.840.10045.4.3.3" => verify_ecdsa_p384(&tbs_bytes, signature_bytes, spki),
+        // ECDSA with SHA-256/384/512 uses the canonical crypto verifier.
+        "1.2.840.10045.4.3.2" | "1.2.840.10045.4.3.3" | "1.2.840.10045.4.3.4" => {
+            verify_certificate_signature_unified(tbs_bytes, signature_bytes, spki, sig_alg)
+        }
         // RSA with SHA-256/384/512 and RSA-PSS variants are handled via the unified verifier
         "1.2.840.113549.1.1.11"
         | "1.2.840.113549.1.1.12"
@@ -399,81 +395,6 @@ fn verify_certificate_signature_unified(
             "Signature verification failed".to_string(),
         ))
     }
-}
-
-/// Verify ECDSA P-256 signature.
-fn verify_ecdsa_p256(
-    message: &[u8],
-    signature: &[u8],
-    spki: &x509_cert::spki::SubjectPublicKeyInfoOwned,
-) -> VerificationResult<()> {
-    use p256::ecdsa::{Signature, VerifyingKey};
-
-    // Parse the public key
-    let pk_bytes = spki.subject_public_key.raw_bytes();
-    let verifying_key = VerifyingKey::from_sec1_bytes(pk_bytes).map_err(|e| {
-        VerificationError::invalid_signature(
-            "ECDSA-P256",
-            format!("Invalid P-256 public key: {}", e),
-        )
-    })?;
-
-    // Parse the signature (DER encoded)
-    let sig = Signature::from_der(signature).map_err(|e| {
-        VerificationError::invalid_signature(
-            "ECDSA-P256",
-            format!("Invalid DER-encoded ECDSA signature: {}", e),
-        )
-    })?;
-
-    // Hash the message with SHA-256
-    let digest = Sha256::digest(message);
-
-    // Verify
-    verifying_key.verify_prehash(&digest, &sig).map_err(|e| {
-        VerificationError::invalid_signature(
-            "ECDSA-P256",
-            format!("P-256 signature verification failed: {}", e),
-        )
-    })
-}
-
-/// Verify ECDSA P-384 signature.
-fn verify_ecdsa_p384(
-    message: &[u8],
-    signature: &[u8],
-    spki: &x509_cert::spki::SubjectPublicKeyInfoOwned,
-) -> VerificationResult<()> {
-    use p384::ecdsa::{Signature, VerifyingKey};
-    use sha2::Sha384;
-
-    // Parse the public key
-    let pk_bytes = spki.subject_public_key.raw_bytes();
-    let verifying_key = VerifyingKey::from_sec1_bytes(pk_bytes).map_err(|e| {
-        VerificationError::invalid_signature(
-            "ECDSA-P384",
-            format!("Invalid P-384 public key: {}", e),
-        )
-    })?;
-
-    // Parse the signature (DER encoded)
-    let sig = Signature::from_der(signature).map_err(|e| {
-        VerificationError::invalid_signature(
-            "ECDSA-P384",
-            format!("Invalid DER-encoded ECDSA signature: {}", e),
-        )
-    })?;
-
-    // Hash the message with SHA-384
-    let digest = Sha384::digest(message);
-
-    // Verify
-    verifying_key.verify_prehash(&digest, &sig).map_err(|e| {
-        VerificationError::invalid_signature(
-            "ECDSA-P384",
-            format!("P-384 signature verification failed: {}", e),
-        )
-    })
 }
 
 /// Verify data group hashes against the SOD.
@@ -719,6 +640,7 @@ pub fn verify_emrtd_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn test_default_result() {
