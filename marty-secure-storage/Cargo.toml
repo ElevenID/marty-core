@@ -22,6 +22,7 @@ rusqlite = { workspace = true }
 
 # Keychain
 keyring = { workspace = true }
+keyring-core = { workspace = true }
 directories = { workspace = true }
 
 # Crypto

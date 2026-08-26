@@ -49,13 +49,34 @@ pub struct SecureStorage {
 impl SecureStorage {
     /// Create new secure storage at the given path
     pub fn new(data_dir: &Path) -> Result<Self, StorageError> {
+        Self::new_with_keychain(data_dir, KeychainManager::new())
+    }
+
+    /// Create storage using a caller-installed process-local keyring.
+    ///
+    /// This is an explicit test and startup-self-check boundary. Normal application
+    /// startup must use [`SecureStorage::new`] and the native platform keychain.
+    pub fn new_with_process_local_keyring(data_dir: &Path) -> Result<Self, StorageError> {
+        let store = keyring_core::get_default_store()
+            .ok_or_else(|| StorageError::Keychain("no default store is installed".to_string()))?;
+        if !matches!(
+            store.persistence(),
+            keyring_core::CredentialPersistence::ProcessOnly
+        ) {
+            return Err(StorageError::Keychain(
+                "installed keyring is not process-local".to_string(),
+            ));
+        }
+        Self::new_with_keychain(data_dir, KeychainManager::with_installed_default_store())
+    }
+
+    fn new_with_keychain(data_dir: &Path, keychain: KeychainManager) -> Result<Self, StorageError> {
         // Ensure data directory exists
         std::fs::create_dir_all(data_dir)?;
 
         let db_path = data_dir.join("marty_verifier.db");
 
         // Get or create encryption key from keychain
-        let keychain = KeychainManager::new();
         let db_key = keychain.get_or_create_db_key()?;
 
         // Open encrypted database
