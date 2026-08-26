@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.60] - 2026-08-25
+
 ### Security
 
 - Verify RSASSA-PSS ASN.1 hash, MGF1 hash, salt length, digest parameters,
