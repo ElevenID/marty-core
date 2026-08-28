@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-08-27
+
+### Fixed
+
+- Canonicalize DTC signature payloads independently of Cargo feature
+  unification, with a deterministic legacy fallback for already-issued DTCs.
+
 ## [0.1.60] - 2026-08-25
 
 ### Added
