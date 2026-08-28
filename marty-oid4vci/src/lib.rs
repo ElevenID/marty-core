@@ -46,6 +46,7 @@
 //! }).unwrap();
 //! ```
 
+pub mod discovery;
 pub mod error;
 pub mod formats;
 pub mod holder_key;
