@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-08-27
+
+### Added
+
+- Support explicitly installed process-local credential stores so secure
+  storage can be qualified in headless environments without weakening the
+  platform-keychain default.
+
+### Fixed
+
+- Track offline reporting attempts and acknowledgements atomically with exact
+  batch metadata and durable retry state.
+- Canonicalize DTC signatures independently of the shared `serde_json` feature
+  graph while preserving verification of already-issued legacy payloads.
+
 ## [0.1.60] - 2026-08-25
 
 ### Added

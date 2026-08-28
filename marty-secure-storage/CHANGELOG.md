@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-08-27
+
 ### Fixed
 
 - Track offline reporting attempts and acknowledgements independently from trust synchronization, including atomic exact-batch acknowledgement and durable retry metadata.
+- Allow an explicitly installed process-local credential store for headless
+  qualification while retaining the platform keychain as the production
+  default.
 
 ## [0.1.40] - 2026-08-10
 
