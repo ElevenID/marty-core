@@ -48,6 +48,18 @@ dependencies:
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-10-28
     rationale: The exact-revision ElevenID fork removes ssi-jwk 0.2.1 and rsa 0.6.1, accepts the standards-valid empty issuerSigned nameSpaces map emitted by the official OIDF wallet without weakening non-empty namespace validation, and verifies DeviceAuthentication against the exact verifier-owned CBOR session transcript bytes instead of a normalized re-encoding. The reviewed revision also provides a serial-first digest executor boundary, behavior-locked mdoc issuance planning, and an optional bounded native executor without changing Marty's selected default route or enabling the parallel feature. It preserves upstream history and licensing, synchronizes upstream monthly through reviewed pull requests, and never auto-merges upstream changes.
+  - package: quick-xml
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/tafia/quick-xml
+    current: "0.41.0"
+    target: "0.41.x"
+    status: maintained
+    decision: retain
+    advisories: [RUSTSEC-2026-0194, RUSTSEC-2026-0195]
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/26
+    review-after: 2026-11-29
+    rationale: Version 0.41.0 is the first release that removes quadratic duplicate-attribute checking and caps namespace declarations per element. Marty parses network-supplied EUDI LoTL and member-state trusted-list XML through quick-xml's Serde deserializer. Keep the parser floor at 0.41 and rerun the exact namespace-limit and valid LoTL/TL fixtures before future updates.
   - package: pyo3
     ecosystem: rust
     owner: ElevenID

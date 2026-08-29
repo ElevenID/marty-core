@@ -94,6 +94,7 @@ jobs:
         if: steps.affected.outputs.all == 'true'
         run: |
           cargo test --locked --workspace --exclude marty-zkp --exclude marty-bindings --features test-fixtures
+          cargo test --locked -p marty-verification --features eudi-client --lib
           cargo test --locked -p marty-bindings --no-default-features
           cargo test --locked -p marty-zkp
       - name: Test affected packages first

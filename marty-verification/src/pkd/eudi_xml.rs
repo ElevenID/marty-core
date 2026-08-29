@@ -227,6 +227,24 @@ impl LocalizedName {
 mod tests {
     use super::*;
 
+    fn minimal_trusted_list_xml(namespace_declarations: usize) -> String {
+        use std::fmt::Write;
+
+        let mut xml = String::from("<TrustServiceStatusList");
+        for index in 0..namespace_declarations {
+            write!(&mut xml, " xmlns:n{index}=\"urn:example:{index}\"").unwrap();
+        }
+        xml.push_str(
+            "><SchemeInformation>\
+             <TSLSequenceNumber>1</TSLSequenceNumber>\
+             <SchemeTerritory>EU</SchemeTerritory>\
+             <ListIssueDateTime>2026-08-29T00:00:00Z</ListIssueDateTime>\
+             <TSLType>urn:example:lotl</TSLType>\
+             </SchemeInformation></TrustServiceStatusList>",
+        );
+        xml
+    }
+
     #[test]
     fn test_localized_name_best_text() {
         let names = vec![
@@ -251,5 +269,22 @@ mod tests {
         }];
 
         assert_eq!(LocalizedName::get_best_text(&names), "Deutscher Name");
+    }
+
+    #[test]
+    fn serde_path_enforces_namespace_declaration_limit() {
+        let at_limit: TrustServiceStatusList =
+            quick_xml::de::from_str(&minimal_trusted_list_xml(256)).unwrap();
+        assert_eq!(at_limit.scheme_information.sequence_number, 1);
+
+        let error =
+            quick_xml::de::from_str::<TrustServiceStatusList>(&minimal_trusted_list_xml(257))
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("more than 256 namespace bindings"),
+            "unexpected namespace-limit error: {error}"
+        );
     }
 }
