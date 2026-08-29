@@ -12,6 +12,25 @@ const CANVAS_OPENID_CONFIGURATION_PATH: &str = "/.well-known/openid-configuratio
 const MAX_OPENID_CONFIGURATION_BYTES: u64 = 1024 * 1024;
 const MAX_JWKS_BYTES: u64 = 1024 * 1024;
 
+pub const CANVAS_LTI_TRUST_HOSTED_GLOBAL: &str = "hosted_global";
+pub const CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN: &str = "self_managed_same_origin";
+
+/// Server-owned Canvas LTI endpoints derived from an approved trust profile.
+///
+/// Management callers must never be able to supply these endpoints directly:
+/// hosted Canvas uses Instructure's environment-specific global endpoints,
+/// while a self-managed installation is accepted only through an exact origin
+/// allow-list match.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CanvasLtiTrustProfile {
+    pub trust_profile: String,
+    pub environment: String,
+    pub issuer: String,
+    pub authorization_endpoint: String,
+    pub jwks_uri: String,
+    pub token_endpoint: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasLtiPlatformProbe {
     pub canvas_base_url: String,
@@ -290,6 +309,116 @@ pub fn normalize_canvas_base_url(
     allow_http_localhost: bool,
 ) -> Oid4vciResult<String> {
     normalize_url(base_url, allow_private_networks, allow_http_localhost, true)
+}
+
+/// Normalize an HTTPS Canvas origin without accepting paths, credentials, or
+/// ambient URL components. Private origins are permitted here because trust is
+/// established separately through an exact operator allow-list.
+pub fn normalize_canvas_https_origin(origin: &str) -> Oid4vciResult<String> {
+    let parsed = Url::parse(origin.trim())?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || !matches!(parsed.path(), "" | "/")
+    {
+        return Err(invalid_request(
+            "Canvas origins must use HTTPS without credentials, paths, queries, or fragments",
+        ));
+    }
+    let hostname = parsed
+        .host_str()
+        .expect("host presence was checked")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if hostname.is_empty() {
+        return Err(invalid_request("Canvas origins must include a host"));
+    }
+    let host = if hostname.contains(':') {
+        format!("[{hostname}]")
+    } else {
+        hostname
+    };
+    let port = parsed
+        .port()
+        .filter(|port| *port != 443)
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Ok(format!("https://{host}{port}"))
+}
+
+/// Derive the only endpoints accepted for a persisted Canvas LTI trust mode.
+/// Invalid allow-list entries are ignored so malformed operator configuration
+/// can never broaden trust.
+pub fn canvas_lti_trust_profile(
+    canvas_origin: &str,
+    trust_profile: &str,
+    self_managed_origin_allowlist: &[String],
+) -> Oid4vciResult<CanvasLtiTrustProfile> {
+    let normalized_origin = normalize_canvas_https_origin(canvas_origin)?;
+    match trust_profile.trim() {
+        CANVAS_LTI_TRUST_HOSTED_GLOBAL => hosted_canvas_lti_profile(&normalized_origin),
+        CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN => {
+            let approved = self_managed_origin_allowlist.iter().any(|candidate| {
+                normalize_canvas_https_origin(candidate)
+                    .is_ok_and(|candidate| candidate == normalized_origin)
+            });
+            if !approved {
+                return Err(invalid_request(
+                    "Self-managed Canvas LTI trust requires an exact origin allow-list entry",
+                ));
+            }
+            Ok(CanvasLtiTrustProfile {
+                trust_profile: CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN.to_owned(),
+                environment: "self_managed".to_owned(),
+                issuer: normalized_origin.clone(),
+                authorization_endpoint: format!("{normalized_origin}/api/lti/authorize_redirect"),
+                jwks_uri: format!("{normalized_origin}/api/lti/security/jwks"),
+                token_endpoint: format!("{normalized_origin}/login/oauth2/token"),
+            })
+        }
+        _ => Err(invalid_request("Canvas LTI trust profile is unsupported")),
+    }
+}
+
+fn hosted_canvas_lti_profile(normalized_origin: &str) -> Oid4vciResult<CanvasLtiTrustProfile> {
+    let parsed = Url::parse(normalized_origin)?;
+    let hostname = parsed
+        .host_str()
+        .ok_or_else(|| invalid_request("Canvas origins must include a host"))?;
+    let (environment, issuer, sso_origin) = if hostname == "canvas.beta.instructure.com"
+        || hostname.ends_with(".beta.instructure.com")
+    {
+        (
+            "beta",
+            "https://canvas.beta.instructure.com",
+            "https://sso.beta.canvaslms.com",
+        )
+    } else if hostname == "canvas.test.instructure.com"
+        || hostname.ends_with(".test.instructure.com")
+    {
+        (
+            "test",
+            "https://canvas.test.instructure.com",
+            "https://sso.test.canvaslms.com",
+        )
+    } else {
+        (
+            "production",
+            "https://canvas.instructure.com",
+            "https://sso.canvaslms.com",
+        )
+    };
+    Ok(CanvasLtiTrustProfile {
+        trust_profile: CANVAS_LTI_TRUST_HOSTED_GLOBAL.to_owned(),
+        environment: environment.to_owned(),
+        issuer: issuer.to_owned(),
+        authorization_endpoint: format!("{sso_origin}/api/lti/authorize_redirect"),
+        jwks_uri: format!("{sso_origin}/api/lti/security/jwks"),
+        token_endpoint: format!("{normalized_origin}/login/oauth2/token"),
+    })
 }
 
 async fn fetch_limited_json(
@@ -584,6 +713,102 @@ mod tests {
         let err =
             normalize_canvas_base_url("https://canvas.example.edu/oidc", false, false).unwrap_err();
         assert!(err.to_string().contains("without a path segment"));
+    }
+
+    #[test]
+    fn hosted_trust_derives_environment_owned_endpoints() {
+        for (origin, environment, issuer, sso_origin) in [
+            (
+                "https://school.instructure.com",
+                "production",
+                "https://canvas.instructure.com",
+                "https://sso.canvaslms.com",
+            ),
+            (
+                "https://school.beta.instructure.com",
+                "beta",
+                "https://canvas.beta.instructure.com",
+                "https://sso.beta.canvaslms.com",
+            ),
+            (
+                "https://school.test.instructure.com",
+                "test",
+                "https://canvas.test.instructure.com",
+                "https://sso.test.canvaslms.com",
+            ),
+        ] {
+            let profile =
+                canvas_lti_trust_profile(origin, CANVAS_LTI_TRUST_HOSTED_GLOBAL, &[]).unwrap();
+            assert_eq!(profile.environment, environment);
+            assert_eq!(profile.issuer, issuer);
+            assert_eq!(
+                profile.authorization_endpoint,
+                format!("{sso_origin}/api/lti/authorize_redirect")
+            );
+            assert_eq!(
+                profile.jwks_uri,
+                format!("{sso_origin}/api/lti/security/jwks")
+            );
+            assert_eq!(
+                profile.token_endpoint,
+                format!("{origin}/login/oauth2/token")
+            );
+        }
+    }
+
+    #[test]
+    fn hosted_environment_matching_is_suffix_bound() {
+        let profile = canvas_lti_trust_profile(
+            "https://school.beta.instructure.com.example",
+            CANVAS_LTI_TRUST_HOSTED_GLOBAL,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(profile.environment, "production");
+        assert_eq!(profile.issuer, "https://canvas.instructure.com");
+    }
+
+    #[test]
+    fn self_managed_trust_requires_an_exact_normalized_allowlist_origin() {
+        let allowlist = vec![
+            "invalid".to_owned(),
+            "https://canvas.example.edu:443/".to_owned(),
+        ];
+        let profile = canvas_lti_trust_profile(
+            "https://CANVAS.EXAMPLE.EDU",
+            CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
+            &allowlist,
+        )
+        .unwrap();
+        assert_eq!(profile.environment, "self_managed");
+        assert_eq!(profile.issuer, "https://canvas.example.edu");
+        assert_eq!(
+            profile.authorization_endpoint,
+            "https://canvas.example.edu/api/lti/authorize_redirect"
+        );
+
+        let error = canvas_lti_trust_profile(
+            "https://other.example.edu",
+            CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
+            &allowlist,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exact origin allow-list"));
+    }
+
+    #[test]
+    fn trust_origins_reject_authority_and_url_component_smuggling() {
+        for origin in [
+            "http://canvas.example.edu",
+            "https://user:secret@canvas.example.edu",
+            "https://canvas.example.edu/path",
+            "https://canvas.example.edu?issuer=evil",
+            "https://canvas.example.edu#evil",
+        ] {
+            assert!(
+                canvas_lti_trust_profile(origin, CANVAS_LTI_TRUST_HOSTED_GLOBAL, &[],).is_err()
+            );
+        }
     }
 
     #[test]
