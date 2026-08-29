@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Advance the maintained ElevenID `isomdl` pin through its reviewed serial
+  mdoc digest execution boundary while leaving Marty issuance on the existing
+  serial path.
+
 ## [0.1.61] - 2026-08-27
 
 ### Added

@@ -40,14 +40,14 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/spruceid/isomdl
-    current: "0.2.0@7a443cf6c37c8d7f11e9a767c1002684842ab5d0"
+    current: "0.2.0@17c6cc89f38b5ae1b23b4b8bbe20735f380533b8"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
     advisories: [GHSA-9c48-w39g-hm26, GHSA-4grx-2x9w-596c, GHSA-c38w-74pg-36hr, RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-10-28
-    rationale: The exact-revision ElevenID fork removes ssi-jwk 0.2.1 and rsa 0.6.1, accepts the standards-valid empty issuerSigned nameSpaces map emitted by the official OIDF wallet without weakening non-empty namespace validation, and verifies DeviceAuthentication against the exact verifier-owned CBOR session transcript bytes instead of a normalized re-encoding. It preserves upstream history and licensing, synchronizes upstream monthly through reviewed pull requests, and never auto-merges upstream changes.
+    rationale: The exact-revision ElevenID fork removes ssi-jwk 0.2.1 and rsa 0.6.1, accepts the standards-valid empty issuerSigned nameSpaces map emitted by the official OIDF wallet without weakening non-empty namespace validation, and verifies DeviceAuthentication against the exact verifier-owned CBOR session transcript bytes instead of a normalized re-encoding. The reviewed revision also provides a serial-first digest executor boundary and behavior-locked mdoc issuance planning without changing Marty's selected default route. It preserves upstream history and licensing, synchronizes upstream monthly through reviewed pull requests, and never auto-merges upstream changes.
   - package: pyo3
     ecosystem: rust
     owner: ElevenID
