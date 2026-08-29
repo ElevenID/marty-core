@@ -4242,6 +4242,7 @@ dependencies = [
  "chrono",
  "ciborium",
  "coset",
+ "criterion",
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
