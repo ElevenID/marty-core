@@ -20,7 +20,7 @@ eudi = []           # EU Digital Identity verification
 python = ["pyo3", "marty-crypto/keygen", "marty-crypto/pkcs12"]   # Python bindings
 aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka", "ldap3"]
-eudi-client = ["reqwest", "tokio", "moka", "quick-xml"]
+eudi-client = ["reqwest", "reqwest/stream", "tokio", "moka", "quick-xml"]
 cert-builder = ["marty-crypto/cert-builder"]   # Explicit certificate building utilities for Python bindings
 authority-issuance = ["csca", "marty-crypto/sod-builder"] # CSCA/DSC generation and passport personalization
 cross-validation = []  # OpenSSL cross-validation tests
@@ -104,7 +104,7 @@ tokio = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 moka = { workspace = true, optional = true }
 ldap3 = { version = "0.12", optional = true, default-features = false, features = ["sync", "tls-rustls-ring"] }
-quick-xml = { version = "0.37", features = ["serialize"], optional = true }
+quick-xml = { version = "0.41", features = ["serialize"], optional = true }
 
 # Optional Python bindings
 pyo3 = { workspace = true, optional = true }
