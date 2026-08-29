@@ -212,7 +212,36 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
         None => format!("urn:uuid:{}", uuid::Uuid::new_v4()),
     };
     let now = chrono::Utc::now();
+    let issuer_claims = claims
+        .claims
+        .iter()
+        .filter(|(claim_name, _)| claim_name.as_str() != MDOC_X5C_CLAIM_KEY)
+        .map(|(claim_name, claim_value)| (claim_name.as_str(), claim_value));
 
+    prepare_mdoc_with_inputs(
+        signer,
+        claims,
+        credential_id,
+        holder_public_jwk,
+        now,
+        issuer_claims,
+        || rand::thread_rng().gen(),
+    )
+}
+
+/// Prepare an mdoc from an already ordered claim plan and a caller-owned salt
+/// source. Production supplies its existing `HashMap` iteration order, current
+/// time, random salts, and credential ID; tests can replay the exact same path
+/// with immutable inputs.
+fn prepare_mdoc_with_inputs<'a>(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    credential_id: String,
+    holder_public_jwk: Option<&serde_json::Value>,
+    now: chrono::DateTime<chrono::Utc>,
+    issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
+    mut next_salt: impl FnMut() -> [u8; 32],
+) -> Oid4vciResult<PreparedMdoc> {
     let doc_type = claims
         .mdoc_doctype
         .as_deref()
@@ -227,14 +256,9 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
     let mut issuer_signed_items = Vec::new();
     let mut value_digests = Vec::new();
 
-    for (i, (claim_name, claim_value)) in claims
-        .claims
-        .iter()
-        .filter(|(claim_name, _)| claim_name.as_str() != MDOC_X5C_CLAIM_KEY)
-        .enumerate()
-    {
+    for (i, (claim_name, claim_value)) in issuer_claims.into_iter().enumerate() {
         let digest_id = i as u64;
-        let salt: [u8; 32] = rand::thread_rng().gen();
+        let salt = next_salt();
         let (issuer_signed_item_bytes, digest) =
             build_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
         value_digests.push((digest_id, digest));
@@ -480,18 +504,17 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
         ));
     }
 
-    let (curve_id, coordinate_len) = match object.get("crv").and_then(serde_json::Value::as_str) {
-        Some("P-256") => (1i64, 32usize),
-        Some("P-384") => (2i64, 48usize),
-        Some(curve) => {
+    let curve = object
+        .get("crv")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Oid4vciError::MdocError("mDoc holder public JWK is missing crv".into()))?;
+    let (curve_id, coordinate_len) = match curve {
+        "P-256" => (1i64, 32usize),
+        "P-384" => (2i64, 48usize),
+        curve => {
             return Err(Oid4vciError::MdocError(format!(
                 "unsupported mDoc holder JWK curve: {curve}"
             )))
-        }
-        None => {
-            return Err(Oid4vciError::MdocError(
-                "mDoc holder public JWK is missing crv".into(),
-            ))
         }
     };
 
@@ -517,6 +540,21 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
 
     let x = decode_coordinate("x")?;
     let y = decode_coordinate("y")?;
+    let mut encoded_point = Vec::with_capacity(1 + 2 * coordinate_len);
+    encoded_point.push(0x04);
+    encoded_point.extend_from_slice(&x);
+    encoded_point.extend_from_slice(&y);
+    let is_valid_point = match curve {
+        "P-256" => p256::PublicKey::from_sec1_bytes(&encoded_point).is_ok(),
+        "P-384" => p384::PublicKey::from_sec1_bytes(&encoded_point).is_ok(),
+        _ => unreachable!("supported curves were checked above"),
+    };
+    if !is_valid_point {
+        return Err(Oid4vciError::MdocError(format!(
+            "mDoc holder public JWK coordinates are not a valid {curve} point"
+        )));
+    }
+
     Ok(CborValue::Map(vec![
         (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
         (
@@ -854,6 +892,11 @@ mod tests {
             else {
                 panic!("namespace digest collection must be a CBOR map");
             };
+            assert_eq!(
+                expected_digests.len(),
+                items.len(),
+                "each issued item must have exactly one valueDigest",
+            );
             for tagged_item in items.iter() {
                 let digest_id = serde_json::to_value(tagged_item.as_ref().digest_id)
                     .unwrap()
@@ -919,12 +962,25 @@ mod tests {
 
     #[test]
     fn test_issuer_signed_item_digest_commits_tagged_wrapper() {
-        let salt: [u8; 32] = rand::thread_rng().gen();
+        let salt: [u8; 32] = std::array::from_fn(|index| index as u8);
         let (tagged_item, digest) =
             build_issuer_signed_item_bytes(3, &salt, "family_name", &serde_json::json!("Smith"))
                 .unwrap();
 
         let encoded_wrapper = cbor_encode(&tagged_item).unwrap();
+        assert_eq!(
+            base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                &encoded_wrapper,
+            ),
+            "2BhYZaRoZGlnZXN0SUQDZnJhbmRvbVggAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh9xZWxlbWVudElkZW50aWZpZXJrZmFtaWx5X25hbWVsZWxlbWVudFZhbHVlZVNtaXRo",
+            "IssuerSignedItemBytes encoding is part of the signed digest contract",
+        );
+        assert_eq!(
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &digest,),
+            "9Nmg3ahEZR98_UVEmU5kjPtv4wltp1h5taEr0C2LMvA",
+            "MSO valueDigest must remain byte-for-byte stable for the fixture",
+        );
         assert_eq!(Sha256::digest(encoded_wrapper).as_slice(), digest);
 
         let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, wrapped_item) = tagged_item else {
@@ -934,6 +990,120 @@ mod tests {
             panic!("IssuerSignedItemBytes must contain an encoded CBOR byte string");
         };
         assert_ne!(Sha256::digest(encoded_item).as_slice(), digest);
+    }
+
+    #[test]
+    fn test_split_mdoc_signing_matches_deterministic_byte_fixture() {
+        let key = test_p256_key();
+        let certificate = [0x30, 0x82, 0x01, 0x0a];
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: [
+                ("family_name".into(), serde_json::json!("Smith")),
+                ("given_name".into(), serde_json::json!("Alice")),
+                ("birth_date".into(), serde_json::json!("1990-01-15")),
+                (
+                    MDOC_X5C_CLAIM_KEY.into(),
+                    serde_json::json!([base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        certificate,
+                    )]),
+                ),
+            ]
+            .into(),
+            expiration_seconds: Some(365 * 86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let holder_public_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "alg": "ES256",
+            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+        });
+        let claim_order = ["given_name", "birth_date", "family_name"];
+        let ordered_claims: Vec<_> = claim_order
+            .iter()
+            .map(|name| (*name, claims.claims.get(*name).unwrap()))
+            .collect();
+        let salts = [
+            std::array::from_fn(|index| index as u8),
+            std::array::from_fn(|index| 0x80 + index as u8),
+            std::array::from_fn(|index| 0xff - index as u8),
+        ];
+        let expected_items: Vec<_> = ordered_claims
+            .iter()
+            .enumerate()
+            .map(|(digest_id, (name, value))| {
+                build_issuer_signed_item_bytes(digest_id as u64, &salts[digest_id], name, value)
+                    .unwrap()
+                    .0
+            })
+            .collect();
+        let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut salt_tape = salts.into_iter();
+        let prepared = prepare_mdoc_with_inputs(
+            &key,
+            &claims,
+            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
+            Some(&holder_public_jwk),
+            signed_at,
+            ordered_claims.iter().map(|(name, value)| (*name, *value)),
+            || salt_tape.next().expect("one salt per issued claim"),
+        )
+        .unwrap();
+        assert!(salt_tape.next().is_none(), "all planned salts must be used");
+        assert_eq!(prepared.issuer_signed_items, expected_items);
+
+        let recomputed_tbs = CoseSign1Builder::new()
+            .protected(prepared.protected_header.clone())
+            .unprotected(prepared.unprotected_header.clone())
+            .payload(prepared.mobile_security_object_bytes.clone())
+            .build()
+            .tbs_data(&[]);
+        assert_eq!(prepared.tbs_data, recomputed_tbs);
+
+        let encode = |bytes: &[u8]| {
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
+        };
+        assert_eq!(
+            encode(&prepared.mobile_security_object_bytes),
+            "2BhZAZ2mZ3ZlcnNpb25jMS4wb2RpZ2VzdEFsZ29yaXRobWdTSEEtMjU2bHZhbHVlRGlnZXN0c6Fxb3JnLmlzby4xODAxMy41LjGjAFggCrd9jjrGFalL2zBUAN84dv7Ll7Fe6QSKCHoexeMIVRgBWCDWaKsW1N5cBKM9W_ak9Rzgy4LYycYoA3q_Arww2-55IAJYIF-JSo0GE0_QW8CWhGErxpkDDd4tztzX--uMhqlR_v07Z2RvY1R5cGV1b3JnLmlzby4xODAxMy41LjEubURMbHZhbGlkaXR5SW5mb6Nmc2lnbmVkwHQyMDI2LTA4LTI5VDEyOjM0OjU2Wml2YWxpZEZyb23AdDIwMjYtMDgtMjlUMTI6MzQ6NTZaanZhbGlkVW50aWzAdDIwMjctMDgtMjlUMTI6MzQ6NTZabWRldmljZUtleUluZm-haWRldmljZUtleaQBAiABIVggaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpYiWCBP40Li_hp_m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q",
+            "MobileSecurityObjectBytes must remain stable for the replay fixture",
+        );
+        assert_eq!(
+            encode(&prepared.tbs_data),
+            "hGpTaWduYXR1cmUxQ6EBJkBZAaLYGFkBnaZndmVyc2lvbmMxLjBvZGlnZXN0QWxnb3JpdGhtZ1NIQS0yNTZsdmFsdWVEaWdlc3RzoXFvcmcuaXNvLjE4MDEzLjUuMaMAWCAKt32OOsYVqUvbMFQA3zh2_suXsV7pBIoIeh7F4whVGAFYINZoqxbU3lwEoz1b9qT1HODLgtjJxigDer8CvDDb7nkgAlggX4lKjQYTT9BbwJaEYSvGmQMN3i3O3Nf764yGqVH-_TtnZG9jVHlwZXVvcmcuaXNvLjE4MDEzLjUuMS5tRExsdmFsaWRpdHlJbmZvo2ZzaWduZWTAdDIwMjYtMDgtMjlUMTI6MzQ6NTZaaXZhbGlkRnJvbcB0MjAyNi0wOC0yOVQxMjozNDo1NlpqdmFsaWRVbnRpbMB0MjAyNy0wOC0yOVQxMjozNDo1NlptZGV2aWNlS2V5SW5mb6FpZGV2aWNlS2V5pAECIAEhWCBrF9Hy4SxCR_i85uVjpEDydwN9gS3rM6D0oTlF2JjCliJYIE_jQuL-Gn-bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1",
+            "COSE Sig_structure bytes must remain stable for remote signing",
+        );
+
+        let signed = assemble_mdoc(prepared, &[0xa5; 64]).unwrap();
+        let SignedCredential::MsoMdoc {
+            issuer_signed_b64,
+            credential_id,
+        } = signed
+        else {
+            panic!("Expected MsoMdoc");
+        };
+
+        assert_eq!(
+            issuer_signed_b64,
+            "ompuYW1lU3BhY2VzoXFvcmcuaXNvLjE4MDEzLjUuMYPYGFhkpGhkaWdlc3RJRABmcmFuZG9tWCAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eH3FlbGVtZW50SWRlbnRpZmllcmpnaXZlbl9uYW1lbGVsZW1lbnRWYWx1ZWVBbGljZdgYWGykaGRpZ2VzdElEAWZyYW5kb21YIICBgoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6fcWVsZW1lbnRJZGVudGlmaWVyamJpcnRoX2RhdGVsZWxlbWVudFZhbHVl2QPsajE5OTAtMDEtMTXYGFhlpGhkaWdlc3RJRAJmcmFuZG9tWCD__v38-_r5-Pf29fTz8vHw7-7t7Ovq6ejn5uXk4-Lh4HFlbGVtZW50SWRlbnRpZmllcmtmYW1pbHlfbmFtZWxlbGVtZW50VmFsdWVlU21pdGhqaXNzdWVyQXV0aIRDoQEmoRghRDCCAQpZAaLYGFkBnaZndmVyc2lvbmMxLjBvZGlnZXN0QWxnb3JpdGhtZ1NIQS0yNTZsdmFsdWVEaWdlc3RzoXFvcmcuaXNvLjE4MDEzLjUuMaMAWCAKt32OOsYVqUvbMFQA3zh2_suXsV7pBIoIeh7F4whVGAFYINZoqxbU3lwEoz1b9qT1HODLgtjJxigDer8CvDDb7nkgAlggX4lKjQYTT9BbwJaEYSvGmQMN3i3O3Nf764yGqVH-_TtnZG9jVHlwZXVvcmcuaXNvLjE4MDEzLjUuMS5tRExsdmFsaWRpdHlJbmZvo2ZzaWduZWTAdDIwMjYtMDgtMjlUMTI6MzQ6NTZaaXZhbGlkRnJvbcB0MjAyNi0wOC0yOVQxMjozNDo1NlpqdmFsaWRVbnRpbMB0MjAyNy0wOC0yOVQxMjozNDo1NlptZGV2aWNlS2V5SW5mb6FpZGV2aWNlS2V5pAECIAEhWCBrF9Hy4SxCR_i85uVjpEDydwN9gS3rM6D0oTlF2JjCliJYIE_jQuL-Gn-bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1WEClpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWl",
+            "IssuerSigned assembly must preserve the planned item order",
+        );
+        assert_eq!(
+            credential_id,
+            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"
+        );
     }
 
     #[test]
@@ -1070,8 +1240,16 @@ mod tests {
             w3c_context: vec![],
             w3c_types: vec![],
         };
-        let x = vec![0x11; 32];
-        let y = vec![0x22; 32];
+        let x = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+        )
+        .unwrap();
+        let y = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+        )
+        .unwrap();
         let holder_jwk = serde_json::json!({
             "kty": "EC",
             "crv": "P-256",
@@ -1084,10 +1262,7 @@ mod tests {
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD,
                 &y,
             ),
-            "d": base64::Engine::encode(
-                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                [0x33; 32],
-            ),
+            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
         });
 
         let prepared =
@@ -1164,6 +1339,73 @@ mod tests {
                 .expect("missing y must fail");
 
         assert!(error.to_string().contains("missing y"));
+    }
+
+    #[test]
+    fn test_prepare_mdoc_rejects_off_curve_holder_public_jwk() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: None,
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: Default::default(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+
+        for (curve, coordinate_len) in [("P-256", 32), ("P-384", 48)] {
+            let invalid = serde_json::json!({
+                "kty": "EC",
+                "crv": curve,
+                "x": base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    vec![0x11; coordinate_len],
+                ),
+                "y": base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    vec![0x22; coordinate_len],
+                ),
+            });
+
+            let error =
+                prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&invalid))
+                    .err()
+                    .expect("off-curve holder key must fail");
+
+            assert!(error.to_string().contains("not a valid"));
+        }
+    }
+
+    #[test]
+    fn test_prepare_mdoc_accepts_valid_p384_holder_public_jwk() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: None,
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: Default::default(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let holder_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-384",
+            "x": "qofKIr6LBTeOscce8yCtdG4dO2KLp5uYWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3",
+            "y": "NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f",
+        });
+
+        prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&holder_jwk))
+            .expect("valid P-384 holder key must prepare");
     }
 
     #[test]

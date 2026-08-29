@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Advance the maintained ElevenID `isomdl` pin through its reviewed serial
+  mdoc digest boundary and optional bounded native executor while leaving
+  Marty issuance on the existing serial path and keeping `parallel` disabled.
+
+### Security
+
+- Reject mdoc holder P-256 and P-384 JWK coordinates that are not valid points
+  on their declared curves before issuing a device-bound credential.
+
 ## [0.1.61] - 2026-08-27
 
 ### Added
