@@ -1576,44 +1576,9 @@ fn oid4vci_prepare_mdoc(
     credential_id: Option<&str>,
     holder_jwk_json: Option<&str>,
 ) -> PyResult<PreparedMdocForRemoteSigning> {
-    use marty_oid4vci::signer::CredentialSigner;
-    use marty_oid4vci::types::{CredentialClaims, SigningAlgorithm};
-
     let claims = serde_json::from_str(claims_json).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid claims JSON: {e}"))
     })?;
-    let algorithm = match algorithm {
-        "ES256" => SigningAlgorithm::ES256,
-        "ES384" => SigningAlgorithm::ES384,
-        _ => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "mDoc remote signing supports ES256 and ES384 only",
-            ))
-        }
-    };
-
-    #[derive(Debug)]
-    struct MetadataSigner {
-        issuer_id: String,
-        algorithm: SigningAlgorithm,
-    }
-    impl CredentialSigner for MetadataSigner {
-        fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-            Err(marty_oid4vci::Oid4vciError::SigningError(
-                "metadata-only mDoc signer cannot sign".to_string(),
-            ))
-        }
-        fn algorithm(&self) -> SigningAlgorithm {
-            self.algorithm
-        }
-        fn issuer_id(&self) -> &str {
-            &self.issuer_id
-        }
-        fn kid_url(&self) -> String {
-            self.issuer_id.clone()
-        }
-    }
-
     let holder_public_jwk = holder_jwk_json
         .map(serde_json::from_str)
         .transpose()
@@ -1622,28 +1587,19 @@ fn oid4vci_prepare_mdoc(
                 "Invalid holder public JWK JSON: {e}"
             ))
         })?;
-    let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc_with_credential_id_and_device_key(
-        &MetadataSigner {
+    let prepared = marty_oid4vci::remote_credential::prepare_remote_mdoc(
+        marty_oid4vci::remote_credential::RemoteMdocRequest {
             issuer_id: issuer_id.to_owned(),
-            algorithm,
-        },
-        &CredentialClaims {
-            subject_id: None,
+            algorithm: algorithm.to_owned(),
             credential_type: credential_type.to_owned(),
+            namespace: namespace.to_owned(),
             claims,
             expiration_seconds,
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: Some(namespace.to_owned()),
-            mdoc_doctype: Some(credential_type.to_owned()),
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
+            credential_id: credential_id.map(str::to_owned),
+            holder_jwk: holder_public_jwk,
         },
-        credential_id,
-        holder_public_jwk.as_ref(),
     )
-    .map_err(to_pyerr)?;
+    .map_err(remote_credential::remote_pyerr)?;
     Ok(PreparedMdocForRemoteSigning {
         inner: Some(prepared),
     })

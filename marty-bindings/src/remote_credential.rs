@@ -1,64 +1,19 @@
 use base64::Engine;
-use marty_oid4vci::signer::CredentialSigner;
-use marty_oid4vci::types::{
-    CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm,
+use marty_oid4vci::{
+    remote_credential::{
+        prepare_remote_jwt_vc, prepare_remote_sd_jwt, RemoteJwtVcRequest, RemoteSdJwtRequest,
+    },
+    types::SignedCredential,
 };
 use pyo3::prelude::*;
 
-#[derive(Debug)]
-struct MetadataSigner {
-    issuer_id: String,
-    verification_method_id: String,
-    algorithm: SigningAlgorithm,
-}
-
-impl CredentialSigner for MetadataSigner {
-    fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-        Err(marty_oid4vci::Oid4vciError::SigningError(
-            "metadata-only remote signer cannot sign".to_string(),
-        ))
-    }
-
-    fn algorithm(&self) -> SigningAlgorithm {
-        self.algorithm
-    }
-
-    fn issuer_id(&self) -> &str {
-        &self.issuer_id
-    }
-
-    fn kid_url(&self) -> String {
-        self.verification_method_id.clone()
-    }
-}
-
-fn metadata_signer(
-    issuer_id: &str,
-    verification_method_id: &str,
-    algorithm: &str,
-) -> PyResult<MetadataSigner> {
-    if !verification_method_id.starts_with(&format!("{issuer_id}#")) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "verification_method_id must identify a key controlled by the issuer DID",
-        ));
-    }
-    let algorithm = match algorithm {
-        "ES256" => SigningAlgorithm::ES256,
-        "EdDSA" => SigningAlgorithm::EdDSA,
-        "ES256K" => SigningAlgorithm::ES256K,
-        "ES384" => SigningAlgorithm::ES384,
-        "RS256" => SigningAlgorithm::RS256,
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unknown algorithm: {algorithm}"
-            )))
+pub(crate) fn remote_pyerr(error: marty_oid4vci::Oid4vciError) -> PyErr {
+    match error {
+        marty_oid4vci::Oid4vciError::InvalidRequest(detail) => {
+            pyo3::exceptions::PyValueError::new_err(detail)
         }
-    };
-    Ok(MetadataSigner {
-        issuer_id: issuer_id.to_string(),
-        verification_method_id: verification_method_id.to_string(),
-        algorithm,
-    })
+        other => pyo3::exceptions::PyRuntimeError::new_err(other.to_string()),
+    }
 }
 
 enum PreparedCredential {
@@ -93,29 +48,6 @@ impl PreparedRemoteCredential {
                 "credential preparation has already been assembled",
             )),
         }
-    }
-}
-
-fn credential_claims(
-    subject_id: Option<&str>,
-    credential_type: &str,
-    claims: std::collections::HashMap<String, serde_json::Value>,
-    expiration_seconds: Option<i64>,
-    selective_disclosure_claims: Vec<String>,
-    credential_payload_format: CredentialPayloadFormat,
-) -> CredentialClaims {
-    CredentialClaims {
-        subject_id: subject_id.map(str::to_string),
-        credential_type: credential_type.to_string(),
-        claims,
-        expiration_seconds,
-        selective_disclosure_claims,
-        mdoc_namespace: None,
-        mdoc_doctype: None,
-        zk_predicate_claims: vec![],
-        credential_payload_format,
-        w3c_context: vec![],
-        w3c_types: vec![],
     }
 }
 
@@ -167,71 +99,27 @@ fn oid4vci_prepare_sd_jwt(
     holder_jwk_json: Option<&str>,
     issuer_certificate_chain: Vec<String>,
 ) -> PyResult<PreparedRemoteCredential> {
-    use marty_oid4vci::formats::sd_jwt::{prepare_sd_jwt_with_options, SdJwtPreparationOptions};
-
-    let signer = metadata_signer(issuer_id, verification_method_id, algorithm)?;
-    let confirmation = match (subject_id, holder_jwk_json) {
-        (Some(_), Some(holder_json)) => {
-            let mut holder: serde_json::Value =
-                serde_json::from_str(holder_json).map_err(|error| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "Invalid holder JWK JSON: {error}"
-                    ))
-                })?;
-            let object = holder.as_object_mut().ok_or_else(|| {
-                pyo3::exceptions::PyValueError::new_err("holder JWK must be an object")
-            })?;
-            for secret in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
-                object.remove(secret);
-            }
-            Some(serde_json::json!({"jwk": holder}))
-        }
-        (Some(subject), None) => Some(serde_json::json!({"kid": subject})),
-        (None, Some(_)) => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "holder_jwk_json requires subject_id",
-            ));
-        }
-        (None, None) => None,
-    };
-    if issuer_certificate_chain
-        .iter()
-        .any(|certificate| certificate.trim().is_empty())
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "issuer certificate chain contains an invalid x5c entry",
-        ));
-    }
-    if credential_id.is_some_and(|value| value.trim().is_empty()) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "credential_id cannot be empty",
-        ));
-    }
-
-    let claims = credential_claims(
-        subject_id,
-        credential_type,
-        parse_claims(claims_json)?,
+    let holder_jwk = holder_jwk_json
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid holder JWK JSON: {error}"))
+        })?;
+    let prepared = prepare_remote_sd_jwt(RemoteSdJwtRequest {
+        issuer_id: issuer_id.to_owned(),
+        verification_method_id: verification_method_id.to_owned(),
+        algorithm: algorithm.to_owned(),
+        subject_id: subject_id.map(str::to_owned),
+        credential_type: credential_type.to_owned(),
+        claims: parse_claims(claims_json)?,
         expiration_seconds,
         selective_disclosure_claims,
-        CredentialPayloadFormat::IetfSdJwt,
-    );
-    let prepared = prepare_sd_jwt_with_options(
-        &signer,
-        &claims,
-        SdJwtPreparationOptions {
-            credential_id: credential_id.map(str::to_string),
-            typ: Some(if credential_format == Some("dc+sd-jwt") {
-                "dc+sd-jwt".to_string()
-            } else {
-                "vc+sd-jwt".to_string()
-            }),
-            confirmation,
-            x5c: issuer_certificate_chain,
-            include_nbf: true,
-        },
-    )
-    .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        credential_format: credential_format.map(str::to_owned),
+        credential_id: credential_id.map(str::to_owned),
+        holder_jwk,
+        issuer_certificate_chain,
+    })
+    .map_err(remote_pyerr)?;
     Ok(PreparedRemoteCredential {
         inner: Some(PreparedCredential::SdJwt(prepared)),
     })
@@ -264,21 +152,6 @@ fn oid4vci_assemble_sd_jwt(
     }
 }
 
-fn explicit_subject_identifies_holder(subject: &serde_json::Value, holder: &str) -> bool {
-    match subject {
-        serde_json::Value::Object(object) => {
-            object.get("id").and_then(serde_json::Value::as_str) == Some(holder)
-        }
-        serde_json::Value::Array(subjects) => subjects.iter().any(|item| {
-            item.as_object()
-                .and_then(|object| object.get("id"))
-                .and_then(serde_json::Value::as_str)
-                == Some(holder)
-        }),
-        _ => false,
-    }
-}
-
 /// Prepare a VCDM v2 JWT-VC while retaining protocol assembly in Rust.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
@@ -308,13 +181,6 @@ fn oid4vci_prepare_jwt_vc(
     credential_profile: Option<&str>,
     achievement_id: Option<&str>,
 ) -> PyResult<PreparedRemoteCredential> {
-    use marty_oid4vci::formats::jwt_vc::{
-        apply_open_badge_v3_profile, prepare_jwt_vc_with_options, JwtVcPreparationOptions,
-    };
-
-    let signer = metadata_signer(issuer_id, verification_method_id, algorithm)?;
-    let mut claims = parse_claims(claims_json)?;
-    let credential_status = claims.remove("credentialStatus");
     let explicit_subject = credential_subject_json
         .map(serde_json::from_str::<serde_json::Value>)
         .transpose()
@@ -323,81 +189,20 @@ fn oid4vci_prepare_jwt_vc(
                 "Invalid credential subject JSON: {error}"
             ))
         })?;
-    if explicit_subject.is_some() && !claims.is_empty() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "explicit credential_subject cannot be combined with subject claims",
-        ));
-    }
-    if let Some(subject) = explicit_subject.as_ref() {
-        let valid = match subject {
-            serde_json::Value::Object(object) => !object.is_empty(),
-            serde_json::Value::Array(items) => {
-                !items.is_empty()
-                    && items
-                        .iter()
-                        .all(|item| item.as_object().is_some_and(|object| !object.is_empty()))
-            }
-            _ => false,
-        };
-        if !valid {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "credential_subject must be a non-empty object or list of non-empty objects",
-            ));
-        }
-    }
-    if credential_id.is_some_and(|value| value.trim().is_empty()) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "credential_id cannot be empty",
-        ));
-    }
-    let include_subject_claim = subject_id.is_some_and(|holder| {
-        explicit_subject
-            .as_ref()
-            .is_none_or(|subject| explicit_subject_identifies_holder(subject, holder))
-    });
-
-    let mut claims = credential_claims(
-        subject_id,
-        credential_type,
-        claims,
+    let prepared = prepare_remote_jwt_vc(RemoteJwtVcRequest {
+        issuer_id: issuer_id.to_owned(),
+        verification_method_id: verification_method_id.to_owned(),
+        algorithm: algorithm.to_owned(),
+        subject_id: subject_id.map(str::to_owned),
+        credential_type: credential_type.to_owned(),
+        claims: parse_claims(claims_json)?,
         expiration_seconds,
-        vec![],
-        CredentialPayloadFormat::W3cVcdmV2JwtVc,
-    );
-    let mut options = JwtVcPreparationOptions {
-        credential_id: credential_id.map(str::to_string),
+        credential_id: credential_id.map(str::to_owned),
         credential_subject: explicit_subject,
-        credential_status,
-        include_subject_claim,
-        include_vc_id: false,
-        include_nbf: true,
-    };
-    match credential_profile {
-        Some("open_badge_v3") => {
-            let achievement_id = achievement_id
-                .filter(|value| !value.trim().is_empty())
-                .ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(
-                        "open_badge_v3 profile requires achievement_id",
-                    )
-                })?;
-            apply_open_badge_v3_profile(&mut claims, &mut options, achievement_id)
-                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-        }
-        Some(profile) => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unsupported JWT-VC credential profile: {profile}"
-            )));
-        }
-        None if achievement_id.is_some() => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "achievement_id is only valid with the open_badge_v3 profile",
-            ));
-        }
-        None => {}
-    }
-    let prepared = prepare_jwt_vc_with_options(&signer, &claims, options)
-        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        credential_profile: credential_profile.map(str::to_owned),
+        achievement_id: achievement_id.map(str::to_owned),
+    })
+    .map_err(remote_pyerr)?;
     Ok(PreparedRemoteCredential {
         inner: Some(PreparedCredential::JwtVc(prepared)),
     })
