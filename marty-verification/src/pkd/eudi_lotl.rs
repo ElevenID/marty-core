@@ -20,6 +20,17 @@ use crate::pkd::eudi_xml::{LocalizedName, TrustServiceStatusList};
 /// Default EU LoTL URL.
 pub const DEFAULT_LOTL_URL: &str = "https://ec.europa.eu/tools/lotl/eu-lotl.xml";
 
+/// Maximum decoded size of a LoTL or member-state trusted-list XML response.
+///
+/// Trusted lists carry certificate chains and can be materially larger than
+/// ordinary registry metadata, so this limit leaves headroom while preventing
+/// an untrusted server from growing the response buffer without bound.
+#[cfg(feature = "eudi-client")]
+const MAX_TRUST_LIST_XML_BYTES: usize = 16 * 1024 * 1024;
+
+#[cfg(feature = "eudi-client")]
+const INITIAL_TRUST_LIST_XML_CAPACITY: usize = 64 * 1024;
+
 /// EUDI LoTL client for fetching trust lists.
 pub struct EudiLotlClient {
     /// LoTL root URL.
@@ -57,6 +68,54 @@ pub struct LotlSyncResult {
     pub version: String,
     /// Sync timestamp.
     pub synced_at: DateTime<Utc>,
+}
+
+#[cfg(feature = "eudi-client")]
+async fn read_bounded_xml_response(
+    response: reqwest::Response,
+    endpoint: &str,
+    list_name: &str,
+    max_bytes: usize,
+) -> VerificationResult<String> {
+    use futures::StreamExt;
+
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(VerificationError::pkd_fetch(
+            endpoint,
+            format!("{list_name} response exceeds the {max_bytes}-byte limit"),
+        ));
+    }
+
+    let initial_capacity = response
+        .content_length()
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or_default()
+        .min(max_bytes)
+        .min(INITIAL_TRUST_LIST_XML_CAPACITY);
+    let mut body = Vec::with_capacity(initial_capacity);
+    let mut chunks = response.bytes_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(|error| {
+            VerificationError::pkd_fetch(
+                endpoint,
+                format!("Failed to read {list_name} response: {error}"),
+            )
+        })?;
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(VerificationError::pkd_fetch(
+                endpoint,
+                format!("{list_name} response exceeds the {max_bytes}-byte limit"),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    // Preserve reqwest's no-charset `Response::text` behavior while keeping
+    // ownership of the bounded byte buffer.
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 impl EudiLotlClient {
@@ -111,12 +170,9 @@ impl EudiLotlClient {
             ));
         }
 
-        let xml = response.text().await.map_err(|e| {
-            VerificationError::pkd_fetch(
-                &self.lotl_url,
-                format!("Failed to read LoTL response: {}", e),
-            )
-        })?;
+        let xml =
+            read_bounded_xml_response(response, &self.lotl_url, "LoTL", MAX_TRUST_LIST_XML_BYTES)
+                .await?;
 
         self.parse_lotl_xml(&xml)
     }
@@ -215,9 +271,8 @@ impl EudiLotlClient {
             ));
         }
 
-        let xml = response.text().await.map_err(|e| {
-            VerificationError::pkd_fetch(&tl_info.url, format!("Failed to read TL response: {}", e))
-        })?;
+        let xml = read_bounded_xml_response(response, &tl_info.url, "TL", MAX_TRUST_LIST_XML_BYTES)
+            .await?;
 
         self.parse_tl_xml(&xml, member_state)
     }
@@ -499,6 +554,31 @@ impl EudiLotlClient {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "eudi-client")]
+    fn serve_raw_http_response(response: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            stream.write_all(&response).unwrap();
+        });
+
+        (format!("http://{address}/trusted-list.xml"), server)
+    }
+
+    #[cfg(feature = "eudi-client")]
+    async fn request_raw_http_response(
+        response: Vec<u8>,
+    ) -> (reqwest::Response, std::thread::JoinHandle<()>) {
+        let (url, server) = serve_raw_http_response(response);
+        let response = reqwest::Client::new().get(url).send().await.unwrap();
+        (response, server)
+    }
+
     const SAMPLE_LOTL_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
     <SchemeInformation>
@@ -653,5 +733,83 @@ mod tests {
             EudiLotlClient::parse_service_status("http://unknown.status"),
             TspStatus::Unknown
         );
+    }
+
+    #[cfg(feature = "eudi-client")]
+    #[tokio::test]
+    async fn bounded_xml_reader_accepts_response_at_limit() {
+        let body = b"0123456789abcdef";
+        let mut raw_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw_response.extend_from_slice(body);
+        let (response, server) = request_raw_http_response(raw_response).await;
+
+        let xml = read_bounded_xml_response(response, "test endpoint", "LoTL", body.len())
+            .await
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(xml, String::from_utf8_lossy(body));
+    }
+
+    #[cfg(feature = "eudi-client")]
+    #[tokio::test]
+    async fn fetch_lotl_preserves_valid_xml_behavior() {
+        let body = SAMPLE_LOTL_XML.as_bytes();
+        let mut raw_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw_response.extend_from_slice(body);
+        let (url, server) = serve_raw_http_response(raw_response);
+
+        let trusted_lists = EudiLotlClient::with_url(url).fetch_lotl().await.unwrap();
+        server.join().unwrap();
+
+        assert_eq!(trusted_lists.len(), 2);
+        assert_eq!(trusted_lists[0].scheme_territory, "DE");
+        assert_eq!(trusted_lists[1].scheme_territory, "FR");
+    }
+
+    #[cfg(feature = "eudi-client")]
+    #[tokio::test]
+    async fn bounded_xml_reader_rejects_declared_oversized_response() {
+        let body = b"0123456789abcdefg";
+        let mut raw_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        raw_response.extend_from_slice(body);
+        let (response, server) = request_raw_http_response(raw_response).await;
+
+        let error = read_bounded_xml_response(response, "test endpoint", "LoTL", body.len() - 1)
+            .await
+            .unwrap_err();
+        server.join().unwrap();
+
+        assert!(error
+            .to_string()
+            .contains("LoTL response exceeds the 16-byte limit"));
+    }
+
+    #[cfg(feature = "eudi-client")]
+    #[tokio::test]
+    async fn bounded_xml_reader_rejects_chunked_oversized_response() {
+        let raw_response = b"HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n11\r\n0123456789abcdefg\r\n0\r\n\r\n".to_vec();
+        let (response, server) = request_raw_http_response(raw_response).await;
+
+        let error = read_bounded_xml_response(response, "test endpoint", "TL", 16)
+            .await
+            .unwrap_err();
+        server.join().unwrap();
+
+        assert!(error
+            .to_string()
+            .contains("TL response exceeds the 16-byte limit"));
     }
 }
