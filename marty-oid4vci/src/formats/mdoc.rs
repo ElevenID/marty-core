@@ -504,18 +504,17 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
         ));
     }
 
-    let (curve_id, coordinate_len) = match object.get("crv").and_then(serde_json::Value::as_str) {
-        Some("P-256") => (1i64, 32usize),
-        Some("P-384") => (2i64, 48usize),
-        Some(curve) => {
+    let curve = object
+        .get("crv")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Oid4vciError::MdocError("mDoc holder public JWK is missing crv".into()))?;
+    let (curve_id, coordinate_len) = match curve {
+        "P-256" => (1i64, 32usize),
+        "P-384" => (2i64, 48usize),
+        curve => {
             return Err(Oid4vciError::MdocError(format!(
                 "unsupported mDoc holder JWK curve: {curve}"
             )))
-        }
-        None => {
-            return Err(Oid4vciError::MdocError(
-                "mDoc holder public JWK is missing crv".into(),
-            ))
         }
     };
 
@@ -541,6 +540,21 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
 
     let x = decode_coordinate("x")?;
     let y = decode_coordinate("y")?;
+    let mut encoded_point = Vec::with_capacity(1 + 2 * coordinate_len);
+    encoded_point.push(0x04);
+    encoded_point.extend_from_slice(&x);
+    encoded_point.extend_from_slice(&y);
+    let is_valid_point = match curve {
+        "P-256" => p256::PublicKey::from_sec1_bytes(&encoded_point).is_ok(),
+        "P-384" => p384::PublicKey::from_sec1_bytes(&encoded_point).is_ok(),
+        _ => unreachable!("supported curves were checked above"),
+    };
+    if !is_valid_point {
+        return Err(Oid4vciError::MdocError(format!(
+            "mDoc holder public JWK coordinates are not a valid {curve} point"
+        )));
+    }
+
     Ok(CborValue::Map(vec![
         (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
         (
@@ -1325,6 +1339,73 @@ mod tests {
                 .expect("missing y must fail");
 
         assert!(error.to_string().contains("missing y"));
+    }
+
+    #[test]
+    fn test_prepare_mdoc_rejects_off_curve_holder_public_jwk() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: None,
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: Default::default(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+
+        for (curve, coordinate_len) in [("P-256", 32), ("P-384", 48)] {
+            let invalid = serde_json::json!({
+                "kty": "EC",
+                "crv": curve,
+                "x": base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    vec![0x11; coordinate_len],
+                ),
+                "y": base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    vec![0x22; coordinate_len],
+                ),
+            });
+
+            let error =
+                prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&invalid))
+                    .err()
+                    .expect("off-curve holder key must fail");
+
+            assert!(error.to_string().contains("not a valid"));
+        }
+    }
+
+    #[test]
+    fn test_prepare_mdoc_accepts_valid_p384_holder_public_jwk() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: None,
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: Default::default(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+        let holder_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-384",
+            "x": "qofKIr6LBTeOscce8yCtdG4dO2KLp5uYWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3",
+            "y": "NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f",
+        });
+
+        prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&holder_jwk))
+            .expect("valid P-384 holder key must prepare");
     }
 
     #[test]
