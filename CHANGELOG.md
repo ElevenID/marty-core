@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reject mdoc holder P-256 and P-384 JWK coordinates that are not valid points
   on their declared curves before issuing a device-bound credential.
+- Bound EUDI LoTL and member-state trusted-list downloads to 16 MiB before
+  XML parsing, including streamed responses without a declared length.
+- Upgrade `quick-xml` to 0.41.0 to fix quadratic duplicate-attribute checks
+  and unbounded namespace-declaration allocation in network-supplied XML.
 
 ## [0.1.61] - 2026-08-27
 
