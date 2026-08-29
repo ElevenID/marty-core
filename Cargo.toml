@@ -131,4 +131,4 @@ debug = true
 # Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
 ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0fbf3e4b967fe73c858a22b38e907b3023" }
 # ElevenID-maintained security/interoperability fork, synchronized from upstream by reviewed monthly PRs.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "17c6cc89f38b5ae1b23b4b8bbe20735f380533b8" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "99189ab81c4831eee00c534928f37c46f559ea17" }
