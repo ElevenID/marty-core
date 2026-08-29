@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 
 use jsonwebtoken::{decode, decode_header, jwk::Jwk, DecodingKey, Validation};
 use reqwest::{redirect::Policy, Client};
@@ -133,20 +133,32 @@ fn decode_audience(aud: &Value) -> Oid4vciResult<Vec<String>> {
 fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let [first, second, third, _] = v4.octets();
             v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
                 || v4.is_broadcast()
                 || v4.is_documentation()
-                || v4 == Ipv4Addr::UNSPECIFIED
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || first == 0
+                || first >= 240
+                || (first == 100 && (64..=127).contains(&second))
+                || (first == 192 && second == 0 && third == 0)
+                || (first == 198 && (18..=19).contains(&second))
         }
         IpAddr::V6(v6) => {
+            let segments = v6.segments();
             v6.is_loopback()
                 || v6.is_unspecified()
-                || ((v6.segments()[0] & 0xfe00) == 0xfc00)
-                || ((v6.segments()[0] & 0xffc0) == 0xfe80)
                 || v6.is_multicast()
-                || v6 == Ipv6Addr::LOCALHOST
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] & 0xffc0) == 0xfec0
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || v6
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| is_private_ip(IpAddr::V4(mapped)))
         }
     }
 }
@@ -347,6 +359,63 @@ pub fn normalize_canvas_https_origin(origin: &str) -> Oid4vciResult<String> {
         .map(|port| format!(":{port}"))
         .unwrap_or_default();
     Ok(format!("https://{host}{port}"))
+}
+
+/// Validate an HTTPS Canvas LTI Advantage service URL against DNS and an exact
+/// operator allow-list for private deployments.
+///
+/// The returned URL preserves the signed launch value after trimming. Callers
+/// that subsequently perform network I/O must still pin the validated DNS
+/// addresses at connection time to prevent resolver races.
+pub async fn validate_canvas_lti_service_url(
+    service_url: &str,
+    private_origin_allowlist: &[String],
+) -> Oid4vciResult<String> {
+    let service_url = service_url.trim();
+    let parsed = Url::parse(service_url)?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(invalid_request(
+            "Canvas LTI service URLs must use HTTPS without embedded credentials",
+        ));
+    }
+    let origin = normalize_canvas_https_origin(&parsed.origin().ascii_serialization())?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| invalid_request("Canvas LTI service URLs must include a host"))?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| invalid_request("Canvas LTI service URLs must include a valid port"))?;
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| invalid_request("Canvas origin DNS resolution failed closed"))?
+        .map(|address| address.ip())
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(invalid_request(
+            "Canvas origin DNS resolution returned no addresses",
+        ));
+    }
+    let hostname_is_private = {
+        let hostname = host.trim_end_matches('.').to_ascii_lowercase();
+        hostname == "localhost"
+            || hostname.ends_with(".localhost")
+            || hostname.ends_with(".local")
+            || hostname.parse::<IpAddr>().is_ok_and(is_private_ip)
+    };
+    let private_resolution = hostname_is_private || addresses.into_iter().any(is_private_ip);
+    let approved = private_origin_allowlist.iter().any(|candidate| {
+        normalize_canvas_https_origin(candidate).is_ok_and(|candidate| candidate == origin)
+    });
+    if private_resolution && !approved {
+        return Err(invalid_request(
+            "Private Canvas origins require an exact CANVAS_PRIVATE_ORIGIN_ALLOWLIST entry",
+        ));
+    }
+    Ok(service_url.to_owned())
 }
 
 /// Derive the only endpoints accepted for a persisted Canvas LTI trust mode.
@@ -713,6 +782,41 @@ mod tests {
         let err =
             normalize_canvas_base_url("https://canvas.example.edu/oidc", false, false).unwrap_err();
         assert!(err.to_string().contains("without a path segment"));
+    }
+
+    #[tokio::test]
+    async fn lti_service_urls_are_https_dns_and_exact_allowlist_bound() {
+        for unsafe_url in [
+            "http://127.0.0.1/internal",
+            "https://user:secret@127.0.0.1/internal",
+        ] {
+            assert!(validate_canvas_lti_service_url(unsafe_url, &[])
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("HTTPS"));
+        }
+        for private_url in [
+            "https://127.0.0.1/internal",
+            "https://100.64.0.1/internal",
+            "https://192.0.2.1/internal",
+            "https://[2001:db8::1]/internal",
+        ] {
+            assert!(validate_canvas_lti_service_url(private_url, &[])
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("exact CANVAS_PRIVATE_ORIGIN_ALLOWLIST"));
+        }
+        assert_eq!(
+            validate_canvas_lti_service_url(
+                " https://127.0.0.1/api/lti/line_items/1?tag=signed ",
+                &["invalid".to_owned(), "https://127.0.0.1:443/".to_owned(),],
+            )
+            .await
+            .unwrap(),
+            "https://127.0.0.1/api/lti/line_items/1?tag=signed"
+        );
     }
 
     #[test]
