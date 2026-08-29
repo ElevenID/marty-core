@@ -8,6 +8,7 @@ use marty_oid4vci::{
 
 const COSE_HEADER_ALG: i64 = 1;
 const COSE_HEADER_X5CHAIN: i64 = 33;
+const CBOR_TAG_ENCODED_CBOR: u64 = 24;
 const MDOC_X5C_CLAIM_KEY: &str = "_mdoc_x5c";
 
 fn issuer_key() -> IssuerKey {
@@ -65,6 +66,47 @@ fn issuer_signed_bytes(credential: SignedCredential) -> Vec<u8> {
 
 fn assert_iso_18013_x5chain_location(credential: SignedCredential, certificates: &[Vec<u8>]) {
     let bytes = issuer_signed_bytes(credential);
+    let typed: isomdl::definitions::IssuerSigned = isomdl::cbor::from_slice(&bytes).unwrap();
+    let namespaces = typed.namespaces.as_ref().expect("nameSpaces present");
+    let items = namespaces
+        .get("org.iso.18013.5.1")
+        .expect("mDL namespace present");
+    assert_eq!(items.len(), 1, "x5chain metadata must not be issued");
+    assert_eq!(items[0].as_ref().element_identifier, "family_name");
+
+    let encoded_mso: CborValue =
+        isomdl::cbor::from_slice(typed.issuer_auth.payload.as_ref().expect("MSO payload")).unwrap();
+    let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_mso) = encoded_mso else {
+        panic!("issuerAuth payload must be MobileSecurityObjectBytes");
+    };
+    let CborValue::Bytes(encoded_mso) = *encoded_mso else {
+        panic!("MobileSecurityObjectBytes must contain a byte string");
+    };
+    let CborValue::Map(mso) = isomdl::cbor::from_slice(&encoded_mso).unwrap() else {
+        panic!("MobileSecurityObject must be a map");
+    };
+    let CborValue::Map(value_digests) = mso
+        .iter()
+        .find_map(|(key, value)| (key == &CborValue::Text("valueDigests".into())).then_some(value))
+        .expect("valueDigests present")
+    else {
+        panic!("valueDigests must be a map");
+    };
+    let CborValue::Map(namespace_digests) = value_digests
+        .iter()
+        .find_map(|(key, value)| {
+            (key == &CborValue::Text("org.iso.18013.5.1".into())).then_some(value)
+        })
+        .expect("mDL namespace digests present")
+    else {
+        panic!("namespace valueDigests must be a map");
+    };
+    assert_eq!(
+        namespace_digests.len(),
+        1,
+        "x5chain metadata must not have a valueDigest",
+    );
+
     let issuer_signed: CborValue = ciborium::from_reader(&bytes[..]).unwrap();
     let issuer_auth = match issuer_signed {
         CborValue::Map(entries) => entries

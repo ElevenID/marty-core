@@ -464,7 +464,6 @@ mod tests {
 
     #[test]
     fn mdoc_preserves_reserved_identity_and_device_binding() {
-        let coordinate = URL_SAFE_NO_PAD.encode([0x11; 32]);
         let prepared = prepare_remote_mdoc(RemoteMdocRequest {
             issuer_id: "did:web:issuer.example".to_owned(),
             algorithm: "ES256".to_owned(),
@@ -475,8 +474,9 @@ mod tests {
             credential_id: Some("urn:uuid:00000000-0000-0000-0000-000000000789".to_owned()),
             holder_jwk: Some(serde_json::json!({
                 "kty": "EC", "crv": "P-256", "alg": "ES256",
-                "x": coordinate, "y": URL_SAFE_NO_PAD.encode([0x22; 32]),
-                "d": URL_SAFE_NO_PAD.encode([0x33; 32]),
+                "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+                "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
             })),
         })
         .expect("mDoc preparation");
