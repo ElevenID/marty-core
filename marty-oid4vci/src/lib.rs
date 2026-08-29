@@ -58,6 +58,7 @@ pub mod metadata;
 pub mod oidc;
 pub mod presentation_request;
 pub mod proof;
+pub mod remote_credential;
 pub mod signer;
 pub mod siop;
 pub mod types;
