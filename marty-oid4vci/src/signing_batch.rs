@@ -1261,6 +1261,40 @@ mod tests {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    struct ConcurrentCallRendezvous {
+        expected: usize,
+        arrived: Mutex<usize>,
+        ready: Condvar,
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl ConcurrentCallRendezvous {
+        fn new(expected: usize) -> Self {
+            Self {
+                expected,
+                arrived: Mutex::new(0),
+                ready: Condvar::new(),
+            }
+        }
+
+        fn wait(&self) {
+            let mut arrived = self.arrived.lock().unwrap();
+            *arrived += 1;
+            self.ready.notify_all();
+            let (arrived, _) = self
+                .ready
+                .wait_timeout_while(arrived, Duration::from_secs(5), |arrived| {
+                    *arrived < self.expected
+                })
+                .unwrap();
+            assert_eq!(
+                *arrived, self.expected,
+                "all expected concurrent signing calls must rendezvous"
+            );
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     struct ConcurrentTestSigner {
         signing_key: p256::ecdsa::SigningKey,
         calls: Mutex<Vec<Vec<u8>>>,
@@ -1273,6 +1307,7 @@ mod tests {
         failure_completion: Mutex<Vec<String>>,
         failure_seven_completed: (Mutex<bool>, Condvar),
         drift_on_call: Option<usize>,
+        call_rendezvous: Option<ConcurrentCallRendezvous>,
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -1290,6 +1325,7 @@ mod tests {
                 failure_completion: Mutex::new(Vec::new()),
                 failure_seven_completed: (Mutex::new(false), Condvar::new()),
                 drift_on_call: None,
+                call_rendezvous: None,
             }
         }
 
@@ -1300,6 +1336,11 @@ mod tests {
 
         fn with_drift_on_call(mut self, call: usize) -> Self {
             self.drift_on_call = Some(call);
+            self
+        }
+
+        fn with_call_rendezvous(mut self, expected: usize) -> Self {
+            self.call_rendezvous = Some(ConcurrentCallRendezvous::new(expected));
             self
         }
 
@@ -1360,6 +1401,9 @@ mod tests {
             }
 
             let label = jwt_label_from_signing_payload(message);
+            if let Some(rendezvous) = &self.call_rendezvous {
+                rendezvous.wait();
+            }
             let mut schedule = self.schedule_seed;
             for byte in message.iter().step_by(17) {
                 schedule = schedule.rotate_left(5) ^ u64::from(*byte);
@@ -1962,7 +2006,7 @@ mod tests {
         assert_eq!(one_worker_signer.call_count(), 8);
         assert_eq!(one_worker_signer.peak_calls(), 1);
 
-        let mut below_limit_signer = ConcurrentTestSigner::new(8, 4);
+        let mut below_limit_signer = ConcurrentTestSigner::new(8, 4).with_call_rendezvous(2);
         let below_limit = {
             let scope = ConcurrentEs256SignerScope::new(&mut below_limit_signer).unwrap();
             scope
