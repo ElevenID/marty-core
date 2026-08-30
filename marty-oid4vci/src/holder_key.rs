@@ -57,6 +57,13 @@ pub fn generate_p256_did_jwk_holder_key() -> Oid4vciResult<DidJwkHolderKeyMateri
 pub fn p256_did_jwk_holder_key_from_private_jwk(
     private_jwk: &str,
 ) -> Oid4vciResult<DidJwkHolderKeyMaterial> {
+    let signing_key = p256_signing_key_from_private_jwk(private_jwk)?;
+    did_jwk_holder_material_from_signing_key(&signing_key)
+}
+
+pub(crate) fn p256_signing_key_from_private_jwk(
+    private_jwk: &str,
+) -> Oid4vciResult<p256::ecdsa::SigningKey> {
     if private_jwk.is_empty() {
         return Err(Oid4vciError::InvalidRequest(
             "Holder private JWK is empty".into(),
@@ -95,7 +102,7 @@ pub fn p256_did_jwk_holder_key_from_private_jwk(
         ));
     }
 
-    did_jwk_holder_material_from_signing_key(&signing_key)
+    Ok(signing_key)
 }
 
 pub(crate) fn generate_p256_signing_key() -> p256::ecdsa::SigningKey {
