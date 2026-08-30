@@ -3,10 +3,7 @@
 //! The preparation retains all format state in Rust while an external KMS
 //! signs only the exact bytes returned by the canonical format kernel.
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
+use std::{collections::HashMap, fmt};
 
 use isomdl::digest_executor::{DigestExecutor, SerialDigestExecutor};
 use rand::Rng;
@@ -19,10 +16,10 @@ use crate::{
             PreparedJwtVc,
         },
         mdoc::{
-            prepare_mdoc_with_credential_id_and_device_key,
+            plan_validated_mdoc_batch, prepare_mdoc_with_credential_id_and_device_key,
             prepare_validated_mdoc_batch_with_digest_executor, validate_mdoc_credential_id,
-            validate_mdoc_preparation, MdocBatchPreparationInput, PreparedMdoc,
-            ValidatedMdocPreparation,
+            validate_mdoc_preparation, MdocBatchPlanError, PreparedMdoc,
+            ValidatedMdocBatchPlanItem,
         },
         sd_jwt::{prepare_sd_jwt_with_options, PreparedSdJwt, SdJwtPreparationOptions},
     },
@@ -331,13 +328,6 @@ pub fn prepare_remote_mdoc_batch(
     )
 }
 
-struct ValidatedRemoteMdocBatchItem {
-    batch_id: u64,
-    credential_id: Option<String>,
-    credential_uuid: Option<uuid::Uuid>,
-    preparation: ValidatedMdocPreparation,
-}
-
 fn prepare_remote_mdoc_batch_with_sources(
     batch: Vec<RemoteMdocBatchItem>,
     mut next_uuid: impl FnMut() -> uuid::Uuid,
@@ -345,35 +335,20 @@ fn prepare_remote_mdoc_batch_with_sources(
     next_salt: impl FnMut() -> [u8; 32],
     digest_executor: &dyn DigestExecutor,
 ) -> Oid4vciResult<Vec<PreparedRemoteMdocBatchItem>> {
-    let validated = validate_remote_mdoc_batch(batch)?;
-    if validated.is_empty() {
-        return Ok(Vec::new());
-    }
+    let routed = batch
+        .into_iter()
+        .map(|item| (item.batch_id, item.request))
+        .collect();
+    let inputs = plan_validated_mdoc_batch(
+        routed,
+        validate_remote_mdoc_batch_item,
+        &mut next_uuid,
+        &mut next_now,
+    )
+    .map_err(map_mdoc_batch_plan_error)?;
 
-    // Reserve every explicit ID before generating missing ones, so a generated
-    // collision with an explicit ID later in caller order also fails closed.
-    let mut credential_ids = validated
-        .iter()
-        .filter_map(|item| item.credential_uuid)
-        .collect::<HashSet<_>>();
-    let mut inputs = Vec::with_capacity(validated.len());
-    for item in validated {
-        let credential_id = match item.credential_id {
-            Some(credential_id) => credential_id,
-            None => {
-                let credential_uuid = next_uuid();
-                if !credential_ids.insert(credential_uuid) {
-                    return Err(protocol_error(DUPLICATE_MDOC_CREDENTIAL_ID));
-                }
-                format!("urn:uuid:{credential_uuid}")
-            }
-        };
-        inputs.push(MdocBatchPreparationInput::new(
-            item.batch_id,
-            credential_id,
-            next_now(),
-            item.preparation,
-        )?);
+    if inputs.is_empty() {
+        return Ok(Vec::new());
     }
 
     prepare_validated_mdoc_batch_with_digest_executor(inputs, next_salt, digest_executor).map(
@@ -389,47 +364,51 @@ fn prepare_remote_mdoc_batch_with_sources(
     )
 }
 
-fn validate_remote_mdoc_batch(
-    batch: Vec<RemoteMdocBatchItem>,
-) -> Oid4vciResult<Vec<ValidatedRemoteMdocBatchItem>> {
-    let mut batch_ids = HashSet::with_capacity(batch.len());
-    let mut credential_ids = HashSet::with_capacity(batch.len());
-    let mut validated = Vec::with_capacity(batch.len());
+fn validate_remote_mdoc_batch_item(
+    request: RemoteMdocRequest,
+) -> Oid4vciResult<ValidatedMdocBatchPlanItem> {
+    validate_credential_id(request.credential_id.as_deref())?;
+    let algorithm = parse_mdoc_algorithm(&request.algorithm)?;
+    let holder_jwk = request.holder_jwk.map(public_jwk).transpose()?;
+    let credential_id = request
+        .credential_id
+        .map(|credential_id| {
+            validate_mdoc_credential_id(&credential_id)
+                .map(|credential_uuid| (credential_id, credential_uuid))
+        })
+        .transpose()?;
+    let claims = mdoc_credential_claims(
+        request.credential_type,
+        request.namespace,
+        request.claims,
+        request.expiration_seconds,
+    );
+    let preparation = validate_mdoc_preparation(algorithm, &claims, holder_jwk.as_ref())?;
 
-    for item in batch {
-        if !batch_ids.insert(item.batch_id) {
-            return Err(protocol_error(DUPLICATE_MDOC_BATCH_ID));
+    Ok(match credential_id {
+        Some((credential_id, credential_uuid)) => {
+            ValidatedMdocBatchPlanItem::with_explicit_credential_id(
+                credential_id,
+                credential_uuid,
+                preparation,
+            )
         }
+        None => ValidatedMdocBatchPlanItem::with_generated_credential_id(preparation),
+    })
+}
 
-        let request = item.request;
-        validate_credential_id(request.credential_id.as_deref())?;
-        let algorithm = parse_mdoc_algorithm(&request.algorithm)?;
-        let holder_jwk = request.holder_jwk.map(public_jwk).transpose()?;
-        let credential_uuid = request
-            .credential_id
-            .as_deref()
-            .map(validate_mdoc_credential_id)
-            .transpose()?;
-        let claims = mdoc_credential_claims(
-            request.credential_type,
-            request.namespace,
-            request.claims,
-            request.expiration_seconds,
-        );
-        let preparation = validate_mdoc_preparation(algorithm, &claims, holder_jwk.as_ref())?;
-
-        if credential_uuid.is_some_and(|credential_uuid| !credential_ids.insert(credential_uuid)) {
-            return Err(protocol_error(DUPLICATE_MDOC_CREDENTIAL_ID));
+fn map_mdoc_batch_plan_error(error: MdocBatchPlanError) -> Oid4vciError {
+    let _ordinal = error.ordinal();
+    match error {
+        MdocBatchPlanError::DuplicateBatchIdentity { .. } => {
+            protocol_error(DUPLICATE_MDOC_BATCH_ID)
         }
-        validated.push(ValidatedRemoteMdocBatchItem {
-            batch_id: item.batch_id,
-            credential_id: request.credential_id,
-            credential_uuid,
-            preparation,
-        });
+        MdocBatchPlanError::DuplicateCredentialId { .. } => {
+            protocol_error(DUPLICATE_MDOC_CREDENTIAL_ID)
+        }
+        MdocBatchPlanError::ItemValidation { source, .. }
+        | MdocBatchPlanError::ItemPreparation { source, .. } => source,
     }
-
-    Ok(validated)
 }
 
 fn parse_mdoc_algorithm(algorithm: &str) -> Oid4vciResult<SigningAlgorithm> {
@@ -973,6 +952,59 @@ mod tests {
             .unwrap_err();
             assert!(error.to_string().contains(expected));
         }
+    }
+
+    #[test]
+    fn mdoc_batch_preserves_duplicate_and_request_validation_precedence() {
+        let credential_id = "urn:uuid:00000000-0000-0000-0000-000000000091";
+        let invalid_duplicate_route = vec![
+            RemoteMdocBatchItem::new(
+                91,
+                remote_mdoc_request(Some(credential_id), "ES256", HashMap::new()),
+            ),
+            RemoteMdocBatchItem::new(
+                91,
+                remote_mdoc_request(Some(credential_id), "RS256", HashMap::new()),
+            ),
+        ];
+        let error = prepare_remote_mdoc_batch_with_sources(
+            invalid_duplicate_route,
+            || panic!("duplicate route must precede UUID allocation"),
+            || panic!("duplicate route must precede time allocation"),
+            || panic!("duplicate route must precede salt allocation"),
+            &MustNotExecute,
+        )
+        .unwrap_err();
+        let crate::Oid4vciError::InvalidRequest(message) = error else {
+            panic!("duplicate route must retain the remote request boundary")
+        };
+        assert_eq!(
+            message,
+            "mDoc preparation batch contains duplicate batch identity"
+        );
+
+        let invalid_duplicate_credential = vec![
+            RemoteMdocBatchItem::new(
+                91,
+                remote_mdoc_request(Some(credential_id), "ES256", HashMap::new()),
+            ),
+            RemoteMdocBatchItem::new(
+                7,
+                remote_mdoc_request(Some(credential_id), "RS256", HashMap::new()),
+            ),
+        ];
+        let error = prepare_remote_mdoc_batch_with_sources(
+            invalid_duplicate_credential,
+            || panic!("request validation must precede UUID allocation"),
+            || panic!("request validation must precede time allocation"),
+            || panic!("request validation must precede salt allocation"),
+            &MustNotExecute,
+        )
+        .unwrap_err();
+        let crate::Oid4vciError::InvalidRequest(message) = error else {
+            panic!("algorithm validation must retain the remote request boundary")
+        };
+        assert_eq!(message, "mDoc remote signing supports ES256 and ES384 only");
     }
 
     #[test]
