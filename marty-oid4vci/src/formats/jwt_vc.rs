@@ -146,6 +146,13 @@ pub struct PreparedJwtVc {
     pub credential_id: String,
 }
 
+impl PreparedJwtVc {
+    /// Borrow the complete base64url-encoded `header.payload` signing input.
+    pub fn signing_payload(&self) -> &[u8] {
+        self.signing_input.as_bytes()
+    }
+}
+
 /// Optional protocol fields used by external issuer profiles.
 #[derive(Debug, Clone)]
 pub struct JwtVcPreparationOptions {
