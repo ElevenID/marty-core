@@ -195,6 +195,76 @@ pub(crate) struct ValidatedMdocPreparation {
     issuer_claims: Vec<ValidatedMdocClaim>,
 }
 
+enum ValidatedMdocCredentialId {
+    Explicit { value: String, uuid: uuid::Uuid },
+    Generated,
+}
+
+/// One fully validated mdoc accepted by the caller-ordered batch planner.
+///
+/// The state is crate-private and intentionally has no serialization, clone,
+/// or debug representation because it owns converted credential claims.
+pub(crate) struct ValidatedMdocBatchPlanItem {
+    credential_id: ValidatedMdocCredentialId,
+    preparation: ValidatedMdocPreparation,
+}
+
+impl ValidatedMdocBatchPlanItem {
+    pub(crate) fn with_explicit_credential_id(
+        credential_id: String,
+        credential_uuid: uuid::Uuid,
+        preparation: ValidatedMdocPreparation,
+    ) -> Self {
+        Self {
+            credential_id: ValidatedMdocCredentialId::Explicit {
+                value: credential_id,
+                uuid: credential_uuid,
+            },
+            preparation,
+        }
+    }
+
+    pub(crate) fn with_generated_credential_id(preparation: ValidatedMdocPreparation) -> Self {
+        Self {
+            credential_id: ValidatedMdocCredentialId::Generated,
+            preparation,
+        }
+    }
+}
+
+/// Typed, redacted failures from caller-ordered mdoc batch planning.
+///
+/// Every variant retains the failing caller ordinal for internal diagnostics,
+/// while the remote boundary deliberately maps it to the existing public error
+/// category and message without exposing routing metadata.
+pub(crate) enum MdocBatchPlanError {
+    DuplicateBatchIdentity {
+        ordinal: usize,
+    },
+    ItemValidation {
+        ordinal: usize,
+        source: Oid4vciError,
+    },
+    DuplicateCredentialId {
+        ordinal: usize,
+    },
+    ItemPreparation {
+        ordinal: usize,
+        source: Oid4vciError,
+    },
+}
+
+impl MdocBatchPlanError {
+    pub(crate) fn ordinal(&self) -> usize {
+        match self {
+            Self::DuplicateBatchIdentity { ordinal }
+            | Self::ItemValidation { ordinal, .. }
+            | Self::DuplicateCredentialId { ordinal }
+            | Self::ItemPreparation { ordinal, .. } => *ordinal,
+        }
+    }
+}
+
 /// One already-validated mdoc preparation routed through a shared digest call.
 pub(crate) struct MdocBatchPreparationInput {
     pub(crate) batch_id: u64,
@@ -220,6 +290,60 @@ impl MdocBatchPreparationInput {
             preparation,
         })
     }
+}
+
+/// Validate and plan one caller-ordered mdoc batch before digest execution.
+///
+/// Route identity is checked before validating the request at that ordinal;
+/// explicit credential identity is checked after that request is fully
+/// validated. All explicit UUIDs are reserved before generated IDs are
+/// allocated. A timestamp is then allocated only after an item's credential
+/// identity is accepted. These ordering rules preserve the remote API's error
+/// precedence and source-consumption contract.
+pub(crate) fn plan_validated_mdoc_batch<T>(
+    batch: Vec<(u64, T)>,
+    mut validate_item: impl FnMut(T) -> Oid4vciResult<ValidatedMdocBatchPlanItem>,
+    mut next_uuid: impl FnMut() -> uuid::Uuid,
+    mut next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<MdocBatchPreparationInput>, MdocBatchPlanError> {
+    let mut batch_ids = HashSet::with_capacity(batch.len());
+    let mut credential_ids = HashSet::with_capacity(batch.len());
+    let mut validated = Vec::with_capacity(batch.len());
+
+    for (ordinal, (batch_id, item)) in batch.into_iter().enumerate() {
+        if !batch_ids.insert(batch_id) {
+            return Err(MdocBatchPlanError::DuplicateBatchIdentity { ordinal });
+        }
+
+        let item = validate_item(item)
+            .map_err(|source| MdocBatchPlanError::ItemValidation { ordinal, source })?;
+        if let ValidatedMdocCredentialId::Explicit { uuid, .. } = &item.credential_id {
+            if !credential_ids.insert(*uuid) {
+                return Err(MdocBatchPlanError::DuplicateCredentialId { ordinal });
+            }
+        }
+        validated.push((batch_id, item));
+    }
+
+    let mut inputs = Vec::with_capacity(validated.len());
+    for (ordinal, (batch_id, item)) in validated.into_iter().enumerate() {
+        let credential_id = match item.credential_id {
+            ValidatedMdocCredentialId::Explicit { value, .. } => value,
+            ValidatedMdocCredentialId::Generated => {
+                let credential_uuid = next_uuid();
+                if !credential_ids.insert(credential_uuid) {
+                    return Err(MdocBatchPlanError::DuplicateCredentialId { ordinal });
+                }
+                format!("urn:uuid:{credential_uuid}")
+            }
+        };
+        let input =
+            MdocBatchPreparationInput::new(batch_id, credential_id, next_now(), item.preparation)
+                .map_err(|source| MdocBatchPlanError::ItemPreparation { ordinal, source })?;
+        inputs.push(input);
+    }
+
+    Ok(inputs)
 }
 
 /// One prepared mdoc restored to its caller-assigned batch identity.
@@ -1639,6 +1763,47 @@ mod tests {
             panic!("holder key failures must use the mdoc error boundary")
         };
         assert_eq!(message, "mDoc holder public JWK is missing y");
+    }
+
+    fn generated_batch_plan_item() -> ValidatedMdocBatchPlanItem {
+        ValidatedMdocBatchPlanItem::with_generated_credential_id(
+            validate_mdoc_preparation(SigningAlgorithm::ES256, &test_mdoc_claims([]), None)
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn mdoc_batch_planner_validates_in_caller_order_and_stops_before_sources() {
+        let mut validation_order = Vec::new();
+        let result = plan_validated_mdoc_batch(
+            vec![(91, 0usize), (7, 1usize), (42, 2usize)],
+            |candidate| {
+                validation_order.push(candidate);
+                if candidate == 1 {
+                    Err(Oid4vciError::MdocError(
+                        "redacted validation fixture".into(),
+                    ))
+                } else {
+                    Ok(generated_batch_plan_item())
+                }
+            },
+            || panic!("validation failure must precede UUID allocation"),
+            || panic!("validation failure must precede time allocation"),
+        );
+
+        assert_eq!(validation_order, [0, 1]);
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("invalid caller ordinal must fail planning"),
+        };
+        assert_eq!(error.ordinal(), 1);
+        let MdocBatchPlanError::ItemValidation { source, .. } = error else {
+            panic!("validation failure must retain its typed planning phase")
+        };
+        let Oid4vciError::MdocError(message) = source else {
+            panic!("planner must preserve the validation source error")
+        };
+        assert_eq!(message, "redacted validation fixture");
     }
 
     struct BatchReplayItem {
