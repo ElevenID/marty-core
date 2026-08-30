@@ -47,7 +47,7 @@ jobs:
           toolchain: 1.97.1
           components: clippy, rustfmt
       - name: Install cargo-deny
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d
         with:
           tool: cargo-deny@0.20.2
       - name: Cache Cargo inputs
@@ -156,7 +156,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d
         with:
           tool: cargo-nextest@0.9.143
       - name: Require reproducible release sources
