@@ -24,6 +24,67 @@ use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
 
 const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
+const SD_JWT_MANAGED_CLAIM_COLLISION: &str = "SD-JWT claims conflict with issuer-controlled claims";
+const SD_JWT_NON_DISCLOSABLE_SELECTOR: &str = "SD-JWT selector targets a non-disclosable claim";
+const IETF_ALWAYS_MANAGED_CLAIMS: &[&str] = &["iss", "iat", "jti", "vct"];
+// draft-ietf-oauth-sd-jwt-vc-18, Section 2.2.2.3. `sub` and `iat`
+// are intentionally absent because that profile permits disclosing them.
+// `jti` is also absent because the profile does not define a policy for it.
+const IETF_NON_DISCLOSABLE_CLAIMS: &[&str] = &[
+    "iss",
+    "nbf",
+    "exp",
+    "cnf",
+    "vct",
+    "vct#integrity",
+    "aka_vcts",
+    "status",
+];
+
+fn validate_sd_jwt_managed_claims(
+    claims: &CredentialClaims,
+    include_nbf: bool,
+    include_confirmation: bool,
+) -> Oid4vciResult<()> {
+    let collides = match claims.credential_payload_format {
+        CredentialPayloadFormat::IetfSdJwt => {
+            claims
+                .claims
+                .keys()
+                .any(|name| IETF_ALWAYS_MANAGED_CLAIMS.contains(&name.as_str()))
+                || (claims.subject_id.is_some() && claims.claims.contains_key("sub"))
+                || (claims.expiration_seconds.is_some() && claims.claims.contains_key("exp"))
+                || (include_nbf && claims.claims.contains_key("nbf"))
+                || (include_confirmation && claims.claims.contains_key("cnf"))
+        }
+        CredentialPayloadFormat::W3cVcdmV2SdJwt => {
+            claims.subject_id.is_some() && claims.claims.contains_key("id")
+        }
+        // Preserve the format error at the existing payload-construction boundary.
+        CredentialPayloadFormat::W3cVcdmV2JwtVc => false,
+    };
+
+    if collides {
+        return Err(Oid4vciError::SdJwtError(
+            SD_JWT_MANAGED_CLAIM_COLLISION.into(),
+        ));
+    }
+
+    if matches!(
+        claims.credential_payload_format,
+        CredentialPayloadFormat::IetfSdJwt
+    ) && claims
+        .selective_disclosure_claims
+        .iter()
+        .any(|name| IETF_NON_DISCLOSABLE_CLAIMS.contains(&name.as_str()))
+    {
+        return Err(Oid4vciError::SdJwtError(
+            SD_JWT_NON_DISCLOSABLE_SELECTOR.into(),
+        ));
+    }
+
+    Ok(())
+}
 
 fn checked_sd_jwt_expiration_timestamp(
     issued_at: chrono::DateTime<chrono::Utc>,
@@ -60,6 +121,8 @@ pub fn sign_sd_jwt(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
+    validate_sd_jwt_managed_claims(claims, false, false)?;
+
     let jwk: JWK = serde_json::from_str(&issuer_key.jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
 
@@ -270,6 +333,8 @@ pub fn prepare_sd_jwt_with_options(
     claims: &CredentialClaims,
     options: SdJwtPreparationOptions,
 ) -> Oid4vciResult<PreparedSdJwt> {
+    validate_sd_jwt_managed_claims(claims, options.include_nbf, options.confirmation.is_some())?;
+
     let credential_id = options
         .credential_id
         .clone()
