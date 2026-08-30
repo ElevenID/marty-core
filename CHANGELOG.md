@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Advance the maintained ElevenID `isomdl` pin through its reviewed serial
-  mdoc digest boundary and optional bounded native executor while leaving
+- Advance the maintained ElevenID `isomdl` pin through its reviewed
+  caller-ordered, all-or-nothing mdoc batch preparation surface while leaving
   Marty issuance on the existing serial path and keeping `parallel` disabled.
+- Route Marty mdoc item commitments through an identity-checked serial
+  plan/execute/assemble boundary while preserving salt allocation, CBOR bytes,
+  claim order, signing input, final assembly, and feature defaults.
 
 ### Security
 
