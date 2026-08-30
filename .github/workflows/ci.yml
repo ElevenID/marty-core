@@ -150,7 +150,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
         with:
           tool: cargo-nextest@0.9.143
       - name: Require reproducible release sources
