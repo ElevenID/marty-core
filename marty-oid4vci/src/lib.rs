@@ -60,6 +60,7 @@ pub mod presentation_request;
 pub mod proof;
 pub mod remote_credential;
 pub mod signer;
+pub mod signing_batch;
 pub mod siop;
 pub mod types;
 pub mod verifier;
