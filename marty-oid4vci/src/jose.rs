@@ -108,7 +108,7 @@ fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
     }
 }
 
-fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oid4vciResult<Jwk> {
+pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oid4vciResult<Jwk> {
     let object = value
         .as_object()
         .ok_or_else(|| Oid4vciError::KeyError("Public JWK must be an object".into()))?;

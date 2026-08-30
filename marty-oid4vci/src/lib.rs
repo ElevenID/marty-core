@@ -68,6 +68,8 @@ pub mod wallet_input;
 
 #[cfg(feature = "wallet")]
 pub mod wallet;
+#[cfg(feature = "wallet")]
+mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
 pub use holder_key::{
@@ -92,6 +94,8 @@ pub use wallet::{
     DcqlClaimQuery, DcqlCredentialQuery, DcqlQuery, IssuerMetadata, ParsedPresentationRequest,
     PresentationRequestQueryType, PresentationResponse, WalletEngine, ZkProofEntry,
 };
+#[cfg(feature = "wallet")]
+pub use wallet_sd_jwt::{ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver};
 
 #[cfg(feature = "lti")]
 pub use lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};

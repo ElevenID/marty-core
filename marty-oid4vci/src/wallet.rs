@@ -35,6 +35,7 @@ use crate::types::{
     CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject, TokenResponse,
 };
 use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
+use crate::wallet_sd_jwt::{self, SdJwtIssuerKeyResolver};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Issuer metadata (wallet-parsed)
@@ -730,6 +731,38 @@ impl WalletEngine {
                     "SD-JWT presentation creation failed: {error:?}"
                 ))
             })
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    /// Verify an issuer-signed SD-JWT VC and its holder binding before creating
+    /// a selectively disclosed presentation with a KB-JWT.
+    ///
+    /// Unlike [`WalletEngine::create_sd_jwt_presentation`], this method has no
+    /// preverified-input assumption. It accepts the transitional SD-JWT VC
+    /// protected types `vc+sd-jwt` and `dc+sd-jwt` and requires a non-empty
+    /// signed `vct`. It resolves the issuer key from the unverified `iss` claim
+    /// and protected `kid` / `alg` context, verifies the issuer signature,
+    /// checks the resolver's exact identity and algorithm binding, and derives
+    /// the holder public key from the supplied private scalar before comparing
+    /// it with the verified `cnf.jwk`. No KB-JWT signing occurs until all of
+    /// those checks succeed.
+    pub fn create_verified_sd_jwt_presentation(
+        &self,
+        credential: &str,
+        claims_to_disclose: &[String],
+        nonce: &str,
+        audience: &str,
+        holder_jwk_json: &str,
+        issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
+    ) -> Oid4vciResult<String> {
+        wallet_sd_jwt::create_verified_presentation(
+            credential,
+            claims_to_disclose,
+            nonce,
+            audience,
+            holder_jwk_json,
+            issuer_key_resolver,
+        )
     }
 
     // ──────────────────────────────────────────────────────────────────────
