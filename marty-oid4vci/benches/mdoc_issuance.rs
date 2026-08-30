@@ -8,8 +8,10 @@ use base64::Engine;
 use ciborium::Value as CborValue;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use marty_oid4vci::{
-    formats::mdoc::assemble_mdoc,
-    remote_credential::{prepare_remote_mdoc, RemoteMdocRequest},
+    formats::mdoc::{assemble_mdoc, PreparedMdoc},
+    remote_credential::{
+        prepare_remote_mdoc, prepare_remote_mdoc_batch, RemoteMdocBatchItem, RemoteMdocRequest,
+    },
     types::SignedCredential,
 };
 use sha2::{Digest, Sha256};
@@ -19,8 +21,14 @@ const CREDENTIAL_ID: &str = "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c";
 const DOC_TYPE: &str = "org.iso.18013.5.1.mDL";
 const NAMESPACE: &str = "org.iso.18013.5.1";
 const ITEM_COUNTS: [usize; 5] = [1, 8, 32, 128, 512];
+const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
+const BATCH_ITEM_COUNT: usize = 8;
 
 fn fixture(item_count: usize) -> RemoteMdocRequest {
+    fixture_with_credential_id(item_count, CREDENTIAL_ID)
+}
+
+fn fixture_with_credential_id(item_count: usize, credential_id: &str) -> RemoteMdocRequest {
     let claims = (0..item_count)
         .map(|index| {
             let name = format!("element_{index:04}");
@@ -37,7 +45,7 @@ fn fixture(item_count: usize) -> RemoteMdocRequest {
         namespace: NAMESPACE.into(),
         claims,
         expiration_seconds: Some(365 * 86_400),
-        credential_id: Some(CREDENTIAL_ID.into()),
+        credential_id: Some(credential_id.into()),
         holder_jwk: Some(serde_json::json!({
             "kty": "EC",
             "crv": "P-256",
@@ -56,10 +64,19 @@ fn map_value<'a>(entries: &'a [(CborValue, CborValue)], name: &str) -> &'a CborV
 }
 
 fn preflight(request: &RemoteMdocRequest, item_count: usize) {
+    let prepared = prepare_remote_mdoc(request.clone()).expect("fixture must prepare");
+    assert_prepared(request, item_count, CREDENTIAL_ID, prepared);
+}
+
+fn assert_prepared(
+    request: &RemoteMdocRequest,
+    item_count: usize,
+    credential_id: &str,
+    prepared: PreparedMdoc,
+) {
     use isomdl::definitions::IssuerSigned;
 
-    let prepared = prepare_remote_mdoc(request.clone()).expect("fixture must prepare");
-    assert_eq!(prepared.credential_id, CREDENTIAL_ID);
+    assert_eq!(prepared.credential_id, credential_id);
     let credential = assemble_mdoc(prepared, &[0xa5; 64]).expect("fixture must assemble");
     let SignedCredential::MsoMdoc {
         issuer_signed_b64,
@@ -68,7 +85,7 @@ fn preflight(request: &RemoteMdocRequest, item_count: usize) {
     else {
         panic!("fixture must produce mso_mdoc");
     };
-    assert_eq!(credential_id, CREDENTIAL_ID);
+    assert_eq!(credential_id, request.credential_id.as_deref().unwrap());
 
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(issuer_signed_b64)
@@ -161,6 +178,38 @@ fn preflight(request: &RemoteMdocRequest, item_count: usize) {
     assert_eq!(seen_identifiers.len(), request.claims.len());
 }
 
+fn batch_fixtures(batch_size: usize) -> (Vec<RemoteMdocRequest>, Vec<RemoteMdocBatchItem>) {
+    let requests = (0..batch_size)
+        .map(|index| {
+            let credential_id = format!("urn:uuid:{index:08x}-0000-4000-8000-{index:012x}");
+            fixture_with_credential_id(BATCH_ITEM_COUNT, &credential_id)
+        })
+        .collect::<Vec<_>>();
+    let batch = requests
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, request)| RemoteMdocBatchItem::new(10_000 + index as u64, request))
+        .collect();
+    (requests, batch)
+}
+
+fn preflight_batch(batch_size: usize) {
+    let (requests, batch) = batch_fixtures(batch_size);
+    let prepared = prepare_remote_mdoc_batch(batch).expect("batch fixture must prepare");
+    assert_eq!(prepared.len(), batch_size);
+    for (index, (request, prepared)) in requests.into_iter().zip(prepared).enumerate() {
+        assert_eq!(prepared.batch_id(), 10_000 + index as u64);
+        let credential_id = request.credential_id.clone().unwrap();
+        assert_prepared(
+            &request,
+            BATCH_ITEM_COUNT,
+            &credential_id,
+            prepared.into_prepared_mdoc(),
+        );
+    }
+}
+
 fn benchmark_mdoc_issuance(c: &mut Criterion) {
     let mut group = c.benchmark_group("mdoc_issuance_prepare");
     group.sample_size(50);
@@ -188,5 +237,55 @@ fn benchmark_mdoc_issuance(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_mdoc_issuance);
+fn benchmark_mdoc_batch_issuance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mdoc_issuance_prepare_batch");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    group.significance_level(0.05);
+    group.noise_threshold(0.03);
+
+    for batch_size in BATCH_SIZES {
+        preflight_batch(batch_size);
+        let (requests, batch) = batch_fixtures(batch_size);
+        group.throughput(Throughput::Elements(batch_size as u64));
+        group.bench_with_input(
+            BenchmarkId::new("sequential_8_claims_256b", batch_size),
+            &requests,
+            |bencher, requests| {
+                bencher.iter_batched(
+                    || requests.clone(),
+                    |requests| {
+                        black_box(
+                            requests
+                                .into_iter()
+                                .map(prepare_remote_mdoc)
+                                .collect::<Result<Vec<_>, _>>()
+                                .unwrap(),
+                        )
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("batch_8_claims_256b", batch_size),
+            &batch,
+            |bencher, batch| {
+                bencher.iter_batched(
+                    || batch.clone(),
+                    |batch| black_box(prepare_remote_mdoc_batch(black_box(batch)).unwrap()),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    benchmark_mdoc_issuance,
+    benchmark_mdoc_batch_issuance
+);
 criterion_main!(benches);
