@@ -1605,6 +1605,68 @@ fn oid4vci_prepare_mdoc(
     })
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteMdocBatchInput {
+    batch_id: u64,
+    issuer_id: String,
+    algorithm: String,
+    credential_type: String,
+    namespace: String,
+    claims: std::collections::HashMap<String, serde_json::Value>,
+    expiration_seconds: Option<i64>,
+    credential_id: Option<String>,
+    holder_jwk: Option<serde_json::Value>,
+}
+
+/// Prepare a caller-ordered JSON array of ISO 18013-5 mDocs for remote signing.
+///
+/// Each array item carries an opaque ``batch_id`` used only to route the
+/// returned preparation handle. The complete prepared state remains inside
+/// Rust; callers receive the existing single-use handle and continue through
+/// ``oid4vci_assemble_mdoc`` after signing its exact ``tbs_data`` bytes.
+#[pyfunction]
+fn oid4vci_prepare_mdoc_batch(
+    batch_json: &str,
+) -> PyResult<Vec<(u64, PreparedMdocForRemoteSigning)>> {
+    let batch: Vec<RemoteMdocBatchInput> = serde_json::from_str(batch_json).map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid remote mDoc batch JSON: {error}"))
+    })?;
+    let batch = batch
+        .into_iter()
+        .map(|item| {
+            marty_oid4vci::remote_credential::RemoteMdocBatchItem::new(
+                item.batch_id,
+                marty_oid4vci::remote_credential::RemoteMdocRequest {
+                    issuer_id: item.issuer_id,
+                    algorithm: item.algorithm,
+                    credential_type: item.credential_type,
+                    namespace: item.namespace,
+                    claims: item.claims,
+                    expiration_seconds: item.expiration_seconds,
+                    credential_id: item.credential_id,
+                    holder_jwk: item.holder_jwk,
+                },
+            )
+        })
+        .collect();
+    let prepared = marty_oid4vci::remote_credential::prepare_remote_mdoc_batch(batch)
+        .map_err(remote_credential::remote_pyerr)?;
+
+    Ok(prepared
+        .into_iter()
+        .map(|item| {
+            let batch_id = item.batch_id();
+            (
+                batch_id,
+                PreparedMdocForRemoteSigning {
+                    inner: Some(item.into_prepared_mdoc()),
+                },
+            )
+        })
+        .collect())
+}
+
 /// Assemble one mDoc credential after its issuer-profile signature is available.
 #[pyfunction]
 fn oid4vci_assemble_mdoc(
@@ -2658,6 +2720,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
     m.add_class::<PreparedMdocForRemoteSigning>()?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_mdoc, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_prepare_mdoc_batch, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_mdoc, m)?)?;
 
     // OID4VP Protocol
@@ -2692,6 +2755,27 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn remote_mdoc_batch_input(
+        batch_id: u64,
+        credential_id: &str,
+        algorithm: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "batch_id": batch_id,
+            "issuer_id": "did:web:issuer.example",
+            "algorithm": algorithm,
+            "credential_type": "org.iso.18013.5.1.mDL",
+            "namespace": "org.iso.18013.5.1",
+            "claims": {
+                "family_name": format!("Holder {batch_id}"),
+                "portrait": [batch_id, 17, 23]
+            },
+            "expiration_seconds": 3600,
+            "credential_id": credential_id,
+            "holder_jwk": null
+        })
+    }
 
     fn canonical_verification_input() -> serde_json::Value {
         serde_json::json!({
@@ -2808,6 +2892,116 @@ mod tests {
         let error = verification_build_decision_result_impl(&input.to_string())
             .expect_err("semantic evidence reference must fail");
         assert!(error.contains("opaque canonical Marty evidence UUID URN"));
+    }
+
+    #[test]
+    fn remote_mdoc_batch_binding_preserves_caller_order_ids_and_tbs_handles() {
+        let expected = [
+            (91, "urn:uuid:00000000-0000-0000-0000-000000000091", "ES256"),
+            (7, "urn:uuid:00000000-0000-0000-0000-000000000007", "ES384"),
+            (42, "urn:uuid:00000000-0000-0000-0000-000000000042", "ES256"),
+        ];
+        let input = expected
+            .iter()
+            .map(|(batch_id, credential_id, algorithm)| {
+                remote_mdoc_batch_input(*batch_id, credential_id, algorithm)
+            })
+            .collect::<Vec<_>>();
+        let prepared = oid4vci_prepare_mdoc_batch(&serde_json::Value::Array(input).to_string())
+            .expect("native batch preparation");
+
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|(batch_id, _)| *batch_id)
+                .collect::<Vec<_>>(),
+            [91, 7, 42]
+        );
+        let tbs = prepared
+            .iter()
+            .map(|(_, handle)| handle.tbs_data().expect("live TBS handle"))
+            .collect::<Vec<_>>();
+        assert!(tbs.iter().all(|bytes| !bytes.is_empty()));
+        assert!(tbs.windows(2).all(|pair| pair[0] != pair[1]));
+        for ((_, handle), (_, credential_id, _)) in prepared.iter().zip(expected) {
+            assert_eq!(handle.credential_id().unwrap(), credential_id);
+        }
+    }
+
+    #[test]
+    fn remote_mdoc_batch_handle_uses_existing_single_use_sign_and_assemble_route() {
+        let input = serde_json::json!([remote_mdoc_batch_input(
+            91,
+            "urn:uuid:00000000-0000-0000-0000-000000000091",
+            "ES256"
+        )]);
+        let mut prepared = oid4vci_prepare_mdoc_batch(&input.to_string())
+            .expect("native batch preparation")
+            .pop()
+            .expect("one preparation")
+            .1;
+        let tbs_data = prepared.tbs_data().expect("live TBS bytes");
+        let expected_credential_id = prepared.credential_id().expect("live credential ID");
+        let (secret_key, _) =
+            marty_crypto::ecdsa::generate_p256_keypair().expect("P-256 key generation");
+        let der_signature =
+            marty_crypto::ecdsa::sign_p256_sha256(&secret_key, &tbs_data).expect("remote signing");
+        let signature = marty_oid4vci::jose::normalize_ecdsa_signature(&der_signature, "ES256")
+            .expect("COSE signature normalization");
+
+        let (issuer_signed, assembled_credential_id) =
+            oid4vci_assemble_mdoc(&mut prepared, signature).expect("native mDoc assembly");
+        assert!(!issuer_signed.is_empty());
+        assert_eq!(assembled_credential_id, expected_credential_id);
+        assert!(prepared.tbs_data().is_err());
+        assert!(prepared.credential_id().is_err());
+        assert!(oid4vci_assemble_mdoc(&mut prepared, vec![0; 64]).is_err());
+    }
+
+    #[test]
+    fn remote_mdoc_batch_binding_accepts_empty_input_and_rejects_unknown_fields() {
+        assert!(oid4vci_prepare_mdoc_batch("[]")
+            .expect("empty batch")
+            .is_empty());
+
+        let mut item =
+            remote_mdoc_batch_input(91, "urn:uuid:00000000-0000-0000-0000-000000000091", "ES256");
+        item.as_object_mut()
+            .unwrap()
+            .insert("caller_override".into(), serde_json::json!(true));
+        assert!(oid4vci_prepare_mdoc_batch(&serde_json::json!([item]).to_string()).is_err());
+    }
+
+    #[test]
+    fn remote_mdoc_batch_binding_rejects_duplicate_routing_and_credential_identity() {
+        let first =
+            remote_mdoc_batch_input(91, "urn:uuid:00000000-0000-0000-0000-000000000091", "ES256");
+        let duplicate_route =
+            remote_mdoc_batch_input(91, "urn:uuid:00000000-0000-0000-0000-000000000007", "ES256");
+        assert!(oid4vci_prepare_mdoc_batch(
+            &serde_json::json!([first.clone(), duplicate_route]).to_string()
+        )
+        .is_err());
+
+        let duplicate_identity =
+            remote_mdoc_batch_input(7, "urn:uuid:00000000000000000000000000000091", "ES256");
+        assert!(oid4vci_prepare_mdoc_batch(
+            &serde_json::json!([first, duplicate_identity]).to_string()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn remote_mdoc_batch_binding_returns_no_handles_when_a_later_request_is_invalid() {
+        let first =
+            remote_mdoc_batch_input(91, "urn:uuid:00000000-0000-0000-0000-000000000091", "ES256");
+        let later_invalid =
+            remote_mdoc_batch_input(7, "urn:uuid:00000000-0000-0000-0000-000000000007", "RS256");
+
+        assert!(
+            oid4vci_prepare_mdoc_batch(&serde_json::json!([first, later_invalid]).to_string())
+                .is_err()
+        );
     }
 
     // ====================================================================
