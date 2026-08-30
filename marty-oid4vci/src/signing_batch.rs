@@ -24,9 +24,9 @@ use std::marker::PhantomData;
 #[cfg(not(target_family = "wasm"))]
 use std::num::NonZeroUsize;
 #[cfg(not(target_family = "wasm"))]
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{catch_unwind, resume_unwind};
 #[cfg(not(target_family = "wasm"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use crate::formats::jwt_vc::{assemble_jwt_vc, prepare_jwt_vc, PreparedJwtVc};
 use crate::formats::mdoc::{assemble_mdoc, prepare_mdoc, PreparedMdoc};
@@ -46,10 +46,16 @@ pub const MAX_CONCURRENT_SIGNING_WORKERS: usize = 64;
 ///
 /// This trait has deliberately no blanket implementation. Implementing it is a
 /// stronger promise than [`Send`] + [`Sync`]: `sign` supports simultaneous calls
-/// up to the returned bound, and the signing key plus ES256 issuer/key identity
-/// remain immutable while a [`ConcurrentEs256SignerScope`] exclusively borrows
-/// the signer. Backend-specific aliases that reach the same key, queue, session,
-/// or rate limit must enforce their own shared bound.
+/// up to the returned bound, shared access is unwind-safe, and the signing key
+/// plus ES256 issuer/key identity remain immutable while a
+/// [`ConcurrentEs256SignerScope`] exclusively borrows the signer.
+/// Backend-specific aliases that reach the same key, queue, session, or rate
+/// limit must enforce their own shared bound.
+///
+/// A signer panic is outside the redacted [`SigningBatchError`] contract. A
+/// capability implementation must not place secrets in panic messages or
+/// payloads because Rust's panic hook observes them before this library can
+/// perform scoped-worker cleanup.
 ///
 /// [`crate::types::IssuerKey`] is intentionally not opted in automatically.
 /// Callers that have audited a signer implementation and its backend may expose
@@ -58,7 +64,7 @@ pub const MAX_CONCURRENT_SIGNING_WORKERS: usize = 64;
 /// The concurrent path is native-only. WebAssembly callers continue to use the
 /// serial [`Es256SignerScope`].
 #[cfg(not(target_family = "wasm"))]
-pub trait BoundedConcurrentCredentialSigner: CredentialSigner {
+pub trait BoundedConcurrentCredentialSigner: CredentialSigner + std::panic::RefUnwindSafe {
     /// Authorize the maximum number of simultaneous `sign` calls.
     fn max_concurrent_signing_workers(&self) -> NonZeroUsize;
 }
@@ -460,15 +466,21 @@ impl<'s> ConcurrentEs256SignerScope<'s> {
     ///
     /// Canonical preparation of every item completes on the caller before a
     /// worker starts. At most the frozen authorized worker count runs at once.
-    /// Each submitted job receives exactly one `sign` call even when another
-    /// call returns an error; all workers are scoped and joined before this
-    /// method returns. Results are collected in arbitrary completion order,
-    /// validated as a complete identity bijection, and restored to caller order
-    /// before signature validation or assembly. Any failure returns no
-    /// credentials, with the deterministic lowest affected caller ordinal.
-    /// In unwind-enabled builds, a signer panic is caught as the same redacted
-    /// item failure and remaining jobs are still attempted exactly once. A
-    /// `panic=abort` build cannot recover from a panic.
+    /// When every `sign` call returns normally, each submitted job receives
+    /// exactly one call even when another call returns an error; all workers are
+    /// scoped and joined before this method returns. Results are collected in
+    /// arbitrary completion order, validated as a complete identity bijection,
+    /// and restored to caller order before signature validation or assembly.
+    /// Any returned failure produces no credentials, with the deterministic
+    /// lowest affected caller ordinal.
+    ///
+    /// A signer panic is outside the returned-error and metadata-error
+    /// precedence contract. In unwind-enabled builds, the executor stops
+    /// dispatching work after observing a panic, joins every worker, and resumes
+    /// the first captured panic. Already in-flight calls may finish, while jobs
+    /// not yet started may remain uncalled. Neither the panic hook nor its
+    /// payload is redacted by this API. A `panic=abort` build cannot perform
+    /// this cleanup.
     pub fn sign_batch_concurrently(
         &self,
         inputs: Vec<Es256SigningBatchInput>,
@@ -736,7 +748,7 @@ enum SigningOutcome {
 
 struct SigningExecutionError {
     // Serial failures know their caller ordinal. `None` is reserved for a
-    // genuinely batch-wide executor failure such as a scoped worker panic.
+    // genuinely batch-wide private-executor failure.
     item_ordinal: Option<usize>,
 }
 
@@ -794,9 +806,9 @@ impl SigningExecutor for ConcurrentSigningExecutor<'_> {
         }
 
         let worker_count = self.worker_limit.get().min(jobs.len());
-        let next_ordinal = AtomicUsize::new(0);
+        let execution_state = ConcurrentExecutionState::new();
 
-        std::thread::scope(|scope| {
+        let results = std::thread::scope(|scope| {
             // The caller is always one worker. Fallible scoped spawning may
             // reduce parallelism, but cannot strand jobs or detach work.
             let mut handles = Vec::with_capacity(worker_count.saturating_sub(1));
@@ -804,28 +816,115 @@ impl SigningExecutor for ConcurrentSigningExecutor<'_> {
                 if let Ok(handle) = std::thread::Builder::new()
                     .name("marty-es256-signing".into())
                     .spawn_scoped(scope, || {
-                        execute_concurrent_signing_worker(self.signer, jobs, &next_ordinal)
+                        execute_concurrent_signing_worker_boundary(
+                            self.signer,
+                            jobs,
+                            &execution_state,
+                        )
                     })
                 {
                     handles.push(handle);
                 }
             }
 
-            let mut results = execute_concurrent_signing_worker(self.signer, jobs, &next_ordinal);
-            let mut worker_panicked = false;
+            let mut results =
+                execute_concurrent_signing_worker_boundary(self.signer, jobs, &execution_state);
             for handle in handles {
                 match handle.join() {
                     Ok(mut worker_results) => results.append(&mut worker_results),
-                    Err(_) => worker_panicked = true,
+                    // The boundary catches the complete worker body. Retain a
+                    // defensive join path so an unexpected wrapper panic still
+                    // stops dispatch and is resumed only after every join.
+                    Err(payload) => execution_state.record_panic(payload),
                 }
             }
 
-            if worker_panicked {
-                Err(SigningExecutionError { item_ordinal: None })
-            } else {
-                Ok(results)
-            }
-        })
+            results
+        });
+
+        if let Some(payload) = execution_state.take_first_panic() {
+            // `resume_unwind` does not run the panic hook a second time. The
+            // original hook already ran at the signer boundary and is outside
+            // this API's redacted Result contract.
+            resume_unwind(payload);
+        }
+
+        Ok(results)
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct ConcurrentExecutionState {
+    inner: Mutex<ConcurrentExecutionStateInner>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct ConcurrentExecutionStateInner {
+    next_ordinal: usize,
+    stopped: bool,
+    first_panic: Option<Box<dyn std::any::Any + Send + 'static>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl ConcurrentExecutionState {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(ConcurrentExecutionStateInner {
+                next_ordinal: 0,
+                stopped: false,
+                first_panic: None,
+            }),
+        }
+    }
+
+    fn claim(&self, job_count: usize) -> Option<usize> {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if inner.stopped || inner.next_ordinal >= job_count {
+            return None;
+        }
+        let ordinal = inner.next_ordinal;
+        inner.next_ordinal += 1;
+        Some(ordinal)
+    }
+
+    fn record_panic(&self, payload: Box<dyn std::any::Any + Send + 'static>) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner.stopped = true;
+        if inner.first_panic.is_none() {
+            inner.first_panic = Some(payload);
+        }
+    }
+
+    fn take_first_panic(&self) -> Option<Box<dyn std::any::Any + Send + 'static>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .first_panic
+            .take()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn execute_concurrent_signing_worker_boundary(
+    signer: &dyn BoundedConcurrentCredentialSigner,
+    jobs: &[SigningJob<'_>],
+    execution_state: &ConcurrentExecutionState,
+) -> Vec<SigningResult> {
+    match catch_unwind(|| execute_concurrent_signing_worker(signer, jobs, execution_state)) {
+        Ok(results) => results,
+        Err(payload) => {
+            // Catch only at the complete worker boundary: the panicking worker
+            // is never reused. Linearized dispatch stops immediately, while
+            // already-claimed calls in other workers are allowed to finish.
+            execution_state.record_panic(payload);
+            Vec::new()
+        }
     }
 }
 
@@ -833,24 +932,19 @@ impl SigningExecutor for ConcurrentSigningExecutor<'_> {
 fn execute_concurrent_signing_worker(
     signer: &dyn BoundedConcurrentCredentialSigner,
     jobs: &[SigningJob<'_>],
-    next_ordinal: &AtomicUsize,
+    execution_state: &ConcurrentExecutionState,
 ) -> Vec<SigningResult> {
     let mut results = Vec::new();
-    loop {
-        let ordinal = next_ordinal.fetch_add(1, Ordering::Relaxed);
-        let Some(job) = jobs.get(ordinal) else {
-            break;
-        };
+    while let Some(ordinal) = execution_state.claim(jobs.len()) {
+        let job = &jobs[ordinal];
 
         // Do not cancel or retry: each claimed job crosses the signer boundary
-        // exactly once, even after another call returns an error.
-        // Keep panic behavior independent of which worker claimed the job.
-        // With unwind-enabled builds, both ordinary backend errors and signer
-        // panics become one redacted item failure and remaining jobs continue.
-        // A panic=abort build terminates by definition and cannot be recovered.
-        let outcome = match catch_unwind(AssertUnwindSafe(|| signer.sign(job.payload))) {
-            Ok(Ok(signature)) => SigningOutcome::Signature(signature),
-            Ok(Err(_)) | Err(_) => SigningOutcome::Failed,
+        // exactly once. Ordinary returned errors do not stop dispatch. A panic
+        // unwinds this whole worker to the outer cleanup boundary, so this
+        // signer reference is not used again by the panicking worker.
+        let outcome = match signer.sign(job.payload) {
+            Ok(signature) => SigningOutcome::Signature(signature),
+            Err(_) => SigningOutcome::Failed,
         };
         results.push(SigningResult {
             identity: job.identity,
@@ -1003,6 +1097,8 @@ mod tests {
 
     const RAW_ES256_SIGNATURE: [u8; ES256_SIGNATURE_LENGTH] = [1; ES256_SIGNATURE_LENGTH];
     const BACKEND_SECRET: &str = "kms-tenant-secret-route-91";
+    #[cfg(not(target_family = "wasm"))]
+    const TEST_SIGNER_PANIC: &str = "intentional concurrent signer test panic";
     const CLAIM_SECRET: &str = "credential-claim-canary";
     const ISSUER_SECRET: &str = "did:example:issuer-private-canary";
     const KID_SECRET: &str = "did:example:issuer-private-canary#key-private-canary";
@@ -1323,42 +1419,40 @@ mod tests {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    enum PanickingWorker {
+        Caller,
+        Spawned,
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     struct PanickingConcurrentSigner {
         signing_key: p256::ecdsa::SigningKey,
         calls: Mutex<Vec<Vec<u8>>>,
+        active_calls: AtomicUsize,
+        peak_calls: AtomicUsize,
         max_workers: NonZeroUsize,
-        panic_caller_once: AtomicBool,
-        panic_worker_once: AtomicBool,
-        spawned_worker_seen: AtomicBool,
-        drift_on_panic: bool,
-        metadata_state: AtomicUsize,
+        panicking_worker: PanickingWorker,
+        panic_once: AtomicBool,
+        caller_started: AtomicBool,
+        spawned_started: AtomicBool,
+        peer_completed: AtomicBool,
     }
 
     #[cfg(not(target_family = "wasm"))]
     impl PanickingConcurrentSigner {
-        fn caller_only(drift_on_panic: bool) -> Self {
+        fn new(panicking_worker: PanickingWorker, max_workers: usize) -> Self {
             Self {
                 signing_key: p256::ecdsa::SigningKey::from_slice(&[0x35; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
-                max_workers: NonZeroUsize::new(1).unwrap(),
-                panic_caller_once: AtomicBool::new(true),
-                panic_worker_once: AtomicBool::new(false),
-                spawned_worker_seen: AtomicBool::new(false),
-                drift_on_panic,
-                metadata_state: AtomicUsize::new(0),
-            }
-        }
-
-        fn caller_and_worker() -> Self {
-            Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x35; 32]).unwrap(),
-                calls: Mutex::new(Vec::new()),
-                max_workers: NonZeroUsize::new(2).unwrap(),
-                panic_caller_once: AtomicBool::new(true),
-                panic_worker_once: AtomicBool::new(true),
-                spawned_worker_seen: AtomicBool::new(false),
-                drift_on_panic: false,
-                metadata_state: AtomicUsize::new(0),
+                active_calls: AtomicUsize::new(0),
+                peak_calls: AtomicUsize::new(0),
+                max_workers: NonZeroUsize::new(max_workers).unwrap(),
+                panicking_worker,
+                panic_once: AtomicBool::new(true),
+                caller_started: AtomicBool::new(false),
+                spawned_started: AtomicBool::new(false),
+                peer_completed: AtomicBool::new(false),
             }
         }
 
@@ -1374,6 +1468,21 @@ mod tests {
                 .collect::<HashSet<_>>()
                 .len()
         }
+
+        fn peak_calls(&self) -> usize {
+            self.peak_calls.load(Ordering::SeqCst)
+        }
+
+        fn wait_for_peer(&self, peer_started: &AtomicBool) {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !peer_started.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            assert!(
+                peer_started.load(Ordering::SeqCst),
+                "both concurrent test workers must enter the signer"
+            );
+        }
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -1386,35 +1495,36 @@ mod tests {
     #[cfg(not(target_family = "wasm"))]
     impl CredentialSigner for PanickingConcurrentSigner {
         fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            let active = self.active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_calls.fetch_max(active, Ordering::SeqCst);
+            let _active_call = ActiveCallGuard(&self.active_calls);
             self.calls.lock().unwrap().push(message.to_vec());
             let is_spawned_worker = std::thread::current().name() == Some("marty-es256-signing");
 
             if is_spawned_worker {
-                self.spawned_worker_seen.store(true, Ordering::SeqCst);
-                if self.panic_worker_once.swap(false, Ordering::SeqCst) {
-                    if self.drift_on_panic {
-                        self.metadata_state.store(2, Ordering::SeqCst);
-                    }
-                    panic!("{BACKEND_SECRET}");
-                }
+                self.spawned_started.store(true, Ordering::SeqCst);
+                self.wait_for_peer(&self.caller_started);
+            } else if self.max_workers.get() > 1 {
+                self.caller_started.store(true, Ordering::SeqCst);
+                self.wait_for_peer(&self.spawned_started);
             } else {
-                if self.max_workers.get() > 1 {
-                    let deadline = Instant::now() + Duration::from_secs(2);
-                    while !self.spawned_worker_seen.load(Ordering::SeqCst)
-                        && Instant::now() < deadline
-                    {
-                        std::thread::yield_now();
-                    }
-                }
-                if self.panic_caller_once.swap(false, Ordering::SeqCst) {
-                    if self.drift_on_panic {
-                        self.metadata_state.store(2, Ordering::SeqCst);
-                    }
-                    panic!("{BACKEND_SECRET}");
-                }
+                self.caller_started.store(true, Ordering::SeqCst);
             }
 
+            let should_panic = matches!(
+                (self.panicking_worker, is_spawned_worker),
+                (PanickingWorker::Caller, false) | (PanickingWorker::Spawned, true)
+            );
+            if should_panic && self.panic_once.swap(false, Ordering::SeqCst) {
+                panic!("{TEST_SIGNER_PANIC}");
+            }
+
+            // Keep the peer call in flight until the selected worker has
+            // unwound into the executor boundary. The API must join this call
+            // before it resumes the selected panic.
+            std::thread::sleep(Duration::from_millis(25));
             let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
+            self.peer_completed.store(true, Ordering::SeqCst);
             Ok(signature.to_bytes().to_vec())
         }
 
@@ -1423,11 +1533,7 @@ mod tests {
         }
 
         fn issuer_id(&self) -> &str {
-            if self.metadata_state.load(Ordering::SeqCst) == 2 {
-                "did:example:changed"
-            } else {
-                ISSUER_SECRET
-            }
+            ISSUER_SECRET
         }
 
         fn kid_url(&self) -> String {
@@ -1891,42 +1997,62 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn concurrent_signer_panics_are_scheduler_independent_and_finish_all_jobs() {
-        let mut caller_signer = PanickingConcurrentSigner::caller_only(false);
-        let caller_error = {
-            let scope = ConcurrentEs256SignerScope::new(&mut caller_signer).unwrap();
-            assert_error(
-                scope.sign_batch_concurrently(jwt_inputs(8, "caller-panic")),
-                SigningBatchErrorKind::ExecutorFailed,
-                Some(0),
-            )
+    fn concurrent_signer_panics_propagate_only_after_every_worker_is_joined() {
+        let mut single_signer = PanickingConcurrentSigner::new(PanickingWorker::Caller, 1);
+        let single_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let scope = ConcurrentEs256SignerScope::new(&mut single_signer).unwrap();
+            scope.sign_batch_concurrently(jwt_inputs(8, "single-caller"))
+        }));
+        let single_payload = match single_outcome {
+            Err(payload) => payload,
+            Ok(_) => panic!("the caller worker's signer panic must propagate"),
         };
-        assert_eq!(caller_signer.call_count(), 8);
-        assert_eq!(caller_signer.unique_call_count(), 8);
-        assert!(!caller_error.to_string().contains(BACKEND_SECRET));
-        assert!(!format!("{caller_error:?}").contains(BACKEND_SECRET));
+        let single_message = single_payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| single_payload.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(single_message, Some(TEST_SIGNER_PANIC));
+        assert_eq!(single_signer.active_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(single_signer.call_count(), 1);
+        assert_eq!(single_signer.unique_call_count(), 1);
+        assert_eq!(single_signer.peak_calls(), 1);
 
-        let mut both_signer = PanickingConcurrentSigner::caller_and_worker();
-        let both_error = {
-            let scope = ConcurrentEs256SignerScope::new(&mut both_signer).unwrap();
-            assert_error(
-                scope.sign_batch_concurrently(jwt_inputs(8, "both-panic")),
-                SigningBatchErrorKind::ExecutorFailed,
-                Some(0),
-            )
-        };
-        assert!(both_signer.spawned_worker_seen.load(Ordering::SeqCst));
-        assert!(!both_signer.panic_caller_once.load(Ordering::SeqCst));
-        assert!(!both_signer.panic_worker_once.load(Ordering::SeqCst));
-        assert_eq!(both_signer.call_count(), 8);
-        assert_eq!(both_signer.unique_call_count(), 8);
-        assert!(!both_error.to_string().contains(BACKEND_SECRET));
-        assert!(!format!("{both_error:?}").contains(BACKEND_SECRET));
+        for (panicking_worker, label) in [
+            (PanickingWorker::Caller, "caller"),
+            (PanickingWorker::Spawned, "spawned"),
+        ] {
+            let mut signer = PanickingConcurrentSigner::new(panicking_worker, 2);
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
+                scope.sign_batch_concurrently(jwt_inputs(8, label))
+            }));
+            let payload = match outcome {
+                Err(payload) => payload,
+                Ok(_) => panic!("a signer panic must remain outside the Result contract"),
+            };
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+
+            assert_eq!(message, Some(TEST_SIGNER_PANIC));
+            assert!(!signer.panic_once.load(Ordering::SeqCst));
+            assert!(signer.caller_started.load(Ordering::SeqCst));
+            assert!(signer.spawned_started.load(Ordering::SeqCst));
+            assert!(
+                signer.peer_completed.load(Ordering::SeqCst),
+                "panic propagation must wait for the already-in-flight peer"
+            );
+            assert_eq!(signer.active_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(signer.call_count(), 2);
+            assert_eq!(signer.unique_call_count(), 2);
+            assert_eq!(signer.peak_calls(), 2);
+        }
     }
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn post_join_metadata_drift_precedes_backend_error_and_panic() {
+    fn post_join_metadata_drift_precedes_a_returned_backend_error() {
         let mut failing_signer = ConcurrentTestSigner::new(4, 0x1212_3434_5656_7878)
             .with_fail_labels(["failure-2"])
             .with_drift_on_call(1);
@@ -1940,18 +2066,6 @@ mod tests {
         }
         assert_eq!(failing_signer.call_count(), 8);
         assert_eq!(failing_signer.unique_call_count(), 8);
-
-        let mut panicking_signer = PanickingConcurrentSigner::caller_only(true);
-        {
-            let scope = ConcurrentEs256SignerScope::new(&mut panicking_signer).unwrap();
-            assert_error(
-                scope.sign_batch_concurrently(jwt_inputs(8, "panic-drift")),
-                SigningBatchErrorKind::SignerMetadataChanged,
-                None,
-            );
-        }
-        assert_eq!(panicking_signer.call_count(), 8);
-        assert_eq!(panicking_signer.unique_call_count(), 8);
     }
 
     #[cfg(not(target_family = "wasm"))]
