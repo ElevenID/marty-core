@@ -184,6 +184,10 @@ fn validate_url(
         }
     }
 
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(invalid_request("Canvas URLs must not include credentials"));
+    }
+
     if url.query().is_some() || url.fragment().is_some() {
         return Err(invalid_request(
             "Canvas URLs must not include query strings or fragments",
@@ -782,6 +786,17 @@ mod tests {
         let err =
             normalize_canvas_base_url("https://canvas.example.edu/oidc", false, false).unwrap_err();
         assert!(err.to_string().contains("without a path segment"));
+    }
+
+    #[test]
+    fn normalize_canvas_base_url_rejects_url_credentials() {
+        for url in [
+            "https://operator@canvas.example.edu",
+            "https://operator:secret@canvas.example.edu",
+        ] {
+            let err = normalize_canvas_base_url(url, false, false).unwrap_err();
+            assert!(err.to_string().contains("must not include credentials"));
+        }
     }
 
     #[tokio::test]
