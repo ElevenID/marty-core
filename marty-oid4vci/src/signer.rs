@@ -26,6 +26,11 @@ use crate::types::{IssuerKey, SigningAlgorithm};
 ///
 /// - [`IssuerKey`] — local JWK-based signer (in-process private key).
 /// - (future) `KmsSigner` — delegates to an external KMS via callback.
+///
+/// Implementors must ensure their [`std::fmt::Debug`] representation never
+/// includes private key material, credentials, signing payloads, or backend
+/// secrets. Executors that retain signers must own a redacted diagnostic
+/// representation instead of delegating formatting to the signer.
 pub trait CredentialSigner: std::fmt::Debug + Send + Sync {
     /// Sign raw bytes and return the raw signature.
     ///

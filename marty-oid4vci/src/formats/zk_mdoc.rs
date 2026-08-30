@@ -254,9 +254,14 @@ mod tests {
 
     /// A minimal CredentialSigner backed by a fresh P-256 JWK, used to test
     /// the external-signer path without pulling in KMS infrastructure.
-    #[derive(Debug)]
     struct TestP256Signer {
         jwk: JWK,
+    }
+
+    impl std::fmt::Debug for TestP256Signer {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("TestP256Signer([redacted])")
+        }
     }
 
     impl TestP256Signer {
@@ -283,6 +288,20 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:kms-issuer#key-1".into()
         }
+    }
+
+    #[test]
+    fn test_p256_signer_debug_is_stably_redacted() {
+        let signer = TestP256Signer::new();
+        let private_jwk = serde_json::to_value(&signer.jwk).unwrap();
+        let private_d = private_jwk
+            .get("d")
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        let diagnostic = format!("{signer:#?}");
+
+        assert_eq!(diagnostic, "TestP256Signer([redacted])");
+        assert!(!diagnostic.contains(private_d));
     }
 
     #[test]
