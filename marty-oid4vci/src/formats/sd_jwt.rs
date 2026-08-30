@@ -23,6 +23,35 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
 
+const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
+
+fn checked_sd_jwt_expiration_timestamp(
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expiration_seconds: Option<i64>,
+) -> Oid4vciResult<Option<i64>> {
+    expiration_seconds
+        .map(|seconds| {
+            issued_at
+                .timestamp()
+                .checked_add(seconds)
+                .ok_or_else(|| Oid4vciError::SigningError(SD_JWT_EXPIRATION_OUT_OF_RANGE.into()))
+        })
+        .transpose()
+}
+
+fn checked_sd_jwt_vcdm_expiration(
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expiration_seconds: Option<i64>,
+) -> Oid4vciResult<Option<(i64, chrono::DateTime<chrono::Utc>)>> {
+    checked_sd_jwt_expiration_timestamp(issued_at, expiration_seconds)?
+        .map(|timestamp| {
+            chrono::DateTime::from_timestamp(timestamp, 0)
+                .map(|date_time| (timestamp, date_time))
+                .ok_or_else(|| Oid4vciError::SigningError(SD_JWT_EXPIRATION_OUT_OF_RANGE.into()))
+        })
+        .transpose()
+}
+
 /// Sign an SD-JWT verifiable credential.
 ///
 /// Claims listed in `selective_disclosure_claims` will be made selectively
@@ -58,8 +87,10 @@ pub fn sign_sd_jwt(
             if let Some(ref subject_id) = claims.subject_id {
                 p["sub"] = serde_json::json!(subject_id);
             }
-            if let Some(exp_secs) = claims.expiration_seconds {
-                p["exp"] = serde_json::json!(now.timestamp() + exp_secs);
+            if let Some(expiration_timestamp) =
+                checked_sd_jwt_expiration_timestamp(now, claims.expiration_seconds)?
+            {
+                p["exp"] = serde_json::json!(expiration_timestamp);
             }
             if let Some(obj) = p.as_object_mut() {
                 for (key, value) in &claims.claims {
@@ -105,12 +136,11 @@ pub fn sign_sd_jwt(
             if let Some(ref subject_id) = claims.subject_id {
                 p["sub"] = serde_json::json!(subject_id);
             }
-            if let Some(exp_secs) = claims.expiration_seconds {
-                let exp_ts = now.timestamp() + exp_secs;
-                p["exp"] = serde_json::json!(exp_ts);
-                let valid_until = chrono::DateTime::from_timestamp(exp_ts, 0)
-                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-                    .unwrap_or_default();
+            if let Some((expiration_timestamp, expires_at)) =
+                checked_sd_jwt_vcdm_expiration(now, claims.expiration_seconds)?
+            {
+                p["exp"] = serde_json::json!(expiration_timestamp);
+                let valid_until = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                 p["validUntil"] = serde_json::json!(valid_until);
             }
             (p, "$.credentialSubject.")
@@ -264,8 +294,10 @@ pub fn prepare_sd_jwt_with_options(
             if let Some(ref subject_id) = claims.subject_id {
                 p["sub"] = serde_json::json!(subject_id);
             }
-            if let Some(exp_secs) = claims.expiration_seconds {
-                p["exp"] = serde_json::json!(now.timestamp() + exp_secs);
+            if let Some(expiration_timestamp) =
+                checked_sd_jwt_expiration_timestamp(now, claims.expiration_seconds)?
+            {
+                p["exp"] = serde_json::json!(expiration_timestamp);
             }
             if let Some(obj) = p.as_object_mut() {
                 for (key, value) in &claims.claims {
@@ -309,12 +341,11 @@ pub fn prepare_sd_jwt_with_options(
             if let Some(ref subject_id) = claims.subject_id {
                 p["sub"] = serde_json::json!(subject_id);
             }
-            if let Some(exp_secs) = claims.expiration_seconds {
-                let exp_ts = now.timestamp() + exp_secs;
-                p["exp"] = serde_json::json!(exp_ts);
-                let valid_until = chrono::DateTime::from_timestamp(exp_ts, 0)
-                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-                    .unwrap_or_default();
+            if let Some((expiration_timestamp, expires_at)) =
+                checked_sd_jwt_vcdm_expiration(now, claims.expiration_seconds)?
+            {
+                p["exp"] = serde_json::json!(expiration_timestamp);
+                let valid_until = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                 p["validUntil"] = serde_json::json!(valid_until);
             }
             // W3C VCDM v2: selective claims are inside credentialSubject
@@ -905,6 +936,147 @@ mod tests {
             jwk_json,
             algorithm: SigningAlgorithm::ES256,
         }
+    }
+
+    struct MustNotSign;
+
+    impl std::fmt::Debug for MustNotSign {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("MustNotSign([redacted])")
+        }
+    }
+
+    impl CredentialSigner for MustNotSign {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            panic!("invalid expiration must be rejected before signing")
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::ES256
+        }
+
+        fn issuer_id(&self) -> &str {
+            "did:example:expiration-test-issuer"
+        }
+
+        fn kid_url(&self) -> String {
+            "did:example:expiration-test-issuer#key-1".into()
+        }
+    }
+
+    fn claims_with_expiration(
+        credential_payload_format: CredentialPayloadFormat,
+        expiration_seconds: i64,
+    ) -> CredentialClaims {
+        CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "ExpirationCredential".into(),
+            claims: [("status".into(), serde_json::json!("active"))].into(),
+            expiration_seconds: Some(expiration_seconds),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        }
+    }
+
+    fn assert_expiration_out_of_range(error: Oid4vciError) {
+        let Oid4vciError::SigningError(message) = error else {
+            panic!("expiration range failures must use the signing error boundary")
+        };
+        assert_eq!(message, SD_JWT_EXPIRATION_OUT_OF_RANGE);
+        for sensitive in [i64::MIN.to_string(), i64::MAX.to_string()] {
+            assert!(!message.contains(&sensitive));
+        }
+    }
+
+    #[test]
+    fn sd_jwt_rejects_unsafe_expiration_before_any_signer_call() {
+        let key = test_p256_key();
+        let ietf_claims = claims_with_expiration(CredentialPayloadFormat::IetfSdJwt, i64::MAX);
+        assert_expiration_out_of_range(sign_sd_jwt(&key, &ietf_claims).unwrap_err());
+        assert_expiration_out_of_range(
+            sign_sd_jwt_with_signer(&MustNotSign, &ietf_claims).unwrap_err(),
+        );
+
+        for expiration_seconds in [i64::MIN, i64::MAX] {
+            let claims =
+                claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2SdJwt, expiration_seconds);
+            assert_expiration_out_of_range(sign_sd_jwt(&key, &claims).unwrap_err());
+            assert_expiration_out_of_range(
+                sign_sd_jwt_with_signer(&MustNotSign, &claims).unwrap_err(),
+            );
+        }
+    }
+
+    #[test]
+    fn sd_jwt_preserves_ietf_numeric_dates_outside_the_vcdm_calendar_range() {
+        let issued_at = chrono::Utc::now();
+        let expiration_seconds = chrono::DateTime::<chrono::Utc>::MAX_UTC
+            .timestamp()
+            .checked_sub(issued_at.timestamp())
+            .and_then(|seconds| seconds.checked_add(2))
+            .unwrap();
+        let numeric_expiration =
+            checked_sd_jwt_expiration_timestamp(issued_at, Some(expiration_seconds))
+                .unwrap()
+                .unwrap();
+        assert!(numeric_expiration > chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp());
+
+        let claims = claims_with_expiration(CredentialPayloadFormat::IetfSdJwt, expiration_seconds);
+        let prepared = prepare_sd_jwt(&MustNotSign, &claims).unwrap();
+        let payload_segment = prepared.signing_input.split('.').nth(1).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&B64.decode(payload_segment).unwrap()).unwrap();
+        assert!(
+            payload["exp"].as_i64().unwrap() > chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp()
+        );
+        sign_sd_jwt(&test_p256_key(), &claims).unwrap();
+    }
+
+    #[test]
+    fn sd_jwt_rejects_vcdm_datetime_boundary_overflow() {
+        for (issued_at, expiration_seconds) in [
+            (chrono::DateTime::<chrono::Utc>::MAX_UTC, 1),
+            (chrono::DateTime::<chrono::Utc>::MIN_UTC, -1),
+        ] {
+            assert_expiration_out_of_range(
+                checked_sd_jwt_vcdm_expiration(issued_at, Some(expiration_seconds)).unwrap_err(),
+            );
+        }
+    }
+
+    #[test]
+    fn sd_jwt_preserves_unsupported_payload_format_error_precedence() {
+        let claims = claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2JwtVc, i64::MAX);
+        for error in [
+            sign_sd_jwt(&test_p256_key(), &claims).unwrap_err(),
+            sign_sd_jwt_with_signer(&MustNotSign, &claims).unwrap_err(),
+        ] {
+            let Oid4vciError::UnsupportedFormat(message) = error else {
+                panic!("unsupported payload format must precede expiration validation")
+            };
+            assert!(message.contains("w3c_vcdm_v2_jwt_vc"));
+        }
+    }
+
+    #[test]
+    fn sd_jwt_uses_one_checked_expiration_for_jwt_and_vcdm_claims() {
+        let claims = claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2SdJwt, 3_600);
+        let prepared = prepare_sd_jwt(&MustNotSign, &claims).unwrap();
+        let payload_segment = prepared.signing_input.split('.').nth(1).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&B64.decode(payload_segment).unwrap()).unwrap();
+        let jwt_expiration = payload["exp"].as_i64().unwrap();
+        let vcdm_expiration =
+            chrono::DateTime::parse_from_rfc3339(payload["validUntil"].as_str().unwrap())
+                .unwrap()
+                .timestamp();
+
+        assert_eq!(jwt_expiration, vcdm_expiration);
     }
 
     #[test]
