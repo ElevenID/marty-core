@@ -34,6 +34,7 @@ const SINGLE_MDOC_DIGEST_CREDENTIAL_ID: u64 = 0;
 const SHA256_DIGEST_LENGTH: usize = 32;
 const MDOC_DIGEST_EXECUTION_FAILED: &str = "mdoc digest execution failed";
 const MDOC_VALIDITY_OUT_OF_RANGE: &str = "mdoc validity period is out of range";
+const MDOC_RS256_UNSUPPORTED: &str = "RS256 is not supported for mDoc COSE signing";
 
 /// Sign an mDoc credential.
 ///
@@ -510,7 +511,9 @@ fn mdoc_cose_algorithm(
             "ES256K is not supported for mDoc COSE signing".into(),
         )),
         crate::types::SigningAlgorithm::ES384 => Ok(iana::Algorithm::ES384),
-        crate::types::SigningAlgorithm::RS256 => Ok(iana::Algorithm::PS256),
+        crate::types::SigningAlgorithm::RS256 => {
+            Err(Oid4vciError::MdocError(MDOC_RS256_UNSUPPORTED.into()))
+        }
     }
 }
 
@@ -1040,17 +1043,7 @@ fn sign_cose_sign1(
     use ssi_crypto::{AlgorithmInstance, SecretKey};
     use ssi_jwk::Params;
 
-    let alg = match issuer_key.algorithm {
-        crate::types::SigningAlgorithm::ES256 => iana::Algorithm::ES256,
-        crate::types::SigningAlgorithm::EdDSA => iana::Algorithm::EdDSA,
-        crate::types::SigningAlgorithm::ES256K => {
-            return Err(Oid4vciError::MdocError(
-                "ES256K is not supported for mDoc COSE signing".into(),
-            ));
-        }
-        crate::types::SigningAlgorithm::ES384 => iana::Algorithm::ES384,
-        crate::types::SigningAlgorithm::RS256 => iana::Algorithm::PS256,
-    };
+    let alg = mdoc_cose_algorithm(issuer_key.algorithm)?;
 
     // ISO 18013-5 section 9.1.2.4 puts alg in the protected header and
     // x5chain in the unprotected header.
@@ -1293,6 +1286,40 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct CountingAlgorithmSigner {
+        algorithm: SigningAlgorithm,
+        algorithm_calls: AtomicUsize,
+    }
+
+    impl CountingAlgorithmSigner {
+        fn new(algorithm: SigningAlgorithm) -> Self {
+            Self {
+                algorithm,
+                algorithm_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CredentialSigner for CountingAlgorithmSigner {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            panic!("preparation fixtures must not sign")
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            self.algorithm_calls.fetch_add(1, Ordering::Relaxed);
+            self.algorithm
+        }
+
+        fn issuer_id(&self) -> &str {
+            "did:example:issuer"
+        }
+
+        fn kid_url(&self) -> String {
+            "did:example:issuer#key-1".into()
+        }
+    }
+
     struct MustNotExecute;
 
     impl DigestExecutor for MustNotExecute {
@@ -1427,6 +1454,191 @@ mod tests {
             w3c_context: vec![],
             w3c_types: vec![],
         }
+    }
+
+    #[test]
+    fn mdoc_cose_algorithm_preserves_supported_mappings_and_rejects_rs256() {
+        for (signing_algorithm, cose_algorithm) in [
+            (SigningAlgorithm::ES256, iana::Algorithm::ES256),
+            (SigningAlgorithm::EdDSA, iana::Algorithm::EdDSA),
+            (SigningAlgorithm::ES384, iana::Algorithm::ES384),
+        ] {
+            assert_eq!(
+                mdoc_cose_algorithm(signing_algorithm).unwrap(),
+                cose_algorithm
+            );
+        }
+
+        let es256k_error = mdoc_cose_algorithm(SigningAlgorithm::ES256K).unwrap_err();
+        let Oid4vciError::MdocError(message) = es256k_error else {
+            panic!("unsupported mdoc algorithms must use the mdoc error boundary")
+        };
+        assert_eq!(message, "ES256K is not supported for mDoc COSE signing");
+
+        let rs256_error = mdoc_cose_algorithm(SigningAlgorithm::RS256).unwrap_err();
+        let Oid4vciError::MdocError(message) = rs256_error else {
+            panic!("unsupported mdoc algorithms must use the mdoc error boundary")
+        };
+        assert_eq!(message, MDOC_RS256_UNSUPPORTED);
+    }
+
+    #[test]
+    fn local_rs256_rejection_preserves_key_parsing_precedence() {
+        let claims = test_mdoc_claims([]);
+        let malformed_local_key = IssuerKey {
+            issuer_id: "did:example:sensitive-issuer".into(),
+            jwk_json: "Sensitive malformed private JWK".into(),
+            algorithm: SigningAlgorithm::RS256,
+        };
+        let malformed_error = match sign_mdoc(&malformed_local_key, &claims) {
+            Ok(_) => panic!("malformed local JWK must fail"),
+            Err(error) => error,
+        };
+        let Oid4vciError::KeyError(malformed_message) = malformed_error else {
+            panic!("local JWK parsing must retain precedence over algorithm rejection")
+        };
+        assert!(malformed_message.starts_with("Invalid issuer JWK:"));
+        assert!(!malformed_message.contains("Sensitive"));
+
+        // A parseable public RSA JWK has no private signing material. Reaching
+        // the fixed mdoc error proves the COSE contract rejects RS256 before
+        // secret-key extraction or signing.
+        let public_rsa_key = IssuerKey {
+            issuer_id: "did:example:sensitive-issuer".into(),
+            jwk_json: r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#.into(),
+            algorithm: SigningAlgorithm::RS256,
+        };
+        let local_error = match sign_mdoc(&public_rsa_key, &claims) {
+            Ok(_) => panic!("local RS256 mdoc issuance must fail"),
+            Err(error) => error,
+        };
+        let Oid4vciError::MdocError(local_message) = local_error else {
+            panic!("local RS256 rejection must use the mdoc error boundary")
+        };
+        assert_eq!(local_message, MDOC_RS256_UNSUPPORTED);
+        assert!(!local_message.contains("sensitive-issuer"));
+    }
+
+    #[test]
+    fn generic_rs256_validation_precedes_salt_digest_and_signing() {
+        let claims = test_mdoc_claims([(
+            "private_claim".into(),
+            serde_json::json!("Sensitive credential value"),
+        )]);
+        let signer = PreparationOnlySigner(SigningAlgorithm::RS256);
+        let generic_error = match sign_mdoc_with_signer(&signer, &claims) {
+            Ok(_) => panic!("generic RS256 mdoc issuance must fail"),
+            Err(error) => error,
+        };
+        let Oid4vciError::MdocError(generic_message) = generic_error else {
+            panic!("generic RS256 rejection must use the mdoc error boundary")
+        };
+        assert_eq!(generic_message, MDOC_RS256_UNSUPPORTED);
+
+        let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let issuer_claims = claims
+            .claims
+            .iter()
+            .map(|(name, value)| (name.as_str(), value));
+        let preparation_error = match prepare_mdoc_with_inputs_and_digest_executor(
+            &signer,
+            &claims,
+            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
+            None,
+            signed_at,
+            issuer_claims,
+            || panic!("RS256 rejection must precede salt allocation"),
+            &MustNotExecute,
+        ) {
+            Ok(_) => panic!("RS256 preparation must not return signing state"),
+            Err(error) => error,
+        };
+        let Oid4vciError::MdocError(preparation_message) = preparation_error else {
+            panic!("RS256 preparation rejection must use the mdoc error boundary")
+        };
+        assert_eq!(preparation_message, MDOC_RS256_UNSUPPORTED);
+
+        for message in [generic_message, preparation_message] {
+            for sensitive in ["Sensitive", "private_claim"] {
+                assert!(!message.contains(sensitive));
+            }
+        }
+    }
+
+    #[test]
+    fn generic_mdoc_preparation_reads_the_signing_algorithm_once() {
+        let signer = CountingAlgorithmSigner::new(SigningAlgorithm::ES256);
+        let prepared = prepare_mdoc(&signer, &test_mdoc_claims([])).unwrap();
+
+        assert!(!prepared.signing_payload().is_empty());
+        assert_eq!(signer.algorithm_calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn es256k_keeps_key_identifier_claim_and_holder_error_precedence() {
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256K);
+        let claims = test_mdoc_claims([]);
+
+        let malformed_key = IssuerKey {
+            issuer_id: "did:example:issuer".into(),
+            jwk_json: "not a JWK".into(),
+            algorithm: SigningAlgorithm::ES256K,
+        };
+        assert!(matches!(
+            sign_mdoc(&malformed_key, &claims),
+            Err(Oid4vciError::KeyError(_))
+        ));
+
+        let reserved_id_error = match prepare_mdoc_with_credential_id(
+            &signer,
+            &claims,
+            Some("not-a-reserved-credential-id"),
+        ) {
+            Ok(_) => panic!("invalid reserved ID must fail"),
+            Err(error) => error,
+        };
+        let Oid4vciError::MdocError(message) = reserved_id_error else {
+            panic!("reserved ID failures must use the mdoc error boundary")
+        };
+        assert_eq!(
+            message,
+            "reserved credential ID must use the urn:uuid scheme"
+        );
+
+        let invalid_x5chain_claims =
+            test_mdoc_claims([(MDOC_X5C_CLAIM_KEY.into(), serde_json::json!("not-an-array"))]);
+        let x5chain_error = match prepare_mdoc(&signer, &invalid_x5chain_claims) {
+            Ok(_) => panic!("invalid x5chain claim must fail"),
+            Err(error) => error,
+        };
+        let Oid4vciError::MdocError(message) = x5chain_error else {
+            panic!("x5chain failures must use the mdoc error boundary")
+        };
+        assert_eq!(
+            message,
+            "_mdoc_x5c must be an array of base64-encoded DER certificates"
+        );
+
+        let incomplete_holder = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "ERERERERERERERERERERERERERERERERERERERERERE"
+        });
+        let holder_error = match prepare_mdoc_with_credential_id_and_device_key(
+            &signer,
+            &claims,
+            None,
+            Some(&incomplete_holder),
+        ) {
+            Ok(_) => panic!("incomplete holder key must fail"),
+            Err(error) => error,
+        };
+        let Oid4vciError::MdocError(message) = holder_error else {
+            panic!("holder key failures must use the mdoc error boundary")
+        };
+        assert_eq!(message, "mDoc holder public JWK is missing y");
     }
 
     struct BatchReplayItem {

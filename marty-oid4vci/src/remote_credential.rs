@@ -849,7 +849,12 @@ mod tests {
 
     #[test]
     fn mdoc_batch_validates_every_request_before_uuid_time_salt_or_execution() {
-        invalid_batch_error_without_sources(remote_mdoc_request(None, "RS256", HashMap::new()));
+        let error =
+            invalid_batch_error_without_sources(remote_mdoc_request(None, "RS256", HashMap::new()));
+        let crate::Oid4vciError::InvalidRequest(message) = error else {
+            panic!("remote mdoc algorithm failures must use the request error boundary")
+        };
+        assert_eq!(message, "mDoc remote signing supports ES256 and ES384 only");
         invalid_batch_error_without_sources(remote_mdoc_request(
             Some("not-a-uuid"),
             "ES256",
