@@ -9,8 +9,8 @@ use std::sync::Mutex;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_oid4vci::{
     formats::{
-        jwt_vc::{assemble_jwt_vc, sign_jwt_vc_with_signer, PreparedJwtVc},
-        mdoc::sign_mdoc_with_signer,
+        jwt_vc::{assemble_jwt_vc, prepare_jwt_vc, sign_jwt_vc_with_signer, PreparedJwtVc},
+        mdoc::{prepare_mdoc, sign_mdoc_with_signer},
     },
     signer::CredentialSigner,
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
@@ -193,4 +193,35 @@ fn scalar_es256_mdoc_signs_one_complete_payload_and_forwards_raw_signature() {
     let diagnostic = format!("{signer:#?}");
     assert_eq!(diagnostic, REDACTED_SIGNER_DIAGNOSTIC);
     assert!(!diagnostic.contains("Mustermann"));
+}
+
+#[test]
+fn prepared_jwt_vc_borrows_the_existing_complete_signing_input() {
+    let signer = RecordingEs256Signer::default();
+    let prepared = prepare_jwt_vc(&signer, &jwt_vc_claims()).unwrap();
+
+    assert_eq!(
+        prepared.signing_payload(),
+        prepared.signing_input.as_bytes()
+    );
+    assert_eq!(
+        prepared.signing_payload().as_ptr(),
+        prepared.signing_input.as_ptr(),
+        "the accessor must borrow the existing signing input without copying"
+    );
+    assert!(signer.signing_payloads.lock().unwrap().is_empty());
+}
+
+#[test]
+fn prepared_mdoc_borrows_the_existing_complete_signing_input() {
+    let signer = RecordingEs256Signer::default();
+    let prepared = prepare_mdoc(&signer, &mdoc_claims()).unwrap();
+
+    assert_eq!(prepared.signing_payload(), prepared.tbs_data.as_slice());
+    assert_eq!(
+        prepared.signing_payload().as_ptr(),
+        prepared.tbs_data.as_ptr(),
+        "the accessor must borrow the existing signing input without copying"
+    );
+    assert!(signer.signing_payloads.lock().unwrap().is_empty());
 }

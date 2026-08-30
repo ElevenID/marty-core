@@ -168,6 +168,13 @@ pub struct PreparedMdoc {
     issuer_signed_items: Vec<CborValue>,
 }
 
+impl PreparedMdoc {
+    /// Borrow the complete COSE_Sign1 Sig_structure signing payload.
+    pub fn signing_payload(&self) -> &[u8] {
+        &self.tbs_data
+    }
+}
+
 struct ValidatedMdocClaim {
     element_identifier: String,
     element_value: CborValue,
