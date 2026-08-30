@@ -16,10 +16,25 @@ use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+const JWT_VC_EXPIRATION_OUT_OF_RANGE: &str = "JWT-VC expiration is out of range";
+
 /// Canonical 1EdTech Open Badges 3.0 JSON-LD context.
 pub const OPEN_BADGES_V3_CONTEXT: &str = "https://purl.imsglobal.org/spec/ob/v3p0/context.json";
 /// Canonical W3C credential type for an Open Badges 3.0 credential.
 pub const OPEN_BADGES_V3_CREDENTIAL_TYPE: &str = "OpenBadgeCredential";
+
+fn checked_jwt_vc_expiration(
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expiration_seconds: Option<i64>,
+) -> Oid4vciResult<Option<chrono::DateTime<chrono::Utc>>> {
+    expiration_seconds
+        .map(|seconds| {
+            chrono::TimeDelta::try_seconds(seconds)
+                .and_then(|duration| issued_at.checked_add_signed(duration))
+                .ok_or_else(|| Oid4vciError::SigningError(JWT_VC_EXPIRATION_OUT_OF_RANGE.into()))
+        })
+        .transpose()
+}
 
 /// Sign a W3C VC-JWT credential.
 ///
@@ -35,6 +50,7 @@ pub fn sign_jwt_vc(
 
     let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
     let now = chrono::Utc::now();
+    let expires_at = checked_jwt_vc_expiration(now, claims.expiration_seconds)?;
 
     // Build the W3C VC payload
     let mut credential_subject: HashMap<String, serde_json::Value> = claims.claims.clone();
@@ -65,10 +81,8 @@ pub fn sign_jwt_vc(
             "validFrom": valid_from,
             "credentialSubject": credential_subject,
         });
-        if let Some(exp_secs) = claims.expiration_seconds {
-            let valid_until = (now + chrono::Duration::seconds(exp_secs))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string();
+        if let Some(expires_at) = expires_at.as_ref() {
+            let valid_until = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
             v["validUntil"] = serde_json::json!(valid_until);
         }
         v
@@ -84,10 +98,8 @@ pub fn sign_jwt_vc(
             "issuanceDate": issuance_date,
             "credentialSubject": credential_subject,
         });
-        if let Some(exp_secs) = claims.expiration_seconds {
-            let expiration_date = (now + chrono::Duration::seconds(exp_secs))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string();
+        if let Some(expires_at) = expires_at.as_ref() {
+            let expiration_date = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
             v["expirationDate"] = serde_json::json!(expiration_date);
         }
         v
@@ -105,8 +117,8 @@ pub fn sign_jwt_vc(
         payload["sub"] = serde_json::json!(subject_id);
     }
 
-    if let Some(exp_secs) = claims.expiration_seconds {
-        payload["exp"] = serde_json::json!(now.timestamp() + exp_secs);
+    if let Some(expires_at) = expires_at {
+        payload["exp"] = serde_json::json!(expires_at.timestamp());
     }
 
     // Build and sign the JWT
@@ -494,6 +506,7 @@ pub fn prepare_jwt_vc_with_options(
         .clone()
         .unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
     let now = chrono::Utc::now();
+    let expires_at = checked_jwt_vc_expiration(now, claims.expiration_seconds)?;
 
     let credential_subject = if let Some(ref explicit) = options.credential_subject {
         explicit.clone()
@@ -529,10 +542,8 @@ pub fn prepare_jwt_vc_with_options(
         if options.include_vc_id {
             v["id"] = serde_json::json!(credential_id);
         }
-        if let Some(exp_secs) = claims.expiration_seconds {
-            let valid_until = (now + chrono::Duration::seconds(exp_secs))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string();
+        if let Some(expires_at) = expires_at.as_ref() {
+            let valid_until = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
             v["validUntil"] = serde_json::json!(valid_until);
         }
         v
@@ -548,10 +559,8 @@ pub fn prepare_jwt_vc_with_options(
         if options.include_vc_id {
             v["id"] = serde_json::json!(credential_id);
         }
-        if let Some(exp_secs) = claims.expiration_seconds {
-            let expiration_date = (now + chrono::Duration::seconds(exp_secs))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string();
+        if let Some(expires_at) = expires_at.as_ref() {
+            let expiration_date = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
             v["expirationDate"] = serde_json::json!(expiration_date);
         }
         v
@@ -575,8 +584,8 @@ pub fn prepare_jwt_vc_with_options(
     if options.include_nbf {
         payload["nbf"] = serde_json::json!(now.timestamp());
     }
-    if let Some(exp_secs) = claims.expiration_seconds {
-        payload["exp"] = serde_json::json!(now.timestamp() + exp_secs);
+    if let Some(expires_at) = expires_at {
+        payload["exp"] = serde_json::json!(expires_at.timestamp());
     }
 
     let alg_str = signer.algorithm().as_str();
@@ -663,6 +672,113 @@ mod tests {
             issuer_id: did,
             jwk_json,
             algorithm: SigningAlgorithm::ES256,
+        }
+    }
+
+    struct MustNotSign;
+
+    impl std::fmt::Debug for MustNotSign {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("MustNotSign([redacted])")
+        }
+    }
+
+    impl CredentialSigner for MustNotSign {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            panic!("invalid expiration must be rejected before signing")
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::ES256
+        }
+
+        fn issuer_id(&self) -> &str {
+            "did:example:expiration-test-issuer"
+        }
+
+        fn kid_url(&self) -> String {
+            "did:example:expiration-test-issuer#key-1".into()
+        }
+    }
+
+    fn claims_with_expiration(
+        credential_payload_format: CredentialPayloadFormat,
+        expiration_seconds: i64,
+    ) -> CredentialClaims {
+        CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "ExpirationCredential".into(),
+            claims: [("status".into(), serde_json::json!("active"))].into(),
+            expiration_seconds: Some(expiration_seconds),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        }
+    }
+
+    fn assert_expiration_out_of_range(error: Oid4vciError) {
+        let Oid4vciError::SigningError(message) = error else {
+            panic!("expiration range failures must use the signing error boundary")
+        };
+        assert_eq!(message, JWT_VC_EXPIRATION_OUT_OF_RANGE);
+        for sensitive in [i64::MIN.to_string(), i64::MAX.to_string()] {
+            assert!(!message.contains(&sensitive));
+        }
+    }
+
+    #[test]
+    fn jwt_vc_rejects_extreme_expiration_before_any_signer_call() {
+        let key = test_p256_key();
+        for credential_payload_format in [
+            CredentialPayloadFormat::default(),
+            CredentialPayloadFormat::W3cVcdmV2JwtVc,
+        ] {
+            for expiration_seconds in [i64::MIN, i64::MAX] {
+                let claims =
+                    claims_with_expiration(credential_payload_format.clone(), expiration_seconds);
+                assert_expiration_out_of_range(sign_jwt_vc(&key, &claims).unwrap_err());
+                assert_expiration_out_of_range(
+                    sign_jwt_vc_with_signer(&MustNotSign, &claims).unwrap_err(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn jwt_vc_rejects_datetime_boundary_overflow() {
+        for (issued_at, expiration_seconds) in [
+            (chrono::DateTime::<chrono::Utc>::MAX_UTC, 1),
+            (chrono::DateTime::<chrono::Utc>::MIN_UTC, -1),
+        ] {
+            assert_expiration_out_of_range(
+                checked_jwt_vc_expiration(issued_at, Some(expiration_seconds)).unwrap_err(),
+            );
+        }
+    }
+
+    #[test]
+    fn jwt_vc_uses_one_checked_expiration_for_vc_and_jwt_claims() {
+        for (credential_payload_format, vc_expiration_name) in [
+            (CredentialPayloadFormat::default(), "expirationDate"),
+            (CredentialPayloadFormat::W3cVcdmV2JwtVc, "validUntil"),
+        ] {
+            let claims = claims_with_expiration(credential_payload_format, 3_600);
+            let prepared = prepare_jwt_vc(&MustNotSign, &claims).unwrap();
+            let payload_segment = prepared.signing_input.split('.').nth(1).unwrap();
+            let payload: serde_json::Value =
+                serde_json::from_slice(&B64.decode(payload_segment).unwrap()).unwrap();
+            let jwt_expiration = payload["exp"].as_i64().unwrap();
+            let vc_expiration = chrono::DateTime::parse_from_rfc3339(
+                payload["vc"][vc_expiration_name].as_str().unwrap(),
+            )
+            .unwrap()
+            .timestamp();
+
+            assert_eq!(jwt_expiration, vc_expiration);
         }
     }
 
