@@ -6403,9 +6403,10 @@ dependencies = [
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=9244ec551ac56bb4fa7d3a87e50f59b2f36d1925#9244ec551ac56bb4fa7d3a87e50f59b2f36d1925"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7#c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
 dependencies = [
  "base64 0.21.7",
+ "getrandom 0.2.17",
  "hmac",
  "jsonwebtoken",
  "log",

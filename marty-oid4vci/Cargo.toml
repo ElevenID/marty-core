@@ -35,7 +35,7 @@ serde_json = { workspace = true }
 # Crypto and signing
 ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "9244ec551ac56bb4fa7d3a87e50f59b2f36d1925" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7" }
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 
 # ISO 18013-5 mDoc

@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Advance the exact ElevenID `sd-jwt-rs` pin through its reviewed serial
+  issuance and verification refactors and consumer-compatible WASM dependency
+  resolution while keeping `parallel` and benchmark features disabled. Wallet
+  presentation construction uses the dependency's explicit unverified
+  constructor to preserve its existing preverified-input contract; issuer-key
+  resolution and holder-key/`cnf` validation remain a separate product change.
 - Advance the maintained ElevenID `isomdl` pin through its reviewed
   caller-ordered, all-or-nothing mdoc batch preparation and opt-in safe-SIMD
   digest qualification surfaces while leaving Marty issuance on the existing

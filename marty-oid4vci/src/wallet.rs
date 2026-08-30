@@ -682,6 +682,14 @@ impl WalletEngine {
     /// The key-binding JWT binds the presentation to the verifier's audience
     /// and nonce. The private JWK must correspond to the public key in the
     /// credential's `cnf` claim.
+    ///
+    /// # Security
+    ///
+    /// This API retains its existing preverified-input contract: it does not
+    /// resolve an issuer key or verify the issuer-signed JWT, and it does not
+    /// compare the supplied holder key with the credential's `cnf` claim.
+    /// Callers must authenticate the credential and enforce that holder-key
+    /// binding before passing it to this method.
     pub fn create_sd_jwt_presentation(
         &self,
         credential: &str,
@@ -697,12 +705,17 @@ impl WalletEngine {
             .map(|claim| (claim.clone(), serde_json::Value::Bool(true)))
             .collect();
         let encoding_key = p256_encoding_key(holder_jwk_json)?;
+        // Compatibility and security boundary: the previous sd-jwt-rs pin also
+        // parsed this credential without verifying its issuer signature, and
+        // WalletEngine does not yet accept a trusted issuer-key resolver. Use
+        // the dependency's explicit opt-out to preserve that behavior. A
+        // resolver- and holder-binding-aware API must be introduced as a
+        // separate product change.
         let mut holder =
-            SDJWTHolder::new(credential.to_string(), SDJWTSerializationFormat::Compact).map_err(
-                |error| {
+            SDJWTHolder::new_unverified(credential.to_string(), SDJWTSerializationFormat::Compact)
+                .map_err(|error| {
                     Oid4vciError::InvalidRequest(format!("Invalid SD-JWT credential: {error:?}"))
-                },
-            )?;
+                })?;
 
         holder
             .create_presentation(
@@ -1868,5 +1881,65 @@ mod tests {
         assert_eq!(payload["aud"], "https://verifier.example");
         assert!(payload["sd_hash"].as_str().is_some());
         assert!(presentation.contains('~'));
+    }
+
+    #[test]
+    fn create_sd_jwt_presentation_preserves_preverified_input_boundary() {
+        use p256::ecdsa::SigningKey;
+        use p256::elliptic_curve::rand_core::OsRng;
+
+        let holder_key = SigningKey::random(&mut OsRng);
+        let holder_point = holder_key.verifying_key().to_encoded_point(false);
+        let credential_bound_key = SigningKey::random(&mut OsRng);
+        let credential_bound_point = credential_bound_key.verifying_key().to_encoded_point(false);
+        let private_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.x().unwrap()),
+            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.y().unwrap()),
+            "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_key.to_bytes()),
+        });
+        let issuer_payload = serde_json::json!({
+            "iss": "https://issuer.example",
+            "iat": 1_700_000_000,
+            "cnf": {
+                "jwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .encode(credential_bound_point.x().unwrap()),
+                    "y": base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .encode(credential_bound_point.y().unwrap()),
+                }
+            }
+        });
+        let protected = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"alg":"ES256","typ":"vc+sd-jwt"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&issuer_payload).unwrap());
+        let invalid_issuer_jws = format!("{protected}.{payload}.AA");
+        let credential = format!("{invalid_issuer_jws}~");
+
+        // The deliberately invalid issuer signature and deliberately different
+        // `cnf` key characterize the method's pre-existing contract: issuer
+        // authentication and holder-key binding belong to the caller, while
+        // this method selects disclosures and creates the KB-JWT.
+        assert_ne!(private_jwk["x"], issuer_payload["cnf"]["jwk"]["x"]);
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let presentation = WalletEngine::new()
+            .create_sd_jwt_presentation(
+                &credential,
+                &[],
+                &nonce,
+                "https://verifier.example",
+                &private_jwk.to_string(),
+            )
+            .unwrap();
+
+        assert!(presentation.starts_with(&format!("{invalid_issuer_jws}~")));
+        assert!(presentation
+            .split('~')
+            .rfind(|part| !part.is_empty())
+            .is_some_and(|part| part.split('.').count() == 3));
     }
 }
