@@ -26,7 +26,9 @@ use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedC
 const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
 const SD_JWT_MANAGED_CLAIM_COLLISION: &str = "SD-JWT claims conflict with issuer-controlled claims";
 const SD_JWT_NON_DISCLOSABLE_SELECTOR: &str = "SD-JWT selector targets a non-disclosable claim";
+const SD_JWT_RESERVED_STRUCTURE: &str = "SD-JWT claims contain reserved structural markers";
 const IETF_ALWAYS_MANAGED_CLAIMS: &[&str] = &["iss", "iat", "jti", "vct"];
+const SD_JWT_STRUCTURAL_MARKERS: &[&str] = &["_sd", "_sd_alg", "..."];
 // draft-ietf-oauth-sd-jwt-vc-18, Section 2.2.2.3. `sub` and `iat`
 // are intentionally absent because that profile permits disclosing them.
 // `jti` is also absent because the profile does not define a policy for it.
@@ -86,6 +88,53 @@ fn validate_sd_jwt_managed_claims(
     Ok(())
 }
 
+fn contains_sd_jwt_structural_marker(value: &serde_json::Value) -> bool {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object
+                    .keys()
+                    .any(|name| SD_JWT_STRUCTURAL_MARKERS.contains(&name.as_str()))
+                {
+                    return true;
+                }
+                pending.extend(object.values());
+            }
+            serde_json::Value::Array(items) => pending.extend(items),
+            _ => {}
+        }
+    }
+    false
+}
+
+fn validate_sd_jwt_structural_markers(
+    claims: &CredentialClaims,
+    confirmation: Option<&serde_json::Value>,
+) -> Oid4vciResult<()> {
+    if matches!(
+        claims.credential_payload_format,
+        CredentialPayloadFormat::W3cVcdmV2JwtVc
+    ) {
+        return Ok(());
+    }
+
+    let reserved = claims.claims.iter().any(|(name, value)| {
+        SD_JWT_STRUCTURAL_MARKERS.contains(&name.as_str())
+            || contains_sd_jwt_structural_marker(value)
+    }) || claims
+        .selective_disclosure_claims
+        .iter()
+        .any(|name| SD_JWT_STRUCTURAL_MARKERS.contains(&name.as_str()))
+        || confirmation.is_some_and(contains_sd_jwt_structural_marker);
+
+    if reserved {
+        return Err(Oid4vciError::SdJwtError(SD_JWT_RESERVED_STRUCTURE.into()));
+    }
+
+    Ok(())
+}
+
 fn checked_sd_jwt_expiration_timestamp(
     issued_at: chrono::DateTime<chrono::Utc>,
     expiration_seconds: Option<i64>,
@@ -122,6 +171,7 @@ pub fn sign_sd_jwt(
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
     validate_sd_jwt_managed_claims(claims, false, false)?;
+    validate_sd_jwt_structural_markers(claims, None)?;
 
     let jwk: JWK = serde_json::from_str(&issuer_key.jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
@@ -334,6 +384,7 @@ pub fn prepare_sd_jwt_with_options(
     options: SdJwtPreparationOptions,
 ) -> Oid4vciResult<PreparedSdJwt> {
     validate_sd_jwt_managed_claims(claims, options.include_nbf, options.confirmation.is_some())?;
+    validate_sd_jwt_structural_markers(claims, options.confirmation.as_ref())?;
 
     let credential_id = options
         .credential_id
