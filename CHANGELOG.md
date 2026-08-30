@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add caller-ordered, all-or-nothing remote mdoc batch preparation that
+  validates every request before randomness, flattens item commitments into
+  one identity-checked scalar digest call, and returns the existing opaque
+  signing state without signing, activating, or persisting credentials. Mdoc
+  preparation now also rejects unrepresentable validity intervals with one
+  stable error before salt allocation or digest execution.
+
 ### Changed
 
 - Advance the maintained ElevenID `isomdl` pin through its reviewed
