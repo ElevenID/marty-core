@@ -1084,7 +1084,7 @@ mod tests {
     #[cfg(not(target_family = "wasm"))]
     use std::sync::atomic::AtomicBool;
     #[cfg(not(target_family = "wasm"))]
-    use std::sync::Arc;
+    use std::sync::{Arc, Condvar};
     #[cfg(not(target_family = "wasm"))]
     use std::time::{Duration, Instant};
 
@@ -1271,6 +1271,7 @@ mod tests {
         schedule_seed: u64,
         fail_labels: HashSet<&'static str>,
         failure_completion: Mutex<Vec<String>>,
+        failure_seven_completed: (Mutex<bool>, Condvar),
         drift_on_call: Option<usize>,
     }
 
@@ -1287,6 +1288,7 @@ mod tests {
                 schedule_seed,
                 fail_labels: HashSet::new(),
                 failure_completion: Mutex::new(Vec::new()),
+                failure_seven_completed: (Mutex::new(false), Condvar::new()),
                 drift_on_call: None,
             }
         }
@@ -1363,22 +1365,35 @@ mod tests {
                 schedule = schedule.rotate_left(5) ^ u64::from(*byte);
                 schedule = schedule.wrapping_mul(0x9e37_79b9_7f4a_7c15);
             }
-            let delay_ms = match label.as_deref() {
-                Some("failure-2") => 20,
-                Some("failure-7") => 0,
-                _ => 1 + schedule % 3,
-            };
-            if delay_ms == 0 {
-                std::thread::yield_now();
+            if label.as_deref() == Some("failure-2") && self.fail_labels.contains("failure-7") {
+                let (completed, ready) = &self.failure_seven_completed;
+                let completed = completed.lock().unwrap();
+                let (completed, _) = ready
+                    .wait_timeout_while(
+                        completed,
+                        Duration::from_secs(5),
+                        |failure_seven_completed| !*failure_seven_completed,
+                    )
+                    .unwrap();
+                assert!(
+                    *completed,
+                    "failure-7 must complete before failure-2 records its result"
+                );
             } else {
-                std::thread::sleep(Duration::from_millis(delay_ms));
+                std::thread::sleep(Duration::from_millis(1 + schedule % 3));
             }
 
             if label
                 .as_deref()
                 .is_some_and(|label| self.fail_labels.contains(label))
             {
-                self.failure_completion.lock().unwrap().push(label.unwrap());
+                let label = label.unwrap();
+                self.failure_completion.lock().unwrap().push(label.clone());
+                if label == "failure-7" {
+                    let (completed, ready) = &self.failure_seven_completed;
+                    *completed.lock().unwrap() = true;
+                    ready.notify_all();
+                }
                 return Err(Oid4vciError::SigningError(BACKEND_SECRET.into()));
             }
 
