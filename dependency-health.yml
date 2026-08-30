@@ -36,6 +36,18 @@ dependencies:
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-09-20
     rationale: Re-reviewed 2026-08-20. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification; spruceid/ssi#706 remains open and upstream main 89630368438c81b55335362b21621d3aadd48d93 still declares unused serde_with 2.3.2. The exact ElevenID ssi-jwt revision remains necessary, and the lock contains only serde_with 3.x.
+  - package: linked-data
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/spruceid/linked-data-rs
+    current: "0.1.2@6f86efc1579033e14ff2ad7d115ca0857e16a67f"
+    target: upstream-release-without-im
+    status: temporary-exception
+    decision: fork
+    advisories: [RUSTSEC-2023-0126, RUSTSEC-2026-0255]
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/26
+    review-after: 2026-09-30
+    rationale: The exact-revision dependency retains the complete spruceid/linked-data-rs history on the dedicated deps/linked-data-rs-v0.1.2-hardening ref in ElevenID/ssi-elevenid. It replaces the traversal-only im dependency with standard-library path-local sets, removing im and sized-chunks from Marty's graph while preserving shared-node expansion, cycle termination, visitor-error cleanup, public API, default features, and MSRV 1.71.1. The ref must be published before this consumer commit and retired after an equivalent maintained upstream release is qualified.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID
