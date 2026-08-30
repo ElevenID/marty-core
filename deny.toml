@@ -19,7 +19,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # Unmaintained crate advisories (workspace deps only)
 unmaintained = "workspace"
 # Yanked crate detection
-yanked = "warn"
+yanked = "deny"
 # A list of advisory IDs to ignore (useful for false positives)
 ignore = [
     # RSA is required by supported passport, certificate, and legacy badge profiles.

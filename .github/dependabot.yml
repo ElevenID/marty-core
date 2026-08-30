@@ -16,12 +16,22 @@ updates:
       rust-dependencies:
         patterns:
           - "*"
+        exclude-patterns:
+          - "blake3"
+          - "uuid"
+          - "cc"
+          - "chacha20"
         update-types:
           - "minor"
           - "patch"
       rust-major-dependencies:
         patterns:
           - "*"
+        exclude-patterns:
+          - "blake3"
+          - "uuid"
+          - "cc"
+          - "chacha20"
         update-types:
           - "major"
     cooldown:
