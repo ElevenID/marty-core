@@ -20,6 +20,9 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::formats;
 use crate::metadata::{IssuerMetadata, MetadataBuilder};
 use crate::proof;
+use crate::signing_batch::{
+    Es256SignerScope, Es256SigningBatchInput, MdocSigningBatchInput, SigningBatchError,
+};
 use crate::types::*;
 
 use std::collections::HashMap;
@@ -366,6 +369,28 @@ impl IssuanceEngine {
         formats::sign_credential(format, &self.config.issuer_key, claims)
     }
 
+    /// Issue a caller-ordered batch of local ES256 mdoc credentials.
+    ///
+    /// This is a narrow integration and staging boundary for the existing
+    /// serial signing batch. No workspace production consumer is wired to it
+    /// yet; consumer wiring is a separate follow-up slice. It does not process
+    /// credential requests, proofs, remote signers, persistence, or protocol
+    /// events. Every input is prepared before the first signing call, and any
+    /// failure returns no credential outputs under [`SigningBatchError`]'s
+    /// existing redacted precedence contract.
+    pub fn issue_mdoc_batch(
+        &self,
+        inputs: Vec<MdocSigningBatchInput>,
+    ) -> Result<Vec<SignedCredential>, SigningBatchError> {
+        let scope = Es256SignerScope::new(&self.config.issuer_key)?;
+        scope.sign_batch(
+            inputs
+                .into_iter()
+                .map(Es256SigningBatchInput::from)
+                .collect(),
+        )
+    }
+
     // ── Metadata (§11.2) ─────────────────────────────────────────────
 
     /// Generate the complete issuer metadata document.
@@ -638,6 +663,7 @@ pub fn generate_p256_did_jwk() -> Oid4vciResult<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::signing_batch::{MdocSigningBatchInput, SigningBatchErrorKind, SigningRouteId};
 
     fn test_engine() -> IssuanceEngine {
         let jwk = ssi_jwk::JWK::generate_p256();
@@ -670,6 +696,125 @@ mod tests {
         };
 
         IssuanceEngine::new(config)
+    }
+
+    fn mdoc_claims(name: &str) -> CredentialClaims {
+        CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: [("given_name".into(), serde_json::json!(name))].into(),
+            expiration_seconds: Some(3600),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        }
+    }
+
+    fn mdoc_input(route: u64, name: &str) -> MdocSigningBatchInput {
+        MdocSigningBatchInput::new(SigningRouteId::new(route), mdoc_claims(name))
+    }
+
+    #[test]
+    fn issuance_engine_mdoc_batch_is_empty_and_caller_ordered() {
+        let engine = test_engine();
+        assert!(engine.issue_mdoc_batch(Vec::new()).unwrap().is_empty());
+
+        let signed = engine
+            .issue_mdoc_batch(vec![mdoc_input(91, "Alice"), mdoc_input(7, "Bob")])
+            .unwrap();
+        assert_eq!(signed.len(), 2);
+        for credential in &signed {
+            assert!(matches!(credential, SignedCredential::MsoMdoc { .. }));
+        }
+        let contains = |credential: &SignedCredential, expected: &[u8]| {
+            let SignedCredential::MsoMdoc {
+                issuer_signed_b64, ..
+            } = credential
+            else {
+                return false;
+            };
+            URL_SAFE_NO_PAD
+                .decode(issuer_signed_b64)
+                .unwrap()
+                .windows(expected.len())
+                .any(|window| window == expected)
+        };
+        assert!(contains(&signed[0], b"Alice"));
+        assert!(contains(&signed[1], b"Bob"));
+        assert_ne!(signed[0].credential_id(), signed[1].credential_id());
+    }
+
+    #[test]
+    fn issuance_engine_mdoc_batch_preserves_kernel_error_precedence_and_redaction() {
+        let engine = test_engine();
+        let mut invalid_duplicate = mdoc_claims("Sensitive Duplicate");
+        invalid_duplicate
+            .claims
+            .insert("_mdoc_x5c".into(), serde_json::json!("Sensitive Duplicate"));
+        let duplicate = engine
+            .issue_mdoc_batch(vec![
+                MdocSigningBatchInput::new(SigningRouteId::new(9), invalid_duplicate),
+                mdoc_input(9, "Bob"),
+            ])
+            .unwrap_err();
+        assert_eq!(duplicate.kind(), SigningBatchErrorKind::DuplicateRoute);
+        assert_eq!(duplicate.item_ordinal(), Some(0));
+
+        let mut invalid = mdoc_claims("Sensitive Name");
+        invalid
+            .claims
+            .insert("_mdoc_x5c".into(), serde_json::json!("Sensitive Name"));
+        let preparation = engine
+            .issue_mdoc_batch(vec![
+                mdoc_input(1, "Valid"),
+                MdocSigningBatchInput::new(SigningRouteId::new(2), invalid),
+            ])
+            .unwrap_err();
+        assert_eq!(preparation.kind(), SigningBatchErrorKind::PreparationFailed);
+        assert_eq!(preparation.item_ordinal(), Some(1));
+        for rendered in [format!("{preparation}"), format!("{preparation:?}")] {
+            assert!(!rendered.contains("Sensitive Name"));
+            assert!(!rendered.contains("did:example"));
+        }
+    }
+
+    #[test]
+    fn issuance_engine_mdoc_batch_rejects_scope_and_signing_failures_without_outputs() {
+        let mut wrong_algorithm = test_engine();
+        wrong_algorithm.config.issuer_key.algorithm = SigningAlgorithm::ES384;
+        let scope = wrong_algorithm
+            .issue_mdoc_batch(vec![mdoc_input(1, "Alice")])
+            .unwrap_err();
+        assert_eq!(scope.kind(), SigningBatchErrorKind::InvalidScope);
+        assert_eq!(scope.item_ordinal(), None);
+
+        let mut broken_signer = test_engine();
+        broken_signer.config.issuer_key.jwk_json = "{}".into();
+        let signing = broken_signer
+            .issue_mdoc_batch(vec![mdoc_input(1, "Alice"), mdoc_input(2, "Bob")])
+            .unwrap_err();
+        assert_eq!(signing.kind(), SigningBatchErrorKind::ExecutorFailed);
+        assert_eq!(signing.item_ordinal(), Some(0));
+    }
+
+    #[test]
+    fn issuance_engine_mdoc_batch_does_not_change_scalar_issuance() {
+        let engine = test_engine();
+        let scalar = engine
+            .issue_credential_in_format(&CredentialFormat::MsoMdoc, &mdoc_claims("Alice"))
+            .unwrap();
+        let batch = engine
+            .issue_mdoc_batch(vec![mdoc_input(1, "Alice")])
+            .unwrap();
+        assert!(matches!(scalar, SignedCredential::MsoMdoc { .. }));
+        assert!(matches!(
+            batch.as_slice(),
+            [SignedCredential::MsoMdoc { .. }]
+        ));
     }
 
     #[test]
