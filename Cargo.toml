@@ -130,5 +130,7 @@ debug = true
 [patch.crates-io]
 # Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
 ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0fbf3e4b967fe73c858a22b38e907b3023" }
+# Exact history is retained on a dedicated dependency ref in the existing SSI fork.
+linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
 # ElevenID-maintained security/interoperability fork, synchronized from upstream by reviewed monthly PRs.
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "671044c9495aec101bf0cd381669d5ed6f64dd11" }

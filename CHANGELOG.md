@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Remove the unsound `im` and `sized-chunks` path from linked-data traversal
+  through an exact, behavior-locked ElevenID revision.
 - Reject mdoc holder P-256 and P-384 JWK coordinates that are not valid points
   on their declared curves before issuing a device-bound credential.
 - Bound EUDI LoTL and member-state trusted-list downloads to 16 MiB before
