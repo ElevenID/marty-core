@@ -77,3 +77,7 @@ tokio = { workspace = true }
 [[bench]]
 name = "mdoc_issuance"
 harness = false
+
+[[bench]]
+name = "es256_signing_batch"
+harness = false
