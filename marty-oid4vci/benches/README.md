@@ -43,3 +43,28 @@ estimates, 95% confidence intervals, element throughput for scalar fixtures,
 and credential throughput for batch fixtures. These results are an
 issuance-preparation baseline, not an isolated SHA benchmark, and do not by
 themselves authorize a parallel route or production threshold.
+
+## ES256 credential signing batch benchmark
+
+`es256_signing_batch` measures mixed JWT-VC/mdoc batches of 1, 8, 32, and 256
+credentials. It reports canonical preparation, raw ES256 signing, canonical
+assembly, and end-to-end total separately. Each phase has serial and concurrent
+labels; preparation and assembly deliberately run the same caller-side kernels
+for both labels, while only signing uses the explicitly authorized bounded
+worker path.
+
+Run a compile/smoke check with:
+
+```console
+cargo test --locked -p marty-oid4vci --bench es256_signing_batch
+```
+
+Collect measurements with:
+
+```console
+cargo bench --locked -p marty-oid4vci --bench es256_signing_batch -- --noplot
+```
+
+The benchmark is evidence, not a speedup guarantee or an automatic production
+threshold. Real results depend heavily on signer latency, backend quotas,
+worker authorization, batch composition, and host scheduling.

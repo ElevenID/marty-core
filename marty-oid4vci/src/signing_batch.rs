@@ -1,4 +1,4 @@
-//! Fail-closed serial batching for complete ES256 credential signatures.
+//! Fail-closed batching for complete ES256 credential signatures.
 //!
 //! A batch is bound to one exact [`CredentialSigner`] reference. The scope
 //! freezes the signer's public routing metadata, canonical format preparation
@@ -6,15 +6,25 @@
 //! signing payloads plus that same signer reference. Results are restored by a
 //! per-call identity envelope instead of executor return order.
 //!
-//! The serial executor is intentionally the only production executor. A future
-//! concurrent implementation requires a separate, explicit signer capability:
-//! [`Send`] and [`Sync`] alone do not authorize concurrent backend requests.
-//! The signer owner must also keep the key bound to `issuer_id` and `kid_url`
-//! immutable for the lifetime of a scope. Metadata checks cannot detect a
-//! backend key rotation that preserves those values.
+//! [`Es256SignerScope`] remains the serial default. Native callers may opt into
+//! [`ConcurrentEs256SignerScope`] only with a signer that explicitly implements
+//! [`BoundedConcurrentCredentialSigner`]. [`Send`] and [`Sync`] alone never
+//! authorize concurrent backend requests. The signer owner must also keep the
+//! key bound to `issuer_id` and `kid_url` immutable for the lifetime of either
+//! scope. Metadata checks cannot detect a backend key rotation that preserves
+//! those values.
 
 use std::collections::HashMap;
 use std::fmt;
+
+#[cfg(not(target_family = "wasm"))]
+use std::cell::Cell;
+#[cfg(not(target_family = "wasm"))]
+use std::marker::PhantomData;
+#[cfg(not(target_family = "wasm"))]
+use std::num::NonZeroUsize;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::formats::jwt_vc::{assemble_jwt_vc, prepare_jwt_vc, PreparedJwtVc};
 use crate::formats::mdoc::{assemble_mdoc, prepare_mdoc, PreparedMdoc};
@@ -22,6 +32,34 @@ use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, SignedCredential, SigningAlgorithm};
 
 const ES256_SIGNATURE_LENGTH: usize = 64;
+
+/// The library-level ceiling for native concurrent signing workers.
+///
+/// A signer may authorize fewer workers. The executor never starts more than
+/// the signer's frozen authorization, this ceiling, or the number of jobs.
+#[cfg(not(target_family = "wasm"))]
+pub const MAX_CONCURRENT_SIGNING_WORKERS: usize = 64;
+
+/// Explicit authorization for bounded concurrent calls to a credential signer.
+///
+/// This trait has deliberately no blanket implementation. Implementing it is a
+/// stronger promise than [`Send`] + [`Sync`]: `sign` supports simultaneous calls
+/// up to the returned bound, and the signing key plus ES256 issuer/key identity
+/// remain immutable while a [`ConcurrentEs256SignerScope`] exclusively borrows
+/// the signer. Backend-specific aliases that reach the same key, queue, session,
+/// or rate limit must enforce their own shared bound.
+///
+/// [`crate::types::IssuerKey`] is intentionally not opted in automatically.
+/// Callers that have audited a signer implementation and its backend may expose
+/// this capability through an owned newtype.
+///
+/// The concurrent path is native-only. WebAssembly callers continue to use the
+/// serial [`Es256SignerScope`].
+#[cfg(not(target_family = "wasm"))]
+pub trait BoundedConcurrentCredentialSigner: CredentialSigner {
+    /// Authorize the maximum number of simultaneous `sign` calls.
+    fn max_concurrent_signing_workers(&self) -> NonZeroUsize;
+}
 
 /// An opaque caller-assigned identity for one route in a signing batch.
 ///
@@ -307,7 +345,7 @@ impl<'s> Es256SignerScope<'s> {
         self.identity.validate()?;
         validate_unique_routes(&inputs)?;
 
-        let prepared = PreparedSigningBatch::prepare(self, inputs)?;
+        let prepared = PreparedSigningBatch::prepare(&self.identity, self.scope_id, inputs)?;
 
         // Run only after complete preparation so preparation failures have
         // deterministic precedence and no backend call has occurred.
@@ -328,6 +366,155 @@ impl<'s> Es256SignerScope<'s> {
                         }
                         None => SigningBatchError::batch(SigningBatchErrorKind::ExecutorFailed),
                     })?;
+            validate_executor_results(&jobs, results)?
+        };
+
+        assemble_credentials(prepared, signatures, assembler)
+    }
+}
+
+/// A native, explicitly authorized concurrent ES256 signing scope.
+///
+/// This scope is bound to the exact [`BoundedConcurrentCredentialSigner`]
+/// reference supplied to [`Self::new`]. Its algorithm, issuer identifier, key
+/// identifier, and worker authorization are frozen once. Constructing this
+/// type does not change [`Es256SignerScope`]'s serial behavior.
+///
+/// The exclusive borrow and non-[`Sync`] scope enforce one aggregate bound for
+/// this signer object in safe Rust. Distinct signer objects that alias the same
+/// backend cannot be detected by this library; enforcing their shared global
+/// limit is part of the capability implementation's contract.
+///
+/// Two scopes cannot lease the same signer at once:
+///
+/// ```compile_fail
+/// use marty_oid4vci::signing_batch::{
+///     BoundedConcurrentCredentialSigner, ConcurrentEs256SignerScope,
+/// };
+///
+/// fn overlapping_scopes(signer: &mut dyn BoundedConcurrentCredentialSigner) {
+///     let first = ConcurrentEs256SignerScope::new(signer).unwrap();
+///     let second = ConcurrentEs256SignerScope::new(signer).unwrap();
+///     drop((first, second));
+/// }
+/// ```
+///
+/// A scope also cannot be shared between caller threads:
+///
+/// ```compile_fail
+/// use marty_oid4vci::signing_batch::ConcurrentEs256SignerScope;
+///
+/// fn require_sync<T: Sync>() {}
+/// fn scope_is_not_sync() {
+///     require_sync::<ConcurrentEs256SignerScope<'static>>();
+/// }
+/// ```
+#[cfg(not(target_family = "wasm"))]
+pub struct ConcurrentEs256SignerScope<'s> {
+    signer: &'s mut dyn BoundedConcurrentCredentialSigner,
+    identity: FrozenSignerIdentity,
+    scope_id: uuid::Uuid,
+    worker_limit: NonZeroUsize,
+    // The exclusive signer borrow prevents a second safe scope. This marker
+    // additionally prevents sharing one scope between caller threads, so its
+    // frozen worker limit is also the aggregate limit for that signer lease.
+    _not_sync: PhantomData<Cell<()>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl fmt::Debug for ConcurrentEs256SignerScope<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConcurrentEs256SignerScope([redacted])")
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl<'s> ConcurrentEs256SignerScope<'s> {
+    /// Exclusively lease one explicitly concurrent signer and freeze its identity
+    /// and worker bound.
+    ///
+    /// The mutable borrow prevents another safe serial or concurrent scope from
+    /// using this exact signer until the returned scope is dropped. The scope is
+    /// intentionally not [`Sync`], preventing simultaneous batch invocations
+    /// from multiplying the frozen worker limit.
+    pub fn new(
+        signer: &'s mut dyn BoundedConcurrentCredentialSigner,
+    ) -> Result<Self, SigningBatchError> {
+        let identity = FrozenSignerIdentity::capture(&*signer)?;
+        let authorized_workers = signer.max_concurrent_signing_workers().get();
+        let worker_limit =
+            NonZeroUsize::new(authorized_workers.min(MAX_CONCURRENT_SIGNING_WORKERS))
+                .expect("the signer authorization and library ceiling are non-zero");
+        Ok(Self {
+            signer,
+            identity,
+            scope_id: uuid::Uuid::new_v4(),
+            worker_limit,
+            _not_sync: PhantomData,
+        })
+    }
+
+    /// Prepare, concurrently sign, validate, and assemble a caller-ordered batch.
+    ///
+    /// Canonical preparation of every item completes on the caller before a
+    /// worker starts. At most the frozen authorized worker count runs at once.
+    /// Each submitted job receives exactly one `sign` call even when another
+    /// call returns an error; all workers are scoped and joined before this
+    /// method returns. Results are collected in arbitrary completion order,
+    /// validated as a complete identity bijection, and restored to caller order
+    /// before signature validation or assembly. Any failure returns no
+    /// credentials, with the deterministic lowest affected caller ordinal.
+    pub fn sign_batch_concurrently(
+        &self,
+        inputs: Vec<Es256SigningBatchInput>,
+    ) -> Result<Vec<SignedCredential>, SigningBatchError> {
+        self.sign_batch_with_components(inputs, &CanonicalAssembler)
+    }
+
+    fn sign_batch_with_components(
+        &self,
+        inputs: Vec<Es256SigningBatchInput>,
+        assembler: &dyn BatchAssembler,
+    ) -> Result<Vec<SignedCredential>, SigningBatchError> {
+        self.identity.validate()?;
+        validate_unique_routes(&inputs)?;
+
+        let prepared = PreparedSigningBatch::prepare(&self.identity, self.scope_id, inputs)?;
+
+        // Canonical preparation has deterministic precedence and has completed
+        // before either metadata validation or worker creation.
+        let signer: &dyn BoundedConcurrentCredentialSigner = &*self.signer;
+        if !self.identity.matches(signer) {
+            return Err(SigningBatchError::batch(
+                SigningBatchErrorKind::SignerMetadataChanged,
+            ));
+        }
+
+        let signatures = {
+            let jobs = prepared.jobs();
+            let executor = ConcurrentSigningExecutor {
+                signer,
+                worker_limit: self.worker_limit,
+            };
+            let results =
+                executor
+                    .execute(signer, &jobs)
+                    .map_err(|error| match error.item_ordinal {
+                        Some(ordinal) => {
+                            SigningBatchError::item(SigningBatchErrorKind::ExecutorFailed, ordinal)
+                        }
+                        None => SigningBatchError::batch(SigningBatchErrorKind::ExecutorFailed),
+                    })?;
+
+            // The capability promises immutable identity. Re-check after every
+            // scoped worker has joined so observable drift fails closed without
+            // cancelling or retrying any submitted job.
+            if !self.identity.matches(signer) {
+                return Err(SigningBatchError::batch(
+                    SigningBatchErrorKind::SignerMetadataChanged,
+                ));
+            }
+
             validate_executor_results(&jobs, results)?
         };
 
@@ -471,11 +658,12 @@ struct PreparedSigningBatch {
 
 impl PreparedSigningBatch {
     fn prepare(
-        scope: &Es256SignerScope<'_>,
+        identity: &FrozenSignerIdentity,
+        scope_id: uuid::Uuid,
         inputs: Vec<Es256SigningBatchInput>,
     ) -> Result<Self, SigningBatchError> {
         let batch_id = uuid::Uuid::new_v4();
-        let preparation_signer = scope.identity.preparation_signer();
+        let preparation_signer = identity.preparation_signer();
         let mut items = Vec::with_capacity(inputs.len());
 
         for (ordinal, input) in inputs.into_iter().enumerate() {
@@ -503,7 +691,7 @@ impl PreparedSigningBatch {
 
             items.push(PreparedSigningItem {
                 identity: SigningJobIdentity {
-                    scope_id: scope.scope_id,
+                    scope_id,
                     batch_id,
                     route_id,
                     job_id,
@@ -533,17 +721,23 @@ struct SigningJob<'a> {
 
 struct SigningResult {
     identity: SigningJobIdentity,
-    signature: Vec<u8>,
+    outcome: SigningOutcome,
+}
+
+enum SigningOutcome {
+    Signature(Vec<u8>),
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    Failed,
 }
 
 struct SigningExecutionError {
-    // The private serial executor always knows the failing caller ordinal.
-    // `None` remains reserved for a genuinely batch-wide executor failure.
+    // Serial failures know their caller ordinal. `None` is reserved for a
+    // genuinely batch-wide executor failure such as a scoped worker panic.
     item_ordinal: Option<usize>,
 }
 
-// Module privacy seals this boundary. No public API can select an alternate or
-// concurrent executor.
+// Module privacy seals this boundary. Public callers select only the serial
+// default or the explicitly capable bounded-concurrent scope.
 trait SigningExecutor {
     fn execute(
         &self,
@@ -569,11 +763,93 @@ impl SigningExecutor for SerialSigningExecutor {
                 })?;
             results.push(SigningResult {
                 identity: job.identity,
-                signature,
+                outcome: SigningOutcome::Signature(signature),
             });
         }
         Ok(results)
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct ConcurrentSigningExecutor<'s> {
+    // Holding the explicitly capable signer here makes the authorization exact:
+    // this executor cannot be constructed from an arbitrary CredentialSigner.
+    signer: &'s dyn BoundedConcurrentCredentialSigner,
+    worker_limit: NonZeroUsize,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl SigningExecutor for ConcurrentSigningExecutor<'_> {
+    fn execute(
+        &self,
+        _signer: &dyn CredentialSigner,
+        jobs: &[SigningJob<'_>],
+    ) -> Result<Vec<SigningResult>, SigningExecutionError> {
+        if jobs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let worker_count = self.worker_limit.get().min(jobs.len());
+        let next_ordinal = AtomicUsize::new(0);
+
+        std::thread::scope(|scope| {
+            // The caller is always one worker. Fallible scoped spawning may
+            // reduce parallelism, but cannot strand jobs or detach work.
+            let mut handles = Vec::with_capacity(worker_count.saturating_sub(1));
+            for _ in 1..worker_count {
+                if let Ok(handle) = std::thread::Builder::new()
+                    .name("marty-es256-signing".into())
+                    .spawn_scoped(scope, || {
+                        execute_concurrent_signing_worker(self.signer, jobs, &next_ordinal)
+                    })
+                {
+                    handles.push(handle);
+                }
+            }
+
+            let mut results = execute_concurrent_signing_worker(self.signer, jobs, &next_ordinal);
+            let mut worker_panicked = false;
+            for handle in handles {
+                match handle.join() {
+                    Ok(mut worker_results) => results.append(&mut worker_results),
+                    Err(_) => worker_panicked = true,
+                }
+            }
+
+            if worker_panicked {
+                Err(SigningExecutionError { item_ordinal: None })
+            } else {
+                Ok(results)
+            }
+        })
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn execute_concurrent_signing_worker(
+    signer: &dyn BoundedConcurrentCredentialSigner,
+    jobs: &[SigningJob<'_>],
+    next_ordinal: &AtomicUsize,
+) -> Vec<SigningResult> {
+    let mut results = Vec::new();
+    loop {
+        let ordinal = next_ordinal.fetch_add(1, Ordering::Relaxed);
+        let Some(job) = jobs.get(ordinal) else {
+            break;
+        };
+
+        // Do not cancel or retry: each claimed job crosses the signer boundary
+        // exactly once, even after another call returns an error.
+        let outcome = match signer.sign(job.payload) {
+            Ok(signature) => SigningOutcome::Signature(signature),
+            Err(_) => SigningOutcome::Failed,
+        };
+        results.push(SigningResult {
+            identity: job.identity,
+            outcome,
+        });
+    }
+    results
 }
 
 struct ValidatedSignature([u8; ES256_SIGNATURE_LENGTH]);
@@ -600,7 +876,7 @@ fn validate_executor_results(
         }
     }
 
-    let mut signatures: Vec<Option<Vec<u8>>> =
+    let mut outcomes: Vec<Option<SigningOutcome>> =
         std::iter::repeat_with(|| None).take(jobs.len()).collect();
     for result in results {
         let Some(ordinal) = expected.remove(&result.identity) else {
@@ -608,23 +884,38 @@ fn validate_executor_results(
                 SigningBatchErrorKind::InvalidExecutorResults,
             ));
         };
-        if signatures[ordinal].replace(result.signature).is_some() {
+        if outcomes[ordinal].replace(result.outcome).is_some() {
             return Err(SigningBatchError::batch(
                 SigningBatchErrorKind::InvalidExecutorResults,
             ));
         }
     }
-    if !expected.is_empty() || signatures.iter().any(Option::is_none) {
+    if !expected.is_empty() || outcomes.iter().any(Option::is_none) {
         return Err(SigningBatchError::batch(
             SigningBatchErrorKind::InvalidExecutorResults,
         ));
     }
 
-    signatures
+    // Interpret executor outcomes only after validating the complete identity
+    // envelope. Backend failures have category precedence and are reported at
+    // the lowest expected ordinal independent of worker completion order.
+    if let Some(ordinal) = outcomes
+        .iter()
+        .position(|outcome| matches!(outcome, Some(SigningOutcome::Failed)))
+    {
+        return Err(SigningBatchError::item(
+            SigningBatchErrorKind::ExecutorFailed,
+            ordinal,
+        ));
+    }
+
+    outcomes
         .into_iter()
         .enumerate()
-        .map(|(ordinal, signature)| {
-            let signature = signature.expect("the complete envelope was validated");
+        .map(|(ordinal, outcome)| {
+            let Some(SigningOutcome::Signature(signature)) = outcome else {
+                unreachable!("the complete envelope and backend outcomes were validated")
+            };
             let raw: [u8; ES256_SIGNATURE_LENGTH] = signature.try_into().map_err(|_| {
                 SigningBatchError::item(SigningBatchErrorKind::InvalidSignature, ordinal)
             })?;
@@ -685,6 +976,13 @@ mod tests {
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+
+    #[cfg(not(target_family = "wasm"))]
+    use std::num::NonZeroUsize;
+    #[cfg(not(target_family = "wasm"))]
+    use std::sync::Arc;
+    #[cfg(not(target_family = "wasm"))]
+    use std::time::Duration;
 
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use p256::ecdsa::signature::{Signer as _, Verifier as _};
@@ -839,6 +1137,181 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    impl BoundedConcurrentCredentialSigner for HighSEs256Signer {
+        fn max_concurrent_signing_workers(&self) -> NonZeroUsize {
+            NonZeroUsize::new(2).unwrap()
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    struct ActiveCallGuard<'a>(&'a AtomicUsize);
+
+    #[cfg(not(target_family = "wasm"))]
+    impl Drop for ActiveCallGuard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    struct ConcurrentTestSigner {
+        signing_key: p256::ecdsa::SigningKey,
+        calls: Mutex<Vec<Vec<u8>>>,
+        active_calls: AtomicUsize,
+        peak_calls: AtomicUsize,
+        metadata_state: Arc<AtomicUsize>,
+        max_workers: NonZeroUsize,
+        schedule_seed: u64,
+        fail_labels: HashSet<&'static str>,
+        failure_completion: Mutex<Vec<String>>,
+        drift_on_call: Option<usize>,
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl ConcurrentTestSigner {
+        fn new(max_workers: usize, schedule_seed: u64) -> Self {
+            Self {
+                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x24; 32]).unwrap(),
+                calls: Mutex::new(Vec::new()),
+                active_calls: AtomicUsize::new(0),
+                peak_calls: AtomicUsize::new(0),
+                metadata_state: Arc::new(AtomicUsize::new(0)),
+                max_workers: NonZeroUsize::new(max_workers).unwrap(),
+                schedule_seed,
+                fail_labels: HashSet::new(),
+                failure_completion: Mutex::new(Vec::new()),
+                drift_on_call: None,
+            }
+        }
+
+        fn with_fail_labels(mut self, labels: impl IntoIterator<Item = &'static str>) -> Self {
+            self.fail_labels.extend(labels);
+            self
+        }
+
+        fn with_drift_on_call(mut self, call: usize) -> Self {
+            self.drift_on_call = Some(call);
+            self
+        }
+
+        fn metadata_handle(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.metadata_state)
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+
+        fn unique_call_count(&self) -> usize {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .collect::<HashSet<_>>()
+                .len()
+        }
+
+        fn peak_calls(&self) -> usize {
+            self.peak_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl fmt::Debug for ConcurrentTestSigner {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("ConcurrentTestSigner([redacted])")
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn jwt_label_from_signing_payload(message: &[u8]) -> Option<String> {
+        let message = std::str::from_utf8(message).ok()?;
+        let payload = message.split('.').nth(1)?;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
+        payload["vc"]["credentialSubject"]["label"]
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl CredentialSigner for ConcurrentTestSigner {
+        fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            let active = self.active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_calls.fetch_max(active, Ordering::SeqCst);
+            let _active_call = ActiveCallGuard(&self.active_calls);
+
+            let call_number = {
+                let mut calls = self.calls.lock().unwrap();
+                calls.push(message.to_vec());
+                calls.len()
+            };
+            if self.drift_on_call == Some(call_number) {
+                self.metadata_state.store(2, Ordering::SeqCst);
+            }
+
+            let label = jwt_label_from_signing_payload(message);
+            let mut schedule = self.schedule_seed;
+            for byte in message.iter().step_by(17) {
+                schedule = schedule.rotate_left(5) ^ u64::from(*byte);
+                schedule = schedule.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            }
+            let delay_ms = match label.as_deref() {
+                Some("failure-2") => 20,
+                Some("failure-7") => 0,
+                _ => 1 + schedule % 3,
+            };
+            if delay_ms == 0 {
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(Duration::from_millis(delay_ms));
+            }
+
+            if label
+                .as_deref()
+                .is_some_and(|label| self.fail_labels.contains(label))
+            {
+                self.failure_completion.lock().unwrap().push(label.unwrap());
+                return Err(Oid4vciError::SigningError(BACKEND_SECRET.into()));
+            }
+
+            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
+            Ok(signature.to_bytes().to_vec())
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            if self.metadata_state.load(Ordering::SeqCst) == 1 {
+                SigningAlgorithm::EdDSA
+            } else {
+                SigningAlgorithm::ES256
+            }
+        }
+
+        fn issuer_id(&self) -> &str {
+            if self.metadata_state.load(Ordering::SeqCst) == 2 {
+                "did:example:changed"
+            } else {
+                ISSUER_SECRET
+            }
+        }
+
+        fn kid_url(&self) -> String {
+            if self.metadata_state.load(Ordering::SeqCst) == 3 {
+                "did:example:changed#key-2".into()
+            } else {
+                KID_SECRET.into()
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl BoundedConcurrentCredentialSigner for ConcurrentTestSigner {
+        fn max_concurrent_signing_workers(&self) -> NonZeroUsize {
+            self.max_workers
+        }
+    }
+
     fn jwt_claims(label: &str) -> CredentialClaims {
         CredentialClaims {
             subject_id: Some(format!("did:example:holder-{label}")),
@@ -897,6 +1370,78 @@ mod tests {
 
     fn two_jwt_inputs() -> Vec<Es256SigningBatchInput> {
         vec![jwt_input(10, "first"), jwt_input(20, "second")]
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn jwt_inputs(batch_size: usize, prefix: &str) -> Vec<Es256SigningBatchInput> {
+        (0..batch_size)
+            .map(|ordinal| jwt_input(ordinal as u64, &format!("{prefix}-{ordinal}")))
+            .collect()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn normalized_jwt_semantics(credential: &SignedCredential) -> serde_json::Value {
+        let SignedCredential::JwtVcJson { jwt, .. } = credential else {
+            panic!("expected JWT-VC")
+        };
+        let segments = jwt.split('.').collect::<Vec<_>>();
+        assert_eq!(segments.len(), 3);
+        let header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[0]).unwrap()).unwrap();
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
+        let payload_object = payload.as_object_mut().unwrap();
+        for field in ["iat", "nbf", "exp", "jti"] {
+            payload_object.remove(field);
+        }
+        let vc = payload_object["vc"].as_object_mut().unwrap();
+        for field in [
+            "id",
+            "validFrom",
+            "validUntil",
+            "issuanceDate",
+            "expirationDate",
+        ] {
+            vc.remove(field);
+        }
+        serde_json::json!({ "header": header, "payload": payload })
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn verify_signed_credential(
+        credential: &SignedCredential,
+        verifying_key: &p256::ecdsa::VerifyingKey,
+    ) {
+        match credential {
+            SignedCredential::JwtVcJson { jwt, .. } => {
+                let segments = jwt.split('.').collect::<Vec<_>>();
+                assert_eq!(segments.len(), 3);
+                let signature = p256::ecdsa::Signature::from_slice(
+                    &URL_SAFE_NO_PAD.decode(segments[2]).unwrap(),
+                )
+                .unwrap();
+                verifying_key
+                    .verify(
+                        format!("{}.{}", segments[0], segments[1]).as_bytes(),
+                        &signature,
+                    )
+                    .unwrap();
+            }
+            SignedCredential::MsoMdoc {
+                issuer_signed_b64, ..
+            } => {
+                let issuer_signed: isomdl::definitions::IssuerSigned =
+                    isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap())
+                        .unwrap();
+                let signature =
+                    p256::ecdsa::Signature::from_slice(&issuer_signed.issuer_auth.signature)
+                        .unwrap();
+                verifying_key
+                    .verify(&issuer_signed.issuer_auth.tbs_data(&[]), &signature)
+                    .unwrap();
+            }
+            other => panic!("unexpected signed credential format: {other:?}"),
+        }
     }
 
     fn assert_error(
@@ -1006,6 +1551,265 @@ mod tests {
             issuer_signed.issuer_auth.signature, calls[1].1,
             "mdoc assembly must not normalize a valid high-S signature"
         );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn randomized_serial_concurrent_jwt_differential_covers_required_batch_sizes() {
+        for (batch_size, schedule_seed) in [
+            (1, 0x0123_4567_89ab_cdef),
+            (8, 0xfedc_ba98_7654_3210),
+            (32, 0x55aa_0ff0_33cc_9696),
+            (256, 0xdead_beef_cafe_babe),
+        ] {
+            let serial_signer = ConcurrentTestSigner::new(1, schedule_seed);
+            let serial_credentials = Es256SignerScope::new(&serial_signer)
+                .unwrap()
+                .sign_batch(jwt_inputs(batch_size, "differential"))
+                .unwrap();
+
+            let mut concurrent_signer = ConcurrentTestSigner::new(8, schedule_seed);
+            let concurrent_credentials = {
+                let scope = ConcurrentEs256SignerScope::new(&mut concurrent_signer).unwrap();
+                scope
+                    .sign_batch_concurrently(jwt_inputs(batch_size, "differential"))
+                    .unwrap()
+            };
+
+            assert_eq!(serial_credentials.len(), batch_size);
+            assert_eq!(concurrent_credentials.len(), batch_size);
+            for (serial, concurrent) in serial_credentials.iter().zip(&concurrent_credentials) {
+                assert_eq!(
+                    normalized_jwt_semantics(serial),
+                    normalized_jwt_semantics(concurrent),
+                    "serial and concurrent paths must preserve the same caller-ordered semantics"
+                );
+                verify_signed_credential(serial, serial_signer.signing_key.verifying_key());
+                verify_signed_credential(concurrent, concurrent_signer.signing_key.verifying_key());
+            }
+
+            assert_eq!(serial_signer.call_count(), batch_size);
+            assert_eq!(concurrent_signer.call_count(), batch_size);
+            assert_eq!(concurrent_signer.unique_call_count(), batch_size);
+            assert!(concurrent_signer.peak_calls() <= batch_size.min(8));
+            if batch_size > 1 {
+                assert!(
+                    concurrent_signer.peak_calls() > 1,
+                    "the schedule must exercise overlapping calls"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn concurrent_mixed_formats_restore_order_and_preserve_valid_signatures() {
+        let inputs = (0..8)
+            .map(|ordinal| {
+                if ordinal % 2 == 0 {
+                    jwt_input(ordinal, &format!("mixed-{ordinal}"))
+                } else {
+                    mdoc_input(ordinal, &format!("mixed-{ordinal}"))
+                }
+            })
+            .collect();
+        let mut signer = ConcurrentTestSigner::new(4, 0x1357_9bdf_2468_ace0);
+        let credentials = {
+            let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
+            scope.sign_batch_concurrently(inputs).unwrap()
+        };
+
+        assert_eq!(credentials.len(), 8);
+        for (ordinal, credential) in credentials.iter().enumerate() {
+            if ordinal % 2 == 0 {
+                assert!(matches!(credential, SignedCredential::JwtVcJson { .. }));
+            } else {
+                assert!(matches!(credential, SignedCredential::MsoMdoc { .. }));
+            }
+            verify_signed_credential(credential, signer.signing_key.verifying_key());
+        }
+        assert_eq!(signer.call_count(), 8);
+        assert_eq!(signer.unique_call_count(), 8);
+        assert!(signer.peak_calls() <= 4);
+        assert!(signer.peak_calls() > 1);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn concurrent_path_preserves_valid_high_s_p1363_bytes() {
+        let mut signer = HighSEs256Signer::new();
+        let credentials = {
+            let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
+            scope
+                .sign_batch_concurrently(vec![jwt_input(1, "jwt"), mdoc_input(2, "mdoc")])
+                .unwrap()
+        };
+        let calls = signer.calls.lock().unwrap();
+
+        assert_eq!(calls.len(), 2);
+        for (payload, raw_signature) in calls.iter() {
+            let signature = p256::ecdsa::Signature::from_slice(raw_signature).unwrap();
+            assert!(signature.normalize_s().is_some());
+            signer
+                .signing_key
+                .verifying_key()
+                .verify(payload, &signature)
+                .unwrap();
+        }
+
+        let SignedCredential::JwtVcJson { jwt, .. } = &credentials[0] else {
+            panic!("expected JWT-VC in caller order")
+        };
+        let emitted_jwt_signature = URL_SAFE_NO_PAD
+            .decode(jwt.rsplit('.').next().unwrap())
+            .unwrap();
+        let SignedCredential::MsoMdoc {
+            issuer_signed_b64, ..
+        } = &credentials[1]
+        else {
+            panic!("expected mdoc in caller order")
+        };
+        let issuer_signed: isomdl::definitions::IssuerSigned =
+            isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap()).unwrap();
+        assert!(calls.iter().any(|(_, raw)| raw == &emitted_jwt_signature));
+        assert!(calls
+            .iter()
+            .any(|(_, raw)| raw == &issuer_signed.issuer_auth.signature));
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn concurrent_worker_bounds_cover_empty_single_one_and_library_ceiling() {
+        let mut empty_signer = ConcurrentTestSigner::new(8, 1);
+        let empty = {
+            let scope = ConcurrentEs256SignerScope::new(&mut empty_signer).unwrap();
+            scope.sign_batch_concurrently(Vec::new()).unwrap()
+        };
+        assert!(empty.is_empty());
+        assert_eq!(empty_signer.call_count(), 0);
+        assert_eq!(empty_signer.peak_calls(), 0);
+
+        let mut single_signer = ConcurrentTestSigner::new(8, 2);
+        let single = {
+            let scope = ConcurrentEs256SignerScope::new(&mut single_signer).unwrap();
+            scope
+                .sign_batch_concurrently(jwt_inputs(1, "single"))
+                .unwrap()
+        };
+        assert_eq!(single.len(), 1);
+        assert_eq!(single_signer.call_count(), 1);
+        assert_eq!(single_signer.peak_calls(), 1);
+
+        let mut one_worker_signer = ConcurrentTestSigner::new(1, 3);
+        let one_worker = {
+            let scope = ConcurrentEs256SignerScope::new(&mut one_worker_signer).unwrap();
+            scope
+                .sign_batch_concurrently(jwt_inputs(8, "one-worker"))
+                .unwrap()
+        };
+        assert_eq!(one_worker.len(), 8);
+        assert_eq!(one_worker_signer.call_count(), 8);
+        assert_eq!(one_worker_signer.peak_calls(), 1);
+
+        let mut below_limit_signer = ConcurrentTestSigner::new(8, 4);
+        let below_limit = {
+            let scope = ConcurrentEs256SignerScope::new(&mut below_limit_signer).unwrap();
+            scope
+                .sign_batch_concurrently(jwt_inputs(2, "below-limit"))
+                .unwrap()
+        };
+        assert_eq!(below_limit.len(), 2);
+        assert_eq!(below_limit_signer.peak_calls(), 2);
+
+        let mut ceiling_signer = ConcurrentTestSigner::new(usize::MAX, 5);
+        {
+            let scope = ConcurrentEs256SignerScope::new(&mut ceiling_signer).unwrap();
+            assert_eq!(scope.worker_limit.get(), MAX_CONCURRENT_SIGNING_WORKERS);
+            assert_eq!(
+                format!("{scope:?}"),
+                "ConcurrentEs256SignerScope([redacted])"
+            );
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn concurrent_errors_finish_all_jobs_and_choose_lowest_caller_ordinal() {
+        let mut signer = ConcurrentTestSigner::new(4, 0xa5a5_5a5a_f0f0_0f0f)
+            .with_fail_labels(["failure-2", "failure-7"]);
+        let error = {
+            let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
+            assert_error(
+                scope.sign_batch_concurrently(jwt_inputs(12, "failure")),
+                SigningBatchErrorKind::ExecutorFailed,
+                Some(2),
+            )
+        };
+
+        assert_eq!(signer.call_count(), 12);
+        assert_eq!(signer.unique_call_count(), 12);
+        assert!(signer.peak_calls() <= 4);
+        assert!(signer.peak_calls() > 1);
+        assert_eq!(
+            signer.failure_completion.lock().unwrap().as_slice(),
+            ["failure-7", "failure-2"],
+            "completion order must not select the reported failure"
+        );
+        assert!(!error.to_string().contains(BACKEND_SECRET));
+        assert!(!format!("{error:?}").contains(BACKEND_SECRET));
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn concurrent_duplicate_preparation_and_metadata_drift_fail_closed() {
+        let mut duplicate_signer = ConcurrentTestSigner::new(4, 11);
+        {
+            let scope = ConcurrentEs256SignerScope::new(&mut duplicate_signer).unwrap();
+            assert_error(
+                scope.sign_batch_concurrently(vec![invalid_mdoc_input(7), jwt_input(7, "dup")]),
+                SigningBatchErrorKind::DuplicateRoute,
+                Some(0),
+            );
+        }
+        assert_eq!(duplicate_signer.call_count(), 0);
+
+        let mut preparation_signer = ConcurrentTestSigner::new(4, 12);
+        {
+            let scope = ConcurrentEs256SignerScope::new(&mut preparation_signer).unwrap();
+            assert_error(
+                scope.sign_batch_concurrently(vec![jwt_input(1, "valid"), invalid_mdoc_input(2)]),
+                SigningBatchErrorKind::PreparationFailed,
+                Some(1),
+            );
+        }
+        assert_eq!(preparation_signer.call_count(), 0);
+
+        for metadata_state in 1..=3 {
+            let mut signer = ConcurrentTestSigner::new(4, metadata_state as u64);
+            let state = signer.metadata_handle();
+            {
+                let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
+                state.store(metadata_state, Ordering::SeqCst);
+                assert_error(
+                    scope.sign_batch_concurrently(jwt_inputs(4, "pre-drift")),
+                    SigningBatchErrorKind::SignerMetadataChanged,
+                    None,
+                );
+            }
+            assert_eq!(signer.call_count(), 0);
+        }
+
+        let mut during_signer = ConcurrentTestSigner::new(4, 13).with_drift_on_call(1);
+        {
+            let scope = ConcurrentEs256SignerScope::new(&mut during_signer).unwrap();
+            assert_error(
+                scope.sign_batch_concurrently(jwt_inputs(16, "during-drift")),
+                SigningBatchErrorKind::SignerMetadataChanged,
+                None,
+            );
+        }
+        assert_eq!(during_signer.call_count(), 16);
+        assert_eq!(during_signer.unique_call_count(), 16);
     }
 
     #[test]
@@ -1164,9 +1968,17 @@ mod tests {
         WrongEncoding,
         TwoInvalidSignatures,
         InvalidSignatureAndDuplicateIdentity,
+        BackendFailureAndDuplicateIdentity,
     }
 
     struct FaultingExecutor(ResultFault);
+
+    fn signature_bytes_mut(result: &mut SigningResult) -> &mut Vec<u8> {
+        let SigningOutcome::Signature(signature) = &mut result.outcome else {
+            panic!("the serial fixture must produce a signature")
+        };
+        signature
+    }
 
     impl SigningExecutor for FaultingExecutor {
         fn execute(
@@ -1196,18 +2008,22 @@ mod tests {
                 }
                 ResultFault::Reordered => results.reverse(),
                 ResultFault::WrongLength => {
-                    results[0].signature.pop();
+                    signature_bytes_mut(&mut results[0]).pop();
                 }
                 ResultFault::WrongEncoding => {
-                    results[0].signature.fill(0);
+                    signature_bytes_mut(&mut results[0]).fill(0);
                 }
                 ResultFault::TwoInvalidSignatures => {
-                    results[1].signature.pop();
-                    results[2].signature.clear();
+                    signature_bytes_mut(&mut results[1]).pop();
+                    signature_bytes_mut(&mut results[2]).clear();
                     results.reverse();
                 }
                 ResultFault::InvalidSignatureAndDuplicateIdentity => {
-                    results[0].signature.clear();
+                    signature_bytes_mut(&mut results[0]).clear();
+                    results[1].identity = results[0].identity;
+                }
+                ResultFault::BackendFailureAndDuplicateIdentity => {
+                    results[0].outcome = SigningOutcome::Failed;
                     results[1].identity = results[0].identity;
                 }
             }
@@ -1225,6 +2041,7 @@ mod tests {
             ResultFault::WrongBatch,
             ResultFault::WrongRoute,
             ResultFault::InvalidSignatureAndDuplicateIdentity,
+            ResultFault::BackendFailureAndDuplicateIdentity,
         ] {
             let signer = RecordingSigner::es256();
             let scope = Es256SignerScope::new(&signer).unwrap();
