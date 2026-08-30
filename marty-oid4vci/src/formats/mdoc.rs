@@ -5,11 +5,18 @@
 //!
 //! Structure: IssuerSigned { nameSpaces, issuerAuth(COSE_Sign1(MSO)) }
 
+use std::collections::BTreeMap;
+
 use ciborium::Value as CborValue;
 use coset::{
     cbor::value::Value as CosetValue, iana, CborSerializable, CoseSign1Builder, HeaderBuilder,
 };
+use isomdl::{
+    definitions::DigestAlgorithm,
+    digest_executor::{DigestExecutor, DigestJob, DigestResult, SerialDigestExecutor},
+};
 use rand::Rng;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
@@ -23,6 +30,9 @@ const CBOR_TAG_ENCODED_CBOR: u64 = 24;
 const CBOR_TAG_FULL_DATE: u64 = 1004;
 const COSE_HEADER_X5CHAIN_LABEL: i64 = 33;
 const MDOC_X5C_CLAIM_KEY: &str = "_mdoc_x5c";
+const SINGLE_MDOC_DIGEST_CREDENTIAL_ID: u64 = 0;
+const SHA256_DIGEST_LENGTH: usize = 32;
+const MDOC_DIGEST_EXECUTION_FAILED: &str = "mdoc digest execution failed";
 
 /// Sign an mDoc credential.
 ///
@@ -52,26 +62,19 @@ pub fn sign_mdoc(
         .unwrap_or("org.iso.18013.5.1");
     let x5chain_der = extract_mdoc_x5chain_from_claims(claims)?;
 
-    // 1. Build IssuerSignedItems and collect digests for the MSO
-    let mut issuer_signed_items = Vec::new();
-    let mut value_digests = Vec::new(); // (digest_id, sha256_digest)
-
-    for (i, (claim_name, claim_value)) in claims
+    // 1. Plan and execute IssuerSignedItem digests through the same serial
+    // boundary used by split/BYOK signing.
+    let issuer_claims = claims
         .claims
         .iter()
         .filter(|(claim_name, _)| claim_name.as_str() != MDOC_X5C_CLAIM_KEY)
-        .enumerate()
-    {
-        let digest_id = i as u64;
-
-        // Generate 32 bytes of random salt
-        let salt: [u8; 32] = rand::thread_rng().gen();
-
-        let (issuer_signed_item_bytes, digest) =
-            build_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
-        value_digests.push((digest_id, digest));
-        issuer_signed_items.push(issuer_signed_item_bytes);
-    }
+        .map(|(claim_name, claim_value)| (claim_name.as_str(), claim_value));
+    let digest_plan = plan_mdoc_digests(issuer_claims, || rand::thread_rng().gen())?;
+    let digest_results = execute_mdoc_digest_plan(&digest_plan, &SerialDigestExecutor)?;
+    let MdocDigestAssembly {
+        issuer_signed_items,
+        value_digests,
+    } = assemble_mdoc_digest_plan(digest_plan, digest_results)?;
 
     // 2. Build the MobileSecurityObject
     let validity_days = claims.expiration_seconds.map(|s| s / 86400).unwrap_or(365);
@@ -162,6 +165,26 @@ pub struct PreparedMdoc {
     issuer_signed_items: Vec<CborValue>,
 }
 
+#[derive(Clone)]
+struct MdocDigestPlanEntry {
+    credential_id: u64,
+    job_id: u64,
+    ordinal: usize,
+    digest_id: u64,
+    issuer_signed_item_bytes: CborValue,
+}
+
+#[derive(Clone)]
+struct MdocDigestPlan {
+    entries: Vec<MdocDigestPlanEntry>,
+    jobs: Vec<DigestJob>,
+}
+
+struct MdocDigestAssembly {
+    issuer_signed_items: Vec<CborValue>,
+    value_digests: Vec<(u64, Vec<u8>)>,
+}
+
 /// Prepare an mDoc credential for signing.
 ///
 /// Builds the MSO and COSE_Sign1 structure, returning a [`PreparedMdoc`]
@@ -240,7 +263,30 @@ fn prepare_mdoc_with_inputs<'a>(
     holder_public_jwk: Option<&serde_json::Value>,
     now: chrono::DateTime<chrono::Utc>,
     issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
-    mut next_salt: impl FnMut() -> [u8; 32],
+    next_salt: impl FnMut() -> [u8; 32],
+) -> Oid4vciResult<PreparedMdoc> {
+    prepare_mdoc_with_inputs_and_digest_executor(
+        signer,
+        claims,
+        credential_id,
+        holder_public_jwk,
+        now,
+        issuer_claims,
+        next_salt,
+        &SerialDigestExecutor,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_mdoc_with_inputs_and_digest_executor<'a>(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    credential_id: String,
+    holder_public_jwk: Option<&serde_json::Value>,
+    now: chrono::DateTime<chrono::Utc>,
+    issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
+    next_salt: impl FnMut() -> [u8; 32],
+    digest_executor: &dyn DigestExecutor,
 ) -> Oid4vciResult<PreparedMdoc> {
     let doc_type = claims
         .mdoc_doctype
@@ -252,18 +298,12 @@ fn prepare_mdoc_with_inputs<'a>(
         .unwrap_or("org.iso.18013.5.1");
     let x5chain_der = extract_mdoc_x5chain_from_claims(claims)?;
 
-    // Build IssuerSignedItems and collect digests
-    let mut issuer_signed_items = Vec::new();
-    let mut value_digests = Vec::new();
-
-    for (i, (claim_name, claim_value)) in issuer_claims.into_iter().enumerate() {
-        let digest_id = i as u64;
-        let salt = next_salt();
-        let (issuer_signed_item_bytes, digest) =
-            build_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
-        value_digests.push((digest_id, digest));
-        issuer_signed_items.push(issuer_signed_item_bytes);
-    }
+    // Allocate salts and encode every IssuerSignedItem on the caller before
+    // crossing the digest boundary. Executors receive only identified bytes to
+    // hash and never receive a signer or signing key.
+    let digest_plan = plan_mdoc_digests(issuer_claims, next_salt)?;
+    let digest_results = execute_mdoc_digest_plan(&digest_plan, digest_executor)?;
+    let digest_assembly = assemble_mdoc_digest_plan(digest_plan, digest_results)?;
 
     // Build MSO
     let validity_days = claims.expiration_seconds.map(|s| s / 86400).unwrap_or(365);
@@ -272,7 +312,7 @@ fn prepare_mdoc_with_inputs<'a>(
     let mso = build_mobile_security_object(
         doc_type,
         namespace,
-        &value_digests,
+        &digest_assembly.value_digests,
         &now,
         &valid_until,
         device_key,
@@ -310,7 +350,7 @@ fn prepare_mdoc_with_inputs<'a>(
         unprotected_header: unprotected,
         mobile_security_object_bytes,
         namespace: namespace.to_string(),
-        issuer_signed_items,
+        issuer_signed_items: digest_assembly.issuer_signed_items,
     })
 }
 
@@ -391,13 +431,25 @@ fn build_issuer_signed_item(
     ]))
 }
 
-/// Build the ISO `IssuerSignedItemBytes` value and its MSO commitment.
+/// Test-only scalar oracle for the former inline item commitment path.
 ///
-/// The MSO digest commits the complete serialized `IssuerSignedItemBytes`:
-/// tag 24, its byte-string wrapper, and the encoded `IssuerSignedItem`. Keeping
-/// construction and hashing in one helper prevents issuance and disclosure
-/// verification from drifting apart.
+/// Production deliberately separates encoding from digest execution. This
+/// helper retains the old construction-and-hash operation so regression tests
+/// can prove that the serial plan commits the identical tag 24 wrapper bytes.
+#[cfg(test)]
 fn build_issuer_signed_item_bytes(
+    digest_id: u64,
+    random: &[u8],
+    element_identifier: &str,
+    element_value: &serde_json::Value,
+) -> Oid4vciResult<(CborValue, Vec<u8>)> {
+    let (issuer_signed_item_bytes, encoded_issuer_signed_item_bytes) =
+        encode_issuer_signed_item_bytes(digest_id, random, element_identifier, element_value)?;
+    let digest = Sha256::digest(encoded_issuer_signed_item_bytes).to_vec();
+    Ok((issuer_signed_item_bytes, digest))
+}
+
+fn encode_issuer_signed_item_bytes(
     digest_id: u64,
     random: &[u8],
     element_identifier: &str,
@@ -410,8 +462,93 @@ fn build_issuer_signed_item_bytes(
         Box::new(CborValue::Bytes(encoded_item.clone())),
     );
     let encoded_issuer_signed_item_bytes = cbor_encode(&issuer_signed_item_bytes)?;
-    let digest = Sha256::digest(encoded_issuer_signed_item_bytes).to_vec();
-    Ok((issuer_signed_item_bytes, digest))
+    Ok((issuer_signed_item_bytes, encoded_issuer_signed_item_bytes))
+}
+
+fn plan_mdoc_digests<'a>(
+    issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
+    mut next_salt: impl FnMut() -> [u8; 32],
+) -> Oid4vciResult<MdocDigestPlan> {
+    let mut entries = Vec::new();
+    let mut jobs = Vec::new();
+
+    for (ordinal, (claim_name, claim_value)) in issuer_claims.into_iter().enumerate() {
+        let digest_id = u64::try_from(ordinal).map_err(|_| mdoc_digest_execution_error())?;
+        let salt = next_salt();
+        let (issuer_signed_item_bytes, digest_input) =
+            encode_issuer_signed_item_bytes(digest_id, &salt, claim_name, claim_value)?;
+        entries.push(MdocDigestPlanEntry {
+            credential_id: SINGLE_MDOC_DIGEST_CREDENTIAL_ID,
+            job_id: digest_id,
+            ordinal,
+            digest_id,
+            issuer_signed_item_bytes,
+        });
+        jobs.push(DigestJob {
+            credential_id: SINGLE_MDOC_DIGEST_CREDENTIAL_ID,
+            job_id: digest_id,
+            ordinal,
+            algorithm: DigestAlgorithm::SHA256,
+            input: digest_input,
+        });
+    }
+
+    Ok(MdocDigestPlan { entries, jobs })
+}
+
+fn execute_mdoc_digest_plan(
+    plan: &MdocDigestPlan,
+    digest_executor: &dyn DigestExecutor,
+) -> Oid4vciResult<Vec<DigestResult>> {
+    digest_executor
+        .execute(&plan.jobs)
+        .map_err(|_| mdoc_digest_execution_error())
+}
+
+fn assemble_mdoc_digest_plan(
+    plan: MdocDigestPlan,
+    results: Vec<DigestResult>,
+) -> Oid4vciResult<MdocDigestAssembly> {
+    if results.len() != plan.entries.len() {
+        return Err(mdoc_digest_execution_error());
+    }
+
+    let mut results_by_identity = BTreeMap::new();
+    for result in results {
+        if result.digest.len() != SHA256_DIGEST_LENGTH
+            || results_by_identity
+                .insert((result.credential_id, result.job_id), result)
+                .is_some()
+        {
+            return Err(mdoc_digest_execution_error());
+        }
+    }
+
+    let mut issuer_signed_items = Vec::with_capacity(plan.entries.len());
+    let mut value_digests = Vec::with_capacity(plan.entries.len());
+    for entry in plan.entries {
+        let result = results_by_identity
+            .remove(&(entry.credential_id, entry.job_id))
+            .ok_or_else(mdoc_digest_execution_error)?;
+        if result.ordinal != entry.ordinal {
+            return Err(mdoc_digest_execution_error());
+        }
+        issuer_signed_items.push(entry.issuer_signed_item_bytes);
+        value_digests.push((entry.digest_id, result.digest));
+    }
+
+    if !results_by_identity.is_empty() {
+        return Err(mdoc_digest_execution_error());
+    }
+
+    Ok(MdocDigestAssembly {
+        issuer_signed_items,
+        value_digests,
+    })
+}
+
+fn mdoc_digest_execution_error() -> Oid4vciError {
+    Oid4vciError::MdocError(MDOC_DIGEST_EXECUTION_FAILED.into())
 }
 
 /// Build MobileSecurityObject (MSO) per ISO 18013-5 §9.1.2.4.
@@ -802,6 +939,104 @@ fn cbor_date_time(dt: &chrono::DateTime<chrono::Utc>) -> CborValue {
 mod tests {
     use super::*;
     use crate::types::SigningAlgorithm;
+    use isomdl::digest_executor::DigestExecutionError;
+    use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+
+    #[derive(Debug)]
+    struct SignerMustRemainUnused;
+
+    impl CredentialSigner for SignerMustRemainUnused {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            panic!("digest failure must stop before signing")
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            panic!("digest failure must stop before signer inspection")
+        }
+
+        fn issuer_id(&self) -> &str {
+            panic!("digest failure must stop before signer inspection")
+        }
+
+        fn kid_url(&self) -> String {
+            panic!("digest failure must stop before signer inspection")
+        }
+    }
+
+    struct SeededShufflingDigestExecutor(u64);
+
+    impl DigestExecutor for SeededShufflingDigestExecutor {
+        fn execute(&self, jobs: &[DigestJob]) -> Result<Vec<DigestResult>, DigestExecutionError> {
+            let mut results = SerialDigestExecutor.execute(jobs)?;
+            results.shuffle(&mut StdRng::seed_from_u64(self.0));
+            Ok(results)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum DigestExecutorFault {
+        Execution,
+        Missing,
+        Duplicate,
+        UnexpectedCredential,
+        UnexpectedJob,
+        WrongOrdinal,
+        WrongDigestLength,
+    }
+
+    struct FaultingDigestExecutor(DigestExecutorFault);
+
+    impl DigestExecutor for FaultingDigestExecutor {
+        fn execute(&self, jobs: &[DigestJob]) -> Result<Vec<DigestResult>, DigestExecutionError> {
+            if matches!(self.0, DigestExecutorFault::Execution) {
+                return Err(DigestExecutionError);
+            }
+
+            let mut results = SerialDigestExecutor.execute(jobs)?;
+            match self.0 {
+                DigestExecutorFault::Execution => unreachable!(),
+                DigestExecutorFault::Missing => {
+                    results.pop();
+                }
+                DigestExecutorFault::Duplicate => {
+                    results[1] = results[0].clone();
+                }
+                DigestExecutorFault::UnexpectedCredential => {
+                    results[0].credential_id += 1;
+                }
+                DigestExecutorFault::UnexpectedJob => {
+                    results[0].job_id += 1_000;
+                }
+                DigestExecutorFault::WrongOrdinal => {
+                    results[0].ordinal += 1;
+                }
+                DigestExecutorFault::WrongDigestLength => {
+                    results[0].digest.pop();
+                }
+            }
+            Ok(results)
+        }
+    }
+
+    fn replay_digest_plan() -> MdocDigestPlan {
+        let claims = [
+            ("family_name", serde_json::json!("Sensitive Smith")),
+            ("given_name", serde_json::json!("Sensitive Alice")),
+            ("birth_date", serde_json::json!("1990-01-15")),
+        ];
+        let salts = [
+            std::array::from_fn(|index| index as u8),
+            std::array::from_fn(|index| 0x40 + index as u8),
+            std::array::from_fn(|index| 0xff - index as u8),
+        ];
+        let mut salt_tape = salts.into_iter();
+        let plan = plan_mdoc_digests(claims.iter().map(|(name, value)| (*name, value)), || {
+            salt_tape.next().expect("one salt per planned digest")
+        })
+        .unwrap();
+        assert!(salt_tape.next().is_none());
+        plan
+    }
 
     fn test_p256_key() -> IssuerKey {
         let jwk = ssi_jwk::JWK::generate_p256();
@@ -810,6 +1045,24 @@ mod tests {
             issuer_id: "did:example:issuer".into(),
             jwk_json,
             algorithm: SigningAlgorithm::ES256,
+        }
+    }
+
+    fn test_mdoc_claims(
+        entries: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> CredentialClaims {
+        CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: entries.into_iter().collect(),
+            expiration_seconds: Some(365 * 86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
         }
     }
 
@@ -990,6 +1243,154 @@ mod tests {
             panic!("IssuerSignedItemBytes must contain an encoded CBOR byte string");
         };
         assert_ne!(Sha256::digest(encoded_item).as_slice(), digest);
+    }
+
+    #[test]
+    fn serial_mdoc_digest_plan_matches_the_inline_digest_oracle() {
+        let salt: [u8; 32] = std::array::from_fn(|index| 0x80 + index as u8);
+        let value = serde_json::json!("Sensitive Smith");
+        let expected = build_issuer_signed_item_bytes(0, &salt, "family_name", &value).unwrap();
+        let plan = plan_mdoc_digests([("family_name", &value)], || salt).unwrap();
+        let results = execute_mdoc_digest_plan(&plan, &SerialDigestExecutor).unwrap();
+        let actual = assemble_mdoc_digest_plan(plan, results).unwrap();
+
+        assert_eq!(actual.issuer_signed_items, [expected.0]);
+        assert_eq!(actual.value_digests, [(0, expected.1)]);
+    }
+
+    #[test]
+    fn empty_mdoc_digest_plan_consumes_no_salt_and_preserves_empty_mso() {
+        let key = test_p256_key();
+        let claims = test_mdoc_claims([]);
+        let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let prepared = prepare_mdoc_with_inputs(
+            &key,
+            &claims,
+            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
+            None,
+            signed_at,
+            std::iter::empty::<(&str, &serde_json::Value)>(),
+            || panic!("empty mdoc preparation must not request a salt"),
+        )
+        .unwrap();
+
+        assert!(prepared.issuer_signed_items.is_empty());
+        let encoded_mso: CborValue =
+            ciborium::from_reader(&prepared.mobile_security_object_bytes[..]).unwrap();
+        let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_mso) = encoded_mso else {
+            panic!("prepared payload must contain MobileSecurityObjectBytes");
+        };
+        let CborValue::Bytes(encoded_mso) = *encoded_mso else {
+            panic!("MobileSecurityObjectBytes must contain encoded CBOR");
+        };
+        let CborValue::Map(mso) = ciborium::from_reader(&encoded_mso[..]).unwrap() else {
+            panic!("MobileSecurityObject must be a map");
+        };
+        let CborValue::Map(value_digests) = mso
+            .iter()
+            .find_map(|(key, value)| {
+                (key == &CborValue::Text("valueDigests".into())).then_some(value)
+            })
+            .unwrap()
+        else {
+            panic!("MobileSecurityObject must contain valueDigests");
+        };
+        let CborValue::Map(namespace_digests) = value_digests
+            .iter()
+            .find_map(|(key, value)| {
+                (key == &CborValue::Text("org.iso.18013.5.1".into())).then_some(value)
+            })
+            .unwrap()
+        else {
+            panic!("valueDigests must contain the planned namespace");
+        };
+        assert!(namespace_digests.is_empty());
+    }
+
+    #[test]
+    fn mdoc_digest_plan_restores_reordered_results_by_identity() {
+        let serial_plan = replay_digest_plan();
+        let serial_results = execute_mdoc_digest_plan(&serial_plan, &SerialDigestExecutor).unwrap();
+        let expected = assemble_mdoc_digest_plan(serial_plan, serial_results).unwrap();
+
+        for seed in 0..64 {
+            let plan = replay_digest_plan();
+            let executor = SeededShufflingDigestExecutor(0x4344_4c41_4d44_4f43 ^ seed);
+            let results = execute_mdoc_digest_plan(&plan, &executor).unwrap();
+            let actual = assemble_mdoc_digest_plan(plan, results).unwrap();
+            assert_eq!(
+                actual.issuer_signed_items, expected.issuer_signed_items,
+                "result schedule changed item output for seed {seed}"
+            );
+            assert_eq!(
+                actual.value_digests, expected.value_digests,
+                "result schedule changed digest output for seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn mdoc_digest_plan_fails_closed_with_one_redacted_error() {
+        let faults = [
+            DigestExecutorFault::Execution,
+            DigestExecutorFault::Missing,
+            DigestExecutorFault::Duplicate,
+            DigestExecutorFault::UnexpectedCredential,
+            DigestExecutorFault::UnexpectedJob,
+            DigestExecutorFault::WrongOrdinal,
+            DigestExecutorFault::WrongDigestLength,
+        ];
+
+        for fault in faults {
+            let plan = replay_digest_plan();
+            let result = execute_mdoc_digest_plan(&plan, &FaultingDigestExecutor(fault))
+                .and_then(|results| assemble_mdoc_digest_plan(plan, results));
+            let error = match result {
+                Ok(_) => panic!("faulty digest execution must fail closed"),
+                Err(error) => error,
+            };
+            let Oid4vciError::MdocError(message) = error else {
+                panic!("digest lane failures must use the mdoc error boundary");
+            };
+            assert_eq!(message, MDOC_DIGEST_EXECUTION_FAILED);
+            for sensitive in ["Sensitive", "family_name", "given_name", "birth_date"] {
+                assert!(!message.contains(sensitive));
+            }
+        }
+    }
+
+    #[test]
+    fn digest_executor_failure_stops_before_preparation_uses_the_signer() {
+        let claims =
+            test_mdoc_claims([("family_name".into(), serde_json::json!("Sensitive Smith"))]);
+        let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let issuer_claims = claims
+            .claims
+            .iter()
+            .map(|(name, value)| (name.as_str(), value));
+        let result = prepare_mdoc_with_inputs_and_digest_executor(
+            &SignerMustRemainUnused,
+            &claims,
+            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
+            None,
+            signed_at,
+            issuer_claims,
+            || rand::thread_rng().gen(),
+            &FaultingDigestExecutor(DigestExecutorFault::Execution),
+        );
+
+        let error = match result {
+            Ok(_) => panic!("digest execution failure must abort preparation"),
+            Err(error) => error,
+        };
+        let Oid4vciError::MdocError(message) = error else {
+            panic!("digest lane failures must use the mdoc error boundary");
+        };
+        assert_eq!(message, MDOC_DIGEST_EXECUTION_FAILED);
     }
 
     #[test]
