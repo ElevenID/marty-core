@@ -47,8 +47,30 @@ pub fn sign_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
+    sign_mdoc_with_optional_device_key(issuer_key, claims, None)
+}
+
+/// Sign an mDoc credential bound to a proof-verified holder public key.
+///
+/// This remains crate-private so remote/BYOK flows continue through explicit
+/// prepare/sign/assemble APIs while scalar local issuance preserves the legacy
+/// issuer-key parsing, configured-algorithm, and signing error boundaries.
+pub(crate) fn sign_mdoc_with_device_key(
+    issuer_key: &IssuerKey,
+    claims: &CredentialClaims,
+    holder_public_jwk: &serde_json::Value,
+) -> Oid4vciResult<SignedCredential> {
+    sign_mdoc_with_optional_device_key(issuer_key, claims, Some(holder_public_jwk))
+}
+
+fn sign_mdoc_with_optional_device_key(
+    issuer_key: &IssuerKey,
+    claims: &CredentialClaims,
+    holder_public_jwk: Option<&serde_json::Value>,
+) -> Oid4vciResult<SignedCredential> {
     let jwk: ssi_jwk::JWK = serde_json::from_str(&issuer_key.jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
+    let device_key = holder_public_jwk.map(jwk_to_cose_device_key).transpose()?;
 
     let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
     let now = chrono::Utc::now();
@@ -90,7 +112,7 @@ pub fn sign_mdoc(
         &value_digests,
         &now,
         &valid_until,
-        None,
+        device_key,
     )?;
 
     let mobile_security_object_bytes = encode_mobile_security_object_bytes(&mso)?;

@@ -334,7 +334,7 @@ impl IssuanceEngine {
         let audience = issuer_audience.unwrap_or(&self.config.credential_issuer_url);
 
         // 1. Verify proof of possession
-        self.verify_request_proof(request, expected_nonce, audience)?;
+        let verified_proof = self.verify_request_proof(request, expected_nonce, audience)?;
 
         // 2. Negotiate format
         let supported_formats: Vec<CredentialFormat> = self
@@ -347,7 +347,22 @@ impl IssuanceEngine {
         let format = formats::negotiate_format(request.format.as_deref(), &supported_formats)?;
 
         // 3. Sign the credential
-        let signed = formats::sign_credential(&format, &self.config.issuer_key, claims)?;
+        let signed = match format {
+            CredentialFormat::MsoMdoc => {
+                let holder_jwk = verified_proof.holder_jwk.as_ref().ok_or_else(|| {
+                    Oid4vciError::ProofVerificationFailed(
+                        "Verified proof has no resolved holder public key".into(),
+                    )
+                })?;
+                let holder_jwk = serde_json::to_value(holder_jwk)?;
+                formats::mdoc::sign_mdoc_with_device_key(
+                    &self.config.issuer_key,
+                    claims,
+                    &holder_jwk,
+                )?
+            }
+            _ => formats::sign_credential(&format, &self.config.issuer_key, claims)?,
+        };
 
         // 4. Build the credential response. Nonces come from the Nonce Endpoint.
         Ok(CredentialResponse {
@@ -404,7 +419,7 @@ impl IssuanceEngine {
         request: &CredentialRequest,
         expected_nonce: &str,
         audience: &str,
-    ) -> Oid4vciResult<()> {
+    ) -> Oid4vciResult<proof::VerifiedProof> {
         let jwt = request
             .proofs
             .as_ref()
@@ -415,8 +430,7 @@ impl IssuanceEngine {
             })?;
 
         // Verify the PoP JWT
-        proof::verify_jwt_proof(jwt, audience, Some(expected_nonce), 300)?;
-        Ok(())
+        proof::verify_jwt_proof(jwt, audience, Some(expected_nonce), 300)
     }
 }
 
@@ -639,6 +653,99 @@ pub fn generate_p256_did_jwk() -> Oid4vciResult<(String, String)> {
 mod tests {
     use super::*;
 
+    fn mdoc_test_engine() -> IssuanceEngine {
+        let mut engine = test_engine();
+        engine.config.credential_types[0].formats = vec![CredentialFormat::MsoMdoc];
+        engine
+    }
+
+    fn test_credential_request(format: &str, proof_jwt: String) -> CredentialRequest {
+        CredentialRequest {
+            format: Some(format.into()),
+            credential_configuration_id: Some("TestCredential".into()),
+            credential_identifier: None,
+            proofs: Some(ProofsObject {
+                jwt: Some(vec![proof_jwt]),
+            }),
+            credential_definition: None,
+            vct: None,
+            doctype: None,
+            claims: None,
+        }
+    }
+
+    fn test_credential_claims() -> CredentialClaims {
+        CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "TestCredential".into(),
+            claims: [("family_name".into(), serde_json::json!("Holder"))].into(),
+            expiration_seconds: Some(3600),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        }
+    }
+
+    fn p256_test_proof(nonce: &str, audience: &str) -> (String, String) {
+        use p256::ecdsa::signature::Signer;
+
+        let holder = crate::holder_key::generate_p256_did_jwk_holder_key().unwrap();
+        let signing_key =
+            crate::holder_key::p256_signing_key_from_private_jwk(&holder.private_jwk).unwrap();
+        let public_jwk: serde_json::Value = serde_json::from_str(&holder.public_jwk).unwrap();
+        let header = serde_json::json!({
+            "alg": "ES256",
+            "typ": "openid4vci-proof+jwt",
+            "jwk": public_jwk,
+        });
+        let payload = serde_json::json!({
+            "iss": holder.kid,
+            "aud": audience,
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": nonce,
+        });
+        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let signing_input = format!("{header}.{payload}");
+        let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
+        let proof = format!(
+            "{signing_input}.{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        );
+
+        (holder.private_jwk, proof)
+    }
+
+    fn fresh_test_nonce() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    #[cfg(feature = "wallet")]
+    fn wallet_proof(nonce: &str, audience: &str) -> (crate::wallet::HolderKeyMaterial, String) {
+        let wallet = crate::wallet::WalletEngine::new();
+        let holder = wallet.generate_holder_key();
+        let proof = wallet
+            .create_proof_jwt(&holder.holder_id, nonce, audience, &holder.private_jwk)
+            .unwrap();
+        (holder, proof)
+    }
+
+    fn tamper_jwt_signature(jwt: &str) -> String {
+        let mut parts = jwt.split('.');
+        let header = parts.next().unwrap();
+        let payload = parts.next().unwrap();
+        let signature = parts.next().unwrap();
+        assert!(parts.next().is_none());
+
+        let mut signature = URL_SAFE_NO_PAD.decode(signature).unwrap();
+        signature[0] ^= 0x01;
+        format!("{header}.{payload}.{}", URL_SAFE_NO_PAD.encode(signature))
+    }
+
     fn test_engine() -> IssuanceEngine {
         let jwk = ssi_jwk::JWK::generate_p256();
         let jwk_json = serde_json::to_string(&jwk).unwrap();
@@ -768,6 +875,362 @@ mod tests {
 
         assert!(matches!(signed, SignedCredential::JwtVcJson { .. }));
         assert!(signed.credential_id().starts_with("urn:uuid:"));
+    }
+
+    fn assert_issue_credential_binds_verified_p256_proof_key_to_mdoc_device_key(
+        engine: IssuanceEngine,
+        holder_private_jwk: &str,
+        proof: String,
+        nonce: &str,
+    ) {
+        use coset::{iana, Algorithm};
+        use isomdl::definitions::{helpers::Tag24, CoseKey, EC2Curve, IssuerSigned, Mso, EC2Y};
+        use p256::ecdsa::signature::Verifier;
+
+        let issuer_jwk: serde_json::Value =
+            serde_json::from_str(&engine.config.issuer_key.jwk_json).unwrap();
+        let issuer_private_key = URL_SAFE_NO_PAD
+            .decode(issuer_jwk["d"].as_str().unwrap())
+            .unwrap();
+        let issuer_signing_key = p256::ecdsa::SigningKey::from_slice(&issuer_private_key).unwrap();
+        let holder_jwk: serde_json::Value = serde_json::from_str(holder_private_jwk).unwrap();
+        let expected_x = URL_SAFE_NO_PAD
+            .decode(holder_jwk["x"].as_str().unwrap())
+            .unwrap();
+        let expected_y = URL_SAFE_NO_PAD
+            .decode(holder_jwk["y"].as_str().unwrap())
+            .unwrap();
+        assert!(
+            holder_jwk.get("d").is_some(),
+            "fixture must own a private key"
+        );
+
+        let response = engine
+            .issue_credential(
+                &test_credential_request("mso_mdoc", proof),
+                &test_credential_claims(),
+                nonce,
+                None,
+            )
+            .unwrap();
+        let issuer_signed_b64 = response
+            .credential
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .expect("mso_mdoc response must contain base64url IssuerSigned");
+        let issuer_signed_bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
+        let issuer_signed: IssuerSigned =
+            isomdl::cbor::from_slice(&issuer_signed_bytes).expect("IssuerSigned must parse");
+        assert_eq!(
+            issuer_signed.issuer_auth.protected.header.alg.as_ref(),
+            Some(&Algorithm::Assigned(iana::Algorithm::ES256)),
+            "issuerAuth must protect the configured ES256 algorithm"
+        );
+        let issuer_signature =
+            p256::ecdsa::Signature::from_slice(&issuer_signed.issuer_auth.signature).unwrap();
+        issuer_signing_key
+            .verifying_key()
+            .verify(&issuer_signed.issuer_auth.tbs_data(&[]), &issuer_signature)
+            .expect("issuerAuth signature must verify over the complete COSE Sig_structure");
+        let tagged_mso: Tag24<Mso> = isomdl::cbor::from_slice(
+            issuer_signed
+                .issuer_auth
+                .payload
+                .as_ref()
+                .expect("issuerAuth must contain MobileSecurityObjectBytes"),
+        )
+        .expect("MobileSecurityObjectBytes must parse as a typed MSO");
+
+        let raw_mso: ciborium::Value = isomdl::cbor::from_slice(&tagged_mso.inner_bytes).unwrap();
+        let ciborium::Value::Map(raw_mso) = raw_mso else {
+            panic!("typed MSO must retain a CBOR map")
+        };
+        let raw_device_key_info = raw_mso
+            .iter()
+            .find_map(|(key, value)| {
+                (key == &ciborium::Value::Text("deviceKeyInfo".into())).then_some(value)
+            })
+            .expect("deviceKeyInfo must be present");
+        let ciborium::Value::Map(raw_device_key_info) = raw_device_key_info else {
+            panic!("deviceKeyInfo must be a CBOR map")
+        };
+        let raw_device_key = raw_device_key_info
+            .iter()
+            .find_map(|(key, value)| {
+                (key == &ciborium::Value::Text("deviceKey".into())).then_some(value)
+            })
+            .expect("deviceKey must be present");
+        let ciborium::Value::Map(raw_device_key) = raw_device_key else {
+            panic!("deviceKey must be a COSE_Key map")
+        };
+        let mut cose_labels: Vec<i128> = raw_device_key
+            .iter()
+            .map(|(label, _)| match label {
+                ciborium::Value::Integer(label) => (*label).into(),
+                _ => panic!("COSE_Key labels must be integers"),
+            })
+            .collect();
+        cose_labels.sort_unstable();
+        assert_eq!(
+            cose_labels,
+            vec![-3, -2, -1, 1],
+            "deviceKey must contain only the public EC2 key parameters"
+        );
+
+        let mso = tagged_mso.into_inner();
+        assert_eq!(
+            mso.device_key_info.device_key,
+            CoseKey::EC2 {
+                crv: EC2Curve::P256,
+                x: expected_x,
+                y: EC2Y::Value(expected_y),
+            },
+            "deviceKeyInfo must contain the exact public key that verified the proof"
+        );
+        assert!(mso.device_key_info.key_authorizations.is_none());
+        assert!(mso.device_key_info.key_info.is_none());
+    }
+
+    #[test]
+    fn issue_credential_binds_verified_p256_proof_key_to_mdoc_device_key() {
+        let engine = mdoc_test_engine();
+        let audience = engine.config.credential_issuer_url.clone();
+        let nonce = fresh_test_nonce();
+        let (holder_private_jwk, proof) = p256_test_proof(&nonce, &audience);
+
+        assert_issue_credential_binds_verified_p256_proof_key_to_mdoc_device_key(
+            engine,
+            &holder_private_jwk,
+            proof,
+            &nonce,
+        );
+    }
+
+    #[cfg(feature = "wallet")]
+    #[test]
+    fn issue_credential_binds_wallet_engine_p256_proof_key_to_mdoc_device_key() {
+        let engine = mdoc_test_engine();
+        let audience = engine.config.credential_issuer_url.clone();
+        let nonce = fresh_test_nonce();
+        let (holder, proof) = wallet_proof(&nonce, &audience);
+
+        assert_issue_credential_binds_verified_p256_proof_key_to_mdoc_device_key(
+            engine,
+            &holder.private_jwk,
+            proof,
+            &nonce,
+        );
+    }
+
+    #[test]
+    fn issue_credential_rejects_issuer_algorithm_and_jwk_mismatches() {
+        let p256_jwk = ssi_jwk::JWK::generate_p256();
+        let ed25519_jwk = ssi_jwk::JWK::generate_ed25519().unwrap();
+        let cases = [
+            (
+                "P-256 JWK configured as EdDSA",
+                serde_json::to_string(&p256_jwk).unwrap(),
+                SigningAlgorithm::EdDSA,
+            ),
+            (
+                "Ed25519 JWK configured as ES256",
+                serde_json::to_string(&ed25519_jwk).unwrap(),
+                SigningAlgorithm::ES256,
+            ),
+            (
+                "P-256 JWK configured as ES384",
+                serde_json::to_string(&p256_jwk).unwrap(),
+                SigningAlgorithm::ES384,
+            ),
+        ];
+
+        for (label, jwk_json, algorithm) in cases {
+            let mut engine = mdoc_test_engine();
+            engine.config.issuer_key.jwk_json = jwk_json;
+            engine.config.issuer_key.algorithm = algorithm;
+            let audience = engine.config.credential_issuer_url.clone();
+            let nonce = fresh_test_nonce();
+            let (_, proof) = p256_test_proof(&nonce, &audience);
+
+            let error = engine
+                .issue_credential(
+                    &test_credential_request("mso_mdoc", proof),
+                    &test_credential_claims(),
+                    &nonce,
+                    None,
+                )
+                .expect_err(label);
+            assert!(
+                matches!(
+                    error,
+                    Oid4vciError::MdocError(ref message)
+                        if message.contains("COSE signing failed")
+                ),
+                "{label} must fail at the existing mdoc signing boundary, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn issue_credential_rejects_malformed_issuer_jwk_before_invalid_mdoc_claims() {
+        let mut engine = mdoc_test_engine();
+        engine.config.issuer_key.jwk_json = "{malformed-issuer-jwk".into();
+        let audience = engine.config.credential_issuer_url.clone();
+        let nonce = fresh_test_nonce();
+        let (_, proof) = p256_test_proof(&nonce, &audience);
+        let mut claims = test_credential_claims();
+        claims
+            .claims
+            .insert("_mdoc_x5c".into(), serde_json::json!("not-an-array"));
+
+        let error = engine
+            .issue_credential(
+                &test_credential_request("mso_mdoc", proof),
+                &claims,
+                &nonce,
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Oid4vciError::KeyError(ref message) if message.starts_with("Invalid issuer JWK:")
+        ));
+    }
+
+    #[test]
+    fn issue_credential_rejects_malformed_issuer_jwk_before_unsupported_holder_key() {
+        let mut engine = mdoc_test_engine();
+        engine.config.issuer_key.jwk_json = "{malformed-issuer-jwk".into();
+        let audience = engine.config.credential_issuer_url.clone();
+        let nonce = fresh_test_nonce();
+        let proof = crate::proof::create_proof_jwt(&audience, &nonce).unwrap();
+
+        let error = engine
+            .issue_credential(
+                &test_credential_request("mso_mdoc", proof),
+                &test_credential_claims(),
+                &nonce,
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Oid4vciError::KeyError(ref message) if message.starts_with("Invalid issuer JWK:")
+        ));
+    }
+
+    #[test]
+    fn metadata_advertised_eddsa_mdoc_proof_still_fails_closed_before_issuer_signing() {
+        let mut engine = mdoc_test_engine();
+        let metadata = engine.generate_metadata();
+        let mdoc_configuration =
+            &metadata.credential_configurations_supported["TestCredential_mso_mdoc"];
+        assert!(
+            mdoc_configuration.proof_types_supported["jwt"]
+                .proof_signing_alg_values_supported
+                .iter()
+                .any(|algorithm| algorithm == "EdDSA"),
+            "characterize the current metadata/profile mismatch until its dedicated fix"
+        );
+        let mut issuer_jwk: serde_json::Value =
+            serde_json::from_str(&engine.config.issuer_key.jwk_json).unwrap();
+        issuer_jwk.as_object_mut().unwrap().remove("d");
+        engine.config.issuer_key.jwk_json = serde_json::to_string(&issuer_jwk).unwrap();
+        let audience = engine.config.credential_issuer_url.clone();
+        let nonce = fresh_test_nonce();
+        let proof = crate::proof::create_proof_jwt(&audience, &nonce).unwrap();
+
+        let error = engine
+            .issue_credential(
+                &test_credential_request("mso_mdoc", proof),
+                &test_credential_claims(),
+                &nonce,
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Oid4vciError::MdocError(ref message)
+                if message == "mDoc holder public JWK must use EC key type"
+        ));
+    }
+
+    #[test]
+    fn issue_credential_preserves_proof_failures() {
+        let engine = mdoc_test_engine();
+        let audience = engine.config.credential_issuer_url.clone();
+        let nonce = fresh_test_nonce();
+        let unexpected_nonce = fresh_test_nonce();
+        assert_ne!(nonce, unexpected_nonce);
+        let (_, proof) = p256_test_proof(&nonce, &audience);
+        let claims = test_credential_claims();
+
+        let nonce_error = engine
+            .issue_credential(
+                &test_credential_request("mso_mdoc", proof.clone()),
+                &claims,
+                &unexpected_nonce,
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            nonce_error,
+            Oid4vciError::InvalidCNonce { expected, got }
+                if expected == unexpected_nonce && got == nonce
+        ));
+
+        let audience_error = engine
+            .issue_credential(
+                &test_credential_request("mso_mdoc", proof.clone()),
+                &claims,
+                &nonce,
+                Some("https://different-issuer.example"),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            audience_error,
+            Oid4vciError::ProofVerificationFailed(message)
+                if message.contains("Audience mismatch")
+        ));
+
+        let signature_error = engine
+            .issue_credential(
+                &test_credential_request("mso_mdoc", tamper_jwt_signature(&proof)),
+                &claims,
+                &nonce,
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            signature_error,
+            Oid4vciError::ProofVerificationFailed(message)
+                if message.contains("Signature verification failed")
+        ));
+    }
+
+    #[test]
+    fn issue_credential_preserves_non_mdoc_dispatch() {
+        let engine = test_engine();
+        let audience = engine.config.credential_issuer_url.clone();
+        let nonce = fresh_test_nonce();
+        let (_, proof) = p256_test_proof(&nonce, &audience);
+
+        let response = engine
+            .issue_credential(
+                &test_credential_request("jwt_vc_json", proof),
+                &test_credential_claims(),
+                &nonce,
+                None,
+            )
+            .unwrap();
+        let jwt = response
+            .credential
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .expect("JWT-VC response must remain a compact JWT");
+        assert_eq!(jwt.split('.').count(), 3);
+        assert!(response.credentials.is_none());
+        assert!(response.transaction_id.is_none());
     }
 
     #[test]
