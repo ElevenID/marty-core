@@ -674,7 +674,7 @@ impl StaticDiscoveryDocuments {
                 doctype: Some("org.iso.18013.5.1.mDL".to_owned()),
                 cryptographic_binding_methods_supported: binding_methods,
                 credential_signing_alg_values_supported: vec![(-7).into(), (-8).into()],
-                proof_types_supported: proof_types,
+                proof_types_supported: mso_mdoc_proof_types(proof_types),
                 credential_definition: None,
                 credential_metadata: Some(display_metadata("Mobile Document (mDL)")),
                 claims: None,
@@ -803,6 +803,11 @@ fn tenant_configuration(
     credential_definition: Option<CredentialDefinition>,
     credential_metadata: Option<CredentialMetadata>,
 ) -> CredentialConfiguration {
+    let proof_types_supported = if format == "mso_mdoc" {
+        mso_mdoc_proof_types(proof_types_supported)
+    } else {
+        proof_types_supported
+    };
     CredentialConfiguration {
         format: format.to_owned(),
         scope: credential_type.to_owned(),
@@ -816,6 +821,15 @@ fn tenant_configuration(
         claims: None,
         display: None,
     }
+}
+
+fn mso_mdoc_proof_types(
+    mut proof_types_supported: BTreeMap<String, ProofTypeMetadata>,
+) -> BTreeMap<String, ProofTypeMetadata> {
+    for proof_type in proof_types_supported.values_mut() {
+        proof_type.proof_signing_alg_values_supported = vec!["ES256".to_owned()];
+    }
+    proof_types_supported
 }
 
 fn proof_types_with_requirements(
@@ -1003,9 +1017,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        IssuerVariant, KeyAttestationRequirements, ProofPolicyRequest, StaticDiscoveryDocuments,
-        TenantClaimDisplay, TenantClaimMetadata, TenantCredentialMetadata,
-        TenantCredentialTemplate, TenantDiscoveryError, TenantDisplayStyle,
+        mso_mdoc_proof_types, IssuerVariant, KeyAttestationRequirements, ProofPolicyRequest,
+        ProofTypeMetadata, StaticDiscoveryDocuments, TenantClaimDisplay, TenantClaimMetadata,
+        TenantCredentialMetadata, TenantCredentialTemplate, TenantDiscoveryError,
+        TenantDisplayStyle,
     };
 
     fn documents() -> StaticDiscoveryDocuments {
@@ -1090,6 +1105,36 @@ mod tests {
     }
 
     #[test]
+    fn mso_mdoc_proof_algorithms_are_exactly_es256_and_preserve_requirements() {
+        let requirements = KeyAttestationRequirements {
+            key_storage: vec!["iso_18045_high".to_owned()],
+            user_authentication: vec!["biometric".to_owned()],
+        };
+
+        let mdoc_algorithms: Vec<Vec<String>> = [
+            vec!["EdDSA".to_owned()],
+            vec!["ES256".to_owned(), "EdDSA".to_owned(), "ES256".to_owned()],
+        ]
+        .into_iter()
+        .map(|configured_algorithms| {
+            let proof_types = BTreeMap::from([(
+                "jwt".to_owned(),
+                ProofTypeMetadata {
+                    proof_signing_alg_values_supported: configured_algorithms,
+                    key_attestations_required: requirements.clone(),
+                },
+            )]);
+
+            let filtered = mso_mdoc_proof_types(proof_types);
+            assert_eq!(filtered["jwt"].key_attestations_required, requirements);
+            filtered["jwt"].proof_signing_alg_values_supported.clone()
+        })
+        .collect();
+
+        assert_eq!(mdoc_algorithms, [["ES256"], ["ES256"]]);
+    }
+
+    #[test]
     fn root_issuer_metadata_preserves_final_spec_shape_and_all_formats() {
         let value = serde_json::to_value(documents().root_issuer_metadata()).expect("serialize");
         assert_eq!(value["credential_issuer"], "https://issuer.example");
@@ -1109,6 +1154,18 @@ mod tests {
             configurations["default#mdoc"]["credential_signing_alg_values_supported"],
             json!([-7, -8])
         );
+        assert_eq!(
+            configurations["default#mdoc"]["proof_types_supported"]["jwt"]
+                ["proof_signing_alg_values_supported"],
+            json!(["ES256"])
+        );
+        for identifier in ["default", "default#credential-manager", "default#ldp-vc"] {
+            assert_eq!(
+                configurations[identifier]["proof_types_supported"]["jwt"]
+                    ["proof_signing_alg_values_supported"],
+                json!(["ES256", "EdDSA"])
+            );
+        }
         for identifier in [
             "default",
             "default#credential-manager",
@@ -1297,6 +1354,10 @@ mod tests {
             employee["proof_types_supported"]["jwt"]["key_attestations_required"],
             json!({})
         );
+        assert_eq!(
+            employee["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["ES256", "EdDSA"])
+        );
 
         let sd_jwt = &configurations["EmployeeBadge#sd-jwt"];
         assert_eq!(sd_jwt["format"], "dc+sd-jwt");
@@ -1309,6 +1370,10 @@ mod tests {
                 "key_storage": ["iso_18045_high"],
                 "user_authentication": ["biometric"]
             })
+        );
+        assert_eq!(
+            sd_jwt["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["ES256", "EdDSA"])
         );
 
         let data_integrity = &configurations["EmployeeBadge#ldp-vc"];
@@ -1328,6 +1393,10 @@ mod tests {
             data_integrity["proof_types_supported"]["jwt"]["key_attestations_required"],
             json!({"user_authentication": ["biometric"]})
         );
+        assert_eq!(
+            data_integrity["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["ES256", "EdDSA"])
+        );
 
         let mdoc = &configurations["org.iso.18013.5.1.mDL#mdoc"];
         assert_eq!(mdoc["format"], "mso_mdoc");
@@ -1339,6 +1408,14 @@ mod tests {
         assert_eq!(
             mdoc["credential_metadata"]["display"],
             json!([{"name": "Mobile Driving Licence", "locale": "en-US"}])
+        );
+        assert_eq!(
+            mdoc["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["ES256"])
+        );
+        assert_eq!(
+            mdoc["proof_types_supported"]["jwt"]["key_attestations_required"],
+            json!({"key_storage": ["iso_18045_high"]})
         );
     }
 
@@ -1373,6 +1450,10 @@ mod tests {
                 "user_authentication": ["biometric"]
             })
         );
+        assert_eq!(
+            employee["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["ES256", "EdDSA"])
+        );
 
         let apple = documents().plan_organization_issuer_metadata(
             "org-a",
@@ -1398,6 +1479,14 @@ mod tests {
             assert_eq!(
                 configuration["credential_signing_alg_values_supported"],
                 json!([-7, -8])
+            );
+            assert_eq!(
+                configuration["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+                json!(["ES256"])
+            );
+            assert_eq!(
+                configuration["proof_types_supported"]["jwt"]["key_attestations_required"],
+                json!({"key_storage": ["iso_18045_high"]})
             );
             assert!(configuration.get("claims").is_none());
             assert!(configuration.get("credential_metadata").is_none());
