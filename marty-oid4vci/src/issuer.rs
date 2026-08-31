@@ -1091,17 +1091,15 @@ mod tests {
     }
 
     #[test]
-    fn metadata_advertised_eddsa_mdoc_proof_still_fails_closed_before_issuer_signing() {
+    fn metadata_constrains_mdoc_proof_to_es256_and_eddsa_fails_before_issuer_signing() {
         let mut engine = mdoc_test_engine();
         let metadata = engine.generate_metadata();
         let mdoc_configuration =
             &metadata.credential_configurations_supported["TestCredential_mso_mdoc"];
-        assert!(
-            mdoc_configuration.proof_types_supported["jwt"]
-                .proof_signing_alg_values_supported
-                .iter()
-                .any(|algorithm| algorithm == "EdDSA"),
-            "characterize the current metadata/profile mismatch until its dedicated fix"
+        assert_eq!(
+            mdoc_configuration.proof_types_supported["jwt"].proof_signing_alg_values_supported,
+            ["ES256"],
+            "mdoc proof metadata must match the ES256-only holder-key profile"
         );
         let mut issuer_jwk: serde_json::Value =
             serde_json::from_str(&engine.config.issuer_key.jwk_json).unwrap();

@@ -407,7 +407,7 @@ fn build_config_for_format(
                     .cloned()
                     .collect()
             },
-            proof_types_supported: proof_types.clone(),
+            proof_types_supported: mso_mdoc_proof_types(proof_types),
             credential_definition: None,
             doctype: ctype.doctype.clone(),
             claims: build_mdoc_claims_metadata(ctype),
@@ -485,6 +485,18 @@ fn build_config_for_format(
             zk_predicates: None,
         },
     }
+}
+
+/// Restrict mdoc proof metadata to algorithms supported by the holder-key binding path.
+fn mso_mdoc_proof_types(
+    proof_types: &HashMap<String, ProofTypeMetadata>,
+) -> HashMap<String, ProofTypeMetadata> {
+    let mut supported = proof_types.clone();
+    for proof_type in supported.values_mut() {
+        proof_type.proof_signing_alg_values_supported =
+            vec![SigningAlgorithm::ES256.as_str().to_owned()];
+    }
+    supported
 }
 
 /// Build a default credential configuration for fallback.
@@ -671,6 +683,112 @@ mod tests {
             configs["IdentityCredential_mso_mdoc"].doctype,
             Some("org.iso.18013.5.1.mDL".into())
         );
+    }
+
+    #[test]
+    fn mso_mdoc_advertises_only_holder_binding_proof_algorithms() {
+        let configured_algorithms = vec![
+            SigningAlgorithm::EdDSA,
+            SigningAlgorithm::ES256K,
+            SigningAlgorithm::ES384,
+            SigningAlgorithm::RS256,
+            SigningAlgorithm::ES256,
+        ];
+        let configured_algorithm_names: Vec<String> = configured_algorithms
+            .iter()
+            .map(|algorithm| algorithm.as_str().to_owned())
+            .collect();
+        let credential_type = CredentialTypeConfig {
+            id: "ProofAlgorithms".into(),
+            name: "Proof Algorithms".into(),
+            formats: vec![
+                CredentialFormat::JwtVcJson,
+                CredentialFormat::SdJwt,
+                CredentialFormat::MsoMdoc,
+                CredentialFormat::ZkMdoc,
+                CredentialFormat::VdsNc,
+            ],
+            vc_types: vec![],
+            vct: None,
+            doctype: Some("org.iso.18013.5.1.mDL".into()),
+            claims: HashMap::new(),
+            display: None,
+        };
+
+        let metadata = MetadataBuilder::new("https://issuer.example.com", "Test Issuer")
+            .signing_algorithms(configured_algorithms)
+            .add_credential_type(credential_type)
+            .build();
+        let configurations = &metadata.credential_configurations_supported;
+
+        let mdoc_proof = &configurations["ProofAlgorithms_mso_mdoc"].proof_types_supported["jwt"]
+            .proof_signing_alg_values_supported;
+        assert_eq!(mdoc_proof, &["ES256"]);
+
+        for configuration_id in [
+            "ProofAlgorithms",
+            "ProofAlgorithms_sd_jwt",
+            "ProofAlgorithms_zk_mdoc",
+            "ProofAlgorithms_vds_nc",
+        ] {
+            let proof_algorithms = &configurations[configuration_id].proof_types_supported["jwt"]
+                .proof_signing_alg_values_supported;
+            assert_eq!(
+                proof_algorithms, &configured_algorithm_names,
+                "proof algorithm configuration changed for {configuration_id}"
+            );
+        }
+
+        assert_eq!(
+            configurations["ProofAlgorithms_mso_mdoc"].credential_signing_alg_values_supported,
+            vec!["EdDSA", "ES256K", "ES384", "ES256"]
+        );
+    }
+
+    #[test]
+    fn mso_mdoc_proof_algorithms_are_exactly_es256_for_any_signing_configuration() {
+        let mdoc_algorithms: Vec<Vec<String>> = [
+            vec![SigningAlgorithm::EdDSA, SigningAlgorithm::RS256],
+            vec![
+                SigningAlgorithm::ES256,
+                SigningAlgorithm::EdDSA,
+                SigningAlgorithm::ES256,
+            ],
+        ]
+        .into_iter()
+        .map(|configured_algorithms| {
+            let configured_algorithm_names: Vec<String> = configured_algorithms
+                .iter()
+                .map(|algorithm| algorithm.as_str().to_owned())
+                .collect();
+            let credential_type = CredentialTypeConfig {
+                id: "ExactProofAlgorithms".into(),
+                name: "Exact Proof Algorithms".into(),
+                formats: vec![CredentialFormat::MsoMdoc, CredentialFormat::SdJwt],
+                vc_types: vec![],
+                vct: None,
+                doctype: Some("org.iso.18013.5.1.mDL".into()),
+                claims: HashMap::new(),
+                display: None,
+            };
+
+            let metadata = MetadataBuilder::new("https://issuer.example.com", "Test Issuer")
+                .signing_algorithms(configured_algorithms)
+                .add_credential_type(credential_type)
+                .build();
+            let configurations = &metadata.credential_configurations_supported;
+            assert_eq!(
+                configurations["ExactProofAlgorithms_sd_jwt"].proof_types_supported["jwt"]
+                    .proof_signing_alg_values_supported,
+                configured_algorithm_names
+            );
+            configurations["ExactProofAlgorithms_mso_mdoc"].proof_types_supported["jwt"]
+                .proof_signing_alg_values_supported
+                .clone()
+        })
+        .collect();
+
+        assert_eq!(mdoc_algorithms, [["ES256"], ["ES256"]]);
     }
 
     #[test]
