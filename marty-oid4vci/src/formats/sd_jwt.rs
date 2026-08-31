@@ -170,8 +170,31 @@ pub fn sign_sd_jwt(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
-    validate_sd_jwt_managed_claims(claims, false, false)?;
-    validate_sd_jwt_structural_markers(claims, None)?;
+    sign_sd_jwt_with_optional_confirmation(issuer_key, claims, None)
+}
+
+/// Sign an SD-JWT bound to the public key that verified an OID4VCI proof.
+///
+/// Scalar local issuance uses this boundary after proof verification. Direct
+/// format issuance remains unbound because it has no proof context.
+pub(crate) fn sign_sd_jwt_with_holder_public_jwk(
+    issuer_key: &IssuerKey,
+    claims: &CredentialClaims,
+    holder_jwk: &JWK,
+) -> Oid4vciResult<SignedCredential> {
+    let confirmation = serde_json::json!({
+        "jwk": serde_json::to_value(holder_jwk.to_public())?,
+    });
+    sign_sd_jwt_with_optional_confirmation(issuer_key, claims, Some(&confirmation))
+}
+
+fn sign_sd_jwt_with_optional_confirmation(
+    issuer_key: &IssuerKey,
+    claims: &CredentialClaims,
+    confirmation: Option<&serde_json::Value>,
+) -> Oid4vciResult<SignedCredential> {
+    validate_sd_jwt_managed_claims(claims, false, confirmation.is_some())?;
+    validate_sd_jwt_structural_markers(claims, confirmation)?;
 
     let jwk: JWK = serde_json::from_str(&issuer_key.jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
@@ -186,7 +209,7 @@ pub fn sign_sd_jwt(
     };
 
     // Build the JWT payload and SD JSONPath selectors based on the payload format.
-    let (payload, sd_path_prefix) = match &claims.credential_payload_format {
+    let (mut payload, sd_path_prefix) = match &claims.credential_payload_format {
         CredentialPayloadFormat::IetfSdJwt => {
             // ── IETF flat SD-JWT VC ──────────────────────────────────────────
             // Top-level claims: vct, iss, iat, jti, sub, exp, plus all credential claims.
@@ -267,6 +290,10 @@ pub fn sign_sd_jwt(
             ));
         }
     };
+
+    if let Some(confirmation) = confirmation {
+        payload["cnf"] = confirmation.clone();
+    }
 
     // Get the signing algorithm and key material for sd-jwt-rs
     let (alg_str, encoding_key) = get_sd_jwt_signing_params(&jwk, issuer_key)?;
@@ -1570,5 +1597,52 @@ mod tests {
         assert_eq!(verified_claims["credentialSubject"]["age"], 30);
         // "name" was selectively disclosed and included — should be reconstructed
         assert_eq!(verified_claims["credentialSubject"]["name"], "Alice");
+    }
+
+    #[test]
+    fn proof_bound_sd_jwt_serializes_only_holder_public_jwk() {
+        let issuer_key = test_p256_key();
+        let holder_jwk = JWK::generate_p256();
+        assert!(
+            !holder_jwk.is_public(),
+            "fixture must contain a private key"
+        );
+        let claims = CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "IdentityCredential".into(),
+            claims: [("employee_id".into(), serde_json::json!("employee-123"))].into(),
+            expiration_seconds: Some(3600),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+
+        let signed = sign_sd_jwt_with_holder_public_jwk(&issuer_key, &claims, &holder_jwk)
+            .expect("proof-bound issuance must sign");
+        let SignedCredential::SdJwt { compact, .. } = signed else {
+            panic!("proof-bound issuance must return SD-JWT")
+        };
+        let payload = compact
+            .split('~')
+            .next()
+            .unwrap()
+            .split('.')
+            .nth(1)
+            .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&B64.decode(payload).unwrap()).unwrap();
+        let expected_public_jwk = serde_json::to_value(holder_jwk.to_public()).unwrap();
+
+        assert_eq!(
+            payload["cnf"],
+            serde_json::json!({"jwk": expected_public_jwk})
+        );
+        for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            assert!(payload["cnf"]["jwk"].get(private_member).is_none());
+        }
     }
 }

@@ -348,6 +348,18 @@ impl IssuanceEngine {
 
         // 3. Sign the credential
         let signed = match format {
+            CredentialFormat::SdJwt => {
+                let holder_jwk = verified_proof.holder_jwk.as_ref().ok_or_else(|| {
+                    Oid4vciError::ProofVerificationFailed(
+                        "Verified proof has no resolved holder public key".into(),
+                    )
+                })?;
+                formats::sd_jwt::sign_sd_jwt_with_holder_public_jwk(
+                    &self.config.issuer_key,
+                    claims,
+                    holder_jwk,
+                )?
+            }
             CredentialFormat::MsoMdoc => {
                 let holder_jwk = verified_proof.holder_jwk.as_ref().ok_or_else(|| {
                     Oid4vciError::ProofVerificationFailed(
