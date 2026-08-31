@@ -590,48 +590,19 @@ pub fn detect_algorithm(jwk_json: &str) -> Oid4vciResult<SigningAlgorithm> {
     let jwk: serde_json::Value = serde_json::from_str(jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid JWK JSON: {}", e)))?;
 
-    // Check explicit alg field first
-    if let Some(alg) = jwk.get("alg").and_then(|v| v.as_str()) {
-        return match alg {
-            "ES256" => Ok(SigningAlgorithm::ES256),
-            "EdDSA" => Ok(SigningAlgorithm::EdDSA),
-            "ES256K" => Ok(SigningAlgorithm::ES256K),
-            "ES384" => Ok(SigningAlgorithm::ES384),
-            "RS256" => Ok(SigningAlgorithm::RS256),
-            _ => Err(Oid4vciError::KeyError(format!(
-                "Unsupported algorithm: {}",
-                alg
-            ))),
-        };
-    }
-
-    // Infer from key type and curve
-    match jwk.get("kty").and_then(|v| v.as_str()) {
-        Some("OKP") => match jwk.get("crv").and_then(|v| v.as_str()) {
-            Some("Ed25519") => Ok(SigningAlgorithm::EdDSA),
-            Some(crv) => Err(Oid4vciError::KeyError(format!(
-                "Unsupported OKP curve: {}",
-                crv
-            ))),
-            None => Err(Oid4vciError::KeyError("Missing curve for OKP key".into())),
-        },
-        Some("EC") => match jwk.get("crv").and_then(|v| v.as_str()) {
-            Some("P-256") => Ok(SigningAlgorithm::ES256),
-            Some("P-384") => Ok(SigningAlgorithm::ES384),
-            Some("secp256k1") => Ok(SigningAlgorithm::ES256K),
-            Some(crv) => Err(Oid4vciError::KeyError(format!(
-                "Unsupported EC curve: {}",
-                crv
-            ))),
-            None => Err(Oid4vciError::KeyError("Missing curve for EC key".into())),
-        },
-        Some("RSA") => Ok(SigningAlgorithm::RS256),
-        Some(kty) => Err(Oid4vciError::KeyError(format!(
-            "Unsupported key type: {}",
-            kty
-        ))),
-        None => Err(Oid4vciError::KeyError("Missing kty in JWK".into())),
-    }
+    // Derive the cryptographic family first. `alg`, when present, is only an
+    // assertion about that structure and can never override `kty` + `crv`.
+    let algorithm = crate::signer::derive_signing_algorithm(
+        jwk.get("kty").and_then(serde_json::Value::as_str),
+        jwk.get("crv").and_then(serde_json::Value::as_str),
+    )?;
+    let declared_algorithm = match jwk.get("alg") {
+        Some(serde_json::Value::String(algorithm)) => Some(algorithm.as_str()),
+        Some(_) => return Err(Oid4vciError::KeyError("JWK alg must be a string".into())),
+        None => None,
+    };
+    crate::signer::validate_declared_jwk_algorithm(algorithm, declared_algorithm)?;
+    Ok(algorithm)
 }
 
 /// Generate a P-256 signing JWK and its public-only counterpart.

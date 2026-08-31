@@ -58,6 +58,7 @@ impl CredentialSigner for IssuerKey {
     fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
         let jwk: JWK = serde_json::from_str(&self.jwk_json)
             .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
+        validate_issuer_key_algorithm(self, &jwk)?;
         sign_with_jwk(&jwk, message)
     }
 
@@ -77,6 +78,98 @@ impl CredentialSigner for IssuerKey {
 // =============================================================================
 // JWK signing helpers (shared with format modules)
 // =============================================================================
+
+/// Derive the signing algorithm from a JWK's structural key family.
+///
+/// `alg` is deliberately excluded from this decision. Callers validate that
+/// optional metadata separately so it can only narrow, never override, the
+/// key type and exact curve.
+pub(crate) fn derive_signing_algorithm(
+    key_type: Option<&str>,
+    curve: Option<&str>,
+) -> Oid4vciResult<SigningAlgorithm> {
+    match key_type {
+        Some("OKP") => match curve {
+            Some("Ed25519") => Ok(SigningAlgorithm::EdDSA),
+            Some(curve) => Err(Oid4vciError::KeyError(format!(
+                "Unsupported OKP curve: {curve}"
+            ))),
+            None => Err(Oid4vciError::KeyError("Missing curve for OKP key".into())),
+        },
+        Some("EC") => match curve {
+            Some("P-256") => Ok(SigningAlgorithm::ES256),
+            Some("P-384") => Ok(SigningAlgorithm::ES384),
+            Some("secp256k1") => Ok(SigningAlgorithm::ES256K),
+            Some(curve) => Err(Oid4vciError::KeyError(format!(
+                "Unsupported EC curve: {curve}"
+            ))),
+            None => Err(Oid4vciError::KeyError("Missing curve for EC key".into())),
+        },
+        Some("RSA") => Ok(SigningAlgorithm::RS256),
+        Some(key_type) => Err(Oid4vciError::KeyError(format!(
+            "Unsupported key type: {key_type}"
+        ))),
+        None => Err(Oid4vciError::KeyError("Missing kty in JWK".into())),
+    }
+}
+
+/// Require optional JWK `alg` metadata to agree with the structural family.
+pub(crate) fn validate_declared_jwk_algorithm(
+    structural_algorithm: SigningAlgorithm,
+    declared_algorithm: Option<&str>,
+) -> Oid4vciResult<()> {
+    let Some(declared_algorithm) = declared_algorithm else {
+        return Ok(());
+    };
+    let declared = match declared_algorithm {
+        "ES256" => SigningAlgorithm::ES256,
+        "EdDSA" => SigningAlgorithm::EdDSA,
+        "ES256K" => SigningAlgorithm::ES256K,
+        "ES384" => SigningAlgorithm::ES384,
+        "RS256" => SigningAlgorithm::RS256,
+        unsupported => {
+            return Err(Oid4vciError::KeyError(format!(
+                "Unsupported algorithm: {unsupported}"
+            )))
+        }
+    };
+    if declared != structural_algorithm {
+        return Err(Oid4vciError::KeyError(format!(
+            "JWK alg {declared} does not match JWK key family {structural_algorithm}"
+        )));
+    }
+    Ok(())
+}
+
+fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> {
+    let (key_type, curve) = match &jwk.params {
+        Params::OKP(params) => (Some("OKP"), Some(params.curve.as_str())),
+        Params::EC(params) => (Some("EC"), params.curve.as_deref()),
+        Params::RSA(_) => (Some("RSA"), None),
+        Params::Symmetric(_) => (Some("oct"), None),
+    };
+    let structural_algorithm = derive_signing_algorithm(key_type, curve)?;
+    validate_declared_jwk_algorithm(
+        structural_algorithm,
+        jwk.algorithm.map(|algorithm| algorithm.as_str()),
+    )?;
+    Ok(structural_algorithm)
+}
+
+/// Bind an [`IssuerKey`]'s public algorithm hint to its actual JWK family.
+pub(crate) fn validate_issuer_key_algorithm(
+    issuer_key: &IssuerKey,
+    jwk: &JWK,
+) -> Oid4vciResult<()> {
+    let structural_algorithm = derive_typed_jwk_algorithm(jwk)?;
+    if issuer_key.algorithm != structural_algorithm {
+        return Err(Oid4vciError::KeyError(format!(
+            "IssuerKey algorithm {} does not match JWK key family {structural_algorithm}",
+            issuer_key.algorithm
+        )));
+    }
+    Ok(())
+}
 
 /// Sign a message using a JWK's private key.
 pub(crate) fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
