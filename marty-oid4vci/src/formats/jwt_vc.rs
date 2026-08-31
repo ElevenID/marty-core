@@ -12,7 +12,7 @@ use ssi_jwk::JWK;
 use std::collections::HashMap;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::CredentialSigner;
+use crate::signer::{validate_issuer_key_algorithm, CredentialSigner};
 use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -120,6 +120,10 @@ pub fn sign_jwt_vc(
     if let Some(expires_at) = expires_at {
         payload["exp"] = serde_json::json!(expires_at.timestamp());
     }
+
+    // Bind the configured JOSE header algorithm to the actual JWK family only
+    // after all claim validation, preserving existing claim-error precedence.
+    validate_issuer_key_algorithm(issuer_key, &jwk)?;
 
     // Build and sign the JWT
     let alg_str = issuer_key.algorithm.as_str();
