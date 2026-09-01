@@ -182,10 +182,14 @@ pub(crate) fn sign_sd_jwt_with_holder_public_jwk(
     claims: &CredentialClaims,
     holder_jwk: &JWK,
 ) -> Oid4vciResult<SignedCredential> {
-    let confirmation = serde_json::json!({
-        "jwk": serde_json::to_value(holder_jwk.to_public())?,
-    });
+    let confirmation = holder_public_jwk_confirmation(holder_jwk)?;
     sign_sd_jwt_with_optional_confirmation(issuer_key, claims, Some(&confirmation))
+}
+
+fn holder_public_jwk_confirmation(holder_jwk: &JWK) -> Oid4vciResult<serde_json::Value> {
+    Ok(serde_json::json!({
+        "jwk": serde_json::to_value(holder_jwk.to_public())?,
+    }))
 }
 
 fn sign_sd_jwt_with_optional_confirmation(
@@ -404,6 +408,26 @@ pub fn prepare_sd_jwt(
     prepare_sd_jwt_with_options(signer, claims, SdJwtPreparationOptions::default())
 }
 
+/// Prepare an SD-JWT bound to a holder key from a successfully verified proof.
+///
+/// Proof verification, including nonce, audience, age, signature, and optional
+/// key-attestation policy, must complete before this boundary. Only the public
+/// projection of `holder_jwk` is retained in the issuer-signed `cnf.jwk` claim.
+pub(crate) fn prepare_sd_jwt_with_holder_public_jwk(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    holder_jwk: &JWK,
+) -> Oid4vciResult<PreparedSdJwt> {
+    prepare_sd_jwt_with_options(
+        signer,
+        claims,
+        SdJwtPreparationOptions {
+            confirmation: Some(holder_public_jwk_confirmation(holder_jwk)?),
+            ..SdJwtPreparationOptions::default()
+        },
+    )
+}
+
 /// Prepare an SD-JWT with explicit remote-issuer protocol fields.
 pub fn prepare_sd_jwt_with_options(
     signer: &dyn CredentialSigner,
@@ -422,6 +446,28 @@ pub fn prepare_sd_jwt_with_options(
             rng.fill_bytes(&mut salt);
             salt
         },
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn prepare_sd_jwt_with_holder_public_jwk_and_sources(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    holder_jwk: &JWK,
+    next_uuid: impl FnMut() -> uuid::Uuid,
+    next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
+    next_salt: impl FnMut() -> [u8; 16],
+) -> Oid4vciResult<PreparedSdJwt> {
+    prepare_sd_jwt_with_options_and_sources(
+        signer,
+        claims,
+        SdJwtPreparationOptions {
+            confirmation: Some(holder_public_jwk_confirmation(holder_jwk)?),
+            ..SdJwtPreparationOptions::default()
+        },
+        next_uuid,
+        next_now,
+        next_salt,
     )
 }
 
@@ -1105,6 +1151,17 @@ mod tests {
         }
     }
 
+    fn fixed_private_holder_jwk() -> JWK {
+        serde_json::from_value(serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+        }))
+        .unwrap()
+    }
+
     struct MustNotSign;
 
     impl std::fmt::Debug for MustNotSign {
@@ -1296,6 +1353,110 @@ mod tests {
                 serde_json::json!(["AQEBAQEBAQEBAQEBAQEBAQ", "email", "alice@example.com"]),
             ]
         );
+    }
+
+    #[test]
+    fn holder_bound_fixed_sources_store_only_public_jwk_and_preserve_source_order() {
+        let claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec!["name".into()],
+        );
+        let holder_jwk = fixed_private_holder_jwk();
+        assert!(!holder_jwk.is_public());
+        let events = RefCell::new(vec![]);
+        let salts = RefCell::new(VecDeque::from([[0x22; 16]]));
+
+        let prepared = prepare_sd_jwt_with_holder_public_jwk_and_sources(
+            &FixedPreparationSigner,
+            &claims,
+            &holder_jwk,
+            || {
+                events.borrow_mut().push("uuid");
+                uuid::Uuid::parse_str("01234567-89ab-4def-8123-456789abcdef").unwrap()
+            },
+            || {
+                events.borrow_mut().push("clock");
+                chrono::DateTime::parse_from_rfc3339("2025-01-02T03:04:05Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc)
+            },
+            || {
+                events.borrow_mut().push("salt");
+                salts.borrow_mut().pop_front().unwrap()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(&*events.borrow(), &["uuid", "clock", "salt"]);
+        assert!(salts.borrow().is_empty());
+        assert_eq!(
+            prepared.credential_id,
+            "urn:uuid:01234567-89ab-4def-8123-456789abcdef"
+        );
+        assert_eq!(
+            prepared_disclosures(&prepared),
+            vec![serde_json::json!([
+                "IiIiIiIiIiIiIiIiIiIiIg",
+                "name",
+                "Alice"
+            ])]
+        );
+
+        let (header, payload) = prepared_json(&prepared);
+        assert_eq!(
+            header,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "vc+sd-jwt",
+                "kid": "https://issuer.example/keys/1"
+            })
+        );
+        assert_eq!(payload["iat"], 1_735_787_045_i64);
+        assert_eq!(payload["jti"], prepared.credential_id);
+        assert_eq!(
+            payload["cnf"],
+            serde_json::json!({"jwk": holder_jwk.to_public()})
+        );
+        for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            assert!(payload["cnf"]["jwk"].get(private_member).is_none());
+        }
+    }
+
+    #[test]
+    fn holder_bound_cnf_collision_fails_before_fixed_sources() {
+        let mut claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec!["name".into()],
+        );
+        claims
+            .claims
+            .insert("cnf".into(), serde_json::json!({"jwk": {"kty": "EC"}}));
+        let holder_jwk = fixed_private_holder_jwk();
+        let events = RefCell::new(vec![]);
+
+        let error = preparation_error(prepare_sd_jwt_with_holder_public_jwk_and_sources(
+            &FixedPreparationSigner,
+            &claims,
+            &holder_jwk,
+            || {
+                events.borrow_mut().push("uuid");
+                uuid::Uuid::nil()
+            },
+            || {
+                events.borrow_mut().push("clock");
+                chrono::Utc::now()
+            },
+            || {
+                events.borrow_mut().push("salt");
+                [0; 16]
+            },
+        ));
+
+        assert_eq!(&*events.borrow(), &[] as &[&str]);
+        assert!(matches!(
+            error,
+            Oid4vciError::SdJwtError(message) if message == SD_JWT_MANAGED_CLAIM_COLLISION
+        ));
     }
 
     #[test]
