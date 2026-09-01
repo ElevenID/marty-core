@@ -410,14 +410,37 @@ pub fn prepare_sd_jwt_with_options(
     claims: &CredentialClaims,
     options: SdJwtPreparationOptions,
 ) -> Oid4vciResult<PreparedSdJwt> {
+    let mut rng = rand::rngs::OsRng;
+    prepare_sd_jwt_with_options_and_sources(
+        signer,
+        claims,
+        options,
+        uuid::Uuid::new_v4,
+        chrono::Utc::now,
+        || {
+            let mut salt = [0u8; 16];
+            rng.fill_bytes(&mut salt);
+            salt
+        },
+    )
+}
+
+fn prepare_sd_jwt_with_options_and_sources(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: SdJwtPreparationOptions,
+    mut next_uuid: impl FnMut() -> uuid::Uuid,
+    mut next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
+    next_salt: impl FnMut() -> [u8; 16],
+) -> Oid4vciResult<PreparedSdJwt> {
     validate_sd_jwt_managed_claims(claims, options.include_nbf, options.confirmation.is_some())?;
     validate_sd_jwt_structural_markers(claims, options.confirmation.as_ref())?;
 
     let credential_id = options
         .credential_id
         .clone()
-        .unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
-    let now = chrono::Utc::now();
+        .unwrap_or_else(|| format!("urn:uuid:{}", next_uuid()));
+    let now = next_now();
 
     let vct = if claims.credential_type.is_empty() {
         "VerifiableCredential".to_string()
@@ -520,7 +543,7 @@ pub fn prepare_sd_jwt_with_options(
                 .as_object_mut()
                 .ok_or_else(|| Oid4vciError::SdJwtError("Payload is not a JSON object".into()))?,
         };
-        generate_disclosures(target, &claims.selective_disclosure_claims)?
+        generate_disclosures(target, &claims.selective_disclosure_claims, next_salt)?
     } else {
         vec![]
     };
@@ -600,6 +623,7 @@ pub fn assemble_sd_jwt(prepared: PreparedSdJwt, signature: &[u8]) -> SignedCrede
 fn generate_disclosures(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
     sd_claims: &[String],
+    mut next_salt: impl FnMut() -> [u8; 16],
 ) -> Oid4vciResult<Vec<String>> {
     let mut disclosures = Vec::new();
     let mut sd_hashes = Vec::new();
@@ -611,8 +635,7 @@ fn generate_disclosures(
         };
 
         // Generate 16 bytes (128 bits) of cryptographically secure random salt
-        let mut salt_bytes = [0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut salt_bytes);
+        let salt_bytes = next_salt();
         let salt = URL_SAFE_NO_PAD.encode(salt_bytes);
 
         // Build disclosure: base64url(json([salt, claim_name, claim_value]))
@@ -1065,6 +1088,7 @@ mod tests {
     use super::*;
     use crate::types::SigningAlgorithm;
     use base64::Engine;
+    use std::{cell::RefCell, collections::VecDeque};
 
     const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
@@ -1105,6 +1129,312 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:expiration-test-issuer#key-1".into()
         }
+    }
+
+    #[derive(Debug)]
+    struct FixedPreparationSigner;
+
+    impl CredentialSigner for FixedPreparationSigner {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            panic!("preparation source fixture must not sign")
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::ES256
+        }
+
+        fn issuer_id(&self) -> &str {
+            "https://issuer.example"
+        }
+
+        fn kid_url(&self) -> String {
+            "https://issuer.example/keys/1".into()
+        }
+    }
+
+    fn deterministic_preparation_claims(
+        credential_payload_format: CredentialPayloadFormat,
+        selective_disclosure_claims: Vec<String>,
+    ) -> CredentialClaims {
+        CredentialClaims {
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "EmployeeCredential".into(),
+            claims: [
+                ("name".into(), serde_json::json!("Alice")),
+                ("email".into(), serde_json::json!("alice@example.com")),
+                ("department".into(), serde_json::json!("Research")),
+            ]
+            .into(),
+            expiration_seconds: Some(3_600),
+            selective_disclosure_claims,
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        }
+    }
+
+    fn deterministic_preparation(
+        claims: &CredentialClaims,
+        options: SdJwtPreparationOptions,
+        salts: impl IntoIterator<Item = [u8; 16]>,
+        events: &RefCell<Vec<&'static str>>,
+    ) -> Oid4vciResult<PreparedSdJwt> {
+        let salts = RefCell::new(salts.into_iter().collect::<VecDeque<_>>());
+        let result = prepare_sd_jwt_with_options_and_sources(
+            &FixedPreparationSigner,
+            claims,
+            options,
+            || {
+                events.borrow_mut().push("uuid");
+                uuid::Uuid::parse_str("01234567-89ab-4def-8123-456789abcdef").unwrap()
+            },
+            || {
+                events.borrow_mut().push("clock");
+                chrono::DateTime::parse_from_rfc3339("2025-01-02T03:04:05Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc)
+            },
+            || {
+                events.borrow_mut().push("salt");
+                salts
+                    .borrow_mut()
+                    .pop_front()
+                    .expect("one fixed salt per present selected claim")
+            },
+        );
+        assert!(salts.borrow().is_empty(), "fixture supplied an unused salt");
+        result
+    }
+
+    fn prepared_json(prepared: &PreparedSdJwt) -> (serde_json::Value, serde_json::Value) {
+        let mut segments = prepared.signing_input.split('.');
+        let header =
+            serde_json::from_slice(&B64.decode(segments.next().unwrap()).unwrap()).unwrap();
+        let payload =
+            serde_json::from_slice(&B64.decode(segments.next().unwrap()).unwrap()).unwrap();
+        assert!(segments.next().is_none());
+        (header, payload)
+    }
+
+    fn prepared_disclosures(prepared: &PreparedSdJwt) -> Vec<serde_json::Value> {
+        prepared
+            .disclosures_suffix
+            .trim_matches('~')
+            .split('~')
+            .filter(|disclosure| !disclosure.is_empty())
+            .map(|disclosure| serde_json::from_slice(&B64.decode(disclosure).unwrap()).unwrap())
+            .collect()
+    }
+
+    fn preparation_error(result: Oid4vciResult<PreparedSdJwt>) -> Oid4vciError {
+        match result {
+            Ok(_) => panic!("fixture must fail preparation"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn deterministic_sources_freeze_preparation_bytes_and_consumption_order() {
+        let claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec![
+                "name".into(),
+                "missing".into(),
+                "email".into(),
+                "name".into(),
+            ],
+        );
+        let events = RefCell::new(vec![]);
+        let prepared = deterministic_preparation(
+            &claims,
+            SdJwtPreparationOptions {
+                typ: Some("dc+sd-jwt".into()),
+                confirmation: Some(serde_json::json!({"jwk": {"kty": "EC"}})),
+                x5c: vec!["Y2VydA".into()],
+                include_nbf: true,
+                ..SdJwtPreparationOptions::default()
+            },
+            [[0; 16], [1; 16]],
+            &events,
+        )
+        .unwrap();
+
+        assert_eq!(&*events.borrow(), &["uuid", "clock", "salt", "salt"]);
+        assert_eq!(prepared.signing_input, "eyJhbGciOiJFUzI1NiIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUva2V5cy8xIiwieDVjIjpbIlkyVnlkQSJdfQ.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiaWF0IjoxNzM1Nzg3MDQ1LCJqdGkiOiJ1cm46dXVpZDowMTIzNDU2Ny04OWFiLTRkZWYtODEyMy00NTY3ODlhYmNkZWYiLCJ2Y3QiOiJFbXBsb3llZUNyZWRlbnRpYWwiLCJzdWIiOiJkaWQ6ZXhhbXBsZTpob2xkZXIiLCJleHAiOjE3MzU3OTA2NDUsImRlcGFydG1lbnQiOiJSZXNlYXJjaCIsIl9zZCI6WyJONzgwSVJNTmI5RGhiVkFIQy1FMEhqckl2WGhFbVcyTXk1VmpMMVUyZWh3IiwiTUNfY2xGdk9tekJSUUEtUkhTMXZMMngzM3hNR0JQQVN6cjNveTNITmNpdyJdLCJfc2RfYWxnIjoic2hhLTI1NiIsIm5iZiI6MTczNTc4NzA0NSwiY25mIjp7Imp3ayI6eyJrdHkiOiJFQyJ9fX0");
+        assert_eq!(prepared.disclosures_suffix, "~WyJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwibmFtZSIsIkFsaWNlIl0~WyJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRIiwiZW1haWwiLCJhbGljZUBleGFtcGxlLmNvbSJd~");
+        assert_eq!(
+            prepared.credential_id,
+            "urn:uuid:01234567-89ab-4def-8123-456789abcdef"
+        );
+        let (header, payload) = prepared_json(&prepared);
+        assert_eq!(
+            header,
+            serde_json::json!({
+                "alg": "ES256",
+                "typ": "dc+sd-jwt",
+                "kid": "https://issuer.example/keys/1",
+                "x5c": ["Y2VydA"]
+            })
+        );
+        assert_eq!(payload["iat"], 1_735_787_045_i64);
+        assert_eq!(payload["nbf"], 1_735_787_045_i64);
+        assert_eq!(payload["exp"], 1_735_790_645_i64);
+        assert_eq!(payload["jti"], prepared.credential_id);
+        assert_eq!(payload["department"], "Research");
+        assert!(payload.get("name").is_none());
+        assert!(payload.get("email").is_none());
+        assert_eq!(payload["cnf"], serde_json::json!({"jwk": {"kty": "EC"}}));
+        assert_eq!(payload["_sd_alg"], "sha-256");
+        assert_eq!(payload["_sd"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            prepared_disclosures(&prepared),
+            vec![
+                serde_json::json!(["AAAAAAAAAAAAAAAAAAAAAA", "name", "Alice"]),
+                serde_json::json!(["AQEBAQEBAQEBAQEBAQEBAQ", "email", "alice@example.com"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_id_without_disclosures_consumes_only_the_clock() {
+        let mut claims =
+            deterministic_preparation_claims(CredentialPayloadFormat::IetfSdJwt, vec![]);
+        claims.expiration_seconds = None;
+        let events = RefCell::new(vec![]);
+        let prepared = deterministic_preparation(
+            &claims,
+            SdJwtPreparationOptions {
+                credential_id: Some("urn:uuid:11111111-2222-4333-8444-555555555555".into()),
+                ..SdJwtPreparationOptions::default()
+            },
+            [],
+            &events,
+        )
+        .unwrap();
+
+        assert_eq!(&*events.borrow(), &["clock"]);
+        assert_eq!(prepared.disclosures_suffix, "~");
+    }
+
+    #[test]
+    fn w3c_fixed_id_and_disclosure_freeze_bytes_without_consuming_uuid() {
+        let mut claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::W3cVcdmV2SdJwt,
+            vec!["email".into()],
+        );
+        claims.claims.retain(|claim_name, _| claim_name == "email");
+        let events = RefCell::new(vec![]);
+        let prepared = deterministic_preparation(
+            &claims,
+            SdJwtPreparationOptions {
+                credential_id: Some("urn:uuid:fedcba98-7654-4321-8fed-cba987654321".into()),
+                ..SdJwtPreparationOptions::default()
+            },
+            [[0x40; 16]],
+            &events,
+        )
+        .unwrap();
+
+        assert_eq!(&*events.borrow(), &["clock", "salt"]);
+        assert_eq!(prepared.signing_input, "eyJhbGciOiJFUzI1NiIsInR5cCI6InZjK3NkLWp3dCIsImtpZCI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUva2V5cy8xIn0.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiaWF0IjoxNzM1Nzg3MDQ1LCJqdGkiOiJ1cm46dXVpZDpmZWRjYmE5OC03NjU0LTQzMjEtOGZlZC1jYmE5ODc2NTQzMjEiLCJ2Y3QiOiJFbXBsb3llZUNyZWRlbnRpYWwiLCJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCJdLCJpc3N1ZXIiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwidmFsaWRGcm9tIjoiMjAyNS0wMS0wMlQwMzowNDowNVoiLCJjcmVkZW50aWFsU3ViamVjdCI6eyJpZCI6ImRpZDpleGFtcGxlOmhvbGRlciIsIl9zZCI6WyJKd21zdzMyaVRVZXVsRE45OGlYOTZEcE9PMTN1bXFVNWRXSnYxU21UdVN3Il19LCJzdWIiOiJkaWQ6ZXhhbXBsZTpob2xkZXIiLCJleHAiOjE3MzU3OTA2NDUsInZhbGlkVW50aWwiOiIyMDI1LTAxLTAyVDA0OjA0OjA1WiIsIl9zZF9hbGciOiJzaGEtMjU2In0");
+        assert_eq!(
+            prepared.disclosures_suffix,
+            "~WyJRRUJBUUVCQVFFQkFRRUJBUUVCQVFBIiwiZW1haWwiLCJhbGljZUBleGFtcGxlLmNvbSJd~"
+        );
+        assert_eq!(
+            prepared_disclosures(&prepared),
+            vec![serde_json::json!([
+                "QEBAQEBAQEBAQEBAQEBAQA",
+                "email",
+                "alice@example.com"
+            ])]
+        );
+    }
+
+    #[test]
+    fn invalid_claims_fail_before_deterministic_sources_and_preserve_precedence() {
+        let mut claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec!["_sd".into()],
+        );
+        claims
+            .claims
+            .insert("iss".into(), serde_json::json!("https://attacker.example"));
+        let events = RefCell::new(vec![]);
+        let error = preparation_error(deterministic_preparation(
+            &claims,
+            SdJwtPreparationOptions::default(),
+            [],
+            &events,
+        ));
+
+        assert_eq!(&*events.borrow(), &[] as &[&str]);
+        assert!(matches!(
+            error,
+            Oid4vciError::SdJwtError(message) if message == SD_JWT_MANAGED_CLAIM_COLLISION
+        ));
+    }
+
+    #[test]
+    fn structural_marker_alone_fails_before_every_deterministic_source() {
+        let claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec!["_sd".into()],
+        );
+        let events = RefCell::new(vec![]);
+        let error = preparation_error(deterministic_preparation(
+            &claims,
+            SdJwtPreparationOptions::default(),
+            [],
+            &events,
+        ));
+
+        assert_eq!(&*events.borrow(), &[] as &[&str]);
+        assert!(matches!(
+            error,
+            Oid4vciError::SdJwtError(message) if message == SD_JWT_RESERVED_STRUCTURE
+        ));
+    }
+
+    #[test]
+    fn post_validation_errors_preserve_existing_source_consumption() {
+        let unsupported = deterministic_preparation_claims(
+            CredentialPayloadFormat::W3cVcdmV2JwtVc,
+            vec!["name".into()],
+        );
+        let events = RefCell::new(vec![]);
+        let error = preparation_error(deterministic_preparation(
+            &unsupported,
+            SdJwtPreparationOptions::default(),
+            [],
+            &events,
+        ));
+        assert!(matches!(
+            error,
+            Oid4vciError::UnsupportedFormat(message)
+                if message
+                    == "credential_payload_format 'w3c_vcdm_v2_jwt_vc' is only valid for \
+                        jwt_vc_json, not for SD-JWT credentials"
+        ));
+        assert_eq!(&*events.borrow(), &["uuid", "clock"]);
+
+        let mut overflow = claims_with_expiration(CredentialPayloadFormat::IetfSdJwt, i64::MAX);
+        overflow
+            .claims
+            .insert("name".into(), serde_json::json!("Alice"));
+        overflow.selective_disclosure_claims = vec!["name".into()];
+        let events = RefCell::new(vec![]);
+        let error = preparation_error(deterministic_preparation(
+            &overflow,
+            SdJwtPreparationOptions::default(),
+            [],
+            &events,
+        ));
+        assert_expiration_out_of_range(error);
+        assert_eq!(&*events.borrow(), &["uuid", "clock"]);
     }
 
     fn claims_with_expiration(
