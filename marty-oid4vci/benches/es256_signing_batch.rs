@@ -7,33 +7,92 @@ use std::{
     time::Duration,
 };
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ciborium::Value as CborValue;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use marty_oid4vci::{
     formats::{
         jwt_vc::{assemble_jwt_vc, prepare_jwt_vc, PreparedJwtVc},
         mdoc::{assemble_mdoc, prepare_mdoc, PreparedMdoc},
+        sd_jwt::{
+            assemble_sd_jwt, prepare_sd_jwt_with_options, PreparedSdJwt, SdJwtPreparationOptions,
+        },
     },
     signer::CredentialSigner,
     signing_batch::{
         BoundedConcurrentCredentialSigner, ConcurrentEs256SignerScope, Es256SignerScope,
-        Es256SigningBatchInput, JwtVcSigningBatchInput, MdocSigningBatchInput, SigningRouteId,
+        Es256SigningBatchInput, JwtVcSigningBatchInput, MdocSigningBatchInput,
+        SdJwtSigningBatchInput, SigningRouteId,
     },
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     Oid4vciResult,
 };
-use p256::ecdsa::signature::Signer as _;
+use p256::ecdsa::signature::{Signer as _, Verifier as _};
+use sha2::{Digest as _, Sha256};
+use ssi_jwk::JWK;
 
 const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
 const WORKER_LIMIT: usize = 8;
+const WORKER_LIMITS: [usize; 4] = [1, 2, 4, 8];
+const MDOC_NAMESPACE: &str = "org.iso.18013.5.1";
+
+#[derive(Clone, Copy, Debug)]
+enum BenchmarkFormat {
+    JwtVc,
+    SdJwt,
+    Mdoc,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BenchmarkComposition {
+    JwtVc,
+    SdJwt,
+    Mdoc,
+    JwtMdoc,
+    ThreeFormat,
+}
+
+impl BenchmarkComposition {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::JwtVc => "jwt_vc",
+            Self::SdJwt => "proof_bound_sd_jwt",
+            Self::Mdoc => "mdoc",
+            Self::JwtMdoc => "mixed_jwt_mdoc",
+            Self::ThreeFormat => "mixed_jwt_sd_jwt_mdoc",
+        }
+    }
+
+    const fn format_at(self, ordinal: usize) -> BenchmarkFormat {
+        match self {
+            Self::JwtVc => BenchmarkFormat::JwtVc,
+            Self::SdJwt => BenchmarkFormat::SdJwt,
+            Self::Mdoc => BenchmarkFormat::Mdoc,
+            Self::JwtMdoc if ordinal.is_multiple_of(2) => BenchmarkFormat::JwtVc,
+            Self::JwtMdoc => BenchmarkFormat::Mdoc,
+            Self::ThreeFormat => match ordinal % 3 {
+                0 => BenchmarkFormat::JwtVc,
+                1 => BenchmarkFormat::SdJwt,
+                _ => BenchmarkFormat::Mdoc,
+            },
+        }
+    }
+
+    const fn includes_sd_jwt(self) -> bool {
+        matches!(self, Self::SdJwt | Self::ThreeFormat)
+    }
+}
 
 struct BenchmarkSigner {
     signing_key: p256::ecdsa::SigningKey,
+    max_workers: NonZeroUsize,
 }
 
 impl BenchmarkSigner {
-    fn new() -> Self {
+    fn new(max_workers: usize) -> Self {
         Self {
             signing_key: p256::ecdsa::SigningKey::from_slice(&[0x31; 32]).unwrap(),
+            max_workers: NonZeroUsize::new(max_workers).unwrap(),
         }
     }
 }
@@ -65,7 +124,7 @@ impl CredentialSigner for BenchmarkSigner {
 
 impl BoundedConcurrentCredentialSigner for BenchmarkSigner {
     fn max_concurrent_signing_workers(&self) -> NonZeroUsize {
-        NonZeroUsize::new(WORKER_LIMIT).unwrap()
+        self.max_workers
     }
 }
 
@@ -85,6 +144,46 @@ fn jwt_claims(ordinal: usize) -> CredentialClaims {
     }
 }
 
+fn sd_jwt_claims(ordinal: usize) -> CredentialClaims {
+    CredentialClaims {
+        subject_id: Some(format!("did:example:benchmark-holder-{ordinal}")),
+        credential_type: "BenchmarkSdJwtCredential".into(),
+        claims: [
+            ("ordinal".into(), serde_json::json!(ordinal)),
+            (
+                "selective_value".into(),
+                serde_json::json!(format!("benchmark-selective-{ordinal}")),
+            ),
+        ]
+        .into(),
+        expiration_seconds: Some(3_600),
+        selective_disclosure_claims: vec!["selective_value".into()],
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: vec![],
+        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+        w3c_context: vec![],
+        w3c_types: vec![],
+    }
+}
+
+fn holder_public_jwk() -> JWK {
+    serde_json::from_value(serde_json::json!({
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+        "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+    }))
+    .unwrap()
+}
+
+fn sd_jwt_preparation_options() -> SdJwtPreparationOptions {
+    SdJwtPreparationOptions {
+        confirmation: Some(serde_json::json!({"jwk": holder_public_jwk()})),
+        ..SdJwtPreparationOptions::default()
+    }
+}
+
 fn mdoc_claims(ordinal: usize) -> CredentialClaims {
     CredentialClaims {
         subject_id: Some(format!("did:example:benchmark-holder-{ordinal}")),
@@ -97,7 +196,7 @@ fn mdoc_claims(ordinal: usize) -> CredentialClaims {
         .collect::<HashMap<_, _>>(),
         expiration_seconds: Some(86_400),
         selective_disclosure_claims: vec![],
-        mdoc_namespace: Some("org.iso.18013.5.1".into()),
+        mdoc_namespace: Some(MDOC_NAMESPACE.into()),
         mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
         zk_predicate_claims: vec![],
         credential_payload_format: CredentialPayloadFormat::default(),
@@ -106,28 +205,39 @@ fn mdoc_claims(ordinal: usize) -> CredentialClaims {
     }
 }
 
-fn claims_batch(batch_size: usize) -> Vec<CredentialClaims> {
+fn claims_for(format: BenchmarkFormat, ordinal: usize) -> CredentialClaims {
+    match format {
+        BenchmarkFormat::JwtVc => jwt_claims(ordinal),
+        BenchmarkFormat::SdJwt => sd_jwt_claims(ordinal),
+        BenchmarkFormat::Mdoc => mdoc_claims(ordinal),
+    }
+}
+
+fn claims_batch(composition: BenchmarkComposition, batch_size: usize) -> Vec<CredentialClaims> {
     (0..batch_size)
-        .map(|ordinal| {
-            if ordinal % 2 == 0 {
-                jwt_claims(ordinal)
-            } else {
-                mdoc_claims(ordinal)
-            }
-        })
+        .map(|ordinal| claims_for(composition.format_at(ordinal), ordinal))
         .collect()
 }
 
-fn signing_inputs(batch_size: usize) -> Vec<Es256SigningBatchInput> {
-    claims_batch(batch_size)
+fn signing_inputs(
+    composition: BenchmarkComposition,
+    batch_size: usize,
+) -> Vec<Es256SigningBatchInput> {
+    let holder_jwk = composition.includes_sd_jwt().then(holder_public_jwk);
+    claims_batch(composition, batch_size)
         .into_iter()
         .enumerate()
         .map(|(ordinal, claims)| {
             let route = SigningRouteId::new(ordinal as u64);
-            if ordinal % 2 == 0 {
-                JwtVcSigningBatchInput::new(route, claims).into()
-            } else {
-                MdocSigningBatchInput::new(route, claims).into()
+            match composition.format_at(ordinal) {
+                BenchmarkFormat::JwtVc => JwtVcSigningBatchInput::new(route, claims).into(),
+                BenchmarkFormat::SdJwt => SdJwtSigningBatchInput::new(
+                    route,
+                    claims,
+                    holder_jwk.as_ref().expect("SD-JWT composition holder key"),
+                )
+                .into(),
+                BenchmarkFormat::Mdoc => MdocSigningBatchInput::new(route, claims).into(),
             }
         })
         .collect()
@@ -135,6 +245,7 @@ fn signing_inputs(batch_size: usize) -> Vec<Es256SigningBatchInput> {
 
 enum BenchmarkPrepared {
     JwtVc(PreparedJwtVc),
+    SdJwt(PreparedSdJwt),
     Mdoc(Box<PreparedMdoc>),
 }
 
@@ -142,6 +253,7 @@ impl BenchmarkPrepared {
     fn signing_payload(&self) -> &[u8] {
         match self {
             Self::JwtVc(prepared) => prepared.signing_payload(),
+            Self::SdJwt(prepared) => prepared.signing_input.as_bytes(),
             Self::Mdoc(prepared) => prepared.signing_payload(),
         }
     }
@@ -149,6 +261,7 @@ impl BenchmarkPrepared {
     fn assemble(self, signature: &[u8]) -> SignedCredential {
         match self {
             Self::JwtVc(prepared) => assemble_jwt_vc(prepared, signature),
+            Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature),
             Self::Mdoc(prepared) => assemble_mdoc(*prepared, signature).unwrap(),
         }
     }
@@ -156,15 +269,31 @@ impl BenchmarkPrepared {
 
 fn prepare_batch(
     signer: &dyn CredentialSigner,
+    composition: BenchmarkComposition,
     claims: Vec<CredentialClaims>,
 ) -> Vec<BenchmarkPrepared> {
+    let sd_jwt_options = composition
+        .includes_sd_jwt()
+        .then(sd_jwt_preparation_options);
     claims
         .into_iter()
         .enumerate()
-        .map(|(ordinal, claims)| {
-            if ordinal % 2 == 0 {
+        .map(|(ordinal, claims)| match composition.format_at(ordinal) {
+            BenchmarkFormat::JwtVc => {
                 BenchmarkPrepared::JwtVc(prepare_jwt_vc(signer, &claims).unwrap())
-            } else {
+            }
+            BenchmarkFormat::SdJwt => BenchmarkPrepared::SdJwt(
+                prepare_sd_jwt_with_options(
+                    signer,
+                    &claims,
+                    sd_jwt_options
+                        .as_ref()
+                        .expect("SD-JWT composition preparation options")
+                        .clone(),
+                )
+                .unwrap(),
+            ),
+            BenchmarkFormat::Mdoc => {
                 BenchmarkPrepared::Mdoc(Box::new(prepare_mdoc(signer, &claims).unwrap()))
             }
         })
@@ -200,11 +329,12 @@ fn signing_worker(
 fn sign_payloads_concurrently(
     signer: &BenchmarkSigner,
     prepared: &[BenchmarkPrepared],
+    worker_limit: usize,
 ) -> Vec<Vec<u8>> {
     if prepared.is_empty() {
         return Vec::new();
     }
-    let workers = prepared.len().min(WORKER_LIMIT);
+    let workers = prepared.len().min(worker_limit);
     let next_ordinal = AtomicUsize::new(0);
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(workers.saturating_sub(1));
@@ -219,9 +349,157 @@ fn sign_payloads_concurrently(
     })
 }
 
-fn benchmark_es256_signing_batch(c: &mut Criterion) {
-    let signer = BenchmarkSigner::new();
-    let mut group = c.benchmark_group("es256_signing_batch_mixed_jwt_mdoc");
+fn available_worker_limits() -> Vec<usize> {
+    let available = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    WORKER_LIMITS
+        .into_iter()
+        .filter(|worker_limit| *worker_limit <= available)
+        .collect()
+}
+
+fn verify_jws(jwt: &str, verifying_key: &p256::ecdsa::VerifyingKey) -> serde_json::Value {
+    let segments = jwt.split('.').collect::<Vec<_>>();
+    assert_eq!(segments.len(), 3);
+    let signature =
+        p256::ecdsa::Signature::from_slice(&URL_SAFE_NO_PAD.decode(segments[2]).unwrap()).unwrap();
+    verifying_key
+        .verify(
+            format!("{}.{}", segments[0], segments[1]).as_bytes(),
+            &signature,
+        )
+        .unwrap();
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap()
+}
+
+fn assert_preflight_credential(
+    expected_format: BenchmarkFormat,
+    ordinal: usize,
+    credential: &SignedCredential,
+    verifying_key: &p256::ecdsa::VerifyingKey,
+) {
+    assert!(credential.credential_id().starts_with("urn:uuid:"));
+    match (expected_format, credential) {
+        (BenchmarkFormat::JwtVc, SignedCredential::JwtVcJson { jwt, .. }) => {
+            let payload = verify_jws(jwt, verifying_key);
+            assert_eq!(
+                payload.pointer("/vc/credentialSubject/ordinal"),
+                Some(&serde_json::json!(ordinal))
+            );
+        }
+        (BenchmarkFormat::SdJwt, SignedCredential::SdJwt { compact, .. }) => {
+            let mut segments = compact.split('~');
+            let payload = verify_jws(segments.next().unwrap(), verifying_key);
+            let disclosures = segments
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>();
+            assert_eq!(disclosures.len(), 1);
+            let disclosure: serde_json::Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(disclosures[0]).unwrap()).unwrap();
+            assert!(disclosure[0].as_str().is_some_and(|salt| !salt.is_empty()));
+            assert_eq!(
+                disclosure,
+                serde_json::json!([
+                    disclosure[0].clone(),
+                    "selective_value",
+                    format!("benchmark-selective-{ordinal}")
+                ])
+            );
+            assert_eq!(payload["ordinal"], ordinal);
+            assert!(payload.get("selective_value").is_none());
+            assert_eq!(payload["_sd_alg"], "sha-256");
+            let disclosure_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosures[0].as_bytes()));
+            let signed_hashes = payload["_sd"].as_array().unwrap();
+            assert_eq!(signed_hashes.len(), 1);
+            assert!(signed_hashes.iter().any(|hash| hash == &disclosure_hash));
+            assert_eq!(
+                payload["cnf"]["jwk"],
+                serde_json::to_value(holder_public_jwk()).unwrap()
+            );
+            for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+                assert!(payload["cnf"]["jwk"].get(private_member).is_none());
+            }
+        }
+        (
+            BenchmarkFormat::Mdoc,
+            SignedCredential::MsoMdoc {
+                issuer_signed_b64, ..
+            },
+        ) => {
+            let issuer_signed: isomdl::definitions::IssuerSigned =
+                isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap())
+                    .unwrap();
+            let signature =
+                p256::ecdsa::Signature::from_slice(&issuer_signed.issuer_auth.signature).unwrap();
+            verifying_key
+                .verify(&issuer_signed.issuer_auth.tbs_data(&[]), &signature)
+                .unwrap();
+            let items = issuer_signed
+                .namespaces
+                .as_ref()
+                .unwrap()
+                .get(MDOC_NAMESPACE)
+                .unwrap();
+            let ordinal_item = items
+                .iter()
+                .find(|item| item.as_ref().element_identifier == "ordinal")
+                .unwrap();
+            assert_eq!(
+                ordinal_item.as_ref().element_value,
+                CborValue::Integer((ordinal as u64).into())
+            );
+        }
+        (expected, actual) => {
+            panic!("preflight format mismatch: expected {expected:?}, got {actual:?}")
+        }
+    }
+}
+
+fn preflight() {
+    let worker_limit = *available_worker_limits().last().unwrap();
+    for composition in [
+        BenchmarkComposition::JwtVc,
+        BenchmarkComposition::SdJwt,
+        BenchmarkComposition::Mdoc,
+        BenchmarkComposition::JwtMdoc,
+        BenchmarkComposition::ThreeFormat,
+    ] {
+        for batch_size in BATCH_SIZES {
+            let serial_signer = BenchmarkSigner::new(1);
+            let serial = Es256SignerScope::new(&serial_signer)
+                .unwrap()
+                .sign_batch(signing_inputs(composition, batch_size))
+                .unwrap();
+            assert_eq!(serial.len(), batch_size);
+            for (ordinal, credential) in serial.iter().enumerate() {
+                assert_preflight_credential(
+                    composition.format_at(ordinal),
+                    ordinal,
+                    credential,
+                    serial_signer.signing_key.verifying_key(),
+                );
+            }
+
+            let mut concurrent_signer = BenchmarkSigner::new(worker_limit);
+            let concurrent = ConcurrentEs256SignerScope::new(&mut concurrent_signer)
+                .unwrap()
+                .sign_batch_concurrently(signing_inputs(composition, batch_size))
+                .unwrap();
+            assert_eq!(concurrent.len(), batch_size);
+            for (ordinal, credential) in concurrent.iter().enumerate() {
+                assert_preflight_credential(
+                    composition.format_at(ordinal),
+                    ordinal,
+                    credential,
+                    concurrent_signer.signing_key.verifying_key(),
+                );
+            }
+        }
+    }
+}
+
+fn benchmark_stages(c: &mut Criterion, group_name: &str, composition: BenchmarkComposition) {
+    let signer = BenchmarkSigner::new(WORKER_LIMIT);
+    let mut group = c.benchmark_group(group_name);
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(2));
@@ -236,15 +514,15 @@ fn benchmark_es256_signing_batch(c: &mut Criterion) {
                 &batch_size,
                 |bencher, &batch_size| {
                     bencher.iter_batched(
-                        || claims_batch(batch_size),
-                        |claims| black_box(prepare_batch(&signer, black_box(claims))),
+                        || claims_batch(composition, batch_size),
+                        |claims| black_box(prepare_batch(&signer, composition, black_box(claims))),
                         BatchSize::SmallInput,
                     );
                 },
             );
         }
 
-        let prepared = prepare_batch(&signer, claims_batch(batch_size));
+        let prepared = prepare_batch(&signer, composition, claims_batch(composition, batch_size));
         group.bench_with_input(
             BenchmarkId::new("signing/serial", batch_size),
             &batch_size,
@@ -256,8 +534,13 @@ fn benchmark_es256_signing_batch(c: &mut Criterion) {
             BenchmarkId::new("signing/concurrent", batch_size),
             &batch_size,
             |bencher, _| {
-                bencher
-                    .iter(|| black_box(sign_payloads_concurrently(&signer, black_box(&prepared))));
+                bencher.iter(|| {
+                    black_box(sign_payloads_concurrently(
+                        &signer,
+                        black_box(&prepared),
+                        WORKER_LIMIT,
+                    ))
+                });
             },
         );
 
@@ -267,7 +550,13 @@ fn benchmark_es256_signing_batch(c: &mut Criterion) {
                 &batch_size,
                 |bencher, &batch_size| {
                     bencher.iter_batched(
-                        || prepare_batch(&signer, claims_batch(batch_size)),
+                        || {
+                            prepare_batch(
+                                &signer,
+                                composition,
+                                claims_batch(composition, batch_size),
+                            )
+                        },
                         |prepared| {
                             black_box(
                                 prepared
@@ -287,7 +576,12 @@ fn benchmark_es256_signing_batch(c: &mut Criterion) {
             &batch_size,
             |bencher, &batch_size| {
                 bencher.iter_batched(
-                    || (BenchmarkSigner::new(), signing_inputs(batch_size)),
+                    || {
+                        (
+                            BenchmarkSigner::new(1),
+                            signing_inputs(composition, batch_size),
+                        )
+                    },
                     |(signer, inputs)| {
                         black_box(
                             Es256SignerScope::new(&signer)
@@ -305,7 +599,12 @@ fn benchmark_es256_signing_batch(c: &mut Criterion) {
             &batch_size,
             |bencher, &batch_size| {
                 bencher.iter_batched(
-                    || (BenchmarkSigner::new(), signing_inputs(batch_size)),
+                    || {
+                        (
+                            BenchmarkSigner::new(WORKER_LIMIT),
+                            signing_inputs(composition, batch_size),
+                        )
+                    },
                     |(mut signer, inputs)| {
                         let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
                         black_box(scope.sign_batch_concurrently(inputs).unwrap())
@@ -316,6 +615,90 @@ fn benchmark_es256_signing_batch(c: &mut Criterion) {
         );
     }
     group.finish();
+}
+
+fn benchmark_composition_totals(c: &mut Criterion) {
+    let mut group = c.benchmark_group("es256_signing_batch_total_by_composition");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    group.noise_threshold(0.05);
+    let worker_limits = available_worker_limits();
+
+    for batch_size in BATCH_SIZES {
+        group.throughput(Throughput::Elements(batch_size as u64));
+        for composition in [
+            BenchmarkComposition::JwtVc,
+            BenchmarkComposition::SdJwt,
+            BenchmarkComposition::Mdoc,
+            BenchmarkComposition::ThreeFormat,
+        ] {
+            group.bench_with_input(
+                BenchmarkId::new(format!("{}/serial", composition.label()), batch_size),
+                &batch_size,
+                |bencher, &batch_size| {
+                    bencher.iter_batched(
+                        || {
+                            (
+                                BenchmarkSigner::new(1),
+                                signing_inputs(composition, batch_size),
+                            )
+                        },
+                        |(signer, inputs)| {
+                            black_box(
+                                Es256SignerScope::new(&signer)
+                                    .unwrap()
+                                    .sign_batch(inputs)
+                                    .unwrap(),
+                            )
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+
+            for &worker_limit in &worker_limits {
+                group.bench_with_input(
+                    BenchmarkId::new(
+                        format!("{}/concurrent/p={worker_limit}", composition.label()),
+                        batch_size,
+                    ),
+                    &batch_size,
+                    |bencher, &batch_size| {
+                        bencher.iter_batched(
+                            || {
+                                (
+                                    BenchmarkSigner::new(worker_limit),
+                                    signing_inputs(composition, batch_size),
+                                )
+                            },
+                            |(mut signer, inputs)| {
+                                let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
+                                black_box(scope.sign_batch_concurrently(inputs).unwrap())
+                            },
+                            BatchSize::SmallInput,
+                        );
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+fn benchmark_es256_signing_batch(c: &mut Criterion) {
+    preflight();
+    benchmark_stages(
+        c,
+        "es256_signing_batch_mixed_jwt_mdoc",
+        BenchmarkComposition::JwtMdoc,
+    );
+    benchmark_stages(
+        c,
+        "es256_signing_batch_proof_bound_sd_jwt",
+        BenchmarkComposition::SdJwt,
+    );
+    benchmark_composition_totals(c);
 }
 
 criterion_group!(benches, benchmark_es256_signing_batch);
