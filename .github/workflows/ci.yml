@@ -67,6 +67,9 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
+      - name: Smoke opt-in ES256 payload matrix
+        if: github.event_name == 'merge_group'
+        run: MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
       - name: Exercise the EUDI trusted-list client
         run: |
           cargo clippy --locked -p marty-verification --features eudi-client --all-targets -- -D warnings
@@ -127,6 +130,7 @@ jobs:
         run: |
           cargo test --locked -p marty-oid4vci --bench mdoc_issuance
           cargo test --locked -p marty-oid4vci --bench es256_signing_batch
+          MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
       - name: Record non-Rust-only change
         if: steps.affected.outputs.all != 'true' && steps.affected.outputs.has_packages != 'true'
         run: echo "No Rust package tests are needed for the affected-first lane."
