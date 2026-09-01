@@ -1142,6 +1142,8 @@ fn assemble_credentials(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_family = "wasm"))]
+    use std::cell::Cell;
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -1160,12 +1162,16 @@ mod tests {
 
     use super::*;
     use crate::error::{Oid4vciError, Oid4vciResult};
+    #[cfg(not(target_family = "wasm"))]
+    use crate::formats::sd_jwt::prepare_sd_jwt_with_holder_public_jwk_and_sources;
     use crate::types::CredentialPayloadFormat;
 
     const RAW_ES256_SIGNATURE: [u8; ES256_SIGNATURE_LENGTH] = [1; ES256_SIGNATURE_LENGTH];
     const BACKEND_SECRET: &str = "kms-tenant-secret-route-91";
     #[cfg(not(target_family = "wasm"))]
     const TEST_SIGNER_PANIC: &str = "intentional concurrent signer test panic";
+    #[cfg(not(target_family = "wasm"))]
+    const PANIC_ORACLE_BATCH_SIZE: usize = 8;
     const CLAIM_SECRET: &str = "credential-claim-canary";
     const ISSUER_SECRET: &str = "did:example:issuer-private-canary";
     const KID_SECRET: &str = "did:example:issuer-private-canary#key-private-canary";
@@ -1815,6 +1821,220 @@ mod tests {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    struct FixedSdJwtBatchFixture {
+        claims: Vec<CredentialClaims>,
+        verified_holder_jwk: JWK,
+        credential_ids: Vec<uuid::Uuid>,
+        issued_at: chrono::DateTime<chrono::Utc>,
+        salts: Vec<[u8; 16]>,
+        batch_id: uuid::Uuid,
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl FixedSdJwtBatchFixture {
+        fn new(batch_size: usize, payload_format: CredentialPayloadFormat) -> Self {
+            let claims = (0..batch_size)
+                .map(|ordinal| {
+                    let mut claims = sd_jwt_claims(&format!("fixed-source-{ordinal}"));
+                    claims.credential_payload_format = payload_format.clone();
+                    claims
+                })
+                .collect();
+            let credential_ids = (0..batch_size)
+                .map(|ordinal| {
+                    let ordinal = u128::try_from(ordinal).unwrap();
+                    uuid::Uuid::from_u128(0x0123_4567_89ab_4def_8123_4567_89ab_c000 + ordinal)
+                })
+                .collect();
+            let salts = (0..batch_size)
+                .map(|ordinal| {
+                    let ordinal = u128::try_from(ordinal).unwrap();
+                    0xa5a5_5a5a_f0f0_0f0f_1357_9bdf_2468_ace0_u128
+                        .wrapping_add(ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+                        .to_be_bytes()
+                })
+                .collect();
+
+            let verified_holder_jwk = fixed_private_holder_jwk();
+            assert!(!verified_holder_jwk.is_public());
+
+            Self {
+                claims,
+                verified_holder_jwk,
+                credential_ids,
+                issued_at: chrono::DateTime::parse_from_rfc3339("2025-01-02T03:04:05Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+                salts,
+                batch_id: uuid::Uuid::from_u128(0xfedc_ba98_7654_4321_8765_4321_0fed_cba9),
+            }
+        }
+
+        fn prepare(
+            &self,
+            identity: &FrozenSignerIdentity,
+            scope_id: uuid::Uuid,
+        ) -> PreparedSigningBatch {
+            let preparation_signer = identity.preparation_signer();
+            let mut credential_ids = self.credential_ids.iter().copied();
+            let mut salts = self.salts.iter().copied();
+            let clock_calls = Cell::new(0);
+            let expected_holder_public_jwk = self.verified_holder_jwk.to_public();
+            let mut items = Vec::with_capacity(self.claims.len());
+
+            for (ordinal, claims) in self.claims.iter().cloned().enumerate() {
+                let route_id = SigningRouteId::new(u64::try_from(ordinal).unwrap());
+                let input =
+                    SdJwtSigningBatchInput::new(route_id, claims, &self.verified_holder_jwk);
+                assert!(input.holder_public_jwk.is_public());
+                assert_eq!(
+                    serde_json::to_value(&input.holder_public_jwk).unwrap(),
+                    serde_json::to_value(&expected_holder_public_jwk).unwrap()
+                );
+
+                let prepared = prepare_sd_jwt_with_holder_public_jwk_and_sources(
+                    &preparation_signer,
+                    &input.claims,
+                    &input.holder_public_jwk,
+                    || {
+                        credential_ids
+                            .next()
+                            .expect("one fixed credential ID per batch item")
+                    },
+                    || {
+                        clock_calls.set(clock_calls.get() + 1);
+                        self.issued_at
+                    },
+                    || salts.next().expect("one fixed salt per disclosed claim"),
+                )
+                .unwrap();
+
+                items.push(PreparedSigningItem {
+                    identity: SigningJobIdentity {
+                        scope_id,
+                        batch_id: self.batch_id,
+                        route_id,
+                        job_id: u64::try_from(ordinal).unwrap(),
+                    },
+                    credential: PreparedCredential::SdJwt(PreparedSdJwtBatchItem { prepared }),
+                });
+            }
+
+            assert!(credential_ids.next().is_none());
+            assert!(salts.next().is_none());
+            assert_eq!(clock_calls.get(), self.claims.len());
+            PreparedSigningBatch { items }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn execute_prepared_batch(
+        signer: &dyn CredentialSigner,
+        prepared: PreparedSigningBatch,
+        executor: &dyn SigningExecutor,
+    ) -> Vec<SignedCredential> {
+        let signatures = {
+            let jobs = prepared.jobs();
+            let results = executor
+                .execute(signer, &jobs)
+                .unwrap_or_else(|_| panic!("fixed-source signing must succeed"));
+            validate_executor_results(&jobs, results).unwrap()
+        };
+        assemble_credentials(prepared, signatures, &CanonicalAssembler).unwrap()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn sign_fixed_sd_jwt_batch_serially(
+        signer: &ConcurrentTestSigner,
+        fixture: &FixedSdJwtBatchFixture,
+    ) -> Vec<SignedCredential> {
+        let scope = Es256SignerScope::new(signer).unwrap();
+        let prepared = fixture.prepare(&scope.identity, scope.scope_id);
+        assert!(scope.identity.matches(scope.signer));
+        execute_prepared_batch(scope.signer, prepared, &SerialSigningExecutor)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn sign_fixed_sd_jwt_batch_concurrently(
+        signer: &mut ConcurrentTestSigner,
+        fixture: &FixedSdJwtBatchFixture,
+    ) -> Vec<SignedCredential> {
+        let scope = ConcurrentEs256SignerScope::new(signer).unwrap();
+        let prepared = fixture.prepare(&scope.identity, scope.scope_id);
+        let signer: &dyn BoundedConcurrentCredentialSigner = &*scope.signer;
+        assert!(scope.identity.matches(signer));
+        let executor = ConcurrentSigningExecutor {
+            signer,
+            worker_limit: scope.worker_limit,
+        };
+        let credentials = execute_prepared_batch(signer, prepared, &executor);
+        assert!(scope.identity.matches(signer));
+        credentials
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn exact_sd_jwt_bytes(credentials: &[SignedCredential]) -> Vec<(Vec<u8>, Vec<u8>)> {
+        credentials
+            .iter()
+            .map(|credential| {
+                let SignedCredential::SdJwt {
+                    compact,
+                    credential_id,
+                } = credential
+                else {
+                    panic!("fixed-source fixture must produce only SD-JWT credentials")
+                };
+                (
+                    compact.as_bytes().to_vec(),
+                    credential_id.as_bytes().to_vec(),
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn assert_fixed_sd_jwt_protocol_boundary(
+        credential: &SignedCredential,
+        payload_format: &CredentialPayloadFormat,
+        expected_holder_public_jwk: &JWK,
+    ) {
+        let SignedCredential::SdJwt { compact, .. } = credential else {
+            panic!("fixed-source fixture must produce an SD-JWT credential")
+        };
+        let payload_segment = compact
+            .split('~')
+            .next()
+            .unwrap()
+            .split('.')
+            .nth(1)
+            .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload_segment).unwrap()).unwrap();
+
+        assert_eq!(
+            payload["cnf"]["jwk"],
+            serde_json::to_value(expected_holder_public_jwk).unwrap()
+        );
+        for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            assert!(payload["cnf"]["jwk"].get(private_member).is_none());
+        }
+
+        match payload_format {
+            CredentialPayloadFormat::IetfSdJwt => {
+                assert!(payload.get("credentialSubject").is_none());
+                assert!(payload.get("label").is_some());
+            }
+            CredentialPayloadFormat::W3cVcdmV2SdJwt => {
+                assert!(payload.get("@context").is_some());
+                assert!(payload["credentialSubject"].get("label").is_some());
+            }
+            CredentialPayloadFormat::W3cVcdmV2JwtVc => {
+                panic!("plain JWT-VC is outside the SD-JWT fixed-source fixture")
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     fn normalized_jwt_semantics(credential: &SignedCredential) -> serde_json::Value {
         let SignedCredential::JwtVcJson { jwt, .. } = credential else {
             panic!("expected JWT-VC")
@@ -2235,6 +2455,74 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    fn fixed_source_proof_bound_sd_jwt_is_byte_exact_across_repeated_schedules() {
+        const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
+        const SCHEDULES: [(usize, u64); 3] = [
+            (2, 0x0123_4567_89ab_cdef),
+            (4, 0xfedc_ba98_7654_3210),
+            (8, 0x55aa_0ff0_33cc_9696),
+        ];
+
+        for payload_format in [
+            CredentialPayloadFormat::IetfSdJwt,
+            CredentialPayloadFormat::W3cVcdmV2SdJwt,
+        ] {
+            for batch_size in BATCH_SIZES {
+                let fixture = FixedSdJwtBatchFixture::new(batch_size, payload_format.clone());
+                let expected_holder_public_jwk = fixture.verified_holder_jwk.to_public();
+                let mut schedule_baseline: Option<Vec<(Vec<u8>, Vec<u8>)>> = None;
+
+                for (worker_limit, schedule_seed) in SCHEDULES {
+                    let mut signer = ConcurrentTestSigner::new(worker_limit, schedule_seed);
+                    let serial_credentials = sign_fixed_sd_jwt_batch_serially(&signer, &fixture);
+                    let concurrent_credentials =
+                        sign_fixed_sd_jwt_batch_concurrently(&mut signer, &fixture);
+                    let serial_bytes = exact_sd_jwt_bytes(&serial_credentials);
+                    let concurrent_bytes = exact_sd_jwt_bytes(&concurrent_credentials);
+
+                    assert_eq!(
+                        serial_bytes, concurrent_bytes,
+                        "serial and concurrent SD-JWT wire bytes must match"
+                    );
+                    if let Some(baseline) = &schedule_baseline {
+                        assert_eq!(
+                            &serial_bytes, baseline,
+                            "worker bounds and schedules must not affect SD-JWT wire bytes"
+                        );
+                    } else {
+                        schedule_baseline = Some(serial_bytes);
+                    }
+
+                    assert_eq!(serial_credentials.len(), batch_size);
+                    assert_eq!(concurrent_credentials.len(), batch_size);
+                    for credential in serial_credentials
+                        .iter()
+                        .chain(concurrent_credentials.iter())
+                    {
+                        verify_signed_credential(credential, signer.signing_key.verifying_key());
+                        assert_fixed_sd_jwt_protocol_boundary(
+                            credential,
+                            &payload_format,
+                            &expected_holder_public_jwk,
+                        );
+                    }
+
+                    assert_eq!(signer.call_count(), batch_size * 2);
+                    assert_eq!(signer.unique_call_count(), batch_size);
+                    assert!(signer.peak_calls() <= batch_size.min(worker_limit));
+                    if batch_size > 1 {
+                        assert!(
+                            signer.peak_calls() > 1,
+                            "each non-trivial schedule must overlap signing calls"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
     fn concurrent_mixed_formats_restore_order_and_preserve_valid_signatures() {
         let inputs = (0..9)
             .map(|ordinal| match ordinal % 3 {
@@ -2414,11 +2702,35 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    fn concurrent_execution_state_stops_and_retains_only_the_first_panic() {
+        const FIRST_PANIC_PAYLOAD: &str = "first concurrent signer panic";
+        const SECOND_PANIC_PAYLOAD: &str = "second concurrent signer panic";
+
+        let state = ConcurrentExecutionState::new();
+        assert_eq!(state.claim(PANIC_ORACLE_BATCH_SIZE), Some(0));
+
+        state.record_panic(Box::new(FIRST_PANIC_PAYLOAD));
+        state.record_panic(Box::new(SECOND_PANIC_PAYLOAD));
+        assert_eq!(state.claim(PANIC_ORACLE_BATCH_SIZE), None);
+
+        let payload = state
+            .take_first_panic()
+            .expect("the first panic payload must be retained");
+        let payload = payload
+            .downcast::<&str>()
+            .unwrap_or_else(|_| panic!("the first panic payload type must be retained"));
+        assert_eq!(*payload, FIRST_PANIC_PAYLOAD);
+        assert_eq!(state.claim(PANIC_ORACLE_BATCH_SIZE), None);
+        assert!(state.take_first_panic().is_none());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
     fn concurrent_signer_panics_propagate_only_after_every_worker_is_joined() {
         let mut single_signer = PanickingConcurrentSigner::new(PanickingWorker::Caller, 1);
         let single_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let scope = ConcurrentEs256SignerScope::new(&mut single_signer).unwrap();
-            scope.sign_batch_concurrently(jwt_inputs(8, "single-caller"))
+            scope.sign_batch_concurrently(jwt_inputs(PANIC_ORACLE_BATCH_SIZE, "single-caller"))
         }));
         let single_payload = match single_outcome {
             Err(payload) => payload,
@@ -2441,7 +2753,7 @@ mod tests {
             let mut signer = PanickingConcurrentSigner::new(panicking_worker, 2);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
-                scope.sign_batch_concurrently(jwt_inputs(8, label))
+                scope.sign_batch_concurrently(jwt_inputs(PANIC_ORACLE_BATCH_SIZE, label))
             }));
             let payload = match outcome {
                 Err(payload) => payload,
@@ -2461,8 +2773,9 @@ mod tests {
                 "panic propagation must wait for the already-in-flight peer"
             );
             assert_eq!(signer.active_calls.load(Ordering::SeqCst), 0);
-            assert_eq!(signer.call_count(), 2);
-            assert_eq!(signer.unique_call_count(), 2);
+            let call_count = signer.call_count();
+            assert!((2..=PANIC_ORACLE_BATCH_SIZE).contains(&call_count));
+            assert_eq!(signer.unique_call_count(), call_count);
             assert_eq!(signer.peak_calls(), 2);
         }
     }

@@ -122,9 +122,11 @@ jobs:
                 ;;
             esac
           done
-      - name: Smoke mdoc issuance benchmark
+      - name: Smoke marty-oid4vci benchmarks
         if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-oid4vci')
-        run: cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+        run: |
+          cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          cargo test --locked -p marty-oid4vci --bench es256_signing_batch
       - name: Record non-Rust-only change
         if: steps.affected.outputs.all != 'true' && steps.affected.outputs.has_packages != 'true'
         run: echo "No Rust package tests are needed for the affected-first lane."
@@ -274,6 +276,7 @@ jobs:
           cargo check --locked -p marty-oid4vci --no-default-features
           cargo test --locked -p marty-oid4vci
           cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          cargo test --locked -p marty-oid4vci --bench es256_signing_batch
           cargo check --locked -p marty-oid4vci --no-default-features --features issuer
           cargo check --locked -p marty-oid4vci --no-default-features --features verifier
 
