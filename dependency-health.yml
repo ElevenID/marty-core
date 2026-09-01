@@ -52,14 +52,14 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/openwallet-foundation-labs/sd-jwt-rust
-    current: "0.7.1@c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+    current: "0.7.1@2799b5fff011342aefe8ac5e9653d5b084e2a20c"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-10-30
-    rationale: The immutable ElevenID revision carries the RFC 9901 holder API update plus reviewed serial-first issuance and verifier refactors, consumer-compatible WASM binding resolution, and dependency-supported Rust 1.85 metadata. Marty leaves the optional parallel and benchmark features disabled. The source-breaking holder constructor is adopted through its explicit unverified variant to preserve WalletEngine's existing preverified-input contract because that API does not yet receive a trusted issuer-key resolver or validate the supplied holder key against the credential's cnf claim; adding those checks is a separate product change rather than a hidden dependency-bump behavior change.
+    rationale: The immutable ElevenID revision carries the RFC 9901 holder API update plus reviewed serial-first issuance and verifier refactors, bounded cross-credential execution seams, consumer-compatible WASM binding resolution, and dependency-supported Rust 1.88 metadata. Marty leaves the optional parallel and benchmark features disabled. WalletEngine's verified presentation boundary now resolves and validates the issuer key, verifies the SD-JWT, and enforces holder-key binding before presentation; the legacy convenience path retains the explicit unverified constructor only for its documented preverified-input contract.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID
