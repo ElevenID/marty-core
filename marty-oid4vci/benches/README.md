@@ -89,3 +89,77 @@ results. These measurements are evidence, not a speedup guarantee, automatic
 production threshold, or permission to change the default serial policy. Real
 results depend heavily on signer latency, backend quotas, worker authorization,
 batch composition, and host scheduling.
+
+### Opt-in ES256 payload matrix
+
+The payload matrix is disabled unless `MARTY_ES256_MATRIX=1`. The default smoke
+command above preserves its historical workload when the matrix variables are
+unset. Enabling the matrix adds
+the `es256_signing_batch_total_payload_matrix` group without changing the
+historical groups, benchmark IDs, production defaults, or
+serial policy. Its complete Criterion IDs have the following shape:
+
+```text
+es256_signing_batch_total_payload_matrix/{format}/{class}/n={item_count}/serial/b={batch_size}
+es256_signing_batch_total_payload_matrix/{format}/{class}/n={item_count}/concurrent/p={worker_limit}/b={batch_size}
+```
+
+The matrix dimensions and exact selector values are:
+
+- `MARTY_ES256_MATRIX_FORMATS`: `jwt_vc`,
+  `proof_bound_ietf_sd_jwt`, `proof_bound_w3c_sd_jwt`, `mdoc`
+- `MARTY_ES256_MATRIX_CLASSES`: `small_primitive`, `medium_nested`,
+  `large_portrait`, `mixed_size`
+- `MARTY_ES256_MATRIX_ITEM_COUNTS`: `1`, `8`, `32`, `128`, `512`
+- `MARTY_ES256_MATRIX_BATCH_SIZES`: `1`, `8`, `32`, `256`
+
+Each selector accepts a comma-separated subset, `all`, or may be omitted for
+all values. Whitespace around comma-separated tokens is allowed. Unknown,
+empty, non-Unicode, duplicate, noncanonical numeric, and `all`-combined values
+fail closed before any historical preflight or benchmark group runs. Fixture
+names, semantic values, and bounded shapes are deterministic and contain no
+personal data. Standard `HashMap` iteration and production UUID, time, and salt
+sources remain unfixed, so complete credential bytes are not deterministic. The
+large class has one bounded 256-KiB opaque value rather than `n` such values, and
+the mixed class is also bounded. Before timing, selected formats and classes are
+checked at `n=1` and `n=512` with `b=1`, independent of the timed item-count and
+batch-size filters.
+The preflight verifies exact ES256 declarations, signatures, format contents,
+and fixture values. Both SD-JWT formats must have their exact expected key sets,
+all selected claims must be hidden, disclosures must be hash-linked to the
+signed payload, and the holder key must remain public-only. The mdoc oracle also
+checks its single namespace and every Tag24 item digest against the signed MSO.
+
+For example, run a small native campaign in PowerShell with:
+
+```powershell
+$env:MARTY_ES256_MATRIX = '1'
+$env:MARTY_ES256_MATRIX_FORMATS = 'jwt_vc,proof_bound_ietf_sd_jwt'
+$env:MARTY_ES256_MATRIX_CLASSES = 'small_primitive,mixed_size'
+$env:MARTY_ES256_MATRIX_ITEM_COUNTS = '1,512'
+$env:MARTY_ES256_MATRIX_BATCH_SIZES = '1,8'
+cargo bench --locked -p marty-oid4vci --bench es256_signing_batch -- --noplot
+```
+
+The complete cross-product is 4 formats x 4 classes x 5 item counts x 4
+batch sizes x (serial plus as many as four host-supported worker limits): up
+to 1,600 timed cases. With this benchmark's minimum warm-up and measurement
+periods it can take well over 80 minutes, before compile and preflight time, so
+use the selectors to shard repeatable matrix selections and runtime campaign
+configurations. Criterion captures
+aggregate timing samples, estimates, confidence intervals, and throughput. It
+does not directly capture allocation bytes, worker utilization, or true
+per-operation p95/p99; retain its raw samples and gather those measurements in
+separately instrumented campaigns.
+
+For each matrix case, fixed signer and semantic claim construction is untimed;
+production serialization and issuance randomness remain exercised. Only scope
+construction and the production serial or concurrent batch call are
+timed. `BatchSize::PerIteration` excludes setup and output cleanup from the
+sample while preventing large fixtures from accumulating across iterations.
+
+The native-only matrix compares the serial route with the bounded concurrent
+route. WASM continues to use
+the production serial fallback through `Es256SignerScope`. Matrix evidence is
+diagnostic and makes no production policy, concurrency-bound, or threshold
+change.
