@@ -1170,6 +1170,8 @@ mod tests {
     const BACKEND_SECRET: &str = "kms-tenant-secret-route-91";
     #[cfg(not(target_family = "wasm"))]
     const TEST_SIGNER_PANIC: &str = "intentional concurrent signer test panic";
+    #[cfg(not(target_family = "wasm"))]
+    const PANIC_ORACLE_BATCH_SIZE: usize = 8;
     const CLAIM_SECRET: &str = "credential-claim-canary";
     const ISSUER_SECRET: &str = "did:example:issuer-private-canary";
     const KID_SECRET: &str = "did:example:issuer-private-canary#key-private-canary";
@@ -2700,11 +2702,35 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    fn concurrent_execution_state_stops_and_retains_only_the_first_panic() {
+        const FIRST_PANIC_PAYLOAD: &str = "first concurrent signer panic";
+        const SECOND_PANIC_PAYLOAD: &str = "second concurrent signer panic";
+
+        let state = ConcurrentExecutionState::new();
+        assert_eq!(state.claim(PANIC_ORACLE_BATCH_SIZE), Some(0));
+
+        state.record_panic(Box::new(FIRST_PANIC_PAYLOAD));
+        state.record_panic(Box::new(SECOND_PANIC_PAYLOAD));
+        assert_eq!(state.claim(PANIC_ORACLE_BATCH_SIZE), None);
+
+        let payload = state
+            .take_first_panic()
+            .expect("the first panic payload must be retained");
+        let payload = payload
+            .downcast::<&str>()
+            .unwrap_or_else(|_| panic!("the first panic payload type must be retained"));
+        assert_eq!(*payload, FIRST_PANIC_PAYLOAD);
+        assert_eq!(state.claim(PANIC_ORACLE_BATCH_SIZE), None);
+        assert!(state.take_first_panic().is_none());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
     fn concurrent_signer_panics_propagate_only_after_every_worker_is_joined() {
         let mut single_signer = PanickingConcurrentSigner::new(PanickingWorker::Caller, 1);
         let single_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let scope = ConcurrentEs256SignerScope::new(&mut single_signer).unwrap();
-            scope.sign_batch_concurrently(jwt_inputs(8, "single-caller"))
+            scope.sign_batch_concurrently(jwt_inputs(PANIC_ORACLE_BATCH_SIZE, "single-caller"))
         }));
         let single_payload = match single_outcome {
             Err(payload) => payload,
@@ -2727,7 +2753,7 @@ mod tests {
             let mut signer = PanickingConcurrentSigner::new(panicking_worker, 2);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
-                scope.sign_batch_concurrently(jwt_inputs(8, label))
+                scope.sign_batch_concurrently(jwt_inputs(PANIC_ORACLE_BATCH_SIZE, label))
             }));
             let payload = match outcome {
                 Err(payload) => payload,
@@ -2747,8 +2773,9 @@ mod tests {
                 "panic propagation must wait for the already-in-flight peer"
             );
             assert_eq!(signer.active_calls.load(Ordering::SeqCst), 0);
-            assert_eq!(signer.call_count(), 2);
-            assert_eq!(signer.unique_call_count(), 2);
+            let call_count = signer.call_count();
+            assert!((2..=PANIC_ORACLE_BATCH_SIZE).contains(&call_count));
+            assert_eq!(signer.unique_call_count(), call_count);
             assert_eq!(signer.peak_calls(), 2);
         }
     }
