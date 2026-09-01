@@ -33,6 +33,7 @@ const MDOC_X5C_CLAIM_KEY: &str = "_mdoc_x5c";
 const SINGLE_MDOC_DIGEST_CREDENTIAL_ID: u64 = 0;
 const SHA256_DIGEST_LENGTH: usize = 32;
 const MDOC_DIGEST_EXECUTION_FAILED: &str = "mdoc digest execution failed";
+const MDOC_UNSUPPORTED_NUMERIC_VALUE: &str = "mdoc claim contains an unsupported numeric value";
 const MDOC_VALIDITY_OUT_OF_RANGE: &str = "mdoc validity period is out of range";
 const MDOC_RS256_UNSUPPORTED: &str = "RS256 is not supported for mDoc COSE signing";
 
@@ -1005,6 +1006,10 @@ fn mdoc_digest_execution_error() -> Oid4vciError {
     Oid4vciError::MdocError(MDOC_DIGEST_EXECUTION_FAILED.into())
 }
 
+fn mdoc_unsupported_numeric_value_error() -> Oid4vciError {
+    Oid4vciError::MdocError(MDOC_UNSUPPORTED_NUMERIC_VALUE.into())
+}
+
 fn mdoc_validity_duration(expiration_seconds: Option<i64>) -> Oid4vciResult<chrono::TimeDelta> {
     let validity_days = expiration_seconds
         .map(|seconds| seconds / 86_400)
@@ -1350,10 +1355,7 @@ fn json_to_cbor(value: &serde_json::Value) -> Oid4vciResult<CborValue> {
             } else if let Some(f) = n.as_f64() {
                 Ok(CborValue::Float(f))
             } else {
-                Err(Oid4vciError::MdocError(format!(
-                    "Unsupported numeric value: {}",
-                    n
-                )))
+                Err(mdoc_unsupported_numeric_value_error())
             }
         }
         serde_json::Value::String(s) => {
@@ -2128,6 +2130,68 @@ mod tests {
 
         let unicode_text = json_to_cbor(&serde_json::json!("\u{1F5D3} 2026-07-21")).unwrap();
         assert!(matches!(unicode_text, CborValue::Text(_)));
+    }
+
+    fn assert_redacted_unsupported_numeric_error(error: &Oid4vciError, sensitive: &str) {
+        let Oid4vciError::MdocError(message) = error else {
+            panic!("unsupported numeric claims must use the mdoc error boundary");
+        };
+        assert_eq!(message, MDOC_UNSUPPORTED_NUMERIC_VALUE);
+
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(
+                !rendered.contains(sensitive),
+                "unsupported numeric errors must not expose claim material"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_numeric_claim_errors_are_redacted_before_salts_or_digests() {
+        const NUMERIC_SOURCE: &str = "1e400";
+
+        let value: serde_json::Value = serde_json::from_str(NUMERIC_SOURCE).unwrap();
+        let sensitive_number = value.as_number().unwrap().to_string();
+        let conversion_error = json_to_cbor(&value).unwrap_err();
+        assert_redacted_unsupported_numeric_error(&conversion_error, &sensitive_number);
+
+        let claims = test_mdoc_claims([("highly_sensitive_counter".into(), value)]);
+        let public_error = match prepare_mdoc_with_credential_id(
+            &PreparationOnlySigner(SigningAlgorithm::ES256),
+            &claims,
+            Some("urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"),
+        ) {
+            Ok(_) => panic!("unsupported numeric claims must not produce signing state"),
+            Err(error) => error,
+        };
+        assert_redacted_unsupported_numeric_error(&public_error, &sensitive_number);
+
+        let issuer_claims = claims
+            .claims
+            .iter()
+            .map(|(name, value)| (name.as_str(), value));
+        let executor = RecordingDigestExecutor::default();
+        let preparation_error = match prepare_mdoc_with_inputs_and_digest_executor(
+            &PreparationOnlySigner(SigningAlgorithm::ES256),
+            &claims,
+            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
+            None,
+            chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            issuer_claims,
+            || panic!("unsupported numeric validation must precede salt allocation"),
+            &executor,
+        ) {
+            Ok(_) => panic!("unsupported numeric claims must not produce signing state"),
+            Err(error) => error,
+        };
+        assert_redacted_unsupported_numeric_error(&preparation_error, &sensitive_number);
+        assert_eq!(
+            executor.calls.load(Ordering::Relaxed),
+            0,
+            "validation must precede digest execution"
+        );
     }
 
     #[test]
