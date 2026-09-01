@@ -30,8 +30,12 @@ use std::sync::Mutex;
 
 use crate::formats::jwt_vc::{assemble_jwt_vc, prepare_jwt_vc, PreparedJwtVc};
 use crate::formats::mdoc::{assemble_mdoc, prepare_mdoc, PreparedMdoc};
+use crate::formats::sd_jwt::{
+    assemble_sd_jwt, prepare_sd_jwt_with_holder_public_jwk, PreparedSdJwt,
+};
 use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, SignedCredential, SigningAlgorithm};
+use ssi_jwk::JWK;
 
 const ES256_SIGNATURE_LENGTH: usize = 64;
 
@@ -117,6 +121,46 @@ impl fmt::Debug for JwtVcSigningBatchInput {
     }
 }
 
+/// One owned, proof-bound SD-JWT input for an ES256 signing batch.
+///
+/// The supplied holder JWK must come from a successfully verified proof. Proof
+/// JWT signature, nonce, audience, age, and optional key-attestation policy
+/// verification remain the caller's responsibility and must complete before
+/// constructing this input. Only the JWK's public projection is retained.
+pub struct SdJwtSigningBatchInput {
+    route_id: SigningRouteId,
+    claims: CredentialClaims,
+    holder_public_jwk: JWK,
+}
+
+impl SdJwtSigningBatchInput {
+    /// Bind owned SD-JWT claims and a verified holder key to a batch-local route.
+    #[must_use]
+    pub fn new(
+        route_id: SigningRouteId,
+        claims: CredentialClaims,
+        verified_holder_jwk: &JWK,
+    ) -> Self {
+        Self {
+            route_id,
+            claims,
+            holder_public_jwk: verified_holder_jwk.to_public(),
+        }
+    }
+
+    /// Return this input's opaque route identity.
+    #[must_use]
+    pub const fn route_id(&self) -> SigningRouteId {
+        self.route_id
+    }
+}
+
+impl fmt::Debug for SdJwtSigningBatchInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SdJwtSigningBatchInput([redacted])")
+    }
+}
+
 /// One owned mdoc input for an ES256 signing batch.
 pub struct MdocSigningBatchInput {
     route_id: SigningRouteId,
@@ -151,6 +195,8 @@ impl fmt::Debug for MdocSigningBatchInput {
 pub enum Es256SigningBatchInput {
     /// Prepare and sign a W3C JWT-VC.
     JwtVc(JwtVcSigningBatchInput),
+    /// Prepare and sign a proof-bound SD-JWT.
+    SdJwt(Box<SdJwtSigningBatchInput>),
     /// Prepare and sign an ISO mdoc.
     Mdoc(MdocSigningBatchInput),
 }
@@ -158,6 +204,12 @@ pub enum Es256SigningBatchInput {
 impl From<JwtVcSigningBatchInput> for Es256SigningBatchInput {
     fn from(input: JwtVcSigningBatchInput) -> Self {
         Self::JwtVc(input)
+    }
+}
+
+impl From<SdJwtSigningBatchInput> for Es256SigningBatchInput {
+    fn from(input: SdJwtSigningBatchInput) -> Self {
+        Self::SdJwt(Box::new(input))
     }
 }
 
@@ -171,6 +223,7 @@ impl fmt::Debug for Es256SigningBatchInput {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::JwtVc(_) => formatter.write_str("Es256SigningBatchInput::JwtVc([redacted])"),
+            Self::SdJwt(_) => formatter.write_str("Es256SigningBatchInput::SdJwt([redacted])"),
             Self::Mdoc(_) => formatter.write_str("Es256SigningBatchInput::Mdoc([redacted])"),
         }
     }
@@ -180,6 +233,7 @@ impl Es256SigningBatchInput {
     fn route_id(&self) -> SigningRouteId {
         match self {
             Self::JwtVc(input) => input.route_id,
+            Self::SdJwt(input) => input.route_id,
             Self::Mdoc(input) => input.route_id,
         }
     }
@@ -645,12 +699,17 @@ struct PreparedJwtVcBatchItem {
     prepared: PreparedJwtVc,
 }
 
+struct PreparedSdJwtBatchItem {
+    prepared: PreparedSdJwt,
+}
+
 struct PreparedMdocBatchItem {
     prepared: Box<PreparedMdoc>,
 }
 
 enum PreparedCredential {
     JwtVc(PreparedJwtVcBatchItem),
+    SdJwt(PreparedSdJwtBatchItem),
     Mdoc(PreparedMdocBatchItem),
 }
 
@@ -658,6 +717,7 @@ impl PreparedCredential {
     fn signing_payload(&self) -> &[u8] {
         match self {
             Self::JwtVc(item) => item.prepared.signing_payload(),
+            Self::SdJwt(item) => item.prepared.signing_input.as_bytes(),
             Self::Mdoc(item) => item.prepared.signing_payload(),
         }
     }
@@ -693,6 +753,12 @@ impl PreparedSigningBatch {
                         PreparedCredential::JwtVc(PreparedJwtVcBatchItem { prepared })
                     })
                 }
+                Es256SigningBatchInput::SdJwt(input) => prepare_sd_jwt_with_holder_public_jwk(
+                    &preparation_signer,
+                    &input.claims,
+                    &input.holder_public_jwk,
+                )
+                .map(|prepared| PreparedCredential::SdJwt(PreparedSdJwtBatchItem { prepared })),
                 Es256SigningBatchInput::Mdoc(input) => {
                     prepare_mdoc(&preparation_signer, &input.claims).map(|prepared| {
                         PreparedCredential::Mdoc(PreparedMdocBatchItem {
@@ -1049,6 +1115,7 @@ impl BatchAssembler for CanonicalAssembler {
     ) -> Result<SignedCredential, ()> {
         match prepared {
             PreparedCredential::JwtVc(item) => Ok(assemble_jwt_vc(item.prepared, &signature.0)),
+            PreparedCredential::SdJwt(item) => Ok(assemble_sd_jwt(item.prepared, &signature.0)),
             PreparedCredential::Mdoc(item) => {
                 assemble_mdoc(*item.prepared, &signature.0).map_err(|_| ())
             }
@@ -1381,6 +1448,7 @@ mod tests {
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
         payload["vc"]["credentialSubject"]["label"]
             .as_str()
+            .or_else(|| payload["label"].as_str())
             .map(str::to_owned)
     }
 
@@ -1623,6 +1691,37 @@ mod tests {
         }
     }
 
+    fn sd_jwt_claims(label: &str) -> CredentialClaims {
+        CredentialClaims {
+            subject_id: Some(format!("did:example:holder-{label}")),
+            credential_type: format!("{label}SdJwtCredential"),
+            claims: [
+                ("label".into(), serde_json::json!(label)),
+                ("secret".into(), serde_json::json!(CLAIM_SECRET)),
+            ]
+            .into(),
+            expiration_seconds: Some(3_600),
+            selective_disclosure_claims: vec!["secret".into()],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
+            credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
+            w3c_context: vec![],
+            w3c_types: vec![],
+        }
+    }
+
+    fn fixed_private_holder_jwk() -> JWK {
+        serde_json::from_value(serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+        }))
+        .unwrap()
+    }
+
     fn mdoc_claims(label: &str) -> CredentialClaims {
         CredentialClaims {
             subject_id: Some(format!("did:example:holder-{label}")),
@@ -1651,8 +1750,25 @@ mod tests {
         claims
     }
 
+    fn invalid_sd_jwt_claims() -> CredentialClaims {
+        let mut claims = sd_jwt_claims("invalid");
+        claims
+            .claims
+            .insert("cnf".into(), serde_json::json!({"jwk": {"kty": "EC"}}));
+        claims
+    }
+
     fn jwt_input(route: u64, label: &str) -> Es256SigningBatchInput {
         JwtVcSigningBatchInput::new(SigningRouteId::new(route), jwt_claims(label)).into()
+    }
+
+    fn sd_jwt_input(route: u64, label: &str) -> Es256SigningBatchInput {
+        SdJwtSigningBatchInput::new(
+            SigningRouteId::new(route),
+            sd_jwt_claims(label),
+            &fixed_private_holder_jwk(),
+        )
+        .into()
     }
 
     fn mdoc_input(route: u64, label: &str) -> Es256SigningBatchInput {
@@ -1663,14 +1779,38 @@ mod tests {
         MdocSigningBatchInput::new(SigningRouteId::new(route), invalid_mdoc_claims()).into()
     }
 
+    fn invalid_sd_jwt_input(route: u64) -> Es256SigningBatchInput {
+        SdJwtSigningBatchInput::new(
+            SigningRouteId::new(route),
+            invalid_sd_jwt_claims(),
+            &fixed_private_holder_jwk(),
+        )
+        .into()
+    }
+
     fn two_jwt_inputs() -> Vec<Es256SigningBatchInput> {
         vec![jwt_input(10, "first"), jwt_input(20, "second")]
+    }
+
+    fn three_format_inputs() -> Vec<Es256SigningBatchInput> {
+        vec![
+            jwt_input(10, "jwt"),
+            sd_jwt_input(20, "sd-jwt"),
+            mdoc_input(30, "mdoc"),
+        ]
     }
 
     #[cfg(not(target_family = "wasm"))]
     fn jwt_inputs(batch_size: usize, prefix: &str) -> Vec<Es256SigningBatchInput> {
         (0..batch_size)
             .map(|ordinal| jwt_input(ordinal as u64, &format!("{prefix}-{ordinal}")))
+            .collect()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn sd_jwt_inputs(batch_size: usize, prefix: &str) -> Vec<Es256SigningBatchInput> {
+        (0..batch_size)
+            .map(|ordinal| sd_jwt_input(ordinal as u64, &format!("{prefix}-{ordinal}")))
             .collect()
     }
 
@@ -1700,6 +1840,38 @@ mod tests {
             vc.remove(field);
         }
         serde_json::json!({ "header": header, "payload": payload })
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn normalized_sd_jwt_semantics(credential: &SignedCredential) -> serde_json::Value {
+        let SignedCredential::SdJwt { compact, .. } = credential else {
+            panic!("expected SD-JWT")
+        };
+        let mut parts = compact.split('~');
+        let segments = parts.next().unwrap().split('.').collect::<Vec<_>>();
+        assert_eq!(segments.len(), 3);
+        let header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[0]).unwrap()).unwrap();
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
+        let payload_object = payload.as_object_mut().unwrap();
+        for field in ["iat", "nbf", "exp", "jti", "_sd", "_sd_alg"] {
+            payload_object.remove(field);
+        }
+        let disclosures = parts
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let disclosure: serde_json::Value =
+                    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(part).unwrap()).unwrap();
+                let disclosure = disclosure.as_array().unwrap();
+                serde_json::json!([disclosure[1], disclosure[2]])
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "header": header,
+            "payload": payload,
+            "disclosures": disclosures,
+        })
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -1735,6 +1907,25 @@ mod tests {
                     .verify(&issuer_signed.issuer_auth.tbs_data(&[]), &signature)
                     .unwrap();
             }
+            SignedCredential::SdJwt { compact, .. } => {
+                let segments = compact
+                    .split('~')
+                    .next()
+                    .unwrap()
+                    .split('.')
+                    .collect::<Vec<_>>();
+                assert_eq!(segments.len(), 3);
+                let signature = p256::ecdsa::Signature::from_slice(
+                    &URL_SAFE_NO_PAD.decode(segments[2]).unwrap(),
+                )
+                .unwrap();
+                verifying_key
+                    .verify(
+                        format!("{}.{}", segments[0], segments[1]).as_bytes(),
+                        &signature,
+                    )
+                    .unwrap();
+            }
             other => panic!("unexpected signed credential format: {other:?}"),
         }
     }
@@ -1751,17 +1942,63 @@ mod tests {
     }
 
     #[test]
-    fn jwt_and_mdoc_sign_complete_payloads_and_preserve_raw_p1363_bytes() {
+    fn sd_jwt_input_stores_only_verified_holder_public_material_and_is_redacted() {
+        let holders = vec![fixed_private_holder_jwk(), JWK::generate_ed25519().unwrap()];
+
+        for holder_jwk in holders {
+            assert!(!holder_jwk.is_public());
+            let input = SdJwtSigningBatchInput::new(
+                SigningRouteId::new(91),
+                sd_jwt_claims(CLAIM_SECRET),
+                &holder_jwk,
+            );
+            assert_eq!(input.route_id(), SigningRouteId::new(91));
+            assert!(input.holder_public_jwk.is_public());
+            let retained = serde_json::to_value(&input.holder_public_jwk).unwrap();
+            assert_eq!(
+                retained,
+                serde_json::to_value(holder_jwk.to_public()).unwrap()
+            );
+            for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+                assert!(retained.get(private_member).is_none());
+            }
+
+            let diagnostics = format!("{input:?}");
+            assert_eq!(diagnostics, "SdJwtSigningBatchInput([redacted])");
+            for secret in [CLAIM_SECRET, "91"] {
+                assert!(!diagnostics.contains(secret));
+            }
+
+            let enum_input: Es256SigningBatchInput = input.into();
+            assert_eq!(
+                format!("{enum_input:?}"),
+                "Es256SigningBatchInput::SdJwt([redacted])"
+            );
+        }
+    }
+
+    #[test]
+    fn jwt_sd_jwt_and_mdoc_sign_complete_payloads_and_preserve_raw_p1363_bytes() {
         let signer = RecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
+        let holder_jwk = JWK::generate_ed25519().unwrap();
         let credentials = scope
-            .sign_batch(vec![jwt_input(1, "jwt"), mdoc_input(2, "mdoc")])
+            .sign_batch(vec![
+                jwt_input(1, "jwt"),
+                SdJwtSigningBatchInput::new(
+                    SigningRouteId::new(2),
+                    sd_jwt_claims("sd-jwt"),
+                    &holder_jwk,
+                )
+                .into(),
+                mdoc_input(3, "mdoc"),
+            ])
             .unwrap();
         let payloads = signer.calls.lock().unwrap();
 
         assert_eq!(
             payloads.len(),
-            2,
+            3,
             "the signer must run exactly once per item"
         );
 
@@ -1786,29 +2023,62 @@ mod tests {
         assert_eq!(header["kid"], KID_SECRET);
         assert_eq!(payload["iss"], ISSUER_SECRET);
 
+        let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
+            panic!("caller order was not preserved")
+        };
+        let sd_jwt_segments = compact
+            .split('~')
+            .next()
+            .unwrap()
+            .split('.')
+            .collect::<Vec<_>>();
+        assert_eq!(sd_jwt_segments.len(), 3);
+        assert_eq!(
+            payloads[1],
+            format!("{}.{}", sd_jwt_segments[0], sd_jwt_segments[1]).as_bytes()
+        );
+        assert_eq!(
+            URL_SAFE_NO_PAD.decode(sd_jwt_segments[2]).unwrap(),
+            RAW_ES256_SIGNATURE
+        );
+        let sd_jwt_payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(sd_jwt_segments[1]).unwrap()).unwrap();
+        assert_eq!(sd_jwt_payload["iss"], ISSUER_SECRET);
+        assert_eq!(
+            sd_jwt_payload["cnf"],
+            serde_json::json!({"jwk": holder_jwk.to_public()})
+        );
+        for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            assert!(sd_jwt_payload["cnf"]["jwk"].get(private_member).is_none());
+        }
+
         let SignedCredential::MsoMdoc {
             issuer_signed_b64, ..
-        } = &credentials[1]
+        } = &credentials[2]
         else {
             panic!("caller order was not preserved")
         };
         let issuer_signed_bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
         let issuer_signed: isomdl::definitions::IssuerSigned =
             isomdl::cbor::from_slice(&issuer_signed_bytes).unwrap();
-        assert_eq!(issuer_signed.issuer_auth.tbs_data(&[]), payloads[1]);
+        assert_eq!(issuer_signed.issuer_auth.tbs_data(&[]), payloads[2]);
         assert_eq!(issuer_signed.issuer_auth.signature, RAW_ES256_SIGNATURE);
     }
 
     #[test]
-    fn valid_high_s_p1363_signatures_are_preserved_for_jwt_and_mdoc() {
+    fn valid_high_s_p1363_signatures_are_preserved_for_all_formats() {
         let signer = HighSEs256Signer::new();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let credentials = scope
-            .sign_batch(vec![jwt_input(1, "jwt"), mdoc_input(2, "mdoc")])
+            .sign_batch(vec![
+                jwt_input(1, "jwt"),
+                sd_jwt_input(2, "sd-jwt"),
+                mdoc_input(3, "mdoc"),
+            ])
             .unwrap();
         let calls = signer.calls.lock().unwrap();
 
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 3);
         for (payload, raw_signature) in calls.iter() {
             let signature = p256::ecdsa::Signature::from_slice(raw_signature).unwrap();
             assert!(
@@ -1833,9 +2103,28 @@ mod tests {
             "JWT assembly must not normalize a valid high-S signature"
         );
 
+        let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
+            panic!("expected SD-JWT in caller order")
+        };
+        let emitted_sd_jwt_signature = URL_SAFE_NO_PAD
+            .decode(
+                compact
+                    .split('~')
+                    .next()
+                    .unwrap()
+                    .rsplit('.')
+                    .next()
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            emitted_sd_jwt_signature, calls[1].1,
+            "SD-JWT assembly must not normalize a valid high-S signature"
+        );
+
         let SignedCredential::MsoMdoc {
             issuer_signed_b64, ..
-        } = &credentials[1]
+        } = &credentials[2]
         else {
             panic!("expected mdoc in caller order")
         };
@@ -1843,7 +2132,7 @@ mod tests {
         let issuer_signed: isomdl::definitions::IssuerSigned =
             isomdl::cbor::from_slice(&issuer_signed_bytes).unwrap();
         assert_eq!(
-            issuer_signed.issuer_auth.signature, calls[1].1,
+            issuer_signed.issuer_auth.signature, calls[2].1,
             "mdoc assembly must not normalize a valid high-S signature"
         );
     }
@@ -1898,14 +2187,60 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    fn randomized_serial_concurrent_sd_jwt_differential_covers_required_batch_sizes() {
+        for (batch_size, schedule_seed) in [
+            (1, 0x1123_4567_89ab_cdef),
+            (8, 0x2edc_ba98_7654_3210),
+            (32, 0x35aa_0ff0_33cc_9696),
+            (256, 0x4ead_beef_cafe_babe),
+        ] {
+            let serial_signer = ConcurrentTestSigner::new(1, schedule_seed);
+            let serial_credentials = Es256SignerScope::new(&serial_signer)
+                .unwrap()
+                .sign_batch(sd_jwt_inputs(batch_size, "sd-differential"))
+                .unwrap();
+
+            let mut concurrent_signer = ConcurrentTestSigner::new(8, schedule_seed);
+            let concurrent_credentials = {
+                let scope = ConcurrentEs256SignerScope::new(&mut concurrent_signer).unwrap();
+                scope
+                    .sign_batch_concurrently(sd_jwt_inputs(batch_size, "sd-differential"))
+                    .unwrap()
+            };
+
+            assert_eq!(serial_credentials.len(), batch_size);
+            assert_eq!(concurrent_credentials.len(), batch_size);
+            for (serial, concurrent) in serial_credentials.iter().zip(&concurrent_credentials) {
+                assert_eq!(
+                    normalized_sd_jwt_semantics(serial),
+                    normalized_sd_jwt_semantics(concurrent),
+                    "serial and concurrent paths must preserve proof-bound SD-JWT semantics"
+                );
+                verify_signed_credential(serial, serial_signer.signing_key.verifying_key());
+                verify_signed_credential(concurrent, concurrent_signer.signing_key.verifying_key());
+            }
+
+            assert_eq!(serial_signer.call_count(), batch_size);
+            assert_eq!(concurrent_signer.call_count(), batch_size);
+            assert_eq!(concurrent_signer.unique_call_count(), batch_size);
+            assert!(concurrent_signer.peak_calls() <= batch_size.min(8));
+            if batch_size > 1 {
+                assert!(
+                    concurrent_signer.peak_calls() > 1,
+                    "the schedule must exercise overlapping SD-JWT calls"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
     fn concurrent_mixed_formats_restore_order_and_preserve_valid_signatures() {
-        let inputs = (0..8)
-            .map(|ordinal| {
-                if ordinal % 2 == 0 {
-                    jwt_input(ordinal, &format!("mixed-{ordinal}"))
-                } else {
-                    mdoc_input(ordinal, &format!("mixed-{ordinal}"))
-                }
+        let inputs = (0..9)
+            .map(|ordinal| match ordinal % 3 {
+                0 => jwt_input(ordinal, &format!("mixed-{ordinal}")),
+                1 => sd_jwt_input(ordinal, &format!("mixed-{ordinal}")),
+                _ => mdoc_input(ordinal, &format!("mixed-{ordinal}")),
             })
             .collect();
         let mut signer = ConcurrentTestSigner::new(4, 0x1357_9bdf_2468_ace0);
@@ -1914,17 +2249,17 @@ mod tests {
             scope.sign_batch_concurrently(inputs).unwrap()
         };
 
-        assert_eq!(credentials.len(), 8);
+        assert_eq!(credentials.len(), 9);
         for (ordinal, credential) in credentials.iter().enumerate() {
-            if ordinal % 2 == 0 {
-                assert!(matches!(credential, SignedCredential::JwtVcJson { .. }));
-            } else {
-                assert!(matches!(credential, SignedCredential::MsoMdoc { .. }));
+            match ordinal % 3 {
+                0 => assert!(matches!(credential, SignedCredential::JwtVcJson { .. })),
+                1 => assert!(matches!(credential, SignedCredential::SdJwt { .. })),
+                _ => assert!(matches!(credential, SignedCredential::MsoMdoc { .. })),
             }
             verify_signed_credential(credential, signer.signing_key.verifying_key());
         }
-        assert_eq!(signer.call_count(), 8);
-        assert_eq!(signer.unique_call_count(), 8);
+        assert_eq!(signer.call_count(), 9);
+        assert_eq!(signer.unique_call_count(), 9);
         assert!(signer.peak_calls() <= 4);
         assert!(signer.peak_calls() > 1);
     }
@@ -1936,12 +2271,16 @@ mod tests {
         let credentials = {
             let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
             scope
-                .sign_batch_concurrently(vec![jwt_input(1, "jwt"), mdoc_input(2, "mdoc")])
+                .sign_batch_concurrently(vec![
+                    jwt_input(1, "jwt"),
+                    sd_jwt_input(2, "sd-jwt"),
+                    mdoc_input(3, "mdoc"),
+                ])
                 .unwrap()
         };
         let calls = signer.calls.lock().unwrap();
 
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 3);
         for (payload, raw_signature) in calls.iter() {
             let signature = p256::ecdsa::Signature::from_slice(raw_signature).unwrap();
             assert!(signature.normalize_s().is_some());
@@ -1958,15 +2297,34 @@ mod tests {
         let emitted_jwt_signature = URL_SAFE_NO_PAD
             .decode(jwt.rsplit('.').next().unwrap())
             .unwrap();
+
+        let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
+            panic!("expected SD-JWT in caller order")
+        };
+        let emitted_sd_jwt_signature = URL_SAFE_NO_PAD
+            .decode(
+                compact
+                    .split('~')
+                    .next()
+                    .unwrap()
+                    .rsplit('.')
+                    .next()
+                    .unwrap(),
+            )
+            .unwrap();
+
         let SignedCredential::MsoMdoc {
             issuer_signed_b64, ..
-        } = &credentials[1]
+        } = &credentials[2]
         else {
             panic!("expected mdoc in caller order")
         };
         let issuer_signed: isomdl::definitions::IssuerSigned =
             isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap()).unwrap();
         assert!(calls.iter().any(|(_, raw)| raw == &emitted_jwt_signature));
+        assert!(calls
+            .iter()
+            .any(|(_, raw)| raw == &emitted_sd_jwt_signature));
         assert!(calls
             .iter()
             .any(|(_, raw)| raw == &issuer_signed.issuer_auth.signature));
@@ -2198,7 +2556,7 @@ mod tests {
         let signer = RecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let error = assert_error(
-            scope.sign_batch(vec![invalid_mdoc_input(7), jwt_input(7, "duplicate")]),
+            scope.sign_batch(vec![invalid_sd_jwt_input(7), jwt_input(7, "duplicate")]),
             SigningBatchErrorKind::DuplicateRoute,
             Some(0),
         );
@@ -2232,7 +2590,7 @@ mod tests {
         assert_error(
             scope.sign_batch(vec![
                 jwt_input(1, "valid"),
-                invalid_mdoc_input(2),
+                invalid_sd_jwt_input(2),
                 invalid_mdoc_input(3),
             ]),
             SigningBatchErrorKind::PreparationFailed,
@@ -2281,7 +2639,7 @@ mod tests {
         let signer = RecordingSigner::failing_at(1);
         let scope = Es256SignerScope::new(&signer).unwrap();
         let error = assert_error(
-            scope.sign_batch(two_jwt_inputs()),
+            scope.sign_batch(three_format_inputs()),
             SigningBatchErrorKind::ExecutorFailed,
             Some(1),
         );
@@ -2334,6 +2692,7 @@ mod tests {
         Reordered,
         WrongLength,
         WrongEncoding,
+        InvalidSdJwtSignature,
         TwoInvalidSignatures,
         InvalidSignatureAndDuplicateIdentity,
         BackendFailureAndDuplicateIdentity,
@@ -2380,6 +2739,9 @@ mod tests {
                 }
                 ResultFault::WrongEncoding => {
                     signature_bytes_mut(&mut results[0]).fill(0);
+                }
+                ResultFault::InvalidSdJwtSignature => {
+                    signature_bytes_mut(&mut results[1]).pop();
                 }
                 ResultFault::TwoInvalidSignatures => {
                     signature_bytes_mut(&mut results[1]).pop();
@@ -2431,13 +2793,18 @@ mod tests {
         let scope = Es256SignerScope::new(&signer).unwrap();
         let credentials = scope
             .sign_batch_with_components(
-                vec![mdoc_input(1, "first"), jwt_input(2, "second")],
+                vec![
+                    mdoc_input(1, "first"),
+                    sd_jwt_input(2, "second"),
+                    jwt_input(3, "third"),
+                ],
                 &FaultingExecutor(ResultFault::Reordered),
                 &CanonicalAssembler,
             )
             .unwrap();
         assert!(matches!(credentials[0], SignedCredential::MsoMdoc { .. }));
-        assert!(matches!(credentials[1], SignedCredential::JwtVcJson { .. }));
+        assert!(matches!(credentials[1], SignedCredential::SdJwt { .. }));
+        assert!(matches!(credentials[2], SignedCredential::JwtVcJson { .. }));
     }
 
     #[test]
@@ -2447,7 +2814,7 @@ mod tests {
             let scope = Es256SignerScope::new(&signer).unwrap();
             assert_error(
                 scope.sign_batch_with_components(
-                    two_jwt_inputs(),
+                    three_format_inputs(),
                     &FaultingExecutor(fault),
                     &CanonicalAssembler,
                 ),
@@ -2455,6 +2822,18 @@ mod tests {
                 Some(0),
             );
         }
+
+        let signer = RecordingSigner::es256();
+        let scope = Es256SignerScope::new(&signer).unwrap();
+        assert_error(
+            scope.sign_batch_with_components(
+                three_format_inputs(),
+                &FaultingExecutor(ResultFault::InvalidSdJwtSignature),
+                &CanonicalAssembler,
+            ),
+            SigningBatchErrorKind::InvalidSignature,
+            Some(1),
+        );
 
         let signer = RecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
@@ -2525,16 +2904,27 @@ mod tests {
         let scope = Es256SignerScope::new(&signer).unwrap();
         let route = SigningRouteId::new(91);
         let jwt = JwtVcSigningBatchInput::new(route, jwt_claims(CLAIM_SECRET));
+        let sd_jwt = SdJwtSigningBatchInput::new(
+            route,
+            sd_jwt_claims(CLAIM_SECRET),
+            &fixed_private_holder_jwk(),
+        );
         let mdoc = MdocSigningBatchInput::new(route, mdoc_claims(CLAIM_SECRET));
         let enum_input = jwt_input(92, CLAIM_SECRET);
+        let sd_jwt_enum_input = sd_jwt_input(93, CLAIM_SECRET);
 
         assert_eq!(format!("{scope:?}"), "Es256SignerScope([redacted])");
         assert_eq!(format!("{route:?}"), "SigningRouteId([redacted])");
         assert_eq!(format!("{jwt:?}"), "JwtVcSigningBatchInput([redacted])");
+        assert_eq!(format!("{sd_jwt:?}"), "SdJwtSigningBatchInput([redacted])");
         assert_eq!(format!("{mdoc:?}"), "MdocSigningBatchInput([redacted])");
         assert_eq!(
             format!("{enum_input:?}"),
             "Es256SigningBatchInput::JwtVc([redacted])"
+        );
+        assert_eq!(
+            format!("{sd_jwt_enum_input:?}"),
+            "Es256SigningBatchInput::SdJwt([redacted])"
         );
 
         for (kind, debug, display) in [
@@ -2590,8 +2980,10 @@ mod tests {
             "SigningBatchError { kind: PreparationFailed, item_ordinal: Some(4) }"
         );
 
-        let diagnostics =
-            format!("{scope:?} {route:?} {jwt:?} {mdoc:?} {enum_input:?} {error:?} {error}");
+        let diagnostics = format!(
+            "{scope:?} {route:?} {jwt:?} {sd_jwt:?} {mdoc:?} {enum_input:?} \
+             {sd_jwt_enum_input:?} {error:?} {error}"
+        );
         for secret in [
             CLAIM_SECRET,
             ISSUER_SECRET,
@@ -2599,6 +2991,7 @@ mod tests {
             BACKEND_SECRET,
             "91",
             "92",
+            "93",
         ] {
             assert!(!diagnostics.contains(secret));
         }
