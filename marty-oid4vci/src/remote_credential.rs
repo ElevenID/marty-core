@@ -82,7 +82,7 @@ impl CredentialSigner for RemoteSignerMetadata {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RemoteSdJwtRequest {
     pub issuer_id: String,
     pub verification_method_id: String,
@@ -96,6 +96,12 @@ pub struct RemoteSdJwtRequest {
     pub credential_id: Option<String>,
     pub holder_jwk: Option<Value>,
     pub issuer_certificate_chain: Vec<String>,
+}
+
+impl fmt::Debug for RemoteSdJwtRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RemoteSdJwtRequest([redacted])")
+    }
 }
 
 pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<PreparedSdJwt> {
@@ -135,7 +141,7 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
     )
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RemoteJwtVcRequest {
     pub issuer_id: String,
     pub verification_method_id: String,
@@ -148,6 +154,12 @@ pub struct RemoteJwtVcRequest {
     pub credential_subject: Option<Value>,
     pub credential_profile: Option<String>,
     pub achievement_id: Option<String>,
+}
+
+impl fmt::Debug for RemoteJwtVcRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RemoteJwtVcRequest([redacted])")
+    }
 }
 
 pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<PreparedJwtVc> {
@@ -211,7 +223,7 @@ pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<Prepa
     prepare_jwt_vc_with_options(&signer, &claims, options)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RemoteMdocRequest {
     pub issuer_id: String,
     pub algorithm: String,
@@ -221,6 +233,12 @@ pub struct RemoteMdocRequest {
     pub expiration_seconds: Option<i64>,
     pub credential_id: Option<String>,
     pub holder_jwk: Option<Value>,
+}
+
+impl fmt::Debug for RemoteMdocRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RemoteMdocRequest([redacted])")
+    }
 }
 
 /// One caller-ordered remote mdoc preparation in a digest batch.
@@ -652,6 +670,69 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(&format!("2026-08-29T12:34:{second:02}Z"))
             .unwrap()
             .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn remote_request_debug_output_is_stably_redacted() {
+        let sd_jwt = RemoteSdJwtRequest {
+            issuer_id: "did:web:sd-jwt-issuer-canary.example".into(),
+            verification_method_id: "did:web:sd-jwt-issuer-canary.example#key-canary".into(),
+            algorithm: "ES256-canary".into(),
+            subject_id: Some("did:example:sd-jwt-holder-canary".into()),
+            credential_type: "SdJwtCredentialCanary".into(),
+            claims: HashMap::from([(
+                "sd_jwt_claim_canary".into(),
+                serde_json::json!("sd-jwt-value-canary"),
+            )]),
+            expiration_seconds: Some(3_600),
+            selective_disclosure_claims: vec!["sd_jwt_selector_canary".into()],
+            credential_format: Some("sd-jwt-format-canary".into()),
+            credential_id: Some("urn:uuid:00000000-0000-4000-8000-000000000001".into()),
+            holder_jwk: Some(serde_json::json!({
+                "kty": "EC",
+                "d": "sd-jwt-private-key-canary"
+            })),
+            issuer_certificate_chain: vec!["certificate-canary".into()],
+        };
+        let jwt_vc = RemoteJwtVcRequest {
+            issuer_id: "did:web:jwt-vc-issuer-canary.example".into(),
+            verification_method_id: "did:web:jwt-vc-issuer-canary.example#key-canary".into(),
+            algorithm: "ES256-canary".into(),
+            subject_id: Some("did:example:jwt-vc-holder-canary".into()),
+            credential_type: "JwtVcCredentialCanary".into(),
+            claims: HashMap::from([(
+                "jwt_vc_claim_canary".into(),
+                serde_json::json!("jwt-vc-value-canary"),
+            )]),
+            expiration_seconds: Some(3_600),
+            credential_id: Some("urn:uuid:00000000-0000-4000-8000-000000000002".into()),
+            credential_subject: Some(serde_json::json!({"subject_canary": true})),
+            credential_profile: Some("profile-canary".into()),
+            achievement_id: Some("achievement-canary".into()),
+        };
+        let mdoc = RemoteMdocRequest {
+            issuer_id: "did:web:mdoc-issuer-canary.example".into(),
+            algorithm: "ES256-canary".into(),
+            credential_type: "MdocCredentialCanary".into(),
+            namespace: "mdoc.namespace.canary".into(),
+            claims: HashMap::from([(
+                "mdoc_claim_canary".into(),
+                serde_json::json!("mdoc-value-canary"),
+            )]),
+            expiration_seconds: Some(3_600),
+            credential_id: Some("urn:uuid:00000000-0000-4000-8000-000000000003".into()),
+            holder_jwk: Some(serde_json::json!({
+                "kty": "EC",
+                "d": "mdoc-private-key-canary"
+            })),
+        };
+
+        assert_eq!(format!("{sd_jwt:?}"), "RemoteSdJwtRequest([redacted])");
+        assert_eq!(format!("{sd_jwt:#?}"), "RemoteSdJwtRequest([redacted])");
+        assert_eq!(format!("{jwt_vc:?}"), "RemoteJwtVcRequest([redacted])");
+        assert_eq!(format!("{jwt_vc:#?}"), "RemoteJwtVcRequest([redacted])");
+        assert_eq!(format!("{mdoc:?}"), "RemoteMdocRequest([redacted])");
+        assert_eq!(format!("{mdoc:#?}"), "RemoteMdocRequest([redacted])");
     }
 
     fn invalid_batch_error_without_sources(invalid: RemoteMdocRequest) -> crate::Oid4vciError {
