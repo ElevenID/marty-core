@@ -24,6 +24,7 @@ use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
 
 const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
+const SD_JWT_DISCLOSURE_STAGE_FAILURE: &str = "SD-JWT disclosure preparation failed";
 const SD_JWT_MANAGED_CLAIM_COLLISION: &str = "SD-JWT claims conflict with issuer-controlled claims";
 const SD_JWT_NON_DISCLOSABLE_SELECTOR: &str = "SD-JWT selector targets a non-disclosable claim";
 const SD_JWT_RESERVED_STRUCTURE: &str = "SD-JWT claims contain reserved structural markers";
@@ -471,14 +472,66 @@ pub(crate) fn prepare_sd_jwt_with_holder_public_jwk_and_sources(
     )
 }
 
-fn prepare_sd_jwt_with_options_and_sources(
+enum SdJwtDisclosureTarget {
+    TopLevel,
+    CredentialSubject,
+}
+
+struct PlannedSdJwtPreparation {
+    credential_id: String,
+    issued_at: chrono::DateTime<chrono::Utc>,
+    payload: serde_json::Value,
+    disclosure_target: SdJwtDisclosureTarget,
+    options: SdJwtPreparationOptions,
+}
+
+struct PlannedSdJwtDisclosure {
+    source_ordinal: usize,
+    claim_name: String,
+    claim_value: serde_json::Value,
+    salt_bytes: [u8; 16],
+}
+
+struct EncodedSdJwtDisclosure {
+    source_ordinal: usize,
+    disclosure: String,
+}
+
+struct DigestedSdJwtDisclosure {
+    source_ordinal: usize,
+    disclosure: String,
+    digest_b64: String,
+}
+
+struct SdJwtDisclosureStage<T> {
+    expected_source_ordinals: Vec<usize>,
+    items: Vec<T>,
+}
+
+type PlannedSdJwtDisclosureBatch = SdJwtDisclosureStage<PlannedSdJwtDisclosure>;
+type EncodedSdJwtDisclosureBatch = SdJwtDisclosureStage<EncodedSdJwtDisclosure>;
+type DigestedSdJwtDisclosureBatch = SdJwtDisclosureStage<DigestedSdJwtDisclosure>;
+
+impl<T> SdJwtDisclosureStage<T> {
+    fn empty() -> Self {
+        Self {
+            expected_source_ordinals: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.expected_source_ordinals.is_empty() && self.items.is_empty()
+    }
+}
+
+fn plan_sd_jwt_preparation(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
     options: SdJwtPreparationOptions,
-    mut next_uuid: impl FnMut() -> uuid::Uuid,
-    mut next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
-    next_salt: impl FnMut() -> [u8; 16],
-) -> Oid4vciResult<PreparedSdJwt> {
+    next_uuid: &mut impl FnMut() -> uuid::Uuid,
+    next_now: &mut impl FnMut() -> chrono::DateTime<chrono::Utc>,
+) -> Oid4vciResult<PlannedSdJwtPreparation> {
     validate_sd_jwt_managed_claims(claims, options.include_nbf, options.confirmation.is_some())?;
     validate_sd_jwt_structural_markers(claims, options.confirmation.as_ref())?;
 
@@ -495,7 +548,7 @@ fn prepare_sd_jwt_with_options_and_sources(
     };
 
     // Build the JWT payload based on the payload format.
-    let (mut payload, sd_target_path) = match &claims.credential_payload_format {
+    let (payload, disclosure_target) = match &claims.credential_payload_format {
         CredentialPayloadFormat::IetfSdJwt => {
             let mut p = serde_json::json!({
                 "iss": signer.issuer_id(),
@@ -517,7 +570,7 @@ fn prepare_sd_jwt_with_options_and_sources(
                 }
             }
             // IETF flat: selective claims are at the top level
-            (p, None)
+            (p, SdJwtDisclosureTarget::TopLevel)
         }
 
         CredentialPayloadFormat::W3cVcdmV2SdJwt => {
@@ -561,7 +614,7 @@ fn prepare_sd_jwt_with_options_and_sources(
                 p["validUntil"] = serde_json::json!(valid_until);
             }
             // W3C VCDM v2: selective claims are inside credentialSubject
-            (p, Some("credentialSubject"))
+            (p, SdJwtDisclosureTarget::CredentialSubject)
         }
 
         CredentialPayloadFormat::W3cVcdmV2JwtVc => {
@@ -573,25 +626,74 @@ fn prepare_sd_jwt_with_options_and_sources(
         }
     };
 
-    // Generate disclosures for selectively-disclosable claims.
-    let disclosures = if !claims.selective_disclosure_claims.is_empty() {
-        let target = match sd_target_path {
-            Some(path) => payload
-                .get_mut(path)
-                .and_then(|v| v.as_object_mut())
-                .ok_or_else(|| {
-                    Oid4vciError::SdJwtError(format!(
-                        "Missing '{}' object in payload for SD claims",
-                        path
-                    ))
-                })?,
-            None => payload
-                .as_object_mut()
-                .ok_or_else(|| Oid4vciError::SdJwtError("Payload is not a JSON object".into()))?,
-        };
-        generate_disclosures(target, &claims.selective_disclosure_claims, next_salt)?
+    Ok(PlannedSdJwtPreparation {
+        credential_id,
+        issued_at: now,
+        payload,
+        disclosure_target,
+        options,
+    })
+}
+
+fn sd_jwt_disclosure_target_mut<'a>(
+    payload: &'a mut serde_json::Value,
+    disclosure_target: &SdJwtDisclosureTarget,
+) -> Oid4vciResult<&'a mut serde_json::Map<String, serde_json::Value>> {
+    match disclosure_target {
+        SdJwtDisclosureTarget::TopLevel => payload
+            .as_object_mut()
+            .ok_or_else(|| Oid4vciError::SdJwtError("Payload is not a JSON object".into())),
+        SdJwtDisclosureTarget::CredentialSubject => payload
+            .get_mut("credentialSubject")
+            .and_then(|value| value.as_object_mut())
+            .ok_or_else(|| {
+                Oid4vciError::SdJwtError(
+                    "Missing 'credentialSubject' object in payload for SD claims".into(),
+                )
+            }),
+    }
+}
+
+fn prepare_sd_jwt_with_options_and_sources(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: SdJwtPreparationOptions,
+    mut next_uuid: impl FnMut() -> uuid::Uuid,
+    mut next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
+    next_salt: impl FnMut() -> [u8; 16],
+) -> Oid4vciResult<PreparedSdJwt> {
+    let mut planned =
+        plan_sd_jwt_preparation(signer, claims, options, &mut next_uuid, &mut next_now)?;
+
+    let digested_disclosures = if claims.selective_disclosure_claims.is_empty() {
+        DigestedSdJwtDisclosureBatch::empty()
     } else {
-        vec![]
+        let target =
+            sd_jwt_disclosure_target_mut(&mut planned.payload, &planned.disclosure_target)?;
+        prepare_sd_jwt_disclosures(target, &claims.selective_disclosure_claims, next_salt)?
+    };
+
+    assemble_sd_jwt_preparation(signer, planned, digested_disclosures)
+}
+
+fn assemble_sd_jwt_preparation(
+    signer: &dyn CredentialSigner,
+    planned: PlannedSdJwtPreparation,
+    digested_disclosures: DigestedSdJwtDisclosureBatch,
+) -> Oid4vciResult<PreparedSdJwt> {
+    let PlannedSdJwtPreparation {
+        credential_id,
+        issued_at,
+        mut payload,
+        disclosure_target,
+        options,
+    } = planned;
+
+    let disclosures = if digested_disclosures.is_empty() {
+        Vec::new()
+    } else {
+        let target = sd_jwt_disclosure_target_mut(&mut payload, &disclosure_target)?;
+        assemble_sd_jwt_disclosures(target, digested_disclosures)?
     };
 
     // Add _sd_alg at the top level (per SD-JWT spec, always top-level).
@@ -602,7 +704,7 @@ fn prepare_sd_jwt_with_options_and_sources(
     }
 
     if options.include_nbf {
-        payload["nbf"] = serde_json::json!(now.timestamp());
+        payload["nbf"] = serde_json::json!(issued_at.timestamp());
     }
     if let Some(ref confirmation) = options.confirmation {
         payload["cnf"] = confirmation.clone();
@@ -656,47 +758,96 @@ pub fn assemble_sd_jwt(prepared: PreparedSdJwt, signature: &[u8]) -> SignedCrede
     }
 }
 
-/// Generate SD-JWT disclosures for selectively-disclosable claims.
-///
-/// For each claim in `sd_claims`:
-/// 1. Remove the claim from `target_object`
-/// 2. Generate a random 128-bit salt
-/// 3. Build disclosure: `base64url([salt, claim_name, claim_value])`
-/// 4. Hash: `base64url(SHA-256(disclosure))`
-/// 5. Add the hash to the `_sd` array in `target_object`
-///
-/// Returns the list of base64url-encoded disclosures.
-fn generate_disclosures(
+fn plan_sd_jwt_disclosure(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
-    sd_claims: &[String],
-    mut next_salt: impl FnMut() -> [u8; 16],
+    source_ordinal: usize,
+    claim_name: &str,
+    next_salt: &mut impl FnMut() -> [u8; 16],
+) -> Option<PlannedSdJwtDisclosure> {
+    let claim_value = target_object.remove(claim_name)?;
+    let salt_bytes = next_salt();
+
+    Some(PlannedSdJwtDisclosure {
+        source_ordinal,
+        claim_name: claim_name.to_owned(),
+        claim_value,
+        salt_bytes,
+    })
+}
+
+fn encode_sd_jwt_disclosure(
+    planned: PlannedSdJwtDisclosure,
+) -> Oid4vciResult<EncodedSdJwtDisclosure> {
+    let salt = URL_SAFE_NO_PAD.encode(planned.salt_bytes);
+    let disclosure_array = serde_json::json!([salt, planned.claim_name, planned.claim_value]);
+    let disclosure_json = serde_json::to_string(&disclosure_array)
+        .map_err(|e| Oid4vciError::SdJwtError(format!("Disclosure serialization failed: {}", e)))?;
+
+    Ok(EncodedSdJwtDisclosure {
+        source_ordinal: planned.source_ordinal,
+        disclosure: URL_SAFE_NO_PAD.encode(disclosure_json.as_bytes()),
+    })
+}
+
+fn digest_sd_jwt_disclosure(encoded: EncodedSdJwtDisclosure) -> DigestedSdJwtDisclosure {
+    let digest_b64 = URL_SAFE_NO_PAD.encode(Sha256::digest(encoded.disclosure.as_bytes()));
+
+    DigestedSdJwtDisclosure {
+        source_ordinal: encoded.source_ordinal,
+        disclosure: encoded.disclosure,
+        digest_b64,
+    }
+}
+
+fn restore_sd_jwt_disclosures(
+    digested: DigestedSdJwtDisclosureBatch,
+) -> Oid4vciResult<Vec<DigestedSdJwtDisclosure>> {
+    let SdJwtDisclosureStage {
+        expected_source_ordinals,
+        items,
+    } = digested;
+
+    if expected_source_ordinals.len() != items.len() {
+        return Err(Oid4vciError::SdJwtError(
+            SD_JWT_DISCLOSURE_STAGE_FAILURE.into(),
+        ));
+    }
+
+    if !expected_source_ordinals
+        .windows(2)
+        .all(|ordinals| ordinals[0] < ordinals[1])
+    {
+        return Err(Oid4vciError::SdJwtError(
+            SD_JWT_DISCLOSURE_STAGE_FAILURE.into(),
+        ));
+    }
+
+    let mut restored = items;
+    restored.sort_unstable_by_key(|item| item.source_ordinal);
+    if expected_source_ordinals
+        .iter()
+        .zip(&restored)
+        .any(|(expected, item)| *expected != item.source_ordinal)
+    {
+        return Err(Oid4vciError::SdJwtError(
+            SD_JWT_DISCLOSURE_STAGE_FAILURE.into(),
+        ));
+    }
+
+    Ok(restored)
+}
+
+fn assemble_sd_jwt_disclosures(
+    target_object: &mut serde_json::Map<String, serde_json::Value>,
+    digested_disclosures: DigestedSdJwtDisclosureBatch,
 ) -> Oid4vciResult<Vec<String>> {
-    let mut disclosures = Vec::new();
-    let mut sd_hashes = Vec::new();
+    let digested_disclosures = restore_sd_jwt_disclosures(digested_disclosures)?;
+    let mut disclosures = Vec::with_capacity(digested_disclosures.len());
+    let mut sd_hashes = Vec::with_capacity(digested_disclosures.len());
 
-    for claim_name in sd_claims {
-        let claim_value = match target_object.remove(claim_name) {
-            Some(v) => v,
-            None => continue, // claim not present in target, skip
-        };
-
-        // Generate 16 bytes (128 bits) of cryptographically secure random salt
-        let salt_bytes = next_salt();
-        let salt = URL_SAFE_NO_PAD.encode(salt_bytes);
-
-        // Build disclosure: base64url(json([salt, claim_name, claim_value]))
-        let disclosure_array = serde_json::json!([salt, claim_name, claim_value]);
-        let disclosure_json = serde_json::to_string(&disclosure_array).map_err(|e| {
-            Oid4vciError::SdJwtError(format!("Disclosure serialization failed: {}", e))
-        })?;
-        let disclosure = URL_SAFE_NO_PAD.encode(disclosure_json.as_bytes());
-
-        // Hash: base64url(SHA-256(disclosure))
-        let hash = Sha256::digest(disclosure.as_bytes());
-        let hash_b64 = URL_SAFE_NO_PAD.encode(hash);
-
-        disclosures.push(disclosure);
-        sd_hashes.push(serde_json::Value::String(hash_b64));
+    for digested in digested_disclosures {
+        disclosures.push(digested.disclosure);
+        sd_hashes.push(serde_json::Value::String(digested.digest_b64));
     }
 
     if !sd_hashes.is_empty() {
@@ -704,6 +855,76 @@ fn generate_disclosures(
     }
 
     Ok(disclosures)
+}
+
+fn plan_sd_jwt_disclosures(
+    target_object: &mut serde_json::Map<String, serde_json::Value>,
+    sd_claims: &[String],
+    mut next_salt: impl FnMut() -> [u8; 16],
+) -> PlannedSdJwtDisclosureBatch {
+    let mut expected_source_ordinals = Vec::with_capacity(sd_claims.len());
+    let mut items = Vec::with_capacity(sd_claims.len());
+
+    for (source_ordinal, claim_name) in sd_claims.iter().enumerate() {
+        let Some(planned) =
+            plan_sd_jwt_disclosure(target_object, source_ordinal, claim_name, &mut next_salt)
+        else {
+            continue;
+        };
+        expected_source_ordinals.push(source_ordinal);
+        items.push(planned);
+    }
+
+    SdJwtDisclosureStage {
+        expected_source_ordinals,
+        items,
+    }
+}
+
+fn encode_sd_jwt_disclosures(
+    planned: PlannedSdJwtDisclosureBatch,
+) -> Oid4vciResult<EncodedSdJwtDisclosureBatch> {
+    let SdJwtDisclosureStage {
+        expected_source_ordinals,
+        items,
+    } = planned;
+    let items = items
+        .into_iter()
+        .map(encode_sd_jwt_disclosure)
+        .collect::<Oid4vciResult<Vec<_>>>()?;
+
+    Ok(SdJwtDisclosureStage {
+        expected_source_ordinals,
+        items,
+    })
+}
+
+fn digest_sd_jwt_disclosures(encoded: EncodedSdJwtDisclosureBatch) -> DigestedSdJwtDisclosureBatch {
+    let SdJwtDisclosureStage {
+        expected_source_ordinals,
+        items,
+    } = encoded;
+    let items = items.into_iter().map(digest_sd_jwt_disclosure).collect();
+
+    SdJwtDisclosureStage {
+        expected_source_ordinals,
+        items,
+    }
+}
+
+/// Generate SD-JWT disclosures for selectively-disclosable claims.
+///
+/// Planning visits selectors and consumes salts in the reference order. All
+/// planned items are then encoded, all encoded items are digested, and results
+/// retain the independent planned identities needed for ordered assembly.
+fn prepare_sd_jwt_disclosures(
+    target_object: &mut serde_json::Map<String, serde_json::Value>,
+    sd_claims: &[String],
+    next_salt: impl FnMut() -> [u8; 16],
+) -> Oid4vciResult<DigestedSdJwtDisclosureBatch> {
+    let planned = plan_sd_jwt_disclosures(target_object, sd_claims, next_salt);
+    let encoded = encode_sd_jwt_disclosures(planned)?;
+    Ok(digest_sd_jwt_disclosures(encoded))
 }
 
 // =============================================================================
@@ -1293,6 +1514,217 @@ mod tests {
         }
     }
 
+    fn inline_disclosure_oracle(
+        target_object: &mut serde_json::Map<String, serde_json::Value>,
+        sd_claims: &[String],
+        mut next_salt: impl FnMut() -> [u8; 16],
+    ) -> Oid4vciResult<Vec<String>> {
+        let mut disclosures = Vec::new();
+        let mut sd_hashes = Vec::new();
+
+        for claim_name in sd_claims {
+            let claim_value = match target_object.remove(claim_name) {
+                Some(value) => value,
+                None => continue,
+            };
+            let salt = B64.encode(next_salt());
+            let disclosure_array = serde_json::json!([salt, claim_name, claim_value]);
+            let disclosure_json = serde_json::to_string(&disclosure_array).map_err(|error| {
+                Oid4vciError::SdJwtError(format!("Disclosure serialization failed: {}", error))
+            })?;
+            let disclosure = B64.encode(disclosure_json.as_bytes());
+            let digest = B64.encode(Sha256::digest(disclosure.as_bytes()));
+
+            disclosures.push(disclosure);
+            sd_hashes.push(serde_json::Value::String(digest));
+        }
+
+        if !sd_hashes.is_empty() {
+            target_object.insert("_sd".into(), serde_json::Value::Array(sd_hashes));
+        }
+
+        Ok(disclosures)
+    }
+
+    #[test]
+    fn staged_disclosures_restore_permuted_results_and_match_inline_oracle() {
+        let source = serde_json::json!({
+            "name": "Alice",
+            "profile": {
+                "roles": ["engineering", "review"],
+                "active": true
+            },
+            "age": 42,
+            "visible": "retained"
+        });
+        let selectors = vec![
+            "profile".into(),
+            "missing".into(),
+            "age".into(),
+            "profile".into(),
+            "name".into(),
+        ];
+        let fixed_tape = [[0x10; 16], [0x20; 16], [0x30; 16]];
+
+        let mut staged_target = source.as_object().unwrap().clone();
+        let mut staged_tape = VecDeque::from(fixed_tape);
+        let mut staged_digests = prepare_sd_jwt_disclosures(&mut staged_target, &selectors, || {
+            staged_tape
+                .pop_front()
+                .expect("missing and duplicate selectors must not consume salt")
+        })
+        .unwrap();
+        staged_digests.items.reverse();
+        assert_eq!(
+            staged_digests
+                .items
+                .iter()
+                .map(|disclosure| disclosure.source_ordinal)
+                .collect::<Vec<_>>(),
+            vec![4, 2, 0]
+        );
+        let staged_disclosures =
+            assemble_sd_jwt_disclosures(&mut staged_target, staged_digests).unwrap();
+
+        let mut oracle_target = source.as_object().unwrap().clone();
+        let mut oracle_tape = VecDeque::from(fixed_tape);
+        let oracle_disclosures = inline_disclosure_oracle(&mut oracle_target, &selectors, || {
+            oracle_tape
+                .pop_front()
+                .expect("oracle fixed tape covers every present selector")
+        })
+        .unwrap();
+
+        assert!(staged_tape.is_empty());
+        assert!(oracle_tape.is_empty());
+        assert_eq!(staged_disclosures, oracle_disclosures);
+        assert_eq!(staged_target, oracle_target);
+        assert_eq!(staged_target["visible"], "retained");
+        assert!(staged_target.get("profile").is_none());
+        assert!(staged_target.get("age").is_none());
+        assert!(staged_target.get("name").is_none());
+        assert_eq!(staged_target["_sd"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn disclosure_stages_retain_sparse_selector_ordinals() {
+        let mut target = serde_json::json!({"name": "Alice", "email": "alice@example.com"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let selectors = vec!["name".into(), "missing".into(), "email".into()];
+        let mut salts = VecDeque::from([[0x44; 16], [0x55; 16]]);
+
+        let planned =
+            plan_sd_jwt_disclosures(&mut target, &selectors, || salts.pop_front().unwrap());
+
+        assert!(salts.is_empty());
+        assert_eq!(planned.expected_source_ordinals, vec![0, 2]);
+        assert_eq!(
+            planned
+                .items
+                .iter()
+                .map(|disclosure| disclosure.source_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+
+        let encoded = encode_sd_jwt_disclosures(planned).unwrap();
+        assert_eq!(encoded.expected_source_ordinals, vec![0, 2]);
+        let digested = digest_sd_jwt_disclosures(encoded);
+        assert_eq!(digested.expected_source_ordinals, vec![0, 2]);
+        assert_eq!(
+            digested
+                .items
+                .iter()
+                .map(|disclosure| disclosure.source_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+    }
+
+    #[test]
+    fn disclosure_assembly_fails_closed_on_identity_mismatch() {
+        fn fixture() -> (
+            serde_json::Map<String, serde_json::Value>,
+            DigestedSdJwtDisclosureBatch,
+        ) {
+            let mut target = serde_json::json!({
+                "name": "Alice",
+                "email": "alice@example.com",
+                "visible": true
+            })
+            .as_object()
+            .unwrap()
+            .clone();
+            let selectors = vec!["name".into(), "email".into()];
+            let mut salts = VecDeque::from([[0x44; 16], [0x55; 16]]);
+            let digested =
+                prepare_sd_jwt_disclosures(&mut target, &selectors, || salts.pop_front().unwrap())
+                    .unwrap();
+            (target, digested)
+        }
+
+        let (mut target, mut missing) = fixture();
+        let unchanged = target.clone();
+        missing.items.pop();
+        let result = assemble_sd_jwt_disclosures(&mut target, missing);
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::SdJwtError(message))
+                if message == SD_JWT_DISCLOSURE_STAGE_FAILURE
+        ));
+        assert_eq!(target, unchanged);
+
+        let (mut target, mut noncanonical_plan) = fixture();
+        let unchanged = target.clone();
+        noncanonical_plan.expected_source_ordinals.swap(0, 1);
+        let result = assemble_sd_jwt_disclosures(&mut target, noncanonical_plan);
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::SdJwtError(message))
+                if message == SD_JWT_DISCLOSURE_STAGE_FAILURE
+        ));
+        assert_eq!(target, unchanged);
+
+        let (mut target, mut extra) = fixture();
+        let unchanged = target.clone();
+        extra.items.push(DigestedSdJwtDisclosure {
+            source_ordinal: usize::MAX,
+            disclosure: "unexpected".into(),
+            digest_b64: "unexpected".into(),
+        });
+        let result = assemble_sd_jwt_disclosures(&mut target, extra);
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::SdJwtError(message))
+                if message == SD_JWT_DISCLOSURE_STAGE_FAILURE
+        ));
+        assert_eq!(target, unchanged);
+
+        let (mut target, mut duplicate) = fixture();
+        let unchanged = target.clone();
+        duplicate.items[1].source_ordinal = duplicate.items[0].source_ordinal;
+        let result = assemble_sd_jwt_disclosures(&mut target, duplicate);
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::SdJwtError(message))
+                if message == SD_JWT_DISCLOSURE_STAGE_FAILURE
+        ));
+        assert_eq!(target, unchanged);
+
+        let (mut target, mut unexpected) = fixture();
+        let unchanged = target.clone();
+        unexpected.items[1].source_ordinal = usize::MAX;
+        let result = assemble_sd_jwt_disclosures(&mut target, unexpected);
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::SdJwtError(message))
+                if message == SD_JWT_DISCLOSURE_STAGE_FAILURE
+        ));
+        assert_eq!(target, unchanged);
+    }
+
     #[test]
     fn deterministic_sources_freeze_preparation_bytes_and_consumption_order() {
         let claims = deterministic_preparation_claims(
@@ -1561,7 +1993,44 @@ mod tests {
     }
 
     #[test]
-    fn post_validation_errors_preserve_existing_source_consumption() {
+    fn staged_sd_jwt_preserves_error_precedence_and_source_consumption() {
+        let mut managed_and_structural = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec!["_sd".into()],
+        );
+        managed_and_structural
+            .claims
+            .insert("iss".into(), serde_json::json!("https://attacker.example"));
+        let events = RefCell::new(vec![]);
+        let error = preparation_error(deterministic_preparation(
+            &managed_and_structural,
+            SdJwtPreparationOptions::default(),
+            [],
+            &events,
+        ));
+        assert!(matches!(
+            error,
+            Oid4vciError::SdJwtError(message) if message == SD_JWT_MANAGED_CLAIM_COLLISION
+        ));
+        assert_eq!(&*events.borrow(), &[] as &[&str]);
+
+        let structural = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec!["_sd".into()],
+        );
+        let events = RefCell::new(vec![]);
+        let error = preparation_error(deterministic_preparation(
+            &structural,
+            SdJwtPreparationOptions::default(),
+            [],
+            &events,
+        ));
+        assert!(matches!(
+            error,
+            Oid4vciError::SdJwtError(message) if message == SD_JWT_RESERVED_STRUCTURE
+        ));
+        assert_eq!(&*events.borrow(), &[] as &[&str]);
+
         let unsupported = deterministic_preparation_claims(
             CredentialPayloadFormat::W3cVcdmV2JwtVc,
             vec!["name".into()],
@@ -1596,6 +2065,26 @@ mod tests {
         ));
         assert_expiration_out_of_range(error);
         assert_eq!(&*events.borrow(), &["uuid", "clock"]);
+
+        let selected = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec![
+                "name".into(),
+                "missing".into(),
+                "email".into(),
+                "name".into(),
+            ],
+        );
+        let events = RefCell::new(vec![]);
+        let prepared = deterministic_preparation(
+            &selected,
+            SdJwtPreparationOptions::default(),
+            [[0x66; 16], [0x77; 16]],
+            &events,
+        )
+        .unwrap();
+        assert_eq!(&*events.borrow(), &["uuid", "clock", "salt", "salt"]);
+        assert_eq!(prepared_disclosures(&prepared).len(), 2);
     }
 
     fn claims_with_expiration(
