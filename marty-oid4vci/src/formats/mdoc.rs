@@ -33,6 +33,8 @@ const MDOC_X5C_CLAIM_KEY: &str = "_mdoc_x5c";
 const SINGLE_MDOC_DIGEST_CREDENTIAL_ID: u64 = 0;
 const SHA256_DIGEST_LENGTH: usize = 32;
 const MDOC_DIGEST_EXECUTION_FAILED: &str = "mdoc digest execution failed";
+const MAX_MDOC_CLAIM_CONTAINER_DEPTH: usize = 127;
+const MDOC_CLAIM_NESTING_TOO_DEEP: &str = "mdoc claim exceeds maximum nesting depth";
 const MDOC_UNSUPPORTED_NUMERIC_VALUE: &str = "mdoc claim contains an unsupported numeric value";
 const MDOC_VALIDITY_OUT_OF_RANGE: &str = "mdoc validity period is out of range";
 const MDOC_RS256_UNSUPPORTED: &str = "RS256 is not supported for mDoc COSE signing";
@@ -1006,6 +1008,10 @@ fn mdoc_digest_execution_error() -> Oid4vciError {
     Oid4vciError::MdocError(MDOC_DIGEST_EXECUTION_FAILED.into())
 }
 
+fn mdoc_claim_nesting_too_deep_error() -> Oid4vciError {
+    Oid4vciError::MdocError(MDOC_CLAIM_NESTING_TOO_DEEP.into())
+}
+
 fn mdoc_unsupported_numeric_value_error() -> Oid4vciError {
     Oid4vciError::MdocError(MDOC_UNSUPPORTED_NUMERIC_VALUE.into())
 }
@@ -1346,6 +1352,16 @@ fn encode_mobile_security_object_bytes(mso: &CborValue) -> Oid4vciResult<Vec<u8>
 
 /// Convert a serde_json::Value into a ciborium CborValue.
 fn json_to_cbor(value: &serde_json::Value) -> Oid4vciResult<CborValue> {
+    json_to_cbor_at_depth(value, 0)
+}
+
+/// Convert one value while bounding the number of containing JSON arrays and
+/// objects. The limit is checked before allocating or traversing an offending
+/// container, and conversion remains single-pass so the first value error wins.
+fn json_to_cbor_at_depth(
+    value: &serde_json::Value,
+    containing_depth: usize,
+) -> Oid4vciResult<CborValue> {
     match value {
         serde_json::Value::Null => Ok(CborValue::Null),
         serde_json::Value::Bool(b) => Ok(CborValue::Bool(*b)),
@@ -1383,13 +1399,27 @@ fn json_to_cbor(value: &serde_json::Value) -> Oid4vciResult<CborValue> {
             }
         }
         serde_json::Value::Array(arr) => {
-            let items: Result<Vec<_>, _> = arr.iter().map(json_to_cbor).collect();
+            let container_depth = containing_depth
+                .checked_add(1)
+                .filter(|depth| *depth <= MAX_MDOC_CLAIM_CONTAINER_DEPTH)
+                .ok_or_else(mdoc_claim_nesting_too_deep_error)?;
+            let items: Result<Vec<_>, _> = arr
+                .iter()
+                .map(|item| json_to_cbor_at_depth(item, container_depth))
+                .collect();
             Ok(CborValue::Array(items?))
         }
         serde_json::Value::Object(obj) => {
+            let container_depth = containing_depth
+                .checked_add(1)
+                .filter(|depth| *depth <= MAX_MDOC_CLAIM_CONTAINER_DEPTH)
+                .ok_or_else(mdoc_claim_nesting_too_deep_error)?;
             let pairs: Result<Vec<_>, _> = obj
                 .iter()
-                .map(|(k, v)| json_to_cbor(v).map(|cv| (CborValue::Text(k.clone()), cv)))
+                .map(|(k, v)| {
+                    json_to_cbor_at_depth(v, container_depth)
+                        .map(|cv| (CborValue::Text(k.clone()), cv))
+                })
                 .collect();
             Ok(CborValue::Map(pairs?))
         }
@@ -2149,6 +2179,194 @@ mod tests {
 
         let unicode_text = json_to_cbor(&serde_json::json!("\u{1F5D3} 2026-07-21")).unwrap();
         assert!(matches!(unicode_text, CborValue::Text(_)));
+    }
+
+    #[derive(Clone, Copy)]
+    enum TestContainer {
+        Array,
+        Object,
+    }
+
+    fn nested_json(containers: impl IntoIterator<Item = TestContainer>) -> serde_json::Value {
+        containers
+            .into_iter()
+            .fold(
+                serde_json::Value::String("leaf".into()),
+                |value, kind| match kind {
+                    TestContainer::Array => serde_json::Value::Array(vec![value]),
+                    TestContainer::Object => {
+                        let mut object = serde_json::Map::new();
+                        object.insert("next".into(), value);
+                        serde_json::Value::Object(object)
+                    }
+                },
+            )
+    }
+
+    fn drop_nested_json_iteratively(mut value: serde_json::Value) {
+        loop {
+            value = match value {
+                serde_json::Value::Array(mut items) if items.len() == 1 => items.pop().unwrap(),
+                serde_json::Value::Object(object) if object.len() == 1 => {
+                    object.into_iter().next().unwrap().1
+                }
+                _ => return,
+            };
+        }
+    }
+
+    fn assert_cbor_leaf_and_drop_iteratively(mut value: CborValue, expected: &[TestContainer]) {
+        for kind in expected.iter().rev() {
+            value = match (kind, value) {
+                (TestContainer::Array, CborValue::Array(mut items)) if items.len() == 1 => {
+                    items.pop().unwrap()
+                }
+                (TestContainer::Object, CborValue::Map(mut entries)) if entries.len() == 1 => {
+                    let (key, value) = entries.pop().unwrap();
+                    assert_eq!(key, CborValue::Text("next".into()));
+                    value
+                }
+                _ => panic!("converted claim nesting changed shape"),
+            };
+        }
+        assert_eq!(value, CborValue::Text("leaf".into()));
+    }
+
+    fn assert_redacted_depth_error(error: &Oid4vciError) {
+        let Oid4vciError::MdocError(message) = error else {
+            panic!("claim depth failures must use the mdoc error boundary");
+        };
+        assert_eq!(message, MDOC_CLAIM_NESTING_TOO_DEEP);
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains("next"));
+            assert!(!rendered.contains("leaf"));
+        }
+    }
+
+    #[test]
+    fn json_to_cbor_accepts_127_array_object_and_mixed_containers() {
+        let cases = [
+            vec![TestContainer::Array; MAX_MDOC_CLAIM_CONTAINER_DEPTH],
+            vec![TestContainer::Object; MAX_MDOC_CLAIM_CONTAINER_DEPTH],
+            (0..MAX_MDOC_CLAIM_CONTAINER_DEPTH)
+                .map(|ordinal| {
+                    if ordinal % 2 == 0 {
+                        TestContainer::Array
+                    } else {
+                        TestContainer::Object
+                    }
+                })
+                .collect(),
+        ];
+
+        for containers in cases {
+            let value = nested_json(containers.iter().copied());
+            let converted = json_to_cbor(&value).unwrap();
+            assert_cbor_leaf_and_drop_iteratively(converted, &containers);
+            drop_nested_json_iteratively(value);
+        }
+    }
+
+    #[test]
+    fn json_to_cbor_rejects_the_128th_array_object_and_mixed_container() {
+        let rejected_depth = MAX_MDOC_CLAIM_CONTAINER_DEPTH + 1;
+        let cases = [
+            vec![TestContainer::Array; rejected_depth],
+            vec![TestContainer::Object; rejected_depth],
+            (0..rejected_depth)
+                .map(|ordinal| {
+                    if ordinal % 2 == 0 {
+                        TestContainer::Array
+                    } else {
+                        TestContainer::Object
+                    }
+                })
+                .collect(),
+        ];
+
+        for containers in cases {
+            let value = nested_json(containers);
+            assert_redacted_depth_error(&json_to_cbor(&value).unwrap_err());
+            drop_nested_json_iteratively(value);
+        }
+    }
+
+    fn assert_first_nested_error(value: &serde_json::Value, expected: &str) {
+        let Oid4vciError::MdocError(message) = json_to_cbor(value).unwrap_err() else {
+            panic!("nested conversion failure must use the mdoc error boundary");
+        };
+        assert_eq!(message, expected);
+    }
+
+    #[test]
+    fn json_to_cbor_preserves_first_error_precedence_in_both_directions() {
+        let unsupported: serde_json::Value = serde_json::from_str("1e400").unwrap();
+        let too_deep = nested_json(std::iter::repeat_n(
+            TestContainer::Array,
+            MAX_MDOC_CLAIM_CONTAINER_DEPTH + 1,
+        ));
+        let unsupported_first = serde_json::Value::Array(vec![unsupported, too_deep]);
+        assert_first_nested_error(&unsupported_first, MDOC_UNSUPPORTED_NUMERIC_VALUE);
+        let serde_json::Value::Array(mut children) = unsupported_first else {
+            unreachable!()
+        };
+        drop_nested_json_iteratively(children.pop().unwrap());
+
+        let unsupported: serde_json::Value = serde_json::from_str("1e400").unwrap();
+        let too_deep = nested_json(std::iter::repeat_n(
+            TestContainer::Array,
+            MAX_MDOC_CLAIM_CONTAINER_DEPTH + 1,
+        ));
+        let depth_first = serde_json::Value::Array(vec![too_deep, unsupported]);
+        assert_first_nested_error(&depth_first, MDOC_CLAIM_NESTING_TOO_DEEP);
+        let serde_json::Value::Array(mut children) = depth_first else {
+            unreachable!()
+        };
+        drop_nested_json_iteratively(children.remove(0));
+    }
+
+    #[test]
+    fn overdeep_public_and_internal_preparation_precedes_salts_and_digests() {
+        for container in [TestContainer::Array, TestContainer::Object] {
+            let value = nested_json(std::iter::repeat_n(
+                container,
+                MAX_MDOC_CLAIM_CONTAINER_DEPTH + 1,
+            ));
+            let claims = test_mdoc_claims([("deep_claim".into(), value)]);
+            let public_error = prepare_mdoc_with_credential_id(
+                &PreparationOnlySigner(SigningAlgorithm::ES256),
+                &claims,
+                Some("urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"),
+            )
+            .err()
+            .expect("overdeep public claims must not produce signing state");
+            assert_redacted_depth_error(&public_error);
+
+            let issuer_claims = claims
+                .claims
+                .iter()
+                .map(|(name, value)| (name.as_str(), value));
+            let executor = RecordingDigestExecutor::default();
+            let internal_error = prepare_mdoc_with_inputs_and_digest_executor(
+                &PreparationOnlySigner(SigningAlgorithm::ES256),
+                &claims,
+                "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
+                None,
+                chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+                issuer_claims,
+                || panic!("claim depth validation must precede salt allocation"),
+                &executor,
+            )
+            .err()
+            .expect("overdeep internal claims must fail preparation");
+            assert_redacted_depth_error(&internal_error);
+            assert_eq!(executor.calls.load(Ordering::Relaxed), 0);
+
+            let value = claims.claims.into_values().next().unwrap();
+            drop_nested_json_iteratively(value);
+        }
     }
 
     #[test]
