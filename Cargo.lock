@@ -1721,7 +1721,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.119",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -6403,7 +6403,7 @@ dependencies = [
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7#c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=2799b5fff011342aefe8ac5e9653d5b084e2a20c#2799b5fff011342aefe8ac5e9653d5b084e2a20c"
 dependencies = [
  "base64 0.21.7",
  "getrandom 0.2.17",
