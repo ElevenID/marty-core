@@ -2369,6 +2369,358 @@ mod tests {
         }
     }
 
+    fn bytes_hex(bytes: impl AsRef<[u8]>) -> String {
+        bytes
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    fn map_value<'a>(entries: &'a [(CborValue, CborValue)], key: &str) -> &'a CborValue {
+        entries
+            .iter()
+            .find_map(|(candidate, value)| {
+                (candidate == &CborValue::Text(key.into())).then_some(value)
+            })
+            .unwrap_or_else(|| panic!("missing CBOR map key {key}"))
+    }
+
+    #[test]
+    fn deterministic_nested_claims_round_trip_with_exact_commitments() {
+        let namespace = "org.example.characterization";
+        let claims = CredentialClaims {
+            mdoc_namespace: Some(namespace.into()),
+            ..test_mdoc_claims([])
+        };
+        let ordered_claims = [
+            ("array_claim", serde_json::json!([[1, 2], {"ok": true}])),
+            (
+                "object_claim",
+                serde_json::json!({"flags": [true, null], "name": "Ada"}),
+            ),
+            (
+                "mixed_claim",
+                serde_json::json!({"path": [{"date": "1990-01-15"}, 3.5]}),
+            ),
+        ];
+        let salts = [
+            std::array::from_fn(|index| index as u8),
+            std::array::from_fn(|index| 0x40 + index as u8),
+            std::array::from_fn(|index| 0x80 + index as u8),
+        ];
+        let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut salt_tape = salts.into_iter();
+        let prepared = prepare_mdoc_with_inputs(
+            &PreparationOnlySigner(SigningAlgorithm::ES256),
+            &claims,
+            "urn:uuid:00000000-0000-0000-0000-000000000123".into(),
+            None,
+            signed_at,
+            ordered_claims.iter().map(|(name, value)| (*name, value)),
+            || salt_tape.next().expect("one replay salt per nested claim"),
+        )
+        .unwrap();
+        assert!(salt_tape.next().is_none());
+
+        let item_digests: Vec<_> = prepared
+            .issuer_signed_items
+            .iter()
+            .map(|item| Sha256::digest(cbor_encode(item).unwrap()).to_vec())
+            .collect();
+        let item_commitments: Vec<_> = item_digests.iter().map(bytes_hex).collect();
+        let mso_commitment = bytes_hex(Sha256::digest(&prepared.mobile_security_object_bytes));
+        assert_eq!(
+            item_commitments,
+            [
+                "db28bd6576913e7330dc2bd55781d9e36aa940fa3463d585caa72dd70fd162d9",
+                "958e94589ff3c11bea7c040703a408bea6870ab759b75a34ed4400c93f009d29",
+                "711ef4850246df11df0d630b9ddb6bf5ed477129bbf812b811b4e0d435a9ab43",
+            ]
+        );
+        assert_eq!(
+            mso_commitment,
+            "d7e0bacc9cecd318d088ff0456234903d6941afbbca07b416b7589be29c42018"
+        );
+        assert_eq!(
+            base64::Engine::encode(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                &prepared.mobile_security_object_bytes
+            ),
+            "2BhZAUWlZ3ZlcnNpb25jMS4wb2RpZ2VzdEFsZ29yaXRobWdTSEEtMjU2bHZhbHVlRGlnZXN0c6F4HG9yZy5leGFtcGxlLmNoYXJhY3Rlcml6YXRpb26jAFgg2yi9ZXaRPnMw3CvVV4HZ42qpQPo0Y9WFyqct1w_RYtkBWCCVjpRYn_PBG-p8BAcDpAi-pocKt1m3WjTtRADJPwCdKQJYIHEe9IUCRt8R3w1jC53ba_XtR3Epu_gSuBG04NQ1qatDZ2RvY1R5cGV1b3JnLmlzby4xODAxMy41LjEubURMbHZhbGlkaXR5SW5mb6Nmc2lnbmVkwHQyMDI2LTA4LTI5VDEyOjM0OjU2Wml2YWxpZEZyb23AdDIwMjYtMDgtMjlUMTI6MzQ6NTZaanZhbGlkVW50aWzAdDIwMjctMDgtMjlUMTI6MzQ6NTZa"
+        );
+
+        let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_mso) =
+            ciborium::from_reader::<CborValue, _>(&prepared.mobile_security_object_bytes[..])
+                .unwrap()
+        else {
+            panic!("MobileSecurityObjectBytes must be tag 24");
+        };
+        let CborValue::Bytes(encoded_mso) = encoded_mso.as_ref() else {
+            panic!("MobileSecurityObjectBytes tag must contain bytes");
+        };
+        let CborValue::Map(mso) = ciborium::from_reader::<CborValue, _>(&encoded_mso[..]).unwrap()
+        else {
+            panic!("MobileSecurityObject must be a map");
+        };
+        let CborValue::Map(value_digests) = map_value(&mso, "valueDigests") else {
+            panic!("valueDigests must be a map");
+        };
+        assert_eq!(value_digests.len(), 1, "owned model has one namespace");
+        let (digest_namespace, CborValue::Map(digests)) = &value_digests[0] else {
+            panic!("namespace digests must be a map");
+        };
+        assert_eq!(digest_namespace, &CborValue::Text(namespace.into()));
+        assert_eq!(digests.len(), ordered_claims.len());
+        for (ordinal, digest) in item_digests.iter().enumerate() {
+            assert_eq!(
+                digests[ordinal],
+                (
+                    CborValue::Integer((ordinal as u64).into()),
+                    CborValue::Bytes(digest.clone())
+                )
+            );
+        }
+
+        let SignedCredential::MsoMdoc {
+            issuer_signed_b64,
+            credential_id,
+        } = assemble_mdoc(prepared, &[0xa5; 64]).unwrap()
+        else {
+            panic!("nested fixture must assemble an mdoc");
+        };
+        assert_eq!(
+            credential_id,
+            "urn:uuid:00000000-0000-0000-0000-000000000123"
+        );
+        let assembled = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            issuer_signed_b64,
+        )
+        .unwrap();
+        let CborValue::Map(issuer_signed) =
+            ciborium::from_reader::<CborValue, _>(&assembled[..]).unwrap()
+        else {
+            panic!("IssuerSigned must be a map");
+        };
+        let CborValue::Map(name_spaces) = map_value(&issuer_signed, "nameSpaces") else {
+            panic!("nameSpaces must be a map");
+        };
+        assert_eq!(name_spaces.len(), 1, "owned model exposes one namespace");
+        let (assembled_namespace, CborValue::Array(items)) = &name_spaces[0] else {
+            panic!("namespace must contain IssuerSignedItems");
+        };
+        assert_eq!(assembled_namespace, &CborValue::Text(namespace.into()));
+        assert_eq!(
+            items.len(),
+            ordered_claims.len(),
+            "no decoy input is modeled"
+        );
+        for (ordinal, item) in items.iter().enumerate() {
+            let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_item) = item else {
+                panic!("IssuerSignedItem must be tag 24");
+            };
+            let CborValue::Bytes(encoded_item) = encoded_item.as_ref() else {
+                panic!("IssuerSignedItem tag must contain bytes");
+            };
+            let CborValue::Map(item) =
+                ciborium::from_reader::<CborValue, _>(&encoded_item[..]).unwrap()
+            else {
+                panic!("IssuerSignedItem must be a map");
+            };
+            assert_eq!(
+                map_value(&item, "digestID"),
+                &CborValue::Integer((ordinal as u64).into())
+            );
+            assert_eq!(
+                map_value(&item, "elementIdentifier"),
+                &CborValue::Text(ordered_claims[ordinal].0.into())
+            );
+            assert_eq!(
+                map_value(&item, "elementValue"),
+                &json_to_cbor(&ordered_claims[ordinal].1).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn public_nested_claim_prepare_assemble_decode_preserves_values() {
+        let namespace = "org.example.public-nested";
+        let expected = [
+            ("array", serde_json::json!([1, {"enabled": true}])),
+            (
+                "object",
+                serde_json::json!({"profile": {"name": "Ada", "roles": ["issuer"]}}),
+            ),
+        ];
+        let mut claims = test_mdoc_claims(
+            expected
+                .iter()
+                .map(|(name, value)| ((*name).into(), value.clone())),
+        );
+        claims.mdoc_namespace = Some(namespace.into());
+        let prepared = prepare_mdoc_with_credential_id(
+            &PreparationOnlySigner(SigningAlgorithm::ES256),
+            &claims,
+            Some("urn:uuid:00000000-0000-0000-0000-000000000125"),
+        )
+        .unwrap();
+        let SignedCredential::MsoMdoc {
+            issuer_signed_b64,
+            credential_id,
+        } = assemble_mdoc(prepared, &[0xa5; 64]).unwrap()
+        else {
+            panic!("public nested fixture must assemble an mdoc");
+        };
+        assert_eq!(
+            credential_id,
+            "urn:uuid:00000000-0000-0000-0000-000000000125"
+        );
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            issuer_signed_b64,
+        )
+        .unwrap();
+        let CborValue::Map(issuer_signed) =
+            ciborium::from_reader::<CborValue, _>(&bytes[..]).unwrap()
+        else {
+            panic!("IssuerSigned must be a map");
+        };
+        let CborValue::Map(name_spaces) = map_value(&issuer_signed, "nameSpaces") else {
+            panic!("nameSpaces must be a map");
+        };
+        let [(actual_namespace, CborValue::Array(items))] = name_spaces.as_slice() else {
+            panic!("owned public preparation must emit exactly one namespace");
+        };
+        assert_eq!(actual_namespace, &CborValue::Text(namespace.into()));
+        assert_eq!(items.len(), expected.len());
+
+        let mut decoded = std::collections::HashMap::new();
+        for item in items {
+            let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_item) = item else {
+                panic!("IssuerSignedItem must be tag 24");
+            };
+            let CborValue::Bytes(encoded_item) = encoded_item.as_ref() else {
+                panic!("IssuerSignedItem tag must contain bytes");
+            };
+            let CborValue::Map(item) =
+                ciborium::from_reader::<CborValue, _>(&encoded_item[..]).unwrap()
+            else {
+                panic!("IssuerSignedItem must be a map");
+            };
+            let CborValue::Text(identifier) = map_value(&item, "elementIdentifier") else {
+                panic!("elementIdentifier must be text");
+            };
+            decoded.insert(identifier.clone(), map_value(&item, "elementValue").clone());
+        }
+        for (name, value) in &expected {
+            assert_eq!(decoded[*name], json_to_cbor(value).unwrap());
+        }
+    }
+
+    #[test]
+    fn multi_claim_validation_preserves_first_error_and_consumes_no_sources() {
+        for (first, second, expected) in [
+            (
+                serde_json::from_str("1e400").unwrap(),
+                nested_json(std::iter::repeat_n(
+                    TestContainer::Array,
+                    MAX_MDOC_CLAIM_CONTAINER_DEPTH + 1,
+                )),
+                MDOC_UNSUPPORTED_NUMERIC_VALUE,
+            ),
+            (
+                nested_json(std::iter::repeat_n(
+                    TestContainer::Object,
+                    MAX_MDOC_CLAIM_CONTAINER_DEPTH + 1,
+                )),
+                serde_json::from_str("1e400").unwrap(),
+                MDOC_CLAIM_NESTING_TOO_DEEP,
+            ),
+        ] {
+            let ordered_claims = [("first", first), ("second", second)];
+            let claims = test_mdoc_claims([]);
+            let error = prepare_mdoc_with_inputs_and_digest_executor(
+                &PreparationOnlySigner(SigningAlgorithm::ES256),
+                &claims,
+                "urn:uuid:00000000-0000-0000-0000-000000000124".into(),
+                None,
+                chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+                ordered_claims.iter().map(|(name, value)| (*name, value)),
+                || panic!("multi-claim validation must precede salt allocation"),
+                &MustNotExecute,
+            )
+            .err()
+            .expect("the first malformed nested claim must fail preparation");
+            let Oid4vciError::MdocError(message) = error else {
+                panic!("malformed nested claims must use the mdoc error boundary");
+            };
+            assert_eq!(message, expected);
+
+            for (_, value) in ordered_claims {
+                drop_nested_json_iteratively(value);
+            }
+        }
+    }
+
+    #[test]
+    fn nested_batch_matches_scalar_bytes_and_preserves_caller_identity_order() {
+        let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let fixture = vec![
+            BatchReplayItem {
+                batch_id: 300,
+                credential_id: "urn:uuid:00000000-0000-0000-0000-000000000300".into(),
+                signed_at,
+                signing_algorithm: SigningAlgorithm::ES256,
+                claims: test_mdoc_claims([
+                    ("array".into(), serde_json::json!([[1], [2, 3]])),
+                    (
+                        "mixed".into(),
+                        serde_json::json!({"items": [{"active": true}, null]}),
+                    ),
+                ]),
+                holder_public_jwk: None,
+            },
+            BatchReplayItem {
+                batch_id: 10,
+                credential_id: "urn:uuid:00000000-0000-0000-0000-000000000010".into(),
+                signed_at: signed_at + chrono::TimeDelta::seconds(1),
+                signing_algorithm: SigningAlgorithm::ES256,
+                claims: test_mdoc_claims([(
+                    "object".into(),
+                    serde_json::json!({"profile": {"name": "Ada", "roles": ["issuer", "holder"]}}),
+                )]),
+                holder_public_jwk: None,
+            },
+        ];
+        let executor = RecordingDigestExecutor::default();
+        let actual = batch_fingerprints(prepare_replay_batch(&fixture, &executor).unwrap());
+        let expected = scalar_fingerprints(&fixture);
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual
+                .iter()
+                .map(|(batch_id, credential_id, _, _)| (*batch_id, credential_id.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (300, "urn:uuid:00000000-0000-0000-0000-000000000300"),
+                (10, "urn:uuid:00000000-0000-0000-0000-000000000010"),
+            ]
+        );
+        assert_eq!(executor.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *executor.identities.lock().unwrap(),
+            [(300, 0, 0), (300, 1, 1), (10, 0, 0)]
+        );
+    }
+
     #[test]
     fn json_to_cbor_preserves_the_complete_native_integer_domain() {
         let cases: &[(&str, &[u8])] = &[
