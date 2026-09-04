@@ -12,52 +12,52 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 # Crypto and certificates
-x509-cert = { version = "0.2", features = ["pem", "builder"] }
-der = { version = "0.7", features = ["pem", "derive"] }
-const-oid = "0.9"
-sha1 = { version = "0.10", features = ["oid"] }
-sha2 = "0.10"
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "ecdh"] }
-p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "ecdh"] }
-p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "arithmetic"] }
-ecdsa = "0.16"
-elliptic-curve = "0.13"
-pem-rfc7468 = "0.7"
-signature = "2.0"
+x509-cert = { version = "0.3", features = ["pem", "builder"] }
+der = { version = "0.8", features = ["pem", "derive"] }
+const-oid = "0.10"
+sha1 = { version = "0.11", features = ["oid"] }
+sha2 = "0.11"
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8", "pem", "ecdh"] }
+p384 = { version = "0.14", features = ["ecdsa", "pkcs8", "ecdh"] }
+p521 = { version = "0.14", features = ["ecdsa", "pkcs8", "arithmetic"] }
+ecdsa = "0.17"
+elliptic-curve = "0.14"
+pem-rfc7468 = "1.0"
+signature = "3.0"
 
 # RSA support
 rsa = { version = "0.9", features = ["sha2", "pem"] }
 
 # PKCS standards
-pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
-pkcs5 = { version = "0.7", features = ["pbes2"] }
-spki = { version = "0.7", features = ["pem"] }
+pkcs8 = { version = "0.11", features = ["pem", "encryption"] }
+pkcs5 = { version = "0.8", features = ["pbes2"] }
+spki = { version = "0.8", features = ["pem"] }
 
 # CMS/CRL/OCSP (PKCS#7, X.509 extensions)
 cms = { version = "0.2", features = ["builder"] }
 x509-ocsp = "0.2"
 
 # Symmetric encryption
-aes-gcm = "0.10"
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
-des = "0.8"
+aes-gcm = "0.11"
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc"] }
+des = "0.9"
 
 # Key derivation
-hkdf = "0.12"
-pbkdf2 = { version = "0.12", features = ["hmac"] }
+hkdf = "0.13"
+pbkdf2 = { version = "0.13", features = ["hmac"] }
 
 # Additional crypto
-hmac = "0.12"
-cmac = "0.7"
-cipher = { version = "0.4", features = ["block-padding"] }
+hmac = "0.13"
+cmac = "0.8"
+cipher = { version = "0.5", features = ["block-padding"] }
 
 # Ed25519 and X25519
-ed25519-dalek = { version = "2.1", features = ["rand_core", "pem"] }
-x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core", "pem"] }
+x25519-dalek = { version = "3.0", features = ["static_secrets"] }
 
 # Ed448 (for eMRTD Active Authentication)
-ed448-goldilocks-plus = "0.16"
+ed448-goldilocks-plus = "0.18"
 
 # BBS+ signatures (BLS12-381)
 zkryptium = { version = "0.6", features = ["bbsplus"] }
@@ -66,7 +66,7 @@ zkryptium = { version = "0.6", features = ["bbsplus"] }
 p12 = "0.6"
 
 # Random number generation
-rand = "0.8"
+rand = "0.10"
 rand_core = "0.10"
 
 # Serialization
@@ -90,7 +90,7 @@ tracing-error = "0.2"
 axum = "0.8"
 
 # Database (for marty-secure-storage)
-rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring = "4.1"
 keyring-core = "1.0"
 directories = "6.0"
@@ -99,7 +99,7 @@ blake3 = "1.5"
 # UUID
 uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-base64 = "0.22"
+base64 = "0.23"
 zeroize = "1.7"
 
 # Python bindings
