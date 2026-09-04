@@ -44,6 +44,79 @@ and credential throughput for batch fixtures. These results are an
 issuance-preparation baseline, not an isolated SHA benchmark, and do not by
 themselves authorize a parallel route or production threshold.
 
+## Opt-in mdoc issuance payload matrix
+
+The mdoc payload matrix is disabled unless `MARTY_MDOC_MATRIX=1`. With the
+matrix variables unset, `mdoc_issuance` retains every historical group,
+benchmark ID, fixture, preflight, sample size, warm-up, measurement period,
+significance level, and noise threshold. Enabling the matrix adds this separate
+ID space:
+
+```text
+mdoc_issuance_payload_matrix/{class}/n={item_count}/scalar
+mdoc_issuance_payload_matrix/{class}/n={item_count}/sequential/b={batch_size}
+mdoc_issuance_payload_matrix/{class}/n={item_count}/batch/b={batch_size}
+```
+
+The supported dimensions and selector environment variables are:
+
+- `MARTY_MDOC_MATRIX_CLASSES`: `small_primitive`, `medium_nested`,
+  `large_portrait`, `mixed_size`
+- `MARTY_MDOC_MATRIX_ITEM_COUNTS`: `1`, `8`, `32`, `128`, `512`
+- `MARTY_MDOC_MATRIX_BATCH_SIZES`: `1`, `8`, `32`, `256`
+
+Each selector accepts a comma-separated subset, `all`, or may be omitted to
+select every value. Whitespace around tokens is allowed. Unknown, empty,
+non-Unicode, duplicate, noncanonical numeric, and `all`-combined selections
+fail before any fixture is built. Selectors are ignored while the matrix is
+disabled.
+
+Fixtures contain deterministic, non-personal semantic values. Small fixtures
+cycle through primitive integers, booleans, text, and nulls; the `n=1` case
+contains only the initial integer. Medium fixtures contain nested maps and
+arrays. Each large-portrait credential contains exactly one 256-KiB text value;
+when present, its remaining claims are small. Mixed fixtures start with one
+bounded 64-KiB value, then add nested values, integers, small text, and bounded
+1-KiB values as the selected item count permits; the `n=1` case contains only
+the 64-KiB value. Every credential and batch route has a unique deterministic
+identity.
+Fixture construction occurs before measurement, and request cloning occurs in
+Criterion's untimed per-iteration setup.
+
+Before measurement, every selected scalar, sequential, and batch case passes
+through the public remote mdoc preparation APIs, public assembly, and typed CBOR
+decode. The independent oracle verifies the expected CBOR value of every claim,
+one namespace, caller and digest-ID order, unique identities, the signed
+`docType`, SHA-256 `valueDigests`, and each complete tag-24
+`IssuerSignedItemBytes` commitment. Exact item and digest counts also confirm
+that the modeled fixtures contain no decoys.
+
+Scalar cases report item throughput. Sequential and batch cases report
+credential throughput while holding payload class and per-credential item count
+constant. The timed region contains production mdoc preparation only. It does
+not include semantic fixture construction, request cloning, final assembly,
+base64 transport encoding, or issuer signing.
+
+For example, run the smallest complete class comparison in PowerShell with:
+
+```powershell
+$env:MARTY_MDOC_MATRIX = '1'
+$env:MARTY_MDOC_MATRIX_CLASSES = 'small_primitive'
+$env:MARTY_MDOC_MATRIX_ITEM_COUNTS = '1'
+$env:MARTY_MDOC_MATRIX_BATCH_SIZES = '1'
+cargo bench --locked -p marty-oid4vci --bench mdoc_issuance -- --noplot
+```
+
+The complete selection contains 20 scalar cases and 160 sequential/batch
+cases. Use selectors to shard campaigns and retain Criterion's raw samples for
+bidirectional revision comparisons. This matrix models the current SHA-256,
+single-namespace, no-decoy issuance route; SHA-384/SHA-512 digests,
+multi-namespace credentials, and decoy digest entries are unsupported by this
+fixture model. It does not measure issuer signing, allocation totals, worker or
+lane utilization, true per-invocation tail latency, or establish cross-platform
+performance thresholds. Those require separately instrumented and qualified
+campaigns.
+
 ## ES256 credential signing batch benchmark
 
 `es256_signing_batch` measures JWT-VC, proof-bound IETF SD-JWT, mdoc, and mixed
