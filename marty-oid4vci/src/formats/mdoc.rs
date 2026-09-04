@@ -1352,10 +1352,20 @@ fn json_to_cbor(value: &serde_json::Value) -> Oid4vciResult<CborValue> {
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Ok(CborValue::Integer(i.into()))
-            } else if let Some(f) = n.as_f64() {
-                Ok(CborValue::Float(f))
+            } else if let Some(u) = n.as_u64() {
+                Ok(CborValue::Integer(u.into()))
+            } else if n.is_f64() {
+                n.as_f64()
+                    .map(CborValue::Float)
+                    .ok_or_else(mdoc_unsupported_numeric_value_error)
             } else {
-                Err(mdoc_unsupported_numeric_value_error())
+                // Number's Deserializer has supported i128 longer than its
+                // as_i128 API, preserving the workspace's serde_json 1.0 range.
+                let i = <i128 as serde::Deserialize>::deserialize(n)
+                    .map_err(|_| mdoc_unsupported_numeric_value_error())?;
+                ciborium::value::Integer::try_from(i)
+                    .map(CborValue::Integer)
+                    .map_err(|_| mdoc_unsupported_numeric_value_error())
             }
         }
         serde_json::Value::String(s) => {
@@ -2116,6 +2126,15 @@ mod tests {
         let num = json_to_cbor(&serde_json::json!(42)).unwrap();
         assert!(matches!(num, CborValue::Integer(_)));
 
+        for source in ["1.5", "1e3", "-0.0", "1e300"] {
+            let value: serde_json::Value = serde_json::from_str(source).unwrap();
+            let expected = value.as_f64().unwrap();
+            let CborValue::Float(actual) = json_to_cbor(&value).unwrap() else {
+                panic!("finite JSON float syntax must remain a CBOR float");
+            };
+            assert_eq!(actual.to_bits(), expected.to_bits());
+        }
+
         let text = json_to_cbor(&serde_json::json!("hello")).unwrap();
         assert!(matches!(text, CborValue::Text(_)));
 
@@ -2130,6 +2149,115 @@ mod tests {
 
         let unicode_text = json_to_cbor(&serde_json::json!("\u{1F5D3} 2026-07-21")).unwrap();
         assert!(matches!(unicode_text, CborValue::Text(_)));
+    }
+
+    #[test]
+    fn json_to_cbor_preserves_the_complete_native_integer_domain() {
+        let cases: &[(&str, &[u8])] = &[
+            (
+                "-18446744073709551616",
+                &[0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+            (
+                "-9223372036854775809",
+                &[0x3b, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            ),
+            (
+                "-9223372036854775808",
+                &[0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+            ("-25", &[0x38, 0x18]),
+            ("-24", &[0x37]),
+            ("-1", &[0x20]),
+            ("0", &[0x00]),
+            ("23", &[0x17]),
+            ("24", &[0x18, 0x18]),
+            (
+                "9223372036854775807",
+                &[0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+            (
+                "9223372036854775808",
+                &[0x1b, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            ),
+            (
+                "9223372036854775809",
+                &[0x1b, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+            ),
+            (
+                "18446744073709551615",
+                &[0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+        ];
+
+        for (source, expected_bytes) in cases {
+            let value: serde_json::Value = serde_json::from_str(source).unwrap();
+            let converted = json_to_cbor(&value).unwrap();
+            assert_eq!(
+                cbor_encode(&converted).unwrap(),
+                *expected_bytes,
+                "{source}"
+            );
+
+            let CborValue::Integer(integer) = converted else {
+                panic!("native JSON integer {source} must remain a CBOR integer");
+            };
+            assert_eq!(i128::from(integer), source.parse::<i128>().unwrap());
+        }
+    }
+
+    #[test]
+    fn public_mdoc_preparation_preserves_native_integer_claims() {
+        let cases: &[(&str, &[u8])] = &[
+            (
+                "-18446744073709551616",
+                &[0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+            (
+                "9223372036854775809",
+                &[0x1b, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+            ),
+            (
+                "18446744073709551615",
+                &[0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            ),
+        ];
+
+        for (source, expected_bytes) in cases {
+            let value: serde_json::Value = serde_json::from_str(source).unwrap();
+            let claims = test_mdoc_claims([("counter".into(), value)]);
+            let prepared =
+                prepare_mdoc(&PreparationOnlySigner(SigningAlgorithm::ES256), &claims).unwrap();
+            let [CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_item)] =
+                prepared.issuer_signed_items.as_slice()
+            else {
+                panic!("public mdoc preparation must produce one tag 24 item");
+            };
+            let CborValue::Bytes(encoded_item) = encoded_item.as_ref() else {
+                panic!("tag 24 must contain encoded IssuerSignedItem bytes");
+            };
+            let CborValue::Map(item) =
+                ciborium::from_reader::<CborValue, _>(&encoded_item[..]).unwrap()
+            else {
+                panic!("IssuerSignedItem must be a CBOR map");
+            };
+            let element_value = item
+                .into_iter()
+                .find_map(|(key, value)| {
+                    (key == CborValue::Text("elementValue".into())).then_some(value)
+                })
+                .unwrap();
+
+            assert_eq!(
+                cbor_encode(&element_value).unwrap(),
+                *expected_bytes,
+                "signed item changed integer value or representation for {source}"
+            );
+            let CborValue::Integer(integer) = element_value else {
+                panic!("signed elementValue {source} must be a CBOR integer");
+            };
+            assert_eq!(i128::from(integer), source.parse::<i128>().unwrap());
+        }
     }
 
     fn assert_redacted_unsupported_numeric_error(error: &Oid4vciError, sensitive: &str) {
@@ -2148,50 +2276,50 @@ mod tests {
 
     #[test]
     fn unsupported_numeric_claim_errors_are_redacted_before_salts_or_digests() {
-        const NUMERIC_SOURCE: &str = "1e400";
+        for numeric_source in ["1e400", "18446744073709551616", "-18446744073709551617"] {
+            let value: serde_json::Value = serde_json::from_str(numeric_source).unwrap();
+            let sensitive_number = value.as_number().unwrap().to_string();
+            let conversion_error = json_to_cbor(&value).unwrap_err();
+            assert_redacted_unsupported_numeric_error(&conversion_error, &sensitive_number);
 
-        let value: serde_json::Value = serde_json::from_str(NUMERIC_SOURCE).unwrap();
-        let sensitive_number = value.as_number().unwrap().to_string();
-        let conversion_error = json_to_cbor(&value).unwrap_err();
-        assert_redacted_unsupported_numeric_error(&conversion_error, &sensitive_number);
+            let claims = test_mdoc_claims([("highly_sensitive_counter".into(), value)]);
+            let public_error = match prepare_mdoc_with_credential_id(
+                &PreparationOnlySigner(SigningAlgorithm::ES256),
+                &claims,
+                Some("urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"),
+            ) {
+                Ok(_) => panic!("unsupported numeric claims must not produce signing state"),
+                Err(error) => error,
+            };
+            assert_redacted_unsupported_numeric_error(&public_error, &sensitive_number);
 
-        let claims = test_mdoc_claims([("highly_sensitive_counter".into(), value)]);
-        let public_error = match prepare_mdoc_with_credential_id(
-            &PreparationOnlySigner(SigningAlgorithm::ES256),
-            &claims,
-            Some("urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"),
-        ) {
-            Ok(_) => panic!("unsupported numeric claims must not produce signing state"),
-            Err(error) => error,
-        };
-        assert_redacted_unsupported_numeric_error(&public_error, &sensitive_number);
-
-        let issuer_claims = claims
-            .claims
-            .iter()
-            .map(|(name, value)| (name.as_str(), value));
-        let executor = RecordingDigestExecutor::default();
-        let preparation_error = match prepare_mdoc_with_inputs_and_digest_executor(
-            &PreparationOnlySigner(SigningAlgorithm::ES256),
-            &claims,
-            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
-            None,
-            chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc),
-            issuer_claims,
-            || panic!("unsupported numeric validation must precede salt allocation"),
-            &executor,
-        ) {
-            Ok(_) => panic!("unsupported numeric claims must not produce signing state"),
-            Err(error) => error,
-        };
-        assert_redacted_unsupported_numeric_error(&preparation_error, &sensitive_number);
-        assert_eq!(
-            executor.calls.load(Ordering::Relaxed),
-            0,
-            "validation must precede digest execution"
-        );
+            let issuer_claims = claims
+                .claims
+                .iter()
+                .map(|(name, value)| (name.as_str(), value));
+            let executor = RecordingDigestExecutor::default();
+            let preparation_error = match prepare_mdoc_with_inputs_and_digest_executor(
+                &PreparationOnlySigner(SigningAlgorithm::ES256),
+                &claims,
+                "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
+                None,
+                chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+                issuer_claims,
+                || panic!("unsupported numeric validation must precede salt allocation"),
+                &executor,
+            ) {
+                Ok(_) => panic!("unsupported numeric claims must not produce signing state"),
+                Err(error) => error,
+            };
+            assert_redacted_unsupported_numeric_error(&preparation_error, &sensitive_number);
+            assert_eq!(
+                executor.calls.load(Ordering::Relaxed),
+                0,
+                "validation must precede digest execution"
+            );
+        }
     }
 
     #[test]
