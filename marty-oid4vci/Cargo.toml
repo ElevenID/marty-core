@@ -36,11 +36,11 @@ serde_json = { workspace = true }
 ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "2799b5fff011342aefe8ac5e9653d5b084e2a20c" }
-jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
 
 # ISO 18013-5 mDoc
 isomdl = "0.2"
-coset = "0.3"
+coset = "0.4"
 ciborium = { workspace = true }
 
 # JWT and base64
