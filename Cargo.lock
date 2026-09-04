@@ -4240,6 +4240,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-oid4vci-wasm-serial-probe"
+version = "0.0.0"
+dependencies = [
+ "marty-oid4vci",
+]
+
+[[package]]
 name = "marty-secure-storage"
 version = "0.1.61"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "marty-oid4vci-wasm-serial-probe"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+marty-oid4vci = { path = "../../..", default-features = false, features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(cdla_native_worker_probe)'] }
+
+[lib]
+path = "../wasm_serial_fallback.rs"
+test = false
+doctest = false
+bench = false

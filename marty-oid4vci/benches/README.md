@@ -117,6 +117,274 @@ lane utilization, true per-invocation tail latency, or establish cross-platform
 performance thresholds. Those require separately instrumented and qualified
 campaigns.
 
+## Opt-in internal mdoc stage evidence
+
+The internal stage harness is a test-only child of the mdoc implementation. It
+does not expose a library API, add production telemetry, or change production
+dependencies or defaults. Its only entry point is an ignored unit test that
+requires a release-profile build and the exact opt-in
+`MARTY_MDOC_STAGE_EVIDENCE=1`.
+
+The harness reuses the mdoc payload matrix's deterministic, non-personal class
+and item-count model and these existing selectors:
+
+- `MARTY_MDOC_MATRIX_CLASSES`: `small_primitive`, `medium_nested`,
+  `large_portrait`, `mixed_size`
+- `MARTY_MDOC_MATRIX_ITEM_COUNTS`: `1`, `8`, `32`, `128`, `512`
+
+Each selector accepts a comma-separated subset, `all`, or may be omitted to
+select every value. Whitespace around tokens is allowed. Unknown, empty,
+non-Unicode, duplicate, noncanonical numeric, and `all`-combined selections
+fail before fixture allocation. This scalar harness does not read the matrix's
+batch-size selector.
+
+Every selected fixture passes an untimed preflight before measurement. The
+preflight independently checks converted CBOR values, claim uniqueness and
+counts, deterministic salts, tag-24 item bytes, routing ordinals, serial
+SHA-256 results, restored digest order, the encoded MSO digest map, and a full
+production scalar replay. This guards the evidence boundary; it is not a
+substitute for protocol-compliance tests.
+
+Semantic names, values, identities, timestamps, and the ordinal salt tape are
+fixed. Claim order retains the production `HashMap` iteration order and can
+therefore differ between processes; preflight anchors identifiers and values
+without assuming one global claim order.
+
+Criterion records these exact IDs, with element throughput:
+
+```text
+mdoc_internal_stage_evidence/{class}/n={item_count}/validate_convert
+mdoc_internal_stage_evidence/{class}/n={item_count}/salt_encode_plan
+mdoc_internal_stage_evidence/{class}/n={item_count}/sha256_digest_serial
+mdoc_internal_stage_evidence/{class}/n={item_count}/restore_digest_results
+mdoc_internal_stage_evidence/{class}/n={item_count}/mso_and_tbs
+```
+
+The timed regions have deliberately narrow meanings:
+
+- `validate_convert` includes document-type and namespace cloning, algorithm,
+  certificate-chain extraction, validity, holder-key, and claim JSON-to-CBOR
+  validation and conversion. These fixtures use an empty certificate chain and
+  one valid ES256/P-256 holder-key profile.
+- `salt_encode_plan` starts with validated claims prepared outside timing. It
+  includes calls to the deterministic in-memory salt source, item construction,
+  inner and tag-24 CBOR encoding, and digest-job planning. It does not measure a
+  production entropy source or SHA-256.
+- `sha256_digest_serial` executes the production `SerialDigestExecutor` over a
+  prebuilt plan. It includes serial SHA-256 plus result allocation and routing
+  metadata, so it is not a hash-compression-only microbenchmark.
+- `restore_digest_results` starts with cloned plan and result inputs prepared
+  outside timing. It includes length and identity validation, ordered lookup,
+  item restoration, and output allocation; it performs no digest calculation.
+- `mso_and_tbs` starts with validation, validity arithmetic, item planning,
+  digest execution, and restoration already completed outside timing. It
+  includes MSO construction and encoding, COSE headers, and Sig_structure TBS
+  construction.
+
+All five stages use the scalar production kernels. Fixture construction,
+per-iteration input preparation or cloning, output destruction, issuer signing,
+signed-credential assembly, and base64 transport encoding are outside timing.
+Per-iteration batching bounds retained fixture memory and separates those
+boundaries at the cost of additional timer overhead, which matters most for the
+smallest cases.
+Because each stage has an independent setup and ownership boundary, their
+measurements are not additive end-to-end latency. The harness uses 10 samples,
+a 250-ms warm-up, and a 500-ms requested measurement period; Criterion may
+extend a case when needed. It does not measure allocation totals, worker or lane
+utilization, production randomness, or true per-operation p95/p99 latency and
+does not establish a speedup, threshold, or parallel policy. It exercises
+successful, single-namespace, SHA-256 preparation only; invalid inputs,
+alternate algorithms and curves, nonempty certificate chains, multiple
+namespaces, and decoy digests require separate evidence.
+
+Run the smallest release-profile evidence case in PowerShell with:
+
+```powershell
+$env:MARTY_MDOC_STAGE_EVIDENCE = '1'
+$env:MARTY_MDOC_MATRIX_CLASSES = 'small_primitive'
+$env:MARTY_MDOC_MATRIX_ITEM_COUNTS = '1'
+cargo test --release --locked -p marty-oid4vci 'formats::mdoc::stage_evidence::collect_mdoc_stage_evidence' -- --ignored --exact --nocapture
+```
+
+## Opt-in aggregate mdoc allocation evidence
+
+`mdoc_allocation_evidence` is a standalone, native release-profile evidence
+binary. It is a successful no-op when `MARTY_MDOC_ALLOC_EVIDENCE` is absent.
+When the variable is present it must equal exactly `1`; enabled debug/test
+profile execution is rejected so its output cannot be mistaken for release
+evidence. The existing `MARTY_MDOC_MATRIX` switch is irrelevant to this binary.
+
+The binary reuses the mdoc payload matrix selector contract:
+
+- `MARTY_MDOC_MATRIX_CLASSES`: `small_primitive`, `medium_nested`,
+  `large_portrait`, `mixed_size`
+- `MARTY_MDOC_MATRIX_ITEM_COUNTS`: `1`, `8`, `32`, `128`, `512`
+- `MARTY_MDOC_MATRIX_BATCH_SIZES`: `1`, `8`, `32`, `256`
+
+Omitted selectors choose all values. Each selector also accepts `all` or a
+comma-separated subset. Unknown, empty, non-Unicode, duplicate, noncanonical
+numeric, and `all`-combined selections fail before any semantic fixture is
+allocated. The complete selection produces 20 scalar, 80 caller-sequential,
+and 80 production-batch evidence rows. Shard it for routine campaigns: the
+largest selected route can hold 256 credentials, and each `large_portrait`
+credential has exactly one bounded 256-KiB value.
+
+Before counters are enabled, every selected case is prepared, assembled, and
+typed-CBOR decoded. The independent oracle checks caller and digest order,
+unique credential and routing identities, one namespace, exact semantic claim
+values, `docType`, SHA-256, every complete tag-24 item commitment, and the
+absence of decoys. Measured outputs pass through the same oracle after the
+counter snapshot, which both prevents optimizer elision and prevents an invalid
+row from being emitted.
+
+The measured boundaries match the payload matrix: public
+`prepare_remote_mdoc`, a caller-side sequential loop that collects public
+scalar results, and public `prepare_remote_mdoc_batch`. Semantic fixture and
+request construction, correctness preflight, output assembly,
+typed decode, output destruction, signing, base64 transport, and printing are
+outside the counter window. Public preparation retains its production time,
+random salts, reserved credential-ID validation (not UUID generation),
+JSON-to-CBOR conversion, encoding, serial SHA-256, MSO construction, and
+signing-input behavior.
+
+The executable installs a benchmark-local wrapper around
+`std::alloc::System`. During one synchronous boundary it reports successful
+`alloc` plus `alloc_zeroed` calls and their gross requested `Layout::size()`
+bytes. It reports successful `realloc` calls and requested new sizes separately.
+These figures are not RSS, committed OS memory, net growth, retained/live
+memory, peak memory, or deallocation totals. A realloc may occur in place, so
+the two byte fields must not be added and described as actual memory use.
+
+Counters are process-global. The runner creates no worker threads and the
+current mdoc preparation routes are serial, but any concurrent in-process
+allocation during or crossing the active counter window may be missed, recorded
+late, spill across rows, or contaminate a row; its occurrence invalidates the
+evidence. Results are specific to the recorded revision, target, profile, Rust
+build, dependencies, and system allocator. Repeat campaigns on an otherwise
+quiet host with the same toolchain; allocation evidence alone does not authorize
+a routing threshold or parallel production path.
+
+Each output line uses the `mdoc_requested_allocation_v1` schema. Metadata records
+the Git revision when available, whether the worktree is clean, a sanitized
+operator run label, package version, target architecture/OS/family, pointer
+width, profile, available parallelism, allocator, counter scope, public
+boundary, and fixture schema. Evidence rows contain only route, payload class,
+`n`, `b` (`na` for scalar rows), credential count, and aggregate counters. They
+contain no claims, credential identifiers, salts, digests, or per-item
+scheduling identifiers.
+
+For example, run the smallest release campaign in PowerShell with:
+
+```powershell
+$env:MARTY_MDOC_ALLOC_EVIDENCE = '1'
+$env:MARTY_MDOC_ALLOC_EVIDENCE_RUN_LABEL = 'windows-x86_64-local'
+$env:MARTY_MDOC_MATRIX_CLASSES = 'small_primitive'
+$env:MARTY_MDOC_MATRIX_ITEM_COUNTS = '1'
+$env:MARTY_MDOC_MATRIX_BATCH_SIZES = '1'
+cargo bench --locked -p marty-oid4vci --bench mdoc_allocation_evidence
+```
+
+Unset `MARTY_MDOC_ALLOC_EVIDENCE` for the ordinary compile/no-op smoke gate:
+
+```console
+cargo test --locked -p marty-oid4vci --bench mdoc_allocation_evidence
+```
+
+Preserve the emitted metadata with campaign results and separately capture
+`rustc -vV` plus a non-sensitive CPU/host description. Only treat a known
+revision with `workspace_clean=true` as reproducible comparison evidence.
+
+## Opt-in mdoc invocation-tail evidence
+
+`mdoc_tail_evidence` is a standalone native evidence binary, not a Criterion
+benchmark. It is disabled unless `MARTY_MDOC_TAIL_EVIDENCE=1` and rejects any
+other value when the variable is set. Evidence collection also rejects debug
+builds; use the optimized `cargo bench` command below. An unset gate exits
+successfully without allocating fixtures so ordinary workspace commands remain
+unchanged.
+
+The binary reuses the payload matrix's strict selectors and exact dimensions:
+
+- `MARTY_MDOC_MATRIX_CLASSES`: `small_primitive`, `medium_nested`,
+  `large_portrait`, `mixed_size`
+- `MARTY_MDOC_MATRIX_ITEM_COUNTS`: `1`, `8`, `32`, `128`, `512`
+- `MARTY_MDOC_MATRIX_BATCH_SIZES`: `1`, `8`, `32`, `256`
+
+Each selector accepts a comma-separated subset, `all`, or may be omitted for
+all values. Whitespace around tokens is allowed. Unknown, empty, non-Unicode,
+duplicate, noncanonical numeric, and `all`-combined selections fail before any
+payload fixture is allocated. Selectors are ignored when the evidence gate is
+unset.
+
+`MARTY_MDOC_TAIL_SAMPLES` defaults to 200 and accepts canonical integers from
+100 through 10,000. The minimum keeps nearest-rank p99 from being inferred from
+fewer than 100 observations. `MARTY_MDOC_TAIL_WARMUP_INVOCATIONS` defaults to
+10 and accepts canonical integers from 1 through 1,000. Both settings are
+validated before fixture allocation. More samples improve the empirical order
+statistics but do not by themselves make a tail estimate statistically robust.
+
+For each selected case, the binary constructs one caller-ordered batch with
+unique deterministic routing, issuer, and reserved credential identities. The
+semantic claims are synthetic and non-personal. The `large_portrait` class has
+exactly one 256-KiB value per credential rather than one per claim; the mixed
+class has one 64-KiB value and bounded 1-KiB values. Production current-time and
+salt sources remain active, and `HashMap` claim order can vary between
+processes, so complete prepared bytes are not deterministic.
+
+An untimed preflight runs the public batch-preparation and assembly APIs, then
+performs a typed CBOR decode. Its independent oracle verifies caller order and
+unique identities, exact claim values and counts, sequential digest IDs, one
+namespace, SHA-256, document type, every complete tag-24 item commitment, and
+the absence of modeled decoys. Assembly uses a fixed synthetic 64-byte
+signature solely to validate structure; it does not prove signature validity.
+
+Every recorded sample surrounds exactly one complete
+`prepare_remote_mdoc_batch` invocation with `Instant`. The owned request clone
+is prepared before the first clock read. The returned value is passed through
+`black_box` before the second clock read to prevent optimizer elision, then is
+dropped outside the timed interval. The sample vector is preallocated. The
+reported batch-size dimension is the latency of one whole public batch call,
+not a per-credential division. The optimizer barrier and clock-read overhead
+remain part of the harness boundary, so timer resolution matters most for the
+smallest cases.
+
+Output uses reproducible case labels and integer nanoseconds:
+
+```text
+mdoc_invocation_tail/{class}/n={item_count}/b={batch_size} samples=... warmup=... method=nearest_rank unit=ns p50=... p95=... p99=...
+```
+
+Percentiles are nearest-rank order statistics over individually timed
+invocations: rank `ceil(percentile * samples / 100)`. With 100 observations,
+p99 is the 99th ordered observation; it is not a confidence bound or a claim
+about an unobserved service-level tail. Repeat campaigns on an otherwise quiet
+host and record the exact commit, `rustc -Vv`, target, CPU, power policy, and
+environment.
+
+Run the smallest campaign in PowerShell with:
+
+```powershell
+$env:MARTY_MDOC_TAIL_EVIDENCE = '1'
+$env:MARTY_MDOC_MATRIX_CLASSES = 'small_primitive'
+$env:MARTY_MDOC_MATRIX_ITEM_COUNTS = '1'
+$env:MARTY_MDOC_MATRIX_BATCH_SIZES = '1'
+$env:MARTY_MDOC_TAIL_SAMPLES = '100'
+$env:MARTY_MDOC_TAIL_WARMUP_INVOCATIONS = '1'
+cargo bench --locked -p marty-oid4vci --bench mdoc_tail_evidence
+```
+
+This evidence covers successful ES256/P-256, SHA-256, single-namespace remote
+mdoc preparation with empty certificate chains and fixed reserved IDs. It does
+not include UUID generation, issuer signing, signed-credential assembly,
+base64 transport encoding, request cloning, fixture construction, preflight,
+or output destruction in the timed interval. It is not a Criterion aggregate
+average or an internal-stage measurement, and it makes no allocation, worker
+or lane utilization, service-tail, cross-host comparability, production
+threshold, or policy claim. Alternate algorithms and curves, invalid inputs,
+nonempty certificate chains, multiple namespaces, and decoy digests require
+separate evidence.
+
+
 ## ES256 credential signing batch benchmark
 
 `es256_signing_batch` measures JWT-VC, proof-bound IETF SD-JWT, mdoc, and mixed

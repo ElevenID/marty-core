@@ -1442,6 +1442,9 @@ fn cbor_date_time(dt: &chrono::DateTime<chrono::Utc>) -> CborValue {
 }
 
 #[cfg(test)]
+mod stage_evidence;
+
+#[cfg(test)]
 mod tests {
     use std::sync::{
         atomic::{AtomicUsize, Ordering},

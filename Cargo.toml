@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-status", "marty-bindings", "marty-oid4vci", "marty-didcomm", "marty-test-wallet"]
+members = ["marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-status", "marty-bindings", "marty-oid4vci", "marty-oid4vci/tests/ui/wasm-serial-probe", "marty-didcomm", "marty-test-wallet"]
 resolver = "2"
 
 [workspace.package]

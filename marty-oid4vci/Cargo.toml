@@ -79,5 +79,13 @@ name = "mdoc_issuance"
 harness = false
 
 [[bench]]
+name = "mdoc_allocation_evidence"
+harness = false
+
+[[bench]]
+name = "mdoc_tail_evidence"
+harness = false
+
+[[bench]]
 name = "es256_signing_batch"
 harness = false

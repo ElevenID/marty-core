@@ -46,6 +46,7 @@ jobs:
         with:
           toolchain: 1.97.1
           components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
       - name: Install cargo-deny
         uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
         with:
@@ -67,6 +68,9 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
+      - name: Check OID4VCI WASM serial fallback contract
+        shell: bash
+        run: bash scripts/test_oid4vci_wasm_serial_fallback.sh
       - name: Smoke opt-in ES256 payload matrix
         if: github.event_name == 'merge_group'
         run: MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
@@ -75,6 +79,11 @@ jobs:
         run: |
           MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=all MARTY_MDOC_MATRIX_ITEM_COUNTS=1,512 MARTY_MDOC_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
           MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=small_primitive MARTY_MDOC_MATRIX_ITEM_COUNTS=1 MARTY_MDOC_MATRIX_BATCH_SIZES=256 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+      - name: Smoke default-off mdoc evidence binaries
+        if: github.event_name == 'merge_group'
+        run: |
+          cargo test --locked -p marty-oid4vci --bench mdoc_allocation_evidence
+          cargo test --locked -p marty-oid4vci --bench mdoc_tail_evidence
       - name: Exercise the EUDI trusted-list client
         run: |
           cargo clippy --locked -p marty-verification --features eudi-client --all-targets -- -D warnings
@@ -136,6 +145,8 @@ jobs:
           cargo test --locked -p marty-oid4vci --bench mdoc_issuance
           MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=all MARTY_MDOC_MATRIX_ITEM_COUNTS=1,512 MARTY_MDOC_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
           MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=small_primitive MARTY_MDOC_MATRIX_ITEM_COUNTS=1 MARTY_MDOC_MATRIX_BATCH_SIZES=256 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          cargo test --locked -p marty-oid4vci --bench mdoc_allocation_evidence
+          cargo test --locked -p marty-oid4vci --bench mdoc_tail_evidence
           cargo test --locked -p marty-oid4vci --bench es256_signing_batch
           MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
       - name: Record non-Rust-only change
