@@ -28,22 +28,26 @@
 #include "algebra/reed_solomon.h"
 #include "arrays/dense.h"
 #include "cbor/host_decoder.h"
+#ifndef MARTY_ZKP_VERIFIER_ONLY
 #include "circuits/mac/mac_reference.h"
 #include "circuits/mac/mac_witness.h"
-#include "circuits/mdoc/mdoc_decompress.h"
 #include "circuits/mdoc/mdoc_witness.h"
+#include "random/secure_random_engine.h"
+#include "zk/zk_prover.h"
+#else
+#include "mdoc_verifier_inputs.h"
+#endif
+#include "circuits/mdoc/mdoc_decompress.h"
 #include "ec/p256.h"
 #include "gf2k/gf2_128.h"
 #include "gf2k/lch14_reed_solomon.h"
 #include "proto/circuit.h"
-#include "random/secure_random_engine.h"
 #include "random/transcript.h"
 #include "sumcheck/circuit.h"
 #include "util/log.h"
 #include "util/panic.h"
 #include "util/readbuffer.h"
 #include "zk/zk_proof.h"
-#include "zk/zk_prover.h"
 #include "zk/zk_verifier.h"
 #include "zstd.h"
 
@@ -57,10 +61,12 @@
 // then compute the MAC and finally place it into the correct part of the
 // dense witness array.
 // ex: numAttrs = 1, this function returns (1*768 + 8) + 161
+#ifndef MARTY_ZKP_VERIFIER_ONLY
 size_t getHashMacIndex(size_t numAttrs, size_t version) {
   // The length of the attribute field that is added in version 4.
   return numAttrs * 8 * (96 + (version < 7 ? 1 : 2)) + 160 + 1;
 }
+#endif
 
 namespace proofs {
 
@@ -94,7 +100,9 @@ static constexpr char kRootY[] =
 // of the MAC key), the verifier can then select its a_v half of the mac key,
 // the prover can then compute the MAC and finally place it into the correct
 // part of the dense witness array.
+#ifndef MARTY_ZKP_VERIFIER_ONLY
 static constexpr size_t kSigMacIndex = 4;
+#endif
 
 // Flags that indicate whether the prover and/or verifier ought
 // to check the circuit id stored in the circuit itself.
@@ -120,6 +128,7 @@ void fill_gf2k<f_128, f_128>(const typename f_128::Elt& m,
   df.push_back(m);
 }
 
+#ifndef MARTY_ZKP_VERIFIER_ONLY
 void compute_macs(size_t len, const Elt x[], gf2k gmacs[/* 6 */],
                   uint8_t macs[/* 2.len.gf2k_size */],
                   const gf2k ap[/* 2.len */], gf2k av) {
@@ -144,6 +153,7 @@ struct ProverState {
   using mac_witness = MacGF2Witness;
   mac_witness macs[3];
 };
+#endif
 
 // Fills the hash witness with the attributes and the time input.
 MdocProverErrorCode fill_attributes(DenseFiller<f_128>& hash_filler,
@@ -208,6 +218,7 @@ bool fill_public_inputs(DenseFiller<Fp256Base>& sig_filler,
 }
 
 // Fills the hash and signature public inputs and private witnesses.
+#ifndef MARTY_ZKP_VERIFIER_ONLY
 MdocProverErrorCode fill_witness(
     DenseFiller<Fp256Base>& fill_b, DenseFiller<f_128>& fill_s,
     const uint8_t* mdoc, size_t mdoc_len, const Elt& pkX, const Elt& pkY,
@@ -272,6 +283,7 @@ MdocProverErrorCode fill_witness(
 
   return MDOC_PROVER_SUCCESS;
 }
+#endif
 
 gf2k generate_mac_key(Transcript& t) {
   f_128 gf;
@@ -282,6 +294,7 @@ gf2k generate_mac_key(Transcript& t) {
 
 // Updates the dense input array with a mac.The location
 // of the start of the macs+av inputs must be passed in as (si, hi).
+#ifndef MARTY_ZKP_VERIFIER_ONLY
 void update_mac_in_dense(Dense<Fp256Base>& W_sig, Dense<f_128>& W_hash,
                          size_t& si, size_t& hi, const gf2k mac,
                          const f_128& Fs) {
@@ -300,6 +313,7 @@ void update_macs(Dense<Fp256Base>& W_sig, Dense<f_128>& W_hash, size_t si,
   }
   update_mac_in_dense(W_sig, W_hash, si, hi, av, Fs);
 }
+#endif
 
 bool parsePk(const char* pkx, const char* pky, Elt& pkX, Elt& pkY) {
   auto maybe_x = p256_base.of_untrusted_string(pkx);
@@ -384,6 +398,7 @@ extern "C" {
 /*
 API version that uses 2 circuits over different fields.
 */
+#ifndef MARTY_ZKP_VERIFIER_ONLY
 using MdocSWw = MdocSignatureWitness<P256, Fp256Scalar>;
 
 // Main endpoint for producing a ZK proof for mdoc properties.
@@ -533,6 +548,7 @@ MdocProverErrorCode run_mdoc_prover(
   memcpy(*prf, buf.data(), buf.size());
   return MDOC_PROVER_SUCCESS;
 }
+#endif
 
 MdocVerifierErrorCode run_mdoc_verifier(
     const uint8_t* bcp, size_t bcsz,          /* circuit data */

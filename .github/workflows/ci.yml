@@ -153,6 +153,39 @@ jobs:
         if: steps.affected.outputs.all != 'true' && steps.affected.outputs.has_packages != 'true'
         run: echo "No Rust package tests are needed for the affected-first lane."
 
+  zkp-native-security:
+    name: Native ZKP Security Boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+      - name: Install native cryptography dependencies
+        run: sudo apt-get update && sudo apt-get install --yes binutils libssl-dev libzstd-dev
+      - name: Test the real verifier and registered circuit identity
+        run: cargo test --locked -p marty-zkp --no-default-features --features verifier --test circuit_identity
+      - name: Prove verifier-only archives exclude prover machinery
+        shell: bash
+        run: |
+          archive="$(find target/debug/build -name liblongfellow_zk.a -print -quit)"
+          test -n "$archive"
+          symbols="$(nm -C "$archive")"
+          if grep -Eq 'run_mdoc_prover|SecureRandomEngine|ZkProver|Mdoc(Hash|Signature)Witness' <<<"$symbols"; then
+            printf '%s\n' "$symbols"
+            exit 1
+          fi
+      - name: Exercise a real prove and verify round trip
+        run: cargo test --locked -p marty-zkp --no-default-features --features prover --test conformance round_trip_age_over_18
+      - name: Reject mock cryptography in release builds
+        shell: bash
+        run: |
+          if USE_ZK_MOCK=1 cargo check --locked --release -p marty-zkp --no-default-features --features verifier; then
+            exit 1
+          fi
+
   platform-tests:
     name: Platform Tests (${{ matrix.os }})
     if: github.event_name != 'pull_request'
@@ -289,6 +322,7 @@ jobs:
           cargo check --locked -p marty-verification --no-default-features --features authority-issuance
           cargo check --locked -p marty-verification --no-default-features --features kms-only,python,iaca,csca,eudi
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
+          cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
           cargo check --locked -p marty-bindings --no-default-features --features kms-only,extension-module
           if cargo check --locked -p marty-crypto --no-default-features --features kms-only,keygen; then exit 1; fi
@@ -319,6 +353,22 @@ jobs:
               exit 1
             fi
           done
+          kms_oid4vci_isomdl_tree="$(cargo tree --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc -e features,no-dev -i isomdl)"
+          kms_oid4vci_sd_jwt_tree="$(cargo tree --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc -e features,no-dev -i sd-jwt-rs)"
+          if grep -Eq 'isomdl feature "(default|issuer-local-signing|session-key-agreement|cli)"' <<<"$kms_oid4vci_isomdl_tree" || grep -Eq 'sd-jwt-rs feature "(default|issuer-local|holder)"' <<<"$kms_oid4vci_sd_jwt_tree"; then
+            printf '%s\n%s\n' "$kms_oid4vci_isomdl_tree" "$kms_oid4vci_sd_jwt_tree"
+            exit 1
+          fi
+          kms_oid4vci_verifier_tree="$(cargo tree --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt -e features,no-dev)"
+          if grep -Eq '(^| )isomdl( |$)|(sd-jwt-rs feature "(default|issuer-local|holder)")' <<<"$kms_oid4vci_verifier_tree"; then
+            printf '%s\n' "$kms_oid4vci_verifier_tree"
+            exit 1
+          fi
+          kms_bindings_tree="$(cargo tree --locked -p marty-bindings --no-default-features --features kms-only,extension-module -e features,no-dev)"
+          if grep -Eq 'isomdl feature "(default|issuer-local-signing|session-key-agreement|cli)"|sd-jwt-rs feature "(default|issuer-local|holder)"' <<<"$kms_bindings_tree"; then
+            printf '%s\n' "$kms_bindings_tree"
+            exit 1
+          fi
           cargo test --locked -p marty-verification --features test-fixtures
           cargo check --locked -p marty-oid4vci --no-default-features
           cargo test --locked -p marty-oid4vci
@@ -484,6 +534,7 @@ jobs:
     needs:
       - preflight
       - affected-tests
+      - zkp-native-security
       - platform-tests
       - security
       - feature-matrix
@@ -499,6 +550,7 @@ jobs:
       EVENT_NAME: ${{ github.event_name }}
       PREFLIGHT: ${{ needs.preflight.result }}
       AFFECTED_TESTS: ${{ needs.affected-tests.result }}
+      ZKP_NATIVE_SECURITY: ${{ needs.zkp-native-security.result }}
       PLATFORM_TESTS: ${{ needs.platform-tests.result }}
       SECURITY: ${{ needs.security.result }}
       FEATURE_MATRIX: ${{ needs.feature-matrix.result }}
@@ -512,6 +564,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$PREFLIGHT" = success
+          test "$ZKP_NATIVE_SECURITY" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$AFFECTED_TESTS" = success
             for result in "$PLATFORM_TESTS" "$SECURITY" "$FEATURE_MATRIX" \

@@ -115,6 +115,16 @@ pub const NUM_ZK_SPECS: usize = 12;
 // ── Extern functions ──────────────────────────────────────────────────
 
 extern "C" {
+    /// Parse both embedded circuits, enforce their individual IDs, and return
+    /// the SHA-256 digest of the ordered pair.
+    #[cfg(not(zk_mock))]
+    pub fn circuit_id(
+        id: *mut c_uchar,
+        bcp: *const c_uchar,
+        bcsz: size_t,
+        zk_spec: *const ZkSpecStruct,
+    ) -> libc::c_int;
+
     #[cfg(feature = "prover")]
     /// Generate a compressed circuit for the given ZK spec.
     /// Caller must free `*cb` via `libc::free`.

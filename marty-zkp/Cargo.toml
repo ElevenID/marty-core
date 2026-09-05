@@ -31,3 +31,11 @@ zk-mock = []
 [dependencies.pyo3]
 workspace = true
 optional = true
+
+[[test]]
+name = "conformance"
+required-features = ["prover"]
+
+[[test]]
+name = "circuit_identity"
+required-features = ["verifier"]

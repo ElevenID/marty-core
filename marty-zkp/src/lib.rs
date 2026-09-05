@@ -323,6 +323,8 @@ impl Circuit {
                 .max_by_key(|&i| ffi::kZkSpecs[i].version)
                 .ok_or(ZkError::InvalidInput)?
         };
+        #[cfg(not(zk_mock))]
+        validate_circuit_identity(&bytes, spec_index)?;
         Ok(Self { bytes, spec_index })
     }
 
@@ -374,6 +376,31 @@ impl Circuit {
         );
         unsafe { &ffi::kZkSpecs[self.spec_index] }
     }
+}
+
+#[cfg(not(zk_mock))]
+fn validate_circuit_identity(bytes: &[u8], spec_index: usize) -> Result<(), ZkError> {
+    let spec = unsafe { &ffi::kZkSpecs[spec_index] };
+    let mut digest = [0u8; 32];
+    let valid = unsafe { ffi::circuit_id(digest.as_mut_ptr(), bytes.as_ptr(), bytes.len(), spec) };
+    if valid != 1 {
+        return Err(ZkError::InvalidInput);
+    }
+
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (index, byte) in digest.iter().copied().enumerate() {
+        let high = HEX[(byte >> 4) as usize];
+        let low = HEX[(byte & 0x0f) as usize];
+        if spec.circuit_hash[index * 2] as u8 != high
+            || spec.circuit_hash[index * 2 + 1] as u8 != low
+        {
+            return Err(ZkError::InvalidInput);
+        }
+    }
+    if spec.circuit_hash[64] != 0 {
+        return Err(ZkError::InvalidInput);
+    }
+    Ok(())
 }
 
 // ── Prover ────────────────────────────────────────────────────────────
