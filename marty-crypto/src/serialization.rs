@@ -8,6 +8,16 @@ use der::{Decode, DecodePem, Encode};
 use elliptic_curve::sec1::FromEncodedPoint;
 use spki::SubjectPublicKeyInfoOwned;
 
+#[cfg(not(feature = "private-key-codec"))]
+/// Marker documenting the public-key-only codec boundary.
+///
+/// Private-key import, export, and conversion do not exist in this build:
+///
+/// ```compile_fail
+/// let _ = marty_crypto::serialization::load_private_key_der(&[]);
+/// ```
+pub struct PublicKeyOnly;
+
 // ============================================================================
 // Private Key Operations
 // ============================================================================
@@ -15,6 +25,7 @@ use spki::SubjectPublicKeyInfoOwned;
 /// Load a private key from PEM format.
 ///
 /// Supports PKCS#8 format for EC and RSA keys.
+#[cfg(feature = "private-key-codec")]
 pub fn load_private_key_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
     // Check for encrypted key
     if pem_data.contains("ENCRYPTED") {
@@ -49,6 +60,7 @@ pub fn load_private_key_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
 }
 
 /// Load an EC private key from SEC1 PEM format.
+#[cfg(feature = "private-key-codec")]
 fn load_ec_private_key_sec1_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
     // Try P-256 first
     if let Ok(key) = p256::SecretKey::from_sec1_pem(pem_data) {
@@ -74,6 +86,7 @@ fn load_ec_private_key_sec1_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
 }
 
 /// Load an RSA private key from PKCS#1 PEM format.
+#[cfg(feature = "private-key-codec")]
 fn load_rsa_private_key_pkcs1_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
     use pkcs8::EncodePrivateKey;
     use rsa::pkcs1::DecodeRsaPrivateKey;
@@ -89,6 +102,7 @@ fn load_rsa_private_key_pkcs1_pem(pem_data: &str) -> CryptoResult<Vec<u8>> {
 }
 
 /// Load a private key from DER format (PKCS#8).
+#[cfg(feature = "private-key-codec")]
 pub fn load_private_key_der(der_data: &[u8]) -> CryptoResult<Vec<u8>> {
     // Validate it's a valid PKCS#8 structure
     let _info = pkcs8::PrivateKeyInfo::from_der(der_data)
@@ -98,6 +112,7 @@ pub fn load_private_key_der(der_data: &[u8]) -> CryptoResult<Vec<u8>> {
 }
 
 /// Save a private key to PEM format (PKCS#8).
+#[cfg(feature = "private-key-codec")]
 pub fn save_private_key_pem(private_key_der: &[u8]) -> CryptoResult<String> {
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(private_key_der);
@@ -116,6 +131,7 @@ pub fn save_private_key_pem(private_key_der: &[u8]) -> CryptoResult<String> {
 }
 
 /// Save a private key to DER format (already in DER, just validate).
+#[cfg(feature = "private-key-codec")]
 pub fn save_private_key_der(private_key_der: &[u8]) -> CryptoResult<Vec<u8>> {
     load_private_key_der(private_key_der)
 }
@@ -125,6 +141,7 @@ pub fn save_private_key_der(private_key_der: &[u8]) -> CryptoResult<Vec<u8>> {
 /// # Arguments
 /// * `raw_key` - Raw private key bytes (32 bytes for P-256, 48 for P-384, 32 for Ed25519)
 /// * `key_type` - One of "EC_P256", "EC_P384", "Ed25519"
+#[cfg(feature = "private-key-codec")]
 pub fn raw_private_key_to_pkcs8(raw_key: &[u8], key_type: &str) -> CryptoResult<Vec<u8>> {
     match key_type {
         "EC_P256" | "P256" | "secp256r1" => {
@@ -235,6 +252,7 @@ pub fn raw_public_key_to_spki(raw_key: &[u8], key_type: &str) -> CryptoResult<Ve
 }
 
 /// Extract raw private key bytes from PKCS#8 DER format.
+#[cfg(feature = "private-key-codec")]
 pub fn pkcs8_to_raw_private_key(pkcs8_der: &[u8]) -> CryptoResult<(Vec<u8>, String)> {
     let key_type = detect_private_key_type(pkcs8_der)?;
 
@@ -330,6 +348,7 @@ pub fn save_public_key_pem(public_key_der: &[u8]) -> CryptoResult<String> {
 }
 
 /// Extract public key from private key (PKCS#8 DER).
+#[cfg(feature = "private-key-codec")]
 pub fn extract_public_key(private_key_der: &[u8]) -> CryptoResult<Vec<u8>> {
     let key_type = detect_private_key_type(private_key_der)?;
 
@@ -450,6 +469,7 @@ fn encode_ed25519_public_key_spki(public_key: &[u8]) -> CryptoResult<Vec<u8>> {
 // ============================================================================
 
 /// Detect the key type from DER-encoded private key.
+#[cfg(feature = "private-key-codec")]
 pub fn detect_private_key_type(der_data: &[u8]) -> CryptoResult<String> {
     let info = pkcs8::PrivateKeyInfo::from_der(der_data)
         .map_err(|e| CryptoError::der_error(format!("Failed to parse private key: {}", e)))?;
@@ -551,7 +571,7 @@ pub fn get_key_size(public_key_der: &[u8]) -> CryptoResult<usize> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "private-key-codec", feature = "keygen"))]
 mod tests {
     #[test]
     fn test_pem_roundtrip_private_key() {

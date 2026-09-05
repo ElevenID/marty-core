@@ -62,7 +62,7 @@ pub mod ocsp;
 pub mod pkcs12;
 #[cfg(feature = "rsa-verification")]
 pub mod rsa;
-#[cfg(feature = "serialization")]
+#[cfg(feature = "public-key-codec")]
 pub mod serialization;
 #[cfg(feature = "sod-builder")]
 pub mod sod_builder;

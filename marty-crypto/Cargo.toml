@@ -42,7 +42,9 @@ ocsp = ["x509"]
 symmetric = []       # AES-GCM, AES-CBC, 3DES
 kdf = ["hashing"]    # HKDF, PBKDF2, and transcript-bound mDoc key derivation
 pkcs12 = []          # PKCS#12 bundle parsing
-serialization = ["rsa"]
+serialization = ["private-key-codec"]
+public-key-codec = []
+private-key-codec = ["public-key-codec", "rsa-verification"]
 keygen = ["bbs", "ecdh", "eddsa", "rsa"]
 cert-builder = ["keygen", "x509"]
 sod-builder = ["dep:cms", "cms/builder", "cert-builder"]
@@ -173,6 +175,10 @@ required-features = ["hashing"]
 [[test]]
 name = "public_jwk_vectors"
 required-features = ["jwk"]
+
+[[test]]
+name = "public_key_codec"
+required-features = ["public-key-codec"]
 
 [[test]]
 name = "verification_only"
