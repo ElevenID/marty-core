@@ -3,13 +3,14 @@
 use super::to_pyerr;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+#[cfg(feature = "ephemeral-session-keys")]
 use pyo3::types::PyDict;
 
 // ============================================================================
 // EAC Bindings
 // ============================================================================
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pyclass(name = "NativeEacChipAuthentication")]
 pub(super) struct PyNativeEacChipAuthentication {
     algorithm: crate::eac::EacAlgorithm,
@@ -17,7 +18,7 @@ pub(super) struct PyNativeEacChipAuthentication {
     private_key: Option<Vec<u8>>,
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 impl PyNativeEacChipAuthentication {
     fn store_private_key(&mut self, private_key: Vec<u8>) {
         if let Some(mut previous) = self.private_key.replace(private_key) {
@@ -33,7 +34,7 @@ impl PyNativeEacChipAuthentication {
     }
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 impl Drop for PyNativeEacChipAuthentication {
     fn drop(&mut self) {
         if let Some(private_key) = self.private_key.as_mut() {
@@ -42,7 +43,7 @@ impl Drop for PyNativeEacChipAuthentication {
     }
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pymethods]
 impl PyNativeEacChipAuthentication {
     #[new]
@@ -104,14 +105,14 @@ impl PyNativeEacChipAuthentication {
     }
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pyclass(name = "NativeEacSecureMessaging")]
 pub(super) struct PyNativeEacSecureMessaging {
     inner: crate::eac::EacSecureMessaging,
     algorithm: String,
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pymethods]
 impl PyNativeEacSecureMessaging {
     #[cfg(feature = "local-key-operations")]

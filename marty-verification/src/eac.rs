@@ -9,6 +9,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{VerificationError, VerificationResult};
 
+#[cfg(not(feature = "ephemeral-session-keys"))]
+/// Marker for EAC builds that verify certificates but cannot create or retain
+/// reader-side session key material.
+///
+/// ```compile_fail
+/// # use marty_verification::eac::EacAlgorithm;
+/// let _ = marty_verification::eac::generate_ephemeral_keypair(
+///     EacAlgorithm::EcdhP256Sha256,
+/// );
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_verification::eac::EacSecureMessaging::new(
+///     &[0u8; 32],
+///     marty_verification::eac::EacAlgorithm::EcdhP256Sha256,
+/// );
+/// ```
+pub struct NoEphemeralSessionKeys;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EacAlgorithm {
     EcdhP256Sha256,
@@ -32,12 +51,14 @@ impl EacAlgorithm {
         }
     }
 
+    #[cfg(any(test, feature = "ephemeral-session-keys"))]
     fn uses_sha384(self) -> bool {
         self == Self::EcdhP384Sha384
     }
 }
 
 /// Generate an ephemeral key pair as `(private scalar, SEC1 public point)`.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn generate_ephemeral_keypair(
     algorithm: EacAlgorithm,
 ) -> VerificationResult<(Vec<u8>, Vec<u8>)> {
@@ -56,6 +77,7 @@ pub fn generate_ephemeral_keypair(
 }
 
 /// Perform actual ECDH with a generated private scalar and chip public point.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn agree(
     algorithm: EacAlgorithm,
     private_key: &[u8],
@@ -80,6 +102,7 @@ pub fn agree(
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn normalize_ec_point(point: &[u8]) -> VerificationResult<Vec<u8>> {
     match point.len() {
         64 | 96 => {
@@ -227,11 +250,13 @@ pub fn serialize_certificate_metadata(
     .map_err(|error| VerificationError::internal(format!("EAC metadata encoding failed: {error}")))
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn calculate_mac(key: &[u8], data: &[u8]) -> VerificationResult<Vec<u8>> {
     marty_crypto::symmetric::hmac_sha256(key, data).map_err(Into::into)
 }
 
 /// Stateful encrypted-message compatibility channel used by EAC callers.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct EacSecureMessaging {
     mac_key: [u8; 32],
     encryption_key: [u8; 32],
@@ -239,6 +264,7 @@ pub struct EacSecureMessaging {
     receive_sequence_counter: u32,
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for EacSecureMessaging {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.mac_key);
@@ -246,6 +272,7 @@ impl Drop for EacSecureMessaging {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl EacSecureMessaging {
     pub fn new(shared_secret: &[u8], algorithm: EacAlgorithm) -> VerificationResult<Self> {
         if shared_secret.is_empty() {
@@ -335,6 +362,7 @@ impl EacSecureMessaging {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn mac_input(counter: u32, iv: &[u8], ciphertext: &[u8]) -> Vec<u8> {
     let mut input = Vec::with_capacity(4 + iv.len() + ciphertext.len());
     input.extend_from_slice(&counter.to_be_bytes());
@@ -343,6 +371,7 @@ fn mac_input(counter: u32, iv: &[u8], ciphertext: &[u8]) -> Vec<u8> {
     input
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;

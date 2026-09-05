@@ -282,7 +282,9 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
         m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
         m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativeEacChipAuthentication>()?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativeEacSecureMessaging>()?;
         #[cfg(feature = "local-key-operations")]
         m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
