@@ -76,17 +76,7 @@ impl SecureStorage {
     /// This is an explicit test and startup-self-check boundary. Normal application
     /// startup must use [`SecureStorage::new`] and the native platform keychain.
     pub fn new_with_process_local_keyring(data_dir: &Path) -> Result<Self, StorageError> {
-        let store = keyring_core::get_default_store()
-            .ok_or_else(|| StorageError::Keychain("no default store is installed".to_string()))?;
-        if !matches!(
-            store.persistence(),
-            keyring_core::CredentialPersistence::ProcessOnly
-        ) {
-            return Err(StorageError::Keychain(
-                "installed keyring is not process-local".to_string(),
-            ));
-        }
-        Self::new_with_keychain(data_dir, KeychainManager::with_installed_default_store())
+        Self::new_with_keychain(data_dir, KeychainManager::with_process_local_store()?)
     }
 
     fn new_with_keychain(data_dir: &Path, keychain: KeychainManager) -> Result<Self, StorageError> {
