@@ -131,6 +131,7 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["crl-builder"] }
+marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["local-key-operations"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 rcgen = { workspace = true }

@@ -140,7 +140,7 @@ pub(super) fn jws_verify<'py>(
 }
 
 /// Encrypt data and create a JWE.
-#[cfg(feature = "local-key-operations")]
+#[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
 #[pyfunction]
 pub(super) fn jwe_encrypt(
     plaintext: &[u8],
@@ -151,7 +151,7 @@ pub(super) fn jwe_encrypt(
 }
 
 /// Decrypt a JWE.
-#[cfg(feature = "local-key-operations")]
+#[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
 #[pyfunction]
 pub(super) fn jwe_decrypt<'py>(
     py: Python<'py>,

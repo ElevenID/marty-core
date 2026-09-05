@@ -942,33 +942,37 @@ fn normalize_presentation_credential_format(value: &str) -> String {
 /// Return explicit native backend and capability diagnostics for readiness.
 #[pyfunction]
 fn native_backend_diagnostics() -> PyResult<String> {
+    let capabilities: Vec<_> = [
+        "oidc_id_token_validation",
+        "presentation_policy_evaluation",
+        "presentation_policy_service_evaluation",
+        "oid4vci",
+        "oid4vp",
+        "document_verification",
+        "credential_format_detection",
+        "credential_presentation_metadata",
+        "oid4vp_request_builder",
+        "oid4vp_x509_identity",
+        "siop_jwk_id_token_verification",
+        "device_authentication",
+        "flow_state_machine",
+        "did_resolution",
+        "did_identifier_derivation",
+        "openid4vp_mdoc_handover",
+        "vds_nc_profile",
+        "trust_registry_sync",
+        "status_list",
+    ]
+    .into_iter()
+    .chain(cfg!(feature = "ephemeral-session-keys").then_some("haip_response_encryption"))
+    .collect();
+
     serde_json::to_string(&serde_json::json!({
         "available": true,
         "backend": "_marty_rs",
         "version": env!("CARGO_PKG_VERSION"),
         "build_revision": option_env!("MARTY_BUILD_REVISION").unwrap_or("unknown"),
-        "capabilities": [
-            "oidc_id_token_validation",
-            "presentation_policy_evaluation",
-            "presentation_policy_service_evaluation",
-            "oid4vci",
-            "oid4vp",
-            "document_verification",
-            "credential_format_detection",
-            "credential_presentation_metadata",
-            "oid4vp_request_builder",
-            "oid4vp_x509_identity",
-            "siop_jwk_id_token_verification",
-            "device_authentication",
-            "flow_state_machine",
-            "haip_response_encryption",
-            "did_resolution",
-            "did_identifier_derivation",
-            "openid4vp_mdoc_handover",
-            "vds_nc_profile",
-            "trust_registry_sync",
-            "status_list"
-        ]
+        "capabilities": capabilities
     }))
     .map_err(to_pyerr)
 }
@@ -3487,9 +3491,12 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability == "openid4vp_mdoc_handover"));
-        assert!(capabilities
-            .iter()
-            .any(|capability| capability == "haip_response_encryption"));
+        assert_eq!(
+            capabilities
+                .iter()
+                .any(|capability| capability == "haip_response_encryption"),
+            cfg!(feature = "ephemeral-session-keys")
+        );
         assert!(capabilities
             .iter()
             .any(|capability| capability == "oid4vp_x509_identity"));

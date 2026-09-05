@@ -57,6 +57,9 @@ hex = "0.4"
 [features]
 default = ["extension-module"]
 extension-module = ["pyo3/extension-module"]
+# Short-lived HAIP/OID4VP response-encryption keys. This is intentionally
+# independent from development-only credential issuer keys.
+ephemeral-session-keys = ["marty-verification/ephemeral-session-keys"]
 # Development and offline migration utilities that place private key material
 # in this process. Production issuer builds must leave this disabled and use
 # the prepare -> remote sign -> assemble APIs.
@@ -66,6 +69,5 @@ local-key-operations = [
     "marty-crypto/private-key-codec",
     "marty-crypto/rsa-local-signing",
     "marty-oid4vci/local-key-operations",
-    "marty-verification/ephemeral-session-keys",
     "marty-verification/local-key-operations",
 ]

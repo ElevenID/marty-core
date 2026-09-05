@@ -6,12 +6,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::{base64url_decode, base64url_encode, Jwk};
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+use super::base64url_encode;
+use super::{base64url_decode, Jwk};
 use crate::{VerificationError, VerificationResult};
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 const MAX_JWE_PLAINTEXT_BYTES: usize = 1024 * 1024;
 const MAX_COMPACT_JWE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PROTECTED_HEADER_BYTES: usize = 16 * 1024;
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 const MAX_PARTY_INFO_BYTES: usize = 1024;
 const AES_GCM_IV_BYTES: usize = 12;
 const AES_GCM_TAG_BYTES: usize = 16;
@@ -118,6 +122,7 @@ fn content_encryption_key_len(enc: &str) -> VerificationResult<usize> {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn decode_party_info(value: Option<&str>) -> VerificationResult<Vec<u8>> {
     let decoded = match value {
         Some(value) => base64url_decode(value)?,
@@ -138,7 +143,24 @@ fn decode_party_info(value: Option<&str>) -> VerificationResult<Vec<u8>> {
 /// but key generation and JWK construction remain canonical Rust behavior.
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(String, String)> {
-    let mut private = super::generate_ec_p256()?;
+    use elliptic_curve::sec1::ToEncodedPoint;
+    use p256::SecretKey;
+    use rand::rngs::OsRng;
+
+    let secret = SecretKey::random(&mut OsRng);
+    let point = secret.public_key().to_encoded_point(false);
+    let mut private = Jwk {
+        kty: "EC".to_string(),
+        crv: Some("P-256".to_string()),
+        x: Some(base64url_encode(point.x().ok_or_else(|| {
+            VerificationError::internal("HAIP P-256 key has no x coordinate".to_string())
+        })?)),
+        y: Some(base64url_encode(point.y().ok_or_else(|| {
+            VerificationError::internal("HAIP P-256 key has no y coordinate".to_string())
+        })?)),
+        d: Some(base64url_encode(&secret.to_bytes())),
+        ..Default::default()
+    };
     private.kid = Some(format!("oid4vp-haip-{}", uuid::Uuid::new_v4()));
     private.alg = Some("ECDH-ES".to_string());
     private.use_ = Some("enc".to_string());
@@ -147,6 +169,7 @@ pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(Strin
 }
 
 /// Decrypt a bounded ECDH-ES compact JWE using a P-256 private JWK JSON value.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn decrypt_haip_response(
     compact_jwe: &str,
     private_jwk_json: &str,
@@ -228,6 +251,7 @@ pub fn validate_haip_response_header(compact_jwe: &str) -> VerificationResult<Jw
 /// # Returns
 ///
 /// JWE in compact serialization format.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn jwe_encrypt_direct(
     plaintext: &[u8],
     recipient_key: &Jwk,
@@ -441,6 +465,7 @@ fn parse_and_validate_direct_jwe(jwe: &str) -> VerificationResult<(Vec<&str>, Jw
 /// # Returns
 ///
 /// Decrypted plaintext.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>> {
     let (parts, header, key_len) = parse_and_validate_direct_jwe(jwe)?;
     let protected_b64 = parts[0];

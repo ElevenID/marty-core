@@ -31,3 +31,17 @@ pub use public_key::*;
 /// let _ = marty_verification::jwk::jws_sign(&JwsHeader::new("ES256"), b"payload", &Jwk::default());
 /// ```
 pub struct VerificationOnly;
+
+#[cfg(not(feature = "ephemeral-session-keys"))]
+/// The ordinary verifier surface can inspect HAIP headers but cannot create or
+/// decrypt JWE payloads or generate session keys.
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let _ = marty_verification::jwk::jwe_encrypt_direct(b"payload", &Jwk::default(), "A256GCM");
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_verification::jwk::generate_haip_response_encryption_jwk_pair();
+/// ```
+pub struct NoEphemeralSessionKeys;

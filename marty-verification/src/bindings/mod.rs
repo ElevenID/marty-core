@@ -413,9 +413,9 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(jws_sign, m)?)?;
     #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jws_verify, m)?)?;
-    #[cfg(feature = "local-key-operations")]
+    #[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
     m.add_function(wrap_pyfunction!(jwe_encrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
+    #[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
     m.add_function(wrap_pyfunction!(jwe_decrypt, m)?)?;
 
     // mDL Document Parsing
