@@ -507,6 +507,7 @@ fn build_default_config(
     }
 }
 
+/// Preserve explicitly configured displays, including an empty list; synthesize only when absent.
 fn claim_metadata(name: &str, definition: &ClaimDefinition) -> ClaimMetadata {
     ClaimMetadata {
         mandatory: definition.mandatory.then_some(true),
@@ -514,14 +515,16 @@ fn claim_metadata(name: &str, definition: &ClaimDefinition) -> ClaimMetadata {
             .value_type
             .clone()
             .or_else(|| Some("string".into())),
-        display: Some(vec![DisplayEntry {
-            name: name.replace('_', " "),
-            locale: Some("en-US".into()),
-            logo: None,
-            description: None,
-            background_color: None,
-            text_color: None,
-        }]),
+        display: definition.display.clone().or_else(|| {
+            Some(vec![DisplayEntry {
+                name: name.replace('_', " "),
+                locale: Some("en-US".into()),
+                logo: None,
+                description: None,
+                background_color: None,
+                text_color: None,
+            }])
+        }),
     }
 }
 
@@ -564,6 +567,39 @@ fn build_mdoc_claims_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_claim_displays_survive_public_metadata_generation() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/claim_display_metadata.json"
+        ))
+        .unwrap();
+        let config: CredentialTypeConfig = serde_json::from_value(fixture.clone()).unwrap();
+        let metadata = MetadataBuilder::new("https://example.test", "Example")
+            .add_credential_type(config)
+            .build();
+        assert_eq!(metadata.credential_configurations_supported.len(), 2);
+        for configuration in metadata.credential_configurations_supported.values() {
+            let prefix = if configuration.format == "mso_mdoc" {
+                "org.example."
+            } else {
+                ""
+            };
+            let claims = configuration.claims.as_ref().unwrap();
+            assert_eq!(
+                serde_json::to_value(&claims[&format!("{prefix}given_name")].display).unwrap(),
+                fixture["claims"]["given_name"]["display"]
+            );
+            assert_eq!(
+                serde_json::to_value(&claims[&format!("{prefix}age")].display).unwrap(),
+                serde_json::json!([])
+            );
+            assert_eq!(
+                serde_json::to_value(&claims[&format!("{prefix}family_name")].display).unwrap(),
+                serde_json::json!([{"name": "family name", "locale": "en-US"}])
+            );
+        }
+    }
 
     #[test]
     fn display_types_keep_both_public_paths_and_wire_fields() {

@@ -1,0 +1,16 @@
+{
+  "id": "permit",
+  "name": "Permit",
+  "formats": ["dc+sd-jwt", "mso_mdoc"],
+  "doctype": "org.example.permit",
+  "claims": {
+    "given_name": {
+      "display": [
+        {"name": "Prénom", "locale": "fr-FR", "description": "Nom personnel"},
+        {"name": "Given name", "locale": "en-US", "logo": {"uri": "https://example.test/name.svg", "alt_text": "Name"}}
+      ]
+    },
+    "age": {"display": []},
+    "family_name": {}
+  }
+}
