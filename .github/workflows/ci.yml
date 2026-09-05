@@ -410,7 +410,13 @@ jobs:
           python -m venv .venv
           .venv/bin/python -m pip install --disable-pip-version-check 'maturin[patchelf]==1.14.1' pytest
           .venv/bin/maturin develop
-          .venv/bin/python -m pytest python/tests/
+          .venv/bin/python -m pytest \
+            python/tests/test_production_kms_surface.py \
+            python/tests/test_mrz_golden_vectors.py \
+            python/tests/test_emrtd_golden_vectors.py
+          .venv/bin/maturin develop --features local-key-operations
+          .venv/bin/python -m pytest python/tests/ \
+            --ignore=python/tests/test_production_kms_surface.py
       - name: Install native transport build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libpcsclite-dev libdbus-1-dev pkg-config
       - name: Build and test ISO bindings

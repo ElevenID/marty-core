@@ -1716,6 +1716,7 @@ fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -> PyResult<
 // ============================================================================
 
 /// Load a private key from PEM format, return PKCS#8 DER.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn load_private_key_pem<'py>(py: Python<'py>, pem_data: &str) -> PyResult<Bound<'py, PyBytes>> {
     let der = marty_crypto::serialization::load_private_key_pem(pem_data).map_err(to_pyerr)?;
@@ -1723,6 +1724,7 @@ fn load_private_key_pem<'py>(py: Python<'py>, pem_data: &str) -> PyResult<Bound<
 }
 
 /// Validate/load a private key from DER format.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn load_private_key_der<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let der = marty_crypto::serialization::load_private_key_der(der_data).map_err(to_pyerr)?;
@@ -1730,6 +1732,7 @@ fn load_private_key_der<'py>(py: Python<'py>, der_data: &[u8]) -> PyResult<Bound
 }
 
 /// Save a private key to PEM format (PKCS#8).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn save_private_key_pem(private_key_der: &[u8]) -> PyResult<String> {
     marty_crypto::serialization::save_private_key_pem(private_key_der).map_err(to_pyerr)
@@ -1830,6 +1833,7 @@ fn p256_public_jwk_to_pem(public_jwk_json: &str) -> PyResult<String> {
 }
 
 /// Extract public key from private key (PKCS#8 DER).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn extract_public_key<'py>(
     py: Python<'py>,
@@ -1841,6 +1845,7 @@ fn extract_public_key<'py>(
 }
 
 /// Detect the type of a private key.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn detect_private_key_type(der_data: &[u8]) -> PyResult<String> {
     marty_crypto::serialization::detect_private_key_type(der_data).map_err(to_pyerr)
@@ -1859,6 +1864,7 @@ fn get_key_size(public_key_der: &[u8]) -> PyResult<usize> {
 }
 
 /// Convert raw EC private key bytes to PKCS#8 DER format.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn raw_private_key_to_pkcs8<'py>(
     py: Python<'py>,
@@ -1883,6 +1889,7 @@ fn raw_public_key_to_spki<'py>(
 }
 
 /// Extract raw private key bytes from PKCS#8 DER format.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn pkcs8_to_raw_private_key<'py>(
     py: Python<'py>,
@@ -1905,6 +1912,7 @@ fn spki_to_raw_public_key<'py>(
 }
 
 /// Derive a key using HKDF-SHA256.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn hkdf_sha256<'py>(
     py: Python<'py>,
@@ -1918,6 +1926,7 @@ fn hkdf_sha256<'py>(
 }
 
 /// Derive a key using HKDF-SHA384.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn hkdf_sha384<'py>(
     py: Python<'py>,
@@ -1931,6 +1940,7 @@ fn hkdf_sha384<'py>(
 }
 
 /// Derive a key using PBKDF2-SHA256.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn pbkdf2_sha256<'py>(
     py: Python<'py>,
@@ -1948,6 +1958,7 @@ fn pbkdf2_sha256<'py>(
 // ============================================================================
 
 /// Encrypt data using AES-GCM.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn aes_gcm_encrypt<'py>(
     py: Python<'py>,
@@ -1970,6 +1981,7 @@ fn aes_gcm_encrypt<'py>(
 }
 
 /// Decrypt data using AES-GCM.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn aes_gcm_decrypt<'py>(
     py: Python<'py>,
@@ -1992,6 +2004,7 @@ fn aes_gcm_decrypt<'py>(
 }
 
 /// Encrypt data using 3DES-CBC.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn tdes_cbc_encrypt<'py>(
     py: Python<'py>,
@@ -2005,6 +2018,7 @@ fn tdes_cbc_encrypt<'py>(
 }
 
 /// Decrypt data using 3DES-CBC.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn tdes_cbc_decrypt<'py>(
     py: Python<'py>,
@@ -2022,6 +2036,7 @@ fn tdes_cbc_decrypt<'py>(
 // ============================================================================
 
 /// Generate an Ed25519 key pair.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ed25519_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ed25519::generate_keypair();
@@ -2029,6 +2044,7 @@ fn ed25519_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Boun
 }
 
 /// Sign a message with Ed25519.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ed25519_sign<'py>(
     py: Python<'py>,
@@ -2052,6 +2068,7 @@ fn ed25519_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResu
 // ============================================================================
 
 /// Generate an X25519 key pair.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn x25519_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdh::x25519_generate_keypair();
@@ -2059,6 +2076,7 @@ fn x25519_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound
 }
 
 /// Perform X25519 key agreement.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn x25519_agree<'py>(
     py: Python<'py>,
@@ -2072,6 +2090,7 @@ fn x25519_agree<'py>(
 }
 
 /// Generate a P-256 key pair.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn p256_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdh::p256_generate_keypair();
@@ -2079,6 +2098,7 @@ fn p256_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'
 }
 
 /// Perform P-256 ECDH key agreement.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn p256_agree<'py>(
     py: Python<'py>,
@@ -2094,6 +2114,7 @@ fn p256_agree<'py>(
 // ============================================================================
 
 /// Generate a P-256 ECDSA key pair for signing.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ecdsa_p256_generate<'py>(
     py: Python<'py>,
@@ -2103,6 +2124,7 @@ fn ecdsa_p256_generate<'py>(
 }
 
 /// Generate a P-384 ECDSA key pair for signing.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ecdsa_p384_generate<'py>(
     py: Python<'py>,
@@ -2112,6 +2134,7 @@ fn ecdsa_p384_generate<'py>(
 }
 
 /// Sign a message with ECDSA P-256 SHA-256 (ES256).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ecdsa_p256_sign<'py>(
     py: Python<'py>,
@@ -2123,6 +2146,7 @@ fn ecdsa_p256_sign<'py>(
 }
 
 /// Sign a message with ECDSA P-384 SHA-384 (ES384).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ecdsa_p384_sign<'py>(
     py: Python<'py>,
@@ -2146,6 +2170,7 @@ fn ecdsa_p384_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyR
 }
 
 /// Generate a P-521 ECDSA key pair for signing.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ecdsa_p521_generate<'py>(
     py: Python<'py>,
@@ -2155,6 +2180,7 @@ fn ecdsa_p521_generate<'py>(
 }
 
 /// Sign a message with ECDSA P-521 SHA-512 (ES512).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ecdsa_p521_sign<'py>(
     py: Python<'py>,
@@ -2176,6 +2202,7 @@ fn ecdsa_p521_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyR
 // ============================================================================
 
 /// Generate an RSA key pair (2048 bits by default).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[pyo3(signature = (bits = 2048))]
 fn rsa_generate<'py>(
@@ -2191,6 +2218,7 @@ fn rsa_generate<'py>(
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 SHA-256 (RS256).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn rsa_pkcs1_sha256_sign<'py>(
     py: Python<'py>,
@@ -2203,6 +2231,7 @@ fn rsa_pkcs1_sha256_sign<'py>(
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 SHA-384 (RS384).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn rsa_pkcs1_sha384_sign<'py>(
     py: Python<'py>,
@@ -2215,6 +2244,7 @@ fn rsa_pkcs1_sha384_sign<'py>(
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 SHA-512 (RS512).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn rsa_pkcs1_sha512_sign<'py>(
     py: Python<'py>,
@@ -2227,6 +2257,7 @@ fn rsa_pkcs1_sha512_sign<'py>(
 }
 
 /// Sign a message with RSA-PSS SHA-256 (PS256).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn rsa_pss_sha256_sign<'py>(
     py: Python<'py>,
@@ -2239,6 +2270,7 @@ fn rsa_pss_sha256_sign<'py>(
 }
 
 /// Sign a message with RSA-PSS SHA-384 (PS384).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn rsa_pss_sha384_sign<'py>(
     py: Python<'py>,
@@ -2251,6 +2283,7 @@ fn rsa_pss_sha384_sign<'py>(
 }
 
 /// Sign a message with RSA-PSS SHA-512 (PS512).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn rsa_pss_sha512_sign<'py>(
     py: Python<'py>,
@@ -2327,6 +2360,7 @@ fn rsa_pss_sha512_verify(
 // ============================================================================
 
 /// Generate random bytes.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn generate_random_bytes<'py>(py: Python<'py>, length: usize) -> Bound<'py, PyBytes> {
     let bytes = marty_crypto::keygen::generate_random_bytes(length);
@@ -2334,6 +2368,7 @@ fn generate_random_bytes<'py>(py: Python<'py>, length: usize) -> Bound<'py, PyBy
 }
 
 /// Generate a cryptographic key.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn generate_key<'py>(
     py: Python<'py>,
@@ -2374,12 +2409,14 @@ fn generate_key<'py>(
 // ============================================================================
 
 /// Python wrapper for JWK.
+#[cfg(feature = "local-key-operations")]
 #[pyclass(name = "Jwk", from_py_object)]
 #[derive(Clone)]
 pub struct PyJwk {
     inner: crate::jwk::Jwk,
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pymethods]
 impl PyJwk {
     /// Get the key type.
@@ -2461,6 +2498,7 @@ impl PyJwk {
 }
 
 /// Generate a JWK of the specified type.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn jwk_generate(key_type: &str) -> PyResult<PyJwk> {
     let inner = match key_type.to_lowercase().as_str() {
@@ -2482,6 +2520,7 @@ fn jwk_generate(key_type: &str) -> PyResult<PyJwk> {
 }
 
 /// Sign data and create a JWS.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn jws_sign(payload: &[u8], key: &PyJwk, algorithm: &str) -> PyResult<String> {
     let header = crate::jwk::JwsHeader::new(algorithm);
@@ -2489,12 +2528,14 @@ fn jws_sign(payload: &[u8], key: &PyJwk, algorithm: &str) -> PyResult<String> {
 }
 
 /// Verify a JWS and return the payload.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn jws_verify<'py>(py: Python<'py>, jws: &str, key: &PyJwk) -> PyResult<Bound<'py, PyBytes>> {
     let (_, payload) = crate::jwk::jws_verify(jws, &key.inner).map_err(to_pyerr)?;
     Ok(PyBytes::new(py, &payload))
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn open_badge_ob2_issue(request_json: &str) -> PyResult<String> {
     crate::open_badges::issue_ob2_json(request_json)
@@ -2507,6 +2548,7 @@ fn open_badge_ob2_verify(request_json: &str) -> PyResult<String> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn open_badge_ob3_issue(request_json: &str) -> PyResult<String> {
     crate::open_badges::issue_ob3_json(request_json)
@@ -2936,12 +2978,14 @@ fn bac_session_dict<'py>(
 }
 
 /// Encrypt data and create a JWE.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn jwe_encrypt(plaintext: &[u8], recipient_key: &PyJwk, encryption: &str) -> PyResult<String> {
     crate::jwk::jwe_encrypt_direct(plaintext, &recipient_key.inner, encryption).map_err(to_pyerr)
 }
 
 /// Decrypt a JWE.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn jwe_decrypt<'py>(py: Python<'py>, jwe: &str, key: &PyJwk) -> PyResult<Bound<'py, PyBytes>> {
     let plaintext = crate::jwk::jwe_decrypt(jwe, &key.inner).map_err(to_pyerr)?;
@@ -2956,6 +3000,7 @@ fn jwe_decrypt<'py>(py: Python<'py>, jwe: &str, key: &PyJwk) -> PyResult<Bound<'
 ///
 /// Returns:
 ///     Tuple of (private_key_bytes, public_key_bytes)
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ed448_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (private_key, public_key) = marty_crypto::ed448::ed448_generate().map_err(to_pyerr)?;
@@ -2973,6 +3018,7 @@ fn ed448_generate<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<
 ///
 /// Returns:
 ///     114-byte signature
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn ed448_sign<'py>(
     py: Python<'py>,
@@ -3002,6 +3048,7 @@ fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult
 // ============================================================================
 
 /// Parsed PKCS#12 data.
+#[cfg(feature = "local-key-operations")]
 #[pyclass(name = "Pkcs12Data")]
 pub struct PyPkcs12Data {
     #[pyo3(get)]
@@ -3017,12 +3064,14 @@ pub struct PyPkcs12Data {
     certificate_chain: Vec<Vec<u8>>,
 }
 
+#[cfg(feature = "local-key-operations")]
 impl Drop for PyPkcs12Data {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.private_key_der);
     }
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pymethods]
 impl PyPkcs12Data {
     /// Get the private key in DER format.
@@ -3088,18 +3137,19 @@ impl PyPkcs12Data {
 ///
 /// Returns:
 ///     Pkcs12Data with private key, certificate, and chain
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn pkcs12_parse(data: &[u8], password: &str) -> PyResult<PyPkcs12Data> {
     let mut parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(to_pyerr)?;
 
     Ok(PyPkcs12Data {
         private_key_algorithm: parsed.private_key_algorithm.to_string(),
-        certificate_subject: parsed.certificate_subject,
-        friendly_name: parsed.friendly_name,
+        certificate_subject: parsed.certificate_subject.take(),
+        friendly_name: parsed.friendly_name.take(),
         chain_length: parsed.certificate_chain.len() + 1,
         private_key_der: std::mem::take(&mut parsed.private_key_der),
-        certificate_der: parsed.certificate_der,
-        certificate_chain: parsed.certificate_chain,
+        certificate_der: std::mem::take(&mut parsed.certificate_der),
+        certificate_chain: std::mem::take(&mut parsed.certificate_chain),
     })
 }
 
@@ -3210,6 +3260,7 @@ fn iso9796_recover<'py>(
 }
 
 /// Create a Scheme 1 signature for passport-chip simulators and tests.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn iso9796_scheme1_sign<'py>(
     py: Python<'py>,
@@ -3425,6 +3476,7 @@ impl PyNativeEacSecureMessaging {
 }
 
 #[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "local-key-operations"))]
 #[pyfunction]
 fn eac_sign_terminal_challenge<'py>(
     py: Python<'py>,
@@ -3628,14 +3680,14 @@ fn validate_ocsp_response(
 // ============================================================================
 
 /// Python-friendly certificate profile enum.
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyclass(name = "CertProfile", from_py_object)]
 #[derive(Clone)]
 pub struct PyCertProfile {
     inner: marty_crypto::cert_builder::CertProfile,
 }
 
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pymethods]
 impl PyCertProfile {
     /// Create a CA profile with optional path length constraint.
@@ -3698,7 +3750,7 @@ impl PyCertProfile {
 }
 
 /// Python-friendly certificate builder configuration.
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyclass(name = "CertificateBuilderConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyCertificateBuilderConfig {
@@ -3712,7 +3764,7 @@ pub struct PyCertificateBuilderConfig {
     key_type: String,
 }
 
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pymethods]
 impl PyCertificateBuilderConfig {
     /// Create a new certificate builder configuration with defaults.
@@ -3964,7 +4016,7 @@ impl PyCertificateBuilderConfig {
 ///
 /// Returns:
 ///     Tuple of (certificate_der_bytes, private_key_pem_str)
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyfunction]
 fn build_self_signed_certificate<'py>(
     py: Python<'py>,
@@ -4036,7 +4088,7 @@ fn build_self_signed_certificate<'py>(
 ///
 /// Returns:
 ///     DER-encoded certificate bytes
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn build_self_signed_certificate_with_key<'py>(
@@ -4132,6 +4184,7 @@ fn dtc_assemble_signature(signature_envelope_json: &str) -> PyResult<String> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn dtc_sign(dtc_json: &str) -> PyResult<String> {
     dtc::sign_dtc_json(dtc_json).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
@@ -4373,6 +4426,64 @@ fn trust_registry_revalidate_state_json(state_json: &str, now_rfc3339: &str) -> 
     crate::trust_sync::revalidate_state_json(state_json, now_rfc3339).map_err(trust_sync_pyerr)
 }
 
+#[cfg(all(test, not(feature = "local-key-operations")))]
+const FORBIDDEN_PRODUCTION_PYTHON_EXPORTS: &[&str] = &[
+    "ed448_generate",
+    "ed448_sign",
+    "Pkcs12Data",
+    "pkcs12_parse",
+    "iso9796_scheme1_sign",
+    "eac_sign_terminal_challenge",
+    "load_private_key_pem",
+    "load_private_key_der",
+    "save_private_key_pem",
+    "extract_public_key",
+    "detect_private_key_type",
+    "raw_private_key_to_pkcs8",
+    "pkcs8_to_raw_private_key",
+    "hkdf_sha256",
+    "hkdf_sha384",
+    "pbkdf2_sha256",
+    "aes_gcm_encrypt",
+    "aes_gcm_decrypt",
+    "tdes_cbc_encrypt",
+    "tdes_cbc_decrypt",
+    "ed25519_generate",
+    "ed25519_sign",
+    "x25519_generate",
+    "x25519_agree",
+    "p256_generate",
+    "p256_agree",
+    "ecdsa_p256_generate",
+    "ecdsa_p384_generate",
+    "ecdsa_p521_generate",
+    "ecdsa_p256_sign",
+    "ecdsa_p384_sign",
+    "ecdsa_p521_sign",
+    "rsa_generate",
+    "rsa_pkcs1_sha256_sign",
+    "rsa_pkcs1_sha384_sign",
+    "rsa_pkcs1_sha512_sign",
+    "rsa_pss_sha256_sign",
+    "rsa_pss_sha384_sign",
+    "rsa_pss_sha512_sign",
+    "generate_random_bytes",
+    "generate_key",
+    "Jwk",
+    "jwk_generate",
+    "jws_sign",
+    "jws_verify",
+    "jwe_encrypt",
+    "jwe_decrypt",
+    "open_badge_ob2_issue",
+    "open_badge_ob3_issue",
+    "dtc_sign",
+    "CertProfile",
+    "CertificateBuilderConfig",
+    "build_self_signed_certificate",
+    "build_self_signed_certificate_with_key",
+];
+
 /// Create the Python module for marty_verification.
 #[pymodule]
 pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -4462,17 +4573,22 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed448_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ed448_verify, m)?)?;
 
     // Crypto Operations - PKCS#12
+    #[cfg(feature = "local-key-operations")]
     m.add_class::<PyPkcs12Data>()?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pkcs12_parse, m)?)?;
 
     // Crypto Operations - ISO 9796-2
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
     #[cfg(feature = "csca")]
     {
@@ -4485,6 +4601,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
         m.add_class::<PyNativeEacChipAuthentication>()?;
         m.add_class::<PyNativeEacSecureMessaging>()?;
+        #[cfg(feature = "local-key-operations")]
         m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
         m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
         m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
@@ -4504,8 +4621,11 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_certificate_signature, m)?)?;
 
     // Crypto Operations - Key Serialization
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(load_private_key_pem, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(load_private_key_der, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(save_private_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_der, m)?)?;
@@ -4515,55 +4635,85 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(certificate_pem_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(certificate_der_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(p256_public_jwk_to_pem, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(extract_public_key, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(detect_private_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(detect_public_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(get_key_size, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(raw_private_key_to_pkcs8, m)?)?;
     m.add_function(wrap_pyfunction!(raw_public_key_to_spki, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pkcs8_to_raw_private_key, m)?)?;
     m.add_function(wrap_pyfunction!(spki_to_raw_public_key, m)?)?;
 
     // Crypto Operations - KDF
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha256, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha384, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pbkdf2_sha256, m)?)?;
 
     // Crypto Operations - Symmetric Encryption
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_encrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_decrypt, m)?)?;
 
     // Crypto Operations - Ed25519
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed25519_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed25519_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ed25519_verify, m)?)?;
 
     // Crypto Operations - ECDH Key Agreement
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(x25519_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(x25519_agree, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(p256_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(p256_agree, m)?)?;
 
     // Crypto Operations - ECDSA Signing
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p256_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p384_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p521_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p521_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p256_verify, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p384_verify, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p521_verify, m)?)?;
 
     // Crypto Operations - RSA Signing
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha512_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha512_sign, m)?)?;
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha256_verify, m)?)?;
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha384_verify, m)?)?;
@@ -4573,15 +4723,23 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rsa_pss_sha512_verify, m)?)?;
 
     // Crypto Operations - Key Generation
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_random_bytes, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_key, m)?)?;
 
     // JWK/JWS/JWE
+    #[cfg(feature = "local-key-operations")]
     m.add_class::<PyJwk>()?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jwk_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jws_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jws_verify, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jwe_encrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jwe_decrypt, m)?)?;
 
     // mDL Document Parsing
@@ -4592,37 +4750,6 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChainValidationResult>()?;
     m.add_class::<PyChainValidator>()?;
 
-    // Ed448 Operations
-    m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
-    m.add_function(wrap_pyfunction!(ed448_sign, m)?)?;
-    m.add_function(wrap_pyfunction!(ed448_verify, m)?)?;
-
-    // PKCS#12 Operations
-    m.add_class::<PyPkcs12Data>()?;
-    m.add_function(wrap_pyfunction!(pkcs12_parse, m)?)?;
-
-    // ISO 9796-2 Operations
-    m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
-    m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
-    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
-    #[cfg(feature = "csca")]
-    {
-        m.add_function(wrap_pyfunction!(
-            active_authentication_generate_challenge,
-            m
-        )?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
-        m.add_class::<PyNativeEacChipAuthentication>()?;
-        m.add_class::<PyNativeEacSecureMessaging>()?;
-        m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
-    }
-
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
     m.add_function(wrap_pyfunction!(get_ocsp_responder_url, m)?)?;
@@ -4631,8 +4758,10 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(open_badge_ob2_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
     m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
@@ -4641,11 +4770,12 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_prepare_signing, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_assemble_signature, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
 
     // Certificate Builder Operations (feature-gated)
-    #[cfg(feature = "cert-builder")]
+    #[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
     {
         m.add_class::<PyCertProfile>()?;
         m.add_class::<PyCertificateBuilderConfig>()?;
@@ -4751,17 +4881,22 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed448_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ed448_verify, m)?)?;
 
     // Crypto Operations - PKCS#12
+    #[cfg(feature = "local-key-operations")]
     m.add_class::<PyPkcs12Data>()?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pkcs12_parse, m)?)?;
 
     // Crypto Operations - ISO 9796-2
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
     #[cfg(feature = "csca")]
     {
@@ -4774,6 +4909,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
         m.add_class::<PyNativeEacChipAuthentication>()?;
         m.add_class::<PyNativeEacSecureMessaging>()?;
+        #[cfg(feature = "local-key-operations")]
         m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
         m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
         m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
@@ -4793,8 +4929,11 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_certificate_signature, m)?)?;
 
     // Crypto Operations - Key Serialization
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(load_private_key_pem, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(load_private_key_der, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(save_private_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_der, m)?)?;
@@ -4804,55 +4943,85 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(certificate_pem_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(certificate_der_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(p256_public_jwk_to_pem, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(extract_public_key, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(detect_private_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(detect_public_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(get_key_size, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(raw_private_key_to_pkcs8, m)?)?;
     m.add_function(wrap_pyfunction!(raw_public_key_to_spki, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pkcs8_to_raw_private_key, m)?)?;
     m.add_function(wrap_pyfunction!(spki_to_raw_public_key, m)?)?;
 
     // Crypto Operations - KDF
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha256, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha384, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pbkdf2_sha256, m)?)?;
 
     // Crypto Operations - Symmetric Encryption
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_encrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_decrypt, m)?)?;
 
     // Crypto Operations - Ed25519
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed25519_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed25519_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ed25519_verify, m)?)?;
 
     // Crypto Operations - ECDH Key Agreement
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(x25519_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(x25519_agree, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(p256_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(p256_agree, m)?)?;
 
     // Crypto Operations - ECDSA Signing
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p256_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p384_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p521_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p521_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p256_verify, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p384_verify, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p521_verify, m)?)?;
 
     // Crypto Operations - RSA Signing
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha512_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha512_sign, m)?)?;
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha256_verify, m)?)?;
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha384_verify, m)?)?;
@@ -4862,15 +5031,23 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rsa_pss_sha512_verify, m)?)?;
 
     // Crypto Operations - Key Generation
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_random_bytes, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_key, m)?)?;
 
     // JWK/JWS/JWE
+    #[cfg(feature = "local-key-operations")]
     m.add_class::<PyJwk>()?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jwk_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jws_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jws_verify, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jwe_encrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jwe_decrypt, m)?)?;
 
     // mDL Document Parsing
@@ -4881,37 +5058,6 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChainValidationResult>()?;
     m.add_class::<PyChainValidator>()?;
 
-    // Ed448 Operations
-    m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
-    m.add_function(wrap_pyfunction!(ed448_sign, m)?)?;
-    m.add_function(wrap_pyfunction!(ed448_verify, m)?)?;
-
-    // PKCS#12 Operations
-    m.add_class::<PyPkcs12Data>()?;
-    m.add_function(wrap_pyfunction!(pkcs12_parse, m)?)?;
-
-    // ISO 9796-2 Operations
-    m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
-    m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
-    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
-    #[cfg(feature = "csca")]
-    {
-        m.add_function(wrap_pyfunction!(
-            active_authentication_generate_challenge,
-            m
-        )?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
-        m.add_class::<PyNativeEacChipAuthentication>()?;
-        m.add_class::<PyNativeEacSecureMessaging>()?;
-        m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
-    }
-
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
     m.add_function(wrap_pyfunction!(get_ocsp_responder_url, m)?)?;
@@ -4920,8 +5066,10 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(open_badge_ob2_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
     m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
@@ -4930,11 +5078,12 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_prepare_signing, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_assemble_signature, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
 
     // Certificate Builder Operations (feature-gated)
-    #[cfg(feature = "cert-builder")]
+    #[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
     {
         m.add_class::<PyCertProfile>()?;
         m.add_class::<PyCertificateBuilderConfig>()?;
@@ -4948,4 +5097,42 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("RULESET_MDL_READER", "mdl_reader")?;
 
     Ok(())
+}
+
+#[cfg(all(test, not(feature = "local-key-operations")))]
+mod kms_surface_tests {
+    use super::*;
+
+    fn assert_kms_only_surface(module: &Bound<'_, PyModule>) {
+        for name in FORBIDDEN_PRODUCTION_PYTHON_EXPORTS {
+            assert!(
+                !module.hasattr(*name).unwrap(),
+                "unexpected local export: {name}"
+            );
+        }
+        for name in [
+            "verify_signature",
+            "dtc_prepare_signing",
+            "dtc_assemble_signature",
+            "dtc_verify",
+            "open_badge_ob2_verify",
+            "open_badge_ob3_verify",
+        ] {
+            assert!(module.hasattr(name).unwrap(), "missing safe export: {name}");
+        }
+    }
+
+    #[test]
+    fn production_modules_exclude_local_secret_key_operations() {
+        Python::initialize();
+        Python::attach(|py| {
+            let standalone = PyModule::new(py, "_marty_verification").unwrap();
+            _marty_verification(&standalone).unwrap();
+            assert_kms_only_surface(&standalone);
+
+            let embedded = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_verification(&embedded).unwrap();
+            assert_kms_only_surface(&embedded);
+        });
+    }
 }

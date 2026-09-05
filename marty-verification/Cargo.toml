@@ -17,7 +17,10 @@ default = ["iaca", "csca", "icao-client"]
 iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
 eudi = []           # EU Digital Identity verification
-python = ["pyo3", "marty-crypto/keygen", "marty-crypto/pkcs12"]   # Python bindings
+python = ["pyo3"]   # Verification-only Python bindings
+# Explicit opt-in for offline development and migration tools. Production
+# Python wheels omit every raw secret/private-key operation from the module.
+local-key-operations = ["python", "marty-crypto/keygen", "marty-crypto/pkcs12"]
 aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka", "ldap3"]
 eudi-client = ["reqwest", "reqwest/stream", "tokio", "moka", "quick-xml"]
