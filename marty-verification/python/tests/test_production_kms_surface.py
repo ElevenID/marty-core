@@ -10,6 +10,7 @@ def test_production_module_excludes_local_secret_key_operations():
         "pkcs12_parse",
         "iso9796_scheme1_sign",
         "eac_sign_terminal_challenge",
+        "eac_calculate_mac",
         "load_private_key_pem",
         "load_private_key_der",
         "save_private_key_pem",
@@ -66,3 +67,43 @@ def test_production_module_excludes_local_secret_key_operations():
         "open_badge_ob3_verify",
     ):
         assert hasattr(marty_verification, safe_name), safe_name
+
+    session_surfaces = {
+        "NativeBacSession": {
+            "derive_bac_keys",
+            "start_bac_with_keys",
+            "start_bac_with_random",
+            "derive_session_keys",
+            "set_session_keys",
+            "session_keys",
+        },
+        "NativePaceSession": {
+            "derive_password_key",
+            "start_pace_with_private_key",
+        },
+        "NativeEacChipAuthentication": {
+            "generate_ephemeral_keypair",
+            "perform_chip_authentication",
+        },
+        "NativeEacSecureMessaging": {"encrypt_apdu_with_iv", "state"},
+    }
+    for class_name, secret_methods in session_surfaces.items():
+        session_class = getattr(marty_verification, class_name)
+        assert secret_methods.isdisjoint(dir(session_class)), class_name
+
+    assert hasattr(marty_verification.NativeBacSession, "protect_command")
+    assert hasattr(marty_verification.NativePaceSession, "protect_command")
+    assert hasattr(
+        marty_verification.NativeEacChipAuthentication,
+        "generate_ephemeral_public_key",
+    )
+    assert hasattr(marty_verification.NativeEacSecureMessaging, "status")
+
+    try:
+        marty_verification.NativeEacSecureMessaging(
+            b"not accepted in production", "ecdh_p256_sha256"
+        )
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("production accepted injected EAC shared secret")

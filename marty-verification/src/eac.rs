@@ -237,6 +237,13 @@ pub struct EacSecureMessaging {
     receive_sequence_counter: u32,
 }
 
+impl Drop for EacSecureMessaging {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.mac_key);
+        zeroize::Zeroize::zeroize(&mut self.encryption_key);
+    }
+}
+
 impl EacSecureMessaging {
     pub fn new(shared_secret: &[u8], algorithm: EacAlgorithm) -> VerificationResult<Self> {
         if shared_secret.is_empty() {

@@ -489,6 +489,14 @@ impl std::fmt::Debug for BacKeys {
     }
 }
 
+impl Drop for BacKeys {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.k_enc);
+        zeroize::Zeroize::zeroize(&mut self.k_mac);
+        zeroize::Zeroize::zeroize(&mut self.k_seed);
+    }
+}
+
 impl BacKeys {
     pub fn from_parts(k_enc: [u8; 16], k_mac: [u8; 16], k_seed: [u8; 16]) -> Self {
         Self {
@@ -520,6 +528,14 @@ pub struct BacHandshake {
     rnd_ifd: [u8; 8],
     k_ifd: [u8; 16],
     rnd_ic: [u8; 8],
+}
+
+impl Drop for BacHandshake {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.rnd_ifd);
+        zeroize::Zeroize::zeroize(&mut self.k_ifd);
+        zeroize::Zeroize::zeroize(&mut self.rnd_ic);
+    }
 }
 
 impl BacHandshake {
@@ -879,6 +895,14 @@ impl BacSession {
     }
 }
 
+impl Drop for BacSession {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.k_enc);
+        zeroize::Zeroize::zeroize(&mut self.k_mac);
+        zeroize::Zeroize::zeroize(&mut self.ssc);
+    }
+}
+
 // ─── PACE — Password Authenticated Connection Establishment ──────────────────
 //
 // Reference: ICAO 9303-11 Annex G; BSI TR-03110.
@@ -925,6 +949,13 @@ pub struct PaceCompatibilityHandshake {
     private_key: [u8; 32],
     public_key: Vec<u8>,
     nonce: Vec<u8>,
+}
+
+impl Drop for PaceCompatibilityHandshake {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.private_key);
+        zeroize::Zeroize::zeroize(&mut self.nonce);
+    }
 }
 
 impl PaceCompatibilityHandshake {
@@ -979,9 +1010,12 @@ impl PaceCompatibilityHandshake {
         use sha2::{Digest, Sha256};
         use zeroize::Zeroize;
 
-        let shared_secret = marty_crypto::ecdh::p256_agree(&self.private_key, chip_public_key)?;
+        let shared_secret = zeroize::Zeroizing::new(marty_crypto::ecdh::p256_agree(
+            &self.private_key,
+            chip_public_key,
+        )?);
         self.private_key.zeroize();
-        let mut input = shared_secret;
+        let mut input = zeroize::Zeroizing::new(shared_secret.to_vec());
         input.extend_from_slice(&self.nonce);
         let digest = Sha256::digest(&input);
         let seed = &digest[..16];
@@ -1044,12 +1078,27 @@ impl std::fmt::Debug for PaceKeys {
     }
 }
 
+impl Drop for PaceKeys {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.k_enc);
+        zeroize::Zeroize::zeroize(&mut self.k_mac);
+    }
+}
+
 /// Established PACE secure-messaging session (AES-128-CBC + AES-CMAC).
 pub struct PaceSession {
     k_enc: [u8; 16],
     k_mac: [u8; 16],
     /// Send Sequence Counter (16 bytes, big-endian for AES).
     ssc: [u8; 16],
+}
+
+impl Drop for PaceSession {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.k_enc);
+        zeroize::Zeroize::zeroize(&mut self.k_mac);
+        zeroize::Zeroize::zeroize(&mut self.ssc);
+    }
 }
 
 impl PaceSession {
@@ -1072,8 +1121,8 @@ impl PaceSession {
         password: &PacePassword,
         enc_nonce: &[u8],
     ) -> VerificationResult<Vec<u8>> {
-        let kpwd = Self::derive_nonce_key(password);
-        marty_crypto::symmetric::aes_128_cbc_decrypt_nopad(&kpwd, &[0u8; 16], enc_nonce)
+        let kpwd = zeroize::Zeroizing::new(Self::derive_nonce_key(password));
+        marty_crypto::symmetric::aes_128_cbc_decrypt_nopad(&kpwd[..], &[0u8; 16], enc_nonce)
             .map_err(|e| VerificationError::internal(format!("PACE nonce decrypt: {}", e)))
     }
 

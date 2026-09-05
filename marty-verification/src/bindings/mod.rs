@@ -2580,6 +2580,7 @@ impl PyNativeBacSession {
         }
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn derive_bac_keys<'py>(
         &self,
         py: Python<'py>,
@@ -2613,6 +2614,7 @@ impl PyNativeBacSession {
         Ok(PyBytes::new(py, &command))
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn start_bac_with_keys<'py>(
         &mut self,
         py: Python<'py>,
@@ -2639,6 +2641,7 @@ impl PyNativeBacSession {
         Ok(PyBytes::new(py, &command))
     }
 
+    #[cfg(feature = "local-key-operations")]
     #[allow(clippy::too_many_arguments)]
     fn start_bac_with_random<'py>(
         &mut self,
@@ -2684,6 +2687,7 @@ impl PyNativeBacSession {
         Ok(result)
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn derive_session_keys<'py>(
         &mut self,
         py: Python<'py>,
@@ -2699,6 +2703,7 @@ impl PyNativeBacSession {
         Ok(result)
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn set_session_keys(&mut self, k_enc: &[u8], k_mac: &[u8], ssc: u64) -> PyResult<()> {
         let k_enc: [u8; 16] = k_enc.try_into().map_err(|_| {
             pyo3::exceptions::PyValueError::new_err("BAC encryption key must be 16 bytes")
@@ -2747,6 +2752,7 @@ impl PyNativeBacSession {
         self.session.is_some()
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn session_keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let session = self.session.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("Session keys not established")
@@ -2759,6 +2765,7 @@ impl PyNativeBacSession {
 #[pyclass(name = "NativePaceSession")]
 struct PyNativePaceSession {
     handshake: Option<crate::chip_io::PaceCompatibilityHandshake>,
+    session: Option<crate::chip_io::BacSession>,
 }
 
 #[cfg(feature = "csca")]
@@ -2766,9 +2773,13 @@ struct PyNativePaceSession {
 impl PyNativePaceSession {
     #[new]
     fn new() -> Self {
-        Self { handshake: None }
+        Self {
+            handshake: None,
+            session: None,
+        }
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn derive_password_key<'py>(
         &self,
         py: Python<'py>,
@@ -2797,9 +2808,11 @@ impl PyNativePaceSession {
                 .map_err(to_pyerr)?;
         let public_key = handshake.public_key().to_vec();
         self.handshake = Some(handshake);
+        self.session = None;
         Ok(PyBytes::new(py, &public_key))
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn start_pace_with_private_key<'py>(
         &mut self,
         py: Python<'py>,
@@ -2815,6 +2828,7 @@ impl PyNativePaceSession {
         .map_err(to_pyerr)?;
         let public_key = handshake.public_key().to_vec();
         self.handshake = Some(handshake);
+        self.session = None;
         Ok(PyBytes::new(py, &public_key))
     }
 
@@ -2829,7 +2843,42 @@ impl PyNativePaceSession {
             )
         })?;
         let session = handshake.complete(chip_public_key).map_err(to_pyerr)?;
-        bac_session_dict(py, &session)
+        let result = bac_session_dict(py, &session)?;
+        self.session = Some(session);
+        Ok(result)
+    }
+
+    fn protect_command<'py>(
+        &mut self,
+        py: Python<'py>,
+        command: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let command = crate::chip_io::ApduCommand::from_bytes(command).map_err(to_pyerr)?;
+        let session = self.session.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("PACE session keys not established")
+        })?;
+        let protected = session.protect_command(&command).map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &protected.to_bytes()))
+    }
+
+    fn unprotect_response<'py>(
+        &mut self,
+        py: Python<'py>,
+        response: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let response = crate::chip_io::ApduResponse::from_bytes(response).map_err(to_pyerr)?;
+        let session = self.session.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("PACE session keys not established")
+        })?;
+        let plaintext = session.unprotect_response(&response).map_err(to_pyerr)?;
+        let mut raw = plaintext.data;
+        raw.extend_from_slice(&[plaintext.sw1, plaintext.sw2]);
+        Ok(PyBytes::new(py, &raw))
+    }
+
+    #[getter]
+    fn session_established(&self) -> bool {
+        self.session.is_some()
     }
 }
 
@@ -2966,9 +3015,13 @@ fn bac_session_dict<'py>(
     session: &crate::chip_io::BacSession,
 ) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
-    result.set_item("k_s_enc", PyBytes::new(py, session.encryption_key()))?;
-    result.set_item("k_s_mac", PyBytes::new(py, session.mac_key()))?;
+    #[cfg(feature = "local-key-operations")]
+    {
+        result.set_item("k_s_enc", PyBytes::new(py, session.encryption_key()))?;
+        result.set_item("k_s_mac", PyBytes::new(py, session.mac_key()))?;
+    }
     result.set_item("ssc", u64::from_be_bytes(*session.send_sequence_counter()))?;
+    result.set_item("session_established", true)?;
     Ok(result)
 }
 
@@ -3364,7 +3417,33 @@ fn active_authentication_verify<'py>(
 #[pyclass(name = "NativeEacChipAuthentication")]
 struct PyNativeEacChipAuthentication {
     algorithm: crate::eac::EacAlgorithm,
+    algorithm_name: String,
     private_key: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "csca")]
+impl PyNativeEacChipAuthentication {
+    fn store_private_key(&mut self, private_key: Vec<u8>) {
+        if let Some(mut previous) = self.private_key.replace(private_key) {
+            zeroize::Zeroize::zeroize(&mut previous);
+        }
+    }
+
+    fn agree(&mut self, chip_public_key: &[u8]) -> PyResult<Vec<u8>> {
+        let private_key = zeroize::Zeroizing::new(self.private_key.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("EAC ephemeral keypair has not been generated")
+        })?);
+        crate::eac::agree(self.algorithm, &private_key, chip_public_key).map_err(to_pyerr)
+    }
+}
+
+#[cfg(feature = "csca")]
+impl Drop for PyNativeEacChipAuthentication {
+    fn drop(&mut self) {
+        if let Some(private_key) = self.private_key.as_mut() {
+            zeroize::Zeroize::zeroize(private_key);
+        }
+    }
 }
 
 #[cfg(feature = "csca")]
@@ -3374,10 +3453,12 @@ impl PyNativeEacChipAuthentication {
     fn new(algorithm: &str) -> PyResult<Self> {
         Ok(Self {
             algorithm: crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?,
+            algorithm_name: algorithm.to_string(),
             private_key: None,
         })
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn generate_ephemeral_keypair<'py>(
         &mut self,
         py: Python<'py>,
@@ -3386,24 +3467,44 @@ impl PyNativeEacChipAuthentication {
             crate::eac::generate_ephemeral_keypair(self.algorithm).map_err(to_pyerr)?;
         let private_key_der =
             crate::eac::encode_private_key(self.algorithm, &private_key).map_err(to_pyerr)?;
-        self.private_key = Some(private_key);
+        self.store_private_key(private_key);
         Ok((
             PyBytes::new(py, &public_key),
             PyBytes::new(py, &private_key_der),
         ))
     }
 
+    fn generate_ephemeral_public_key<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let (private_key, public_key) =
+            crate::eac::generate_ephemeral_keypair(self.algorithm).map_err(to_pyerr)?;
+        self.store_private_key(private_key);
+        Ok(PyBytes::new(py, &public_key))
+    }
+
+    #[cfg(feature = "local-key-operations")]
     fn perform_chip_authentication<'py>(
         &mut self,
         py: Python<'py>,
         chip_public_key: &[u8],
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let private_key = self.private_key.take().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("EAC ephemeral keypair has not been generated")
-        })?;
-        let shared =
-            crate::eac::agree(self.algorithm, &private_key, chip_public_key).map_err(to_pyerr)?;
+        let shared = self.agree(chip_public_key)?;
         Ok(PyBytes::new(py, &shared))
+    }
+
+    fn establish_secure_messaging(
+        &mut self,
+        chip_public_key: &[u8],
+    ) -> PyResult<PyNativeEacSecureMessaging> {
+        let shared = zeroize::Zeroizing::new(self.agree(chip_public_key)?);
+        let inner =
+            crate::eac::EacSecureMessaging::new(&shared, self.algorithm).map_err(to_pyerr)?;
+        Ok(PyNativeEacSecureMessaging {
+            inner,
+            algorithm: self.algorithm_name.clone(),
+        })
     }
 }
 
@@ -3417,6 +3518,7 @@ struct PyNativeEacSecureMessaging {
 #[cfg(feature = "csca")]
 #[pymethods]
 impl PyNativeEacSecureMessaging {
+    #[cfg(feature = "local-key-operations")]
     #[new]
     fn new(shared_secret: &[u8], algorithm: &str) -> PyResult<Self> {
         let parsed = crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?;
@@ -3435,6 +3537,7 @@ impl PyNativeEacSecureMessaging {
         Ok(PyBytes::new(py, &protected))
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn encrypt_apdu_with_iv<'py>(
         &mut self,
         py: Python<'py>,
@@ -3457,12 +3560,22 @@ impl PyNativeEacSecureMessaging {
         Ok(PyBytes::new(py, &plaintext))
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn state<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
         let output = PyDict::new(py);
         let (mac_key, encryption_key) = self.inner.keys();
         let (send_counter, receive_counter) = self.inner.counters();
         output.set_item("mac_key", PyBytes::new(py, mac_key))?;
         output.set_item("encryption_key", PyBytes::new(py, encryption_key))?;
+        output.set_item("send_sequence_counter", send_counter)?;
+        output.set_item("receive_sequence_counter", receive_counter)?;
+        output.set_item("algorithm", &self.algorithm)?;
+        Ok(output.unbind())
+    }
+
+    fn status<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        let output = PyDict::new(py);
+        let (send_counter, receive_counter) = self.inner.counters();
         output.set_item("send_sequence_counter", send_counter)?;
         output.set_item("receive_sequence_counter", receive_counter)?;
         output.set_item("algorithm", &self.algorithm)?;
@@ -3532,7 +3645,7 @@ fn eac_serialize_certificate<'py>(
     Ok(PyBytes::new(py, &encoded))
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "local-key-operations"))]
 #[pyfunction]
 fn eac_calculate_mac<'py>(
     py: Python<'py>,
@@ -4429,6 +4542,7 @@ const FORBIDDEN_PRODUCTION_PYTHON_EXPORTS: &[&str] = &[
     "pkcs12_parse",
     "iso9796_scheme1_sign",
     "eac_sign_terminal_challenge",
+    "eac_calculate_mac",
     "load_private_key_pem",
     "load_private_key_der",
     "save_private_key_pem",
@@ -4593,6 +4707,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
         m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
         m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
+        #[cfg(feature = "local-key-operations")]
         m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
     }
 
@@ -4893,6 +5008,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
         m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
         m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
+        #[cfg(feature = "local-key-operations")]
         m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
     }
 
@@ -5074,6 +5190,77 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod kms_surface_tests {
     use super::*;
 
+    #[cfg(feature = "csca")]
+    fn assert_protocol_session_secrets_are_internal(module: &Bound<'_, PyModule>) {
+        for (class_name, forbidden_methods, safe_methods) in [
+            (
+                "NativeBacSession",
+                &[
+                    "derive_bac_keys",
+                    "start_bac_with_keys",
+                    "start_bac_with_random",
+                    "derive_session_keys",
+                    "set_session_keys",
+                    "session_keys",
+                ][..],
+                &[
+                    "start_bac",
+                    "finish_bac",
+                    "protect_command",
+                    "unprotect_response",
+                    "session_established",
+                ][..],
+            ),
+            (
+                "NativePaceSession",
+                &["derive_password_key", "start_pace_with_private_key"][..],
+                &[
+                    "start_pace",
+                    "complete_pace",
+                    "protect_command",
+                    "unprotect_response",
+                    "session_established",
+                ][..],
+            ),
+            (
+                "NativeEacChipAuthentication",
+                &["generate_ephemeral_keypair", "perform_chip_authentication"][..],
+                &[
+                    "generate_ephemeral_public_key",
+                    "establish_secure_messaging",
+                ][..],
+            ),
+            (
+                "NativeEacSecureMessaging",
+                &["encrypt_apdu_with_iv", "state"][..],
+                &["encrypt_apdu", "decrypt_apdu", "status"][..],
+            ),
+        ] {
+            let class = module.getattr(class_name).unwrap();
+            for method in forbidden_methods {
+                assert!(
+                    !class.hasattr(*method).unwrap(),
+                    "unexpected secret-bearing method: {class_name}.{method}"
+                );
+            }
+            for method in safe_methods {
+                assert!(
+                    class.hasattr(*method).unwrap(),
+                    "missing secret-retaining method: {class_name}.{method}"
+                );
+            }
+        }
+
+        let secure_messaging = module.getattr("NativeEacSecureMessaging").unwrap();
+        let shared_secret = PyBytes::new(module.py(), &[0x44; 32]);
+        assert!(
+            secure_messaging
+                .call1((shared_secret, "ecdh_p256_sha256"))
+                .is_err(),
+            "production must not construct EAC sessions from injected secrets"
+        );
+    }
+
     fn assert_kms_only_surface(module: &Bound<'_, PyModule>) {
         for name in FORBIDDEN_PRODUCTION_PYTHON_EXPORTS {
             assert!(
@@ -5094,6 +5281,8 @@ mod kms_surface_tests {
         ] {
             assert!(module.hasattr(name).unwrap(), "missing safe export: {name}");
         }
+        #[cfg(feature = "csca")]
+        assert_protocol_session_secrets_are_internal(module);
     }
 
     #[test]
@@ -5104,9 +5293,72 @@ mod kms_surface_tests {
             _marty_verification(&standalone).unwrap();
             assert_kms_only_surface(&standalone);
 
+            #[cfg(feature = "csca")]
+            {
+                let session = crate::chip_io::BacSession::from_session_keys(
+                    [0x11; 16], [0x22; 16], [0x33; 8],
+                );
+                let state = bac_session_dict(py, &session).unwrap();
+                assert!(!state.contains("k_s_enc").unwrap());
+                assert!(!state.contains("k_s_mac").unwrap());
+                assert!(state.contains("ssc").unwrap());
+            }
+
             let embedded = PyModule::new(py, "_marty_rs").unwrap();
             register_marty_verification(&embedded).unwrap();
             assert_kms_only_surface(&embedded);
+        });
+    }
+}
+
+#[cfg(all(test, feature = "csca", feature = "local-key-operations"))]
+mod local_key_surface_tests {
+    use super::*;
+
+    #[test]
+    fn local_build_preserves_explicit_protocol_secret_compatibility_methods() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_verification").unwrap();
+            _marty_verification(&module).unwrap();
+
+            for (class_name, methods) in [
+                (
+                    "NativeBacSession",
+                    &[
+                        "derive_bac_keys",
+                        "start_bac_with_keys",
+                        "start_bac_with_random",
+                        "derive_session_keys",
+                        "set_session_keys",
+                        "session_keys",
+                    ][..],
+                ),
+                (
+                    "NativePaceSession",
+                    &["derive_password_key", "start_pace_with_private_key"][..],
+                ),
+                (
+                    "NativeEacChipAuthentication",
+                    &["generate_ephemeral_keypair", "perform_chip_authentication"][..],
+                ),
+                (
+                    "NativeEacSecureMessaging",
+                    &["encrypt_apdu_with_iv", "state"][..],
+                ),
+            ] {
+                let class = module.getattr(class_name).unwrap();
+                for method in methods {
+                    assert!(class.hasattr(*method).unwrap(), "{class_name}.{method}");
+                }
+            }
+            assert!(module.hasattr("eac_calculate_mac").unwrap());
+
+            let session =
+                crate::chip_io::BacSession::from_session_keys([0x11; 16], [0x22; 16], [0x33; 8]);
+            let state = bac_session_dict(py, &session).unwrap();
+            assert!(state.contains("k_s_enc").unwrap());
+            assert!(state.contains("k_s_mac").unwrap());
         });
     }
 }
