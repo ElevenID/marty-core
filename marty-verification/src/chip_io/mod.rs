@@ -26,6 +26,19 @@ use crate::error::{VerificationError, VerificationResult};
 use crate::trust_anchor::CscaRegistry;
 use crate::verification::emrtd::{verify_emrtd, SecurityObject};
 
+#[cfg(not(feature = "ephemeral-session-keys"))]
+/// Marker for passive eMRTD builds that can parse APDUs and verify passport
+/// evidence but cannot create or retain reader-side BAC/PACE session secrets.
+///
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::BacHandshake::begin;
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::PaceSession::derive_password_key;
+/// ```
+pub struct NoEphemeralSessionKeys;
+
 // ─── APDU primitives ──────────────────────────────────────────────────────────
 
 /// ISO/IEC 7816-4 command APDU.
@@ -446,6 +459,7 @@ pub fn verify_from_reader<R: PassportReader>(
 /// - Date of Birth: MRZ chars 62–67, check digit at char 68.
 /// - Date of Expiry: MRZ chars 92–97, check digit at char 98.
 #[derive(Debug, Clone)]
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct MrzKeyInfo {
     /// Document number (9 chars) + check digit (1 char) = 10 chars.
     pub doc_number_with_check: String,
@@ -455,6 +469,7 @@ pub struct MrzKeyInfo {
     pub expiry_with_check: String,
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl MrzKeyInfo {
     /// Construct from the three MRZ key fields (without check digits) and
     /// compute the Luhn-style check digits automatically.
@@ -474,6 +489,7 @@ impl MrzKeyInfo {
 
 /// Derived BAC session keys.
 #[derive(Clone)]
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct BacKeys {
     /// 16-byte 3DES encryption key (K1‖K2).
     pub k_enc: [u8; 16],
@@ -483,12 +499,14 @@ pub struct BacKeys {
     pub k_seed: [u8; 16],
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl std::fmt::Debug for BacKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("BacKeys { … }")
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for BacKeys {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -497,6 +515,7 @@ impl Drop for BacKeys {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl BacKeys {
     pub fn from_parts(k_enc: [u8; 16], k_mac: [u8; 16], k_seed: [u8; 16]) -> Self {
         Self {
@@ -513,6 +532,7 @@ impl BacKeys {
 /// [`protect_command`](BacSession::protect_command) /
 /// [`unprotect_response`](BacSession::unprotect_response) for all subsequent
 /// APDU exchanges with the chip.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct BacSession {
     /// Session encryption key (KSenc).
     k_enc: [u8; 16],
@@ -523,6 +543,7 @@ pub struct BacSession {
 }
 
 /// In-progress BAC mutual-authentication exchange.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct BacHandshake {
     base_keys: BacKeys,
     rnd_ifd: [u8; 8],
@@ -530,6 +551,7 @@ pub struct BacHandshake {
     rnd_ic: [u8; 8],
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for BacHandshake {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.rnd_ifd);
@@ -538,6 +560,7 @@ impl Drop for BacHandshake {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl BacHandshake {
     /// Start a BAC exchange with cryptographically random reader material.
     pub fn begin(mrz: &MrzKeyInfo, rnd_ic: &[u8]) -> VerificationResult<Self> {
@@ -642,6 +665,7 @@ impl BacHandshake {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl BacSession {
     /// Restore a BAC secure-messaging session from established key material.
     pub fn from_session_keys(k_enc: [u8; 16], k_mac: [u8; 16], ssc: [u8; 8]) -> Self {
@@ -895,6 +919,7 @@ impl BacSession {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for BacSession {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -921,6 +946,7 @@ impl Drop for BacSession {
 
 /// Password type for PACE key derivation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub enum PacePassword {
     /// 6-digit Card Access Number (printed on the card).
     Can(String),
@@ -930,6 +956,7 @@ pub enum PacePassword {
     Pin(String),
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl PacePassword {
     fn as_bytes(&self) -> &[u8] {
         match self {
@@ -945,12 +972,14 @@ impl PacePassword {
 /// single Rust implementation. New protocol integrations should use the full
 /// [`PaceSession`] state machine as it evolves rather than reproducing these
 /// compatibility steps in another language.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct PaceCompatibilityHandshake {
     private_key: [u8; 32],
     public_key: Vec<u8>,
     nonce: Vec<u8>,
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for PaceCompatibilityHandshake {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.private_key);
@@ -958,6 +987,7 @@ impl Drop for PaceCompatibilityHandshake {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl PaceCompatibilityHandshake {
     pub fn begin(password: &str, encrypted_nonce: &[u8]) -> VerificationResult<Self> {
         let (private_key, _) = marty_crypto::ecdh::p256_generate_keypair();
@@ -1031,6 +1061,7 @@ impl PaceCompatibilityHandshake {
 }
 
 /// Derive the 3DES password key used by the established compatibility API.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationResult<[u8; 16]> {
     use sha1::{Digest, Sha1};
 
@@ -1074,6 +1105,7 @@ pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationRes
 
 /// PACE-specific symmetric keys.
 #[derive(Clone)]
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct PaceKeys {
     /// Encryption key (KSenc) — 16 bytes for AES-128.
     pub k_enc: [u8; 16],
@@ -1081,12 +1113,14 @@ pub struct PaceKeys {
     pub k_mac: [u8; 16],
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl std::fmt::Debug for PaceKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PaceKeys { … }")
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for PaceKeys {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -1095,6 +1129,7 @@ impl Drop for PaceKeys {
 }
 
 /// Established PACE secure-messaging session (AES-128-CBC + AES-CMAC).
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct PaceSession {
     k_enc: [u8; 16],
     k_mac: [u8; 16],
@@ -1102,6 +1137,7 @@ pub struct PaceSession {
     ssc: [u8; 16],
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for PaceSession {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -1110,6 +1146,7 @@ impl Drop for PaceSession {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl PaceSession {
     /// Derive the initial password-encryption key for decrypting the chip nonce.
     ///
@@ -1286,6 +1323,7 @@ impl PaceSession {
 /// 2. `Kseed` = SHA-1(MRZ_info)[0..16]
 /// 3. `K_ENC` = adjust_parity(SHA-1(Kseed ‖ 0x00000001)[0..16])
 /// 4. `K_MAC` = adjust_parity(SHA-1(Kseed ‖ 0x00000002)[0..16])
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn derive_bac_base_keys(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
     use sha1::{Digest, Sha1};
 
@@ -1317,6 +1355,7 @@ pub fn derive_bac_base_keys(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
 }
 
 /// Derive BAC secure-messaging keys from authenticated reader/chip material.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn derive_bac_session_keys(
     k_ifd: &[u8],
     k_ic: &[u8],
@@ -1350,6 +1389,7 @@ pub fn derive_bac_session_keys(
 /// BAC / PACE KDF — derives a 16-byte key.
 ///
 /// `seed` can be 8 or 16 bytes; `counter` is 1 for KEnc, 2 for KMac, 3 for password key.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn bac_kdf_16(seed: &[u8], counter: u8) -> VerificationResult<[u8; 16]> {
     use sha1::{Digest, Sha1};
     let mut input = seed.to_vec();
@@ -1362,6 +1402,7 @@ fn bac_kdf_16(seed: &[u8], counter: u8) -> VerificationResult<[u8; 16]> {
 }
 
 /// PACE KDF — SHA-256 based, derives a 16-byte AES key.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn pace_kdf_16(seed: &[u8], counter: u8) -> [u8; 16] {
     use sha2::{Digest, Sha256};
     let mut input = seed.to_vec();
@@ -1373,6 +1414,7 @@ fn pace_kdf_16(seed: &[u8], counter: u8) -> [u8; 16] {
 }
 
 /// Set DES parity bits on each byte so that each byte has an odd number of 1-bits.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn adjust_des_parity(key: &mut [u8]) {
     for byte in key.iter_mut() {
         let count = byte.count_ones();
@@ -1383,6 +1425,7 @@ fn adjust_des_parity(key: &mut [u8]) {
 }
 
 /// Extend a 16-byte 2-key 3DES key to the 24-byte 3-key form K1‖K2‖K1.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn extend_to_24_bytes(key16: &[u8; 16]) -> [u8; 24] {
     let mut k24 = [0u8; 24];
     k24[..8].copy_from_slice(&key16[..8]);
@@ -1394,12 +1437,14 @@ fn extend_to_24_bytes(key16: &[u8; 16]) -> [u8; 24] {
 /// ICAO Doc 9303 BAC/secure-messaging and the compatibility PACE exchange
 /// mandate an all-zero 3DES CBC IV. It is a public protocol constant, not a
 /// secret or caller-configurable cryptographic value.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn icao_3des_cbc_iv() -> [u8; 8] {
     Default::default()
 }
 
 /// ISO/IEC 9797-1 Padding Method 2: append 0x80 then 0x00..0x00 to
 /// the next 8-byte boundary.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn iso7816_pad(data: &[u8]) -> Vec<u8> {
     let mut padded = data.to_vec();
     padded.push(0x80);
@@ -1410,6 +1455,7 @@ fn iso7816_pad(data: &[u8]) -> Vec<u8> {
 }
 
 /// Remove ISO/IEC 7816-4 padding.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn iso7816_unpad(data: &[u8]) -> VerificationResult<Vec<u8>> {
     for i in (0..data.len()).rev() {
         if data[i] == 0x80 {
@@ -1427,6 +1473,7 @@ fn iso7816_unpad(data: &[u8]) -> VerificationResult<Vec<u8>> {
 /// ISO/IEC 9797-1 Algorithm 3 (Retail-MAC) with ISO 7816-4 Padding Method 2.
 ///
 /// Used in BAC secure messaging.  `key16` is the 16-byte MAC key [K1‖K2].
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn retail_mac_3des(key16: &[u8; 16], data: &[u8]) -> VerificationResult<[u8; 8]> {
     let padded = iso7816_pad(data);
     let n = padded.len() / 8;
@@ -1464,6 +1511,7 @@ fn retail_mac_3des(key16: &[u8; 16], data: &[u8]) -> VerificationResult<[u8; 8]>
 }
 
 /// Build a 24-byte key K‖K‖K so `tdes_cbc_encrypt` acts as single DES.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn extend_single_des(k8: &[u8]) -> [u8; 24] {
     let mut out = [0u8; 24];
     out[..8].copy_from_slice(k8);
@@ -1473,6 +1521,7 @@ fn extend_single_des(k8: &[u8]) -> [u8; 24] {
 }
 
 /// Increment an 8-byte big-endian counter.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn increment_ssc(ssc: &mut [u8; 8]) {
     for i in (0..8).rev() {
         ssc[i] = ssc[i].wrapping_add(1);
@@ -1483,6 +1532,7 @@ fn increment_ssc(ssc: &mut [u8; 8]) {
 }
 
 /// Increment a 16-byte big-endian counter (PACE).
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn increment_ssc_16(ssc: &mut [u8; 16]) {
     for i in (0..16).rev() {
         ssc[i] = ssc[i].wrapping_add(1);
@@ -1493,6 +1543,7 @@ fn increment_ssc_16(ssc: &mut [u8; 16]) {
 }
 
 /// Constant-time byte slice comparison.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;

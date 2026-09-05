@@ -13,7 +13,7 @@ name = "marty_verification"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["iaca", "csca", "icao-client"]
+default = ["iaca", "csca", "icao-client", "ephemeral-session-keys"]
 iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
 eudi = []           # EU Digital Identity verification
@@ -22,6 +22,7 @@ python = ["pyo3"]   # Verification-only Python bindings
 # Python wheels omit every raw secret/private-key operation from the module.
 local-key-operations = [
     "python",
+    "ephemeral-session-keys",
     "marty-crypto/ecdsa-local-signing",
     "marty-crypto/eddsa-local-signing",
     "marty-crypto/keygen",
@@ -30,10 +31,11 @@ local-key-operations = [
     "marty-crypto/rsa-local-signing",
 ]
 # Short-lived protocol/session secrets, distinct from credential issuer keys.
-ephemeral-session-keys = []
-aamva-client = ["reqwest", "tokio", "moka"]
-icao-client = ["reqwest", "tokio", "moka", "ldap3"]
-eudi-client = ["reqwest", "reqwest/stream", "tokio", "moka", "quick-xml"]
+ephemeral-session-keys = ["marty-crypto/ecdh", "marty-crypto/symmetric"]
+network-tls-client = ["dep:reqwest"]
+aamva-client = ["network-tls-client", "tokio", "moka"]
+icao-client = ["network-tls-client", "tokio", "moka", "ldap3"]
+eudi-client = ["network-tls-client", "reqwest/stream", "tokio", "moka", "quick-xml"]
 cert-builder = ["marty-crypto/cert-builder"]   # Explicit certificate building utilities for Python bindings
 authority-issuance = ["csca", "marty-crypto/sod-builder"] # CSCA/DSC generation and passport personalization
 cross-validation = []  # OpenSSL cross-validation tests
@@ -45,7 +47,6 @@ full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "s
 # Internal crate
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = [
     "crl",
-    "ecdh",
     "ecdsa-verification",
     "eddsa-verification",
     "hashing",
@@ -54,7 +55,6 @@ marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features =
     "ocsp",
     "rsa-verification",
     "public-key-codec",
-    "symmetric",
     "x509",
 ] }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false }
@@ -144,6 +144,26 @@ criterion = { workspace = true }
 name = "verification_kernels"
 harness = false
 required-features = ["authority-issuance"]
+
+[[test]]
+name = "eac_behavior"
+required-features = ["ephemeral-session-keys"]
+
+[[test]]
+name = "passport_chip_behavior"
+required-features = ["ephemeral-session-keys"]
+
+[[test]]
+name = "open_badges_conformance"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "open_badges_tests"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "public_key_jwk_golden_vectors"
+required-features = ["local-key-operations"]
 
 [target.'cfg(unix)'.dev-dependencies]
 openssl = { version = "0.10", features = ["vendored"] }

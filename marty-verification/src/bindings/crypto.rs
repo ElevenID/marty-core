@@ -359,6 +359,7 @@ pub(super) fn pbkdf2_sha256<'py>(
 // ============================================================================
 
 /// Encrypt data using AES-GCM.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn aes_gcm_encrypt<'py>(
     py: Python<'py>,
@@ -381,6 +382,7 @@ pub(super) fn aes_gcm_encrypt<'py>(
 }
 
 /// Decrypt data using AES-GCM.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn aes_gcm_decrypt<'py>(
     py: Python<'py>,
@@ -403,6 +405,7 @@ pub(super) fn aes_gcm_decrypt<'py>(
 }
 
 /// Encrypt data using 3DES-CBC.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn tdes_cbc_encrypt<'py>(
     py: Python<'py>,
@@ -416,6 +419,7 @@ pub(super) fn tdes_cbc_encrypt<'py>(
 }
 
 /// Decrypt data using 3DES-CBC.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn tdes_cbc_decrypt<'py>(
     py: Python<'py>,

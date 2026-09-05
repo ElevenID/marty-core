@@ -14,14 +14,14 @@ pub(super) fn compare_passport_hashes_json(request_json: &str) -> PyResult<Strin
         .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pyclass(name = "NativeBacSession")]
 pub(super) struct PyNativeBacSession {
     handshake: Option<crate::chip_io::BacHandshake>,
     session: Option<crate::chip_io::BacSession>,
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pymethods]
 impl PyNativeBacSession {
     #[new]
@@ -213,14 +213,14 @@ impl PyNativeBacSession {
     }
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pyclass(name = "NativePaceSession")]
 pub(super) struct PyNativePaceSession {
     handshake: Option<crate::chip_io::PaceCompatibilityHandshake>,
     session: Option<crate::chip_io::BacSession>,
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pymethods]
 impl PyNativePaceSession {
     #[new]
@@ -430,7 +430,7 @@ pub(super) fn passport_data_group_file_id(data_group: u8) -> PyResult<u16> {
     crate::chip_io::passport_data_group_file_id(data_group).map_err(to_pyerr)
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 pub(super) fn bac_mrz(
     passport_number: &str,
     date_of_birth: &str,
@@ -461,7 +461,7 @@ pub(super) fn bac_mrz(
     ))
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 pub(super) fn bac_session_dict<'py>(
     py: Python<'py>,
     session: &crate::chip_io::BacSession,

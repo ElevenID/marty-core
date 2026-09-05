@@ -110,8 +110,11 @@ pub use verification::mdl::{
 // Re-export chip I/O types for government NFC integration
 #[cfg(feature = "csca")]
 pub use chip_io::{
-    derive_bac_base_keys, mrz_check_digit, ApduCommand, ApduResponse, BacKeys, BacSession,
-    MockPassportChip, MrzKeyInfo, PaceKeys, PacePassword, PaceSession, PassportChip,
+    mrz_check_digit, ApduCommand, ApduResponse, MockPassportChip, PassportChip,
+};
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+pub use chip_io::{
+    derive_bac_base_keys, BacKeys, BacSession, MrzKeyInfo, PaceKeys, PacePassword, PaceSession,
 };
 
 // Re-export crypto primitives from marty-crypto

@@ -211,7 +211,9 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativeBacSession>()?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativePaceSession>()?;
         m.add_function(wrap_pyfunction!(apdu_encode, m)?)?;
         m.add_function(wrap_pyfunction!(apdu_parse_response, m)?)?;
@@ -340,9 +342,13 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pbkdf2_sha256, m)?)?;
 
     // Crypto Operations - Symmetric Encryption
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(tdes_cbc_encrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(tdes_cbc_decrypt, m)?)?;
 
     // Crypto Operations - Ed25519
@@ -472,10 +478,10 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(all(test, not(feature = "local-key-operations")))]
 mod kms_surface_tests {
     use super::*;
-    #[cfg(feature = "csca")]
+    #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
     use pyo3::types::PyBytes;
 
-    #[cfg(feature = "csca")]
+    #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
     fn assert_protocol_session_secrets_are_internal(module: &Bound<'_, PyModule>) {
         for (class_name, forbidden_methods, safe_methods) in [
             (
@@ -556,8 +562,6 @@ mod kms_surface_tests {
         for name in [
             "verify_signature",
             "generate_random_bytes",
-            "aes_gcm_encrypt",
-            "aes_gcm_decrypt",
             "dtc_prepare_signing",
             "dtc_assemble_signature",
             "dtc_verify",
@@ -566,7 +570,35 @@ mod kms_surface_tests {
         ] {
             assert!(module.hasattr(name).unwrap(), "missing safe export: {name}");
         }
-        #[cfg(feature = "csca")]
+
+        #[cfg(feature = "ephemeral-session-keys")]
+        for name in [
+            "aes_gcm_encrypt",
+            "aes_gcm_decrypt",
+            "tdes_cbc_encrypt",
+            "tdes_cbc_decrypt",
+        ] {
+            assert!(module.hasattr(name).unwrap(), "missing session export: {name}");
+        }
+
+        #[cfg(not(feature = "ephemeral-session-keys"))]
+        for name in [
+            "aes_gcm_encrypt",
+            "aes_gcm_decrypt",
+            "tdes_cbc_encrypt",
+            "tdes_cbc_decrypt",
+            "NativeBacSession",
+            "NativePaceSession",
+            "NativeEacChipAuthentication",
+            "NativeEacSecureMessaging",
+        ] {
+            assert!(
+                !module.hasattr(name).unwrap(),
+                "unexpected session-secret export: {name}"
+            );
+        }
+
+        #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
         assert_protocol_session_secrets_are_internal(module);
     }
 
@@ -578,7 +610,7 @@ mod kms_surface_tests {
             _marty_verification(&standalone).unwrap();
             assert_kms_only_surface(&standalone);
 
-            #[cfg(feature = "csca")]
+            #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
             {
                 let session = crate::chip_io::BacSession::from_session_keys(
                     [0x11; 16], [0x22; 16], [0x33; 8],
