@@ -104,3 +104,25 @@ fn malformed_certificates_fail_closed() {
     assert!(certificate_pem_to_jwk("not a certificate").is_err());
     assert!(certificate_der_to_jwk(&[0, 1, 2]).is_err());
 }
+
+#[test]
+fn typed_conversion_preserves_public_metadata_and_extensions() {
+    let source: marty_crypto::jwk::PublicJwk = serde_json::from_value(serde_json::json!({
+        "kty": "EC", "use": "sig", "key_ops": ["verify"], "alg": "ES256",
+        "kid": "example", "x5u": "https://example.test/cert", "x5c": ["certificate"],
+        "x5t": "sha1", "x5t#S256": "sha256", "crv": "P-256", "x": "x", "y": "y",
+        "custom": {"nested": [1, true, null]}
+    }))
+    .unwrap();
+    let expected = serde_json::to_value(&source).unwrap();
+    let converted = marty_verification::jwk::Jwk::from(source);
+    assert_eq!(serde_json::to_value(&converted).unwrap(), expected);
+    assert!(converted.d.is_none());
+    assert!(converted.rsa_d.is_none());
+    assert!(converted.p.is_none());
+    assert!(converted.q.is_none());
+    assert!(converted.dp.is_none());
+    assert!(converted.dq.is_none());
+    assert!(converted.qi.is_none());
+    assert!(converted.k.is_none());
+}
