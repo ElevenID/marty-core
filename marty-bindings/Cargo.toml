@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 marty-python-adapters = { path = "../marty-python-adapters" }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa", "eddsa", "hashing", "rsa", "serialization", "symmetric"] }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "hashing", "public-key-codec", "rsa-verification", "symmetric"] }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", features = ["lti"] }
 marty-didcomm = { version = "0.1.5", path = "../marty-didcomm" }
 marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013" }
@@ -46,6 +46,10 @@ thiserror = "2.0"
 tokio = { version = "1.35", features = ["rt", "macros"] }
 
 [dev-dependencies]
+# Test-only feature unification keeps legacy local-key regression coverage out
+# of production dependency graphs.
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa", "eddsa", "rsa", "serialization"] }
+marty-verification = { version = "0.1.5", path = "../marty-verification", default-features = false, features = ["ephemeral-session-keys", "local-key-operations"] }
 serde_json = "1.0"
 hex = "0.4"
 
@@ -55,4 +59,11 @@ extension-module = ["pyo3/extension-module"]
 # Development and offline migration utilities that place private key material
 # in this process. Production issuer builds must leave this disabled and use
 # the prepare -> remote sign -> assemble APIs.
-local-key-operations = []
+local-key-operations = [
+    "marty-crypto/ecdsa-local-signing",
+    "marty-crypto/eddsa-local-signing",
+    "marty-crypto/private-key-codec",
+    "marty-crypto/rsa-local-signing",
+    "marty-verification/ephemeral-session-keys",
+    "marty-verification/local-key-operations",
+]
