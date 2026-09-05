@@ -115,6 +115,7 @@ fn key_attestation_behavior_fixture() -> &'static str {
 /// Example:
 ///     >>> secret, public = generate_p256_key()
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
@@ -122,12 +123,14 @@ fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bou
 
 /// Generate a P-256 private JWK and its public-only JWK.
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn generate_p256_jwk() -> PyResult<(String, String)> {
     marty_oid4vci::issuer::generate_p256_jwk_pair().map_err(to_pyerr)
 }
 
 /// Generate a did:jwk identifier and P-256 private signing JWK.
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn generate_p256_did_jwk() -> PyResult<(String, String)> {
     marty_oid4vci::issuer::generate_p256_did_jwk().map_err(to_pyerr)
 }
@@ -144,6 +147,7 @@ fn derive_p256_did_identifier(public_jwk_json: &str, method: &str) -> PyResult<S
 ///     Tuple of (private_key, public_key) as bytes.
 ///     Private key is 48 bytes, public key is 97 bytes (uncompressed).
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn generate_p384_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
@@ -155,6 +159,7 @@ fn generate_p384_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bou
 ///     Tuple of (private_key, public_key) as bytes.
 ///     Both keys are 32 bytes.
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn generate_ed25519_key<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
@@ -167,6 +172,7 @@ fn generate_ed25519_key<'py>(
 /// This preserves the established credential binding contract while keeping
 /// key generation and DID derivation in the canonical Rust extension.
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn generate_did_key() -> PyResult<(String, String)> {
     use base64::Engine;
 
@@ -202,6 +208,7 @@ fn generate_did_key() -> PyResult<(String, String)> {
 ///     >>> secret, _ = generate_p256_key()
 ///     >>> signature = sign_p256(secret, b"Hello, World!")
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_p256<'py>(
     py: Python<'py>,
     secret_key: &[u8],
@@ -220,6 +227,7 @@ fn sign_p256<'py>(
 /// Returns:
 ///     DER-encoded signature
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_p384<'py>(
     py: Python<'py>,
     secret_key: &[u8],
@@ -238,6 +246,7 @@ fn sign_p384<'py>(
 /// Returns:
 ///     64-byte signature
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_ed25519<'py>(
     py: Python<'py>,
     secret_key: &[u8],
@@ -1192,6 +1201,7 @@ fn sd_jwt_create_presentation(
 ///     (credential_string, credential_id)
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "local-key-operations"))]
 #[pyo3(signature = (issuer_id, jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![], mdoc_namespace=None, mdoc_doctype=None))]
 fn oid4vci_sign_credential(
     issuer_id: &str,
@@ -1284,6 +1294,7 @@ fn oid4vci_sign_credential(
 /// passes through the same Rust credential engine.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "local-key-operations"))]
 #[pyo3(signature = (issuer_did, issuer_jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], mdoc_namespace=None, mdoc_doctype=None, zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
 fn create_verifiable_credential(
     issuer_did: &str,
@@ -1691,6 +1702,7 @@ fn oid4vci_assemble_mdoc(
 }
 
 /// Normalize legacy Python input (`List[str]`) into typed ZK predicate bindings.
+#[cfg(any(test, feature = "local-key-operations"))]
 fn normalize_zk_predicate_claims(
     claims: &std::collections::HashMap<String, serde_json::Value>,
     raw: Vec<String>,
@@ -2283,6 +2295,7 @@ fn vds_nc_validate_profile(
 /// Create and sign a canonical VDS-NC profile with a PEM private key.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn vds_nc_sign_profile(
     private_key_pem: &str,
     signer_id: &str,
@@ -2575,18 +2588,26 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     haip::register(m)?;
 
     // Key Generation
-    m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
-    m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
-    m.add_function(wrap_pyfunction!(generate_p256_did_jwk, m)?)?;
+    #[cfg(feature = "local-key-operations")]
+    {
+        m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_p256_did_jwk, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_ed25519_key, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
+        m.add_function(wrap_pyfunction!(vds_nc_sign_profile, m)?)?;
+    }
     m.add_function(wrap_pyfunction!(derive_p256_did_identifier, m)?)?;
-    m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
-    m.add_function(wrap_pyfunction!(generate_ed25519_key, m)?)?;
-    m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
 
-    // Signing
-    m.add_function(wrap_pyfunction!(sign_p256, m)?)?;
-    m.add_function(wrap_pyfunction!(sign_p384, m)?)?;
-    m.add_function(wrap_pyfunction!(sign_ed25519, m)?)?;
+    // Verification remains available in production. Private-key signing is
+    // registered only in explicitly opted-in development/migration builds.
+    #[cfg(feature = "local-key-operations")]
+    {
+        m.add_function(wrap_pyfunction!(sign_p256, m)?)?;
+        m.add_function(wrap_pyfunction!(sign_p384, m)?)?;
+        m.add_function(wrap_pyfunction!(sign_ed25519, m)?)?;
+    }
 
     // Verification
     m.add_function(wrap_pyfunction!(detect_credential_format, m)?)?;
@@ -2634,7 +2655,6 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(vds_nc_inspect, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_verify_profile, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_validate_profile, m)?)?;
-    m.add_function(wrap_pyfunction!(vds_nc_sign_profile, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_canonicalize, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_barcode_policy, m)?)?;
     m.add_function(wrap_pyfunction!(vds_nc_select_barcode_format, m)?)?;
@@ -2655,7 +2675,9 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(mdoc::openid4vp_mdoc_binding_digests, m)?)?;
 
-    // Verifiable Credentials
+    // In-process issuer signing is available only to explicitly opted-in
+    // offline tooling. Production bindings expose the remote-signing split.
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
 
     // Canvas LTI / Sandbox Hardening
@@ -2715,6 +2737,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(verify_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(sd_jwt_create_presentation, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
@@ -2755,6 +2778,48 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(not(feature = "local-key-operations"))]
+    fn production_module_excludes_private_key_operations() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_bindings(&module).unwrap();
+
+            for private_operation in [
+                "generate_p256_key",
+                "generate_p256_jwk",
+                "generate_p256_did_jwk",
+                "generate_p384_key",
+                "generate_ed25519_key",
+                "generate_did_key",
+                "sign_p256",
+                "sign_p384",
+                "sign_ed25519",
+                "vds_nc_sign_profile",
+                "oid4vci_sign_credential",
+                "create_verifiable_credential",
+            ] {
+                assert!(
+                    !module.hasattr(private_operation).unwrap(),
+                    "{private_operation}"
+                );
+            }
+
+            for remote_signing_operation in [
+                "oid4vci_prepare_credential",
+                "oid4vci_assemble_credential",
+                "oid4vci_prepare_mdoc",
+                "oid4vci_assemble_mdoc",
+            ] {
+                assert!(
+                    module.hasattr(remote_signing_operation).unwrap(),
+                    "{remote_signing_operation}"
+                );
+            }
+        });
+    }
 
     fn remote_mdoc_batch_input(
         batch_id: u64,

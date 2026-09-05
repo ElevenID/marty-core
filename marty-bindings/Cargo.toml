@@ -51,3 +51,7 @@ hex = "0.4"
 [features]
 default = ["extension-module"]
 extension-module = ["pyo3/extension-module"]
+# Development and offline migration utilities that place private key material
+# in this process. Production issuer builds must leave this disabled and use
+# the prepare -> remote sign -> assemble APIs.
+local-key-operations = []
