@@ -46,6 +46,12 @@
 //! }).unwrap();
 //! ```
 
+#[cfg(all(
+    feature = "kms-only",
+    any(feature = "holder-key-operations", feature = "local-key-operations")
+))]
+compile_error!("kms-only builds cannot include local issuer or holder key operations");
+
 pub mod discovery;
 pub mod error;
 pub mod formats;

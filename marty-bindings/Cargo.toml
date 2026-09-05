@@ -19,7 +19,7 @@ marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features =
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", features = ["lti"] }
 marty-didcomm = { version = "0.1.5", path = "../marty-didcomm" }
 marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013" }
-marty-verification = { version = "0.1.5", path = "../marty-verification" }
+marty-verification = { version = "0.1.5", path = "../marty-verification", default-features = false }
 marty-types = { version = "0.1.5", path = "../marty-types" }
 marty-status = { version = "0.1.45", path = "../marty-status" }
 
@@ -57,6 +57,7 @@ hex = "0.4"
 [features]
 default = ["extension-module"]
 extension-module = ["pyo3/extension-module"]
+kms-only = ["marty-crypto/kms-only", "marty-oid4vci/kms-only", "marty-verification/kms-only"]
 # Short-lived HAIP/OID4VP response-encryption keys. This is intentionally
 # independent from development-only credential issuer keys.
 ephemeral-session-keys = ["marty-verification/ephemeral-session-keys"]

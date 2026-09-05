@@ -18,6 +18,27 @@ FORBIDDEN_CRYPTO_FEATURES = {
     "keygen",
     "sod-builder",
 }
+FORBIDDEN_KMS_CRYPTO_FEATURES = FORBIDDEN_CRYPTO_FEATURES | {
+    "bbs",
+    "ecdsa-local-signing",
+    "eddsa-local-signing",
+    "pkcs12",
+    "private-key-codec",
+    "rsa-local-signing",
+    "serialization",
+}
+KMS_GUARDED_CRYPTO_FEATURES = {
+    "bbs",
+    "cert-builder",
+    "crl-builder",
+    "ecdsa-local-signing",
+    "eddsa-local-signing",
+    "keygen",
+    "pkcs12",
+    "private-key-codec",
+    "rsa-local-signing",
+    "sod-builder",
+}
 
 
 def load_toml(path: Path) -> dict:
@@ -39,14 +60,26 @@ def check_repository(root: Path = ROOT) -> None:
     verification_python = load_toml(root / "marty-verification" / "pyproject.toml")
 
     crypto_features = crypto["features"]
-    require(crypto_features["crl"] == ["x509"], "CRL parsing must not enable builders")
+    require(
+        set(crypto_features["crl"]) == {"x509", "dep:pem-rfc7468"},
+        "CRL parsing must not enable builders",
+    )
     require(
         crypto_features["crl-builder"] == ["crl", "cert-builder"],
         "CRL construction must remain an explicit builder feature",
     )
-    require(crypto_features["ocsp"] == ["x509"], "OCSP verification must not enable builders")
+    require(
+        set(crypto_features["ocsp"]) == {"x509", "dep:x509-ocsp"},
+        "OCSP verification must not enable builders",
+    )
+    require(crypto_features["kms-only"] == [], "the KMS marker must enable no primitives")
 
     verification_features = verification["features"]
+    require(
+        set(verification_features["kms-only"])
+        == {"marty-crypto/kms-only", "marty-oid4vci/kms-only"},
+        "verification KMS enforcement must propagate to cryptographic dependencies",
+    )
     require(
         "authority-issuance" not in verification_features["default"],
         "default verification must exclude authority issuance",
@@ -74,8 +107,12 @@ def check_repository(root: Path = ROOT) -> None:
     oid4vci_crypto = oid4vci["dependencies"]["marty-crypto"]
     require(
         oid4vci_crypto.get("default-features") is False
-        and oid4vci_crypto["features"] == ["ecdsa"],
+        and oid4vci_crypto["features"] == ["ecdsa-verification"],
         "marty-oid4vci must not transitively restore marty-crypto defaults",
+    )
+    require(
+        oid4vci["features"]["kms-only"] == ["marty-crypto/kms-only"],
+        "marty-oid4vci must propagate KMS enforcement",
     )
 
     bindings_crypto = bindings["dependencies"]["marty-crypto"]
@@ -86,6 +123,19 @@ def check_repository(root: Path = ROOT) -> None:
     require(
         not (set(bindings_crypto["features"]) & FORBIDDEN_CRYPTO_FEATURES),
         "released bindings must exclude authority-only crypto features",
+    )
+    require(
+        bindings["dependencies"]["marty-verification"].get("default-features") is False,
+        "released bindings must select verification capabilities explicitly",
+    )
+    require(
+        set(bindings["features"]["kms-only"])
+        == {
+            "marty-crypto/kms-only",
+            "marty-oid4vci/kms-only",
+            "marty-verification/kms-only",
+        },
+        "released bindings must propagate KMS enforcement",
     )
 
     iso18013_crypto = iso18013["dependencies"]["marty-crypto"]
@@ -99,6 +149,19 @@ def check_repository(root: Path = ROOT) -> None:
     require(
         not ({"authority-issuance", "cert-builder"} & wheel_features),
         "the released verification wheel must exclude authority and certificate builders",
+    )
+    require(
+        verification_python["tool"]["maturin"].get("no-default-features") is True
+        and "kms-only" in wheel_features,
+        "the released verification wheel must use an explicit KMS-only feature set",
+    )
+
+    bindings_wheel = load_toml(root / "marty-bindings" / "pyproject.toml")
+    bindings_wheel_config = bindings_wheel["tool"]["maturin"]
+    require(
+        bindings_wheel_config.get("no-default-features") is True
+        and "kms-only" in bindings_wheel_config["features"],
+        "the released aggregate wheel must use an explicit KMS-only feature set",
     )
 
     lib_source = (root / "marty-verification" / "src" / "lib.rs").read_text(
@@ -117,6 +180,15 @@ def check_repository(root: Path = ROOT) -> None:
         is None,
         "ordinary CSCA verification must not expose authority issuance",
     )
+
+    crypto_source = (root / "marty-crypto" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    for forbidden_feature in KMS_GUARDED_CRYPTO_FEATURES:
+        require(
+            f'feature = "{forbidden_feature}"' in crypto_source,
+            f"marty-crypto KMS guard must reject {forbidden_feature}",
+        )
 
     benches = verification.get("bench", [])
     kernel_bench = next(bench for bench in benches if bench["name"] == "verification_kernels")

@@ -18,6 +18,10 @@ crate-type = ["rlib"]
 # Preserve the historical feature-complete default while allowing consumers
 # with a narrow security boundary to compile only the primitives they use.
 default = ["full"]
+# Enforcement marker for processes whose long-term credential keys live in a
+# remote KMS. It enables no primitives by itself; lib.rs rejects combinations
+# that would restore an in-process credential private-key capability.
+kms-only = []
 # Compatibility aliases retain the historical signing + verification surface.
 ecdsa = ["ecdsa-local-signing"]
 eddsa = ["eddsa-local-signing"]

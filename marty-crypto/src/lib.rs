@@ -25,6 +25,25 @@
 //! //   --features signature-verification
 //! ```
 
+#[cfg(all(
+    feature = "kms-only",
+    any(
+        feature = "bbs",
+        feature = "cert-builder",
+        feature = "crl-builder",
+        feature = "ecdsa-local-signing",
+        feature = "eddsa-local-signing",
+        feature = "keygen",
+        feature = "pkcs12",
+        feature = "private-key-codec",
+        feature = "rsa-local-signing",
+        feature = "sod-builder"
+    )
+))]
+compile_error!(
+    "kms-only builds cannot include local signing, key generation, private-key codecs, or authority builders"
+);
+
 #[cfg(feature = "signature-verification")]
 pub mod algorithm_identifier;
 #[cfg(feature = "bbs")]

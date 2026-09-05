@@ -937,6 +937,30 @@ pub struct IssuerConfig {
 }
 
 impl IssuerConfig {
+    /// Construct a key-free configuration for stateless protocol helpers.
+    ///
+    /// The compatibility key field, when compiled, is initialized internally
+    /// so downstream KMS-only crates never need to name [`IssuerKey`].
+    pub fn stateless() -> Self {
+        Self {
+            credential_issuer_url: String::new(),
+            issuer_name: String::new(),
+            credential_types: Vec::new(),
+            #[cfg(any(test, feature = "local-key-operations"))]
+            issuer_key: IssuerKey {
+                issuer_id: String::new(),
+                jwk_json: String::new(),
+                algorithm: SigningAlgorithm::EdDSA,
+            },
+            token_endpoint: None,
+            credential_endpoint: None,
+            authorization_endpoint: None,
+            deferred_credential_endpoint: None,
+            binding_methods: Vec::new(),
+            proof_signing_alg_values: Vec::new(),
+        }
+    }
+
     /// Get the token endpoint, defaulting to `{credential_issuer_url}/token`.
     pub fn token_endpoint(&self) -> String {
         self.token_endpoint

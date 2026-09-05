@@ -287,10 +287,28 @@ jobs:
           cargo build --locked -p marty-verification --no-default-features
           cargo build --locked -p marty-verification
           cargo check --locked -p marty-verification --no-default-features --features authority-issuance
+          cargo check --locked -p marty-verification --no-default-features --features kms-only,python,iaca,csca,eudi
+          cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
+          cargo check --locked -p marty-bindings --no-default-features --features kms-only,extension-module
+          if cargo check --locked -p marty-crypto --no-default-features --features kms-only,keygen; then exit 1; fi
+          if cargo check --locked -p marty-verification --no-default-features --features kms-only,local-key-operations; then exit 1; fi
+          if cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,holder-key-operations; then exit 1; fi
+          if cargo check --locked -p marty-bindings --no-default-features --features kms-only,local-key-operations; then exit 1; fi
           for package in marty-verification marty-bindings; do
             default_crypto_tree="$(cargo tree --locked -p "$package" -e features,no-dev -i marty-crypto)"
             if grep -Eq 'marty-crypto feature "(default|full|cert-builder|crl-builder|keygen|sod-builder)"' <<<"$default_crypto_tree"; then
               printf '%s\n' "$default_crypto_tree"
+              exit 1
+            fi
+          done
+          for package_and_features in \
+            "marty-verification:kms-only,python,iaca,csca,eudi" \
+            "marty-bindings:kms-only,extension-module"; do
+            package="${package_and_features%%:*}"
+            features="${package_and_features#*:}"
+            kms_crypto_tree="$(cargo tree --locked -p "$package" --no-default-features --features "$features" -e features,no-dev -i marty-crypto)"
+            if grep -Eq 'marty-crypto feature "(default|full|bbs|cert-builder|crl-builder|ecdsa-local-signing|eddsa-local-signing|keygen|pkcs12|private-key-codec|rsa-local-signing|serialization|sod-builder)"' <<<"$kms_crypto_tree"; then
+              printf '%s\n' "$kms_crypto_tree"
               exit 1
             fi
           done

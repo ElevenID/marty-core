@@ -17,6 +17,7 @@ crate-type = ["rlib"]
 
 [features]
 default = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
+kms-only = ["marty-crypto/kms-only"] # Reject in-process credential/holder private-key capabilities
 issuer = []         # OID4VCI credential issuer support
 verifier = []       # OID4VP verifiable presentation support
 wallet = ["dep:reqwest", "dep:tokio", "holder-key-operations"]  # OID4VCI/OID4VP wallet/holder support

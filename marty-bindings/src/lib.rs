@@ -7,6 +7,9 @@
 // Rust 1.97 flags even though they are outside the handwritten function bodies.
 #![allow(clippy::useless_conversion)]
 
+#[cfg(all(feature = "kms-only", feature = "local-key-operations"))]
+compile_error!("kms-only bindings cannot include local credential key operations");
+
 mod device_auth;
 mod flow;
 mod haip;
@@ -533,25 +536,7 @@ fn lti_verify_launch_jwt(
 /// Build a minimal IssuerConfig for stateless engine methods that don't
 /// reference config fields (authorization response, token exchange, etc.).
 fn _dummy_engine() -> marty_oid4vci::IssuanceEngine {
-    use marty_oid4vci::types::*;
-    let config = IssuerConfig {
-        credential_issuer_url: String::new(),
-        issuer_name: String::new(),
-        credential_types: vec![],
-        #[cfg(any(test, feature = "local-key-operations"))]
-        issuer_key: IssuerKey {
-            issuer_id: String::new(),
-            jwk_json: String::new(),
-            algorithm: SigningAlgorithm::EdDSA,
-        },
-        token_endpoint: None,
-        credential_endpoint: None,
-        authorization_endpoint: None,
-        deferred_credential_endpoint: None,
-        binding_methods: vec![],
-        proof_signing_alg_values: vec![],
-    };
-    marty_oid4vci::IssuanceEngine::new(config)
+    marty_oid4vci::IssuanceEngine::new(marty_oid4vci::types::IssuerConfig::stateless())
 }
 
 /// Create a credential offer as a JSON string.

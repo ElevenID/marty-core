@@ -28,6 +28,16 @@
 //! assert!(result.is_valid());
 //! ```
 
+#[cfg(all(
+    feature = "kms-only",
+    any(
+        feature = "authority-issuance",
+        feature = "cert-builder",
+        feature = "local-key-operations"
+    )
+))]
+compile_error!("kms-only builds cannot include local key operations or authority builders");
+
 #[cfg(feature = "csca")]
 pub mod active_authentication;
 pub mod asn1;
