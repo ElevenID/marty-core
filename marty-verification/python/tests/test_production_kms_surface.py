@@ -1,4 +1,5 @@
 import marty_verification
+import marty_verification_py
 
 
 def test_production_module_excludes_local_secret_key_operations():
@@ -60,6 +61,7 @@ def test_production_module_excludes_local_secret_key_operations():
     }
 
     assert forbidden.isdisjoint(dir(marty_verification))
+    assert forbidden.isdisjoint(dir(marty_verification_py))
     for safe_name in (
         "verify_signature",
         "dtc_prepare_signing",
