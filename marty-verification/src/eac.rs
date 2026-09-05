@@ -96,6 +96,7 @@ fn normalize_ec_point(point: &[u8]) -> VerificationResult<Vec<u8>> {
 }
 
 /// Serialize the generated EC private scalar as PKCS#8 for compatibility APIs.
+#[cfg(feature = "local-key-operations")]
 pub fn encode_private_key(
     algorithm: EacAlgorithm,
     private_key: &[u8],
@@ -123,6 +124,7 @@ pub fn encode_private_key(
 }
 
 /// Sign the chip challenge with a PKCS#8 terminal private key.
+#[cfg(feature = "local-key-operations")]
 pub fn sign_terminal_challenge(
     algorithm: EacAlgorithm,
     private_key_der: &[u8],
@@ -354,6 +356,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "local-key-operations")]
     use marty_crypto::ecdsa::verify_p256_sha256;
 
     #[test]
@@ -390,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "local-key-operations")]
     fn terminal_challenge_signing_uses_the_native_key() {
         let (private_key, public_key) = marty_crypto::ecdsa::generate_p256_keypair().unwrap();
         let private_der = encode_private_key(EacAlgorithm::EcdhP256Sha256, &private_key).unwrap();

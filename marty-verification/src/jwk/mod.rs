@@ -16,3 +16,18 @@ pub use jwe::*;
 pub use jws::*;
 pub use key::*;
 pub use public_key::*;
+
+#[cfg(not(feature = "local-key-operations"))]
+/// Marker documenting the verification-only JWK boundary.
+///
+/// JWK generation and local JWS signing do not exist in this build:
+///
+/// ```compile_fail
+/// let _ = marty_verification::jwk::generate_ec_p256();
+/// ```
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::{Jwk, JwsHeader};
+/// let _ = marty_verification::jwk::jws_sign(&JwsHeader::new("ES256"), b"payload", &Jwk::default());
+/// ```
+pub struct VerificationOnly;

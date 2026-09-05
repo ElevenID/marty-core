@@ -331,6 +331,7 @@ impl Default for JwkSet {
 // ============================================================================
 
 /// Generate a new EC P-256 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_ec_p256() -> VerificationResult<Jwk> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p256::SecretKey;
@@ -358,6 +359,7 @@ pub fn generate_ec_p256() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new EC P-384 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_ec_p384() -> VerificationResult<Jwk> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p384::SecretKey;
@@ -385,6 +387,7 @@ pub fn generate_ec_p384() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new Ed25519 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_ed25519() -> VerificationResult<Jwk> {
     use marty_crypto::ed25519::Ed25519KeyPair;
 
@@ -400,6 +403,7 @@ pub fn generate_ed25519() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new X25519 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_x25519() -> VerificationResult<Jwk> {
     use marty_crypto::ecdh::x25519_generate_keypair;
 
@@ -415,6 +419,7 @@ pub fn generate_x25519() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new symmetric key JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_symmetric(size: usize) -> VerificationResult<Jwk> {
     use rand::RngCore;
 
@@ -449,6 +454,7 @@ pub fn import_ed25519_public(bytes: &[u8]) -> VerificationResult<Jwk> {
 }
 
 /// Import an Ed25519 private key from raw bytes.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn import_ed25519_private(secret: &[u8], public: &[u8]) -> VerificationResult<Jwk> {
     if secret.len() != 32 || public.len() != 32 {
         return Err(VerificationError::internal(
@@ -484,6 +490,7 @@ pub fn export_ed25519_public(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
 }
 
 /// Export an Ed25519 private key to raw bytes.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn export_ed25519_private(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
     if jwk.kty != "OKP" || jwk.crv.as_deref() != Some("Ed25519") {
         return Err(VerificationError::internal(

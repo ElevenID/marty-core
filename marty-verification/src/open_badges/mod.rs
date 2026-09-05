@@ -47,7 +47,9 @@ use serde_json::Value;
 
 pub use contexts::{ob2_context_uri, ob3_context_uri, open_badges_context_loader};
 pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
-pub use ob2::{issue_ob2_json, verify_ob2_json};
+#[cfg(any(test, feature = "local-key-operations"))]
+pub use ob2::issue_ob2_json;
+pub use ob2::verify_ob2_json;
 #[cfg(not(target_arch = "wasm32"))]
 pub use ob3::{issue_ob3_json, verify_ob3_json, verify_ob3_json_with_status_lists};
 pub use ob3::{

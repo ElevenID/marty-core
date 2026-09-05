@@ -20,7 +20,17 @@ eudi = []           # EU Digital Identity verification
 python = ["pyo3"]   # Verification-only Python bindings
 # Explicit opt-in for offline development and migration tools. Production
 # Python wheels omit every raw secret/private-key operation from the module.
-local-key-operations = ["python", "marty-crypto/keygen", "marty-crypto/pkcs12"]
+local-key-operations = [
+    "python",
+    "marty-crypto/ecdsa-local-signing",
+    "marty-crypto/eddsa-local-signing",
+    "marty-crypto/keygen",
+    "marty-crypto/pkcs12",
+    "marty-crypto/private-key-codec",
+    "marty-crypto/rsa-local-signing",
+]
+# Short-lived protocol/session secrets, distinct from credential issuer keys.
+ephemeral-session-keys = []
 aamva-client = ["reqwest", "tokio", "moka"]
 icao-client = ["reqwest", "tokio", "moka", "ldap3"]
 eudi-client = ["reqwest", "reqwest/stream", "tokio", "moka", "quick-xml"]
@@ -36,14 +46,14 @@ full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "s
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = [
     "crl",
     "ecdh",
-    "ecdsa",
-    "eddsa",
+    "ecdsa-verification",
+    "eddsa-verification",
     "hashing",
     "jwk",
     "kdf",
     "ocsp",
-    "rsa",
-    "serialization",
+    "rsa-verification",
+    "public-key-codec",
     "symmetric",
     "x509",
 ] }

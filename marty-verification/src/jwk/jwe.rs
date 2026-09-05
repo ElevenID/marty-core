@@ -136,6 +136,7 @@ fn decode_party_info(value: Option<&str>) -> VerificationResult<Vec<u8>> {
 /// The public and private JSON values carry the same random key identifier and
 /// JOSE encryption metadata. Callers may wrap the private JSON with their KMS,
 /// but key generation and JWK construction remain canonical Rust behavior.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(String, String)> {
     let mut private = super::generate_ec_p256()?;
     private.kid = Some(format!("oid4vp-haip-{}", uuid::Uuid::new_v4()));
