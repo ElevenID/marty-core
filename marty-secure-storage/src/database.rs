@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::Utc;
+use marty_types::open_badges::contains_private_key_material;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use serde_json::Value;
@@ -1859,27 +1860,6 @@ fn validate_open_badge_package(
     Ok(sequence)
 }
 
-fn contains_private_key_material(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => object.iter().any(|(key, nested)| {
-            if key.starts_with("privateKey") || key.starts_with("secretKey") {
-                return true;
-            }
-            if key == "publicKeyJwk" {
-                return nested.as_object().is_none_or(|jwk| {
-                    matches!(jwk.get("kty").and_then(Value::as_str), Some("oct") | None)
-                        || ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
-                            .iter()
-                            .any(|private| jwk.contains_key(*private))
-                });
-            }
-            contains_private_key_material(nested)
-        }),
-        Value::Array(items) => items.iter().any(contains_private_key_material),
-        _ => false,
-    }
-}
-
 fn required_stored_value(
     value: Option<String>,
     record_id: &str,
@@ -3439,7 +3419,7 @@ mod tests {
                     .apply_open_badge_trust_package(&private_package, &[private_key])
                     .await
                     .unwrap_err(),
-                StorageError::InvalidTrustPackage(_)
+                StorageError::InvalidTrustPackage(message) if message.contains("method did:example:private#key-1 contains private or symmetric key material")
             ));
 
             let mut invalid_interval =
