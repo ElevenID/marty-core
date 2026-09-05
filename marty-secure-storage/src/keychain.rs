@@ -4,7 +4,6 @@ use crate::error::StorageError;
 
 const SERVICE_NAME: &str = "com.marty.verifier";
 const DB_KEY_NAME: &str = "database_encryption_key";
-#[allow(dead_code)]
 const PII_KEY_NAME: &str = "pii_encryption_key";
 
 /// Keychain manager for secure key storage
@@ -28,11 +27,21 @@ impl KeychainManager {
         }
     }
 
-    pub(crate) fn with_installed_default_store() -> Self {
-        Self {
+    pub(crate) fn with_process_local_store() -> Result<Self, StorageError> {
+        let store = keyring_core::get_default_store()
+            .ok_or_else(|| StorageError::Keychain("no default store is installed".to_string()))?;
+        if !matches!(
+            store.persistence(),
+            keyring_core::CredentialPersistence::ProcessOnly
+        ) {
+            return Err(StorageError::Keychain(
+                "installed keyring is not process-local".to_string(),
+            ));
+        }
+        Ok(Self {
             service: SERVICE_NAME.to_string(),
             store_selection: StoreSelection::InstalledDefault,
-        }
+        })
     }
 
     /// Get or create the database encryption key
@@ -41,7 +50,6 @@ impl KeychainManager {
     }
 
     /// Get or create the PII encryption key
-    #[allow(dead_code)]
     pub fn get_or_create_pii_key(&self) -> Result<Vec<u8>, StorageError> {
         self.get_or_create_key(PII_KEY_NAME)
     }
@@ -126,6 +134,7 @@ mod tests {
                 .err()
                 .expect("an explicitly installed process-local store is required");
         assert!(missing.to_string().contains("no default store"));
+        assert!(crate::PiiEncryptor::from_process_local_keyring().is_err());
 
         let store: Arc<keyring_core::CredentialStore> = keyring_core::mock::Store::new().unwrap();
         let expected_id = store.id();
@@ -140,6 +149,14 @@ mod tests {
             selected.persistence(),
             keyring_core::CredentialPersistence::ProcessOnly
         ));
+        let first = crate::PiiEncryptor::from_process_local_keyring().unwrap();
+        let ciphertext = first.encrypt("persisted PII").unwrap();
+        let reopened = crate::PiiEncryptor::from_process_local_keyring().unwrap();
+        assert_eq!(reopened.decrypt(&ciphertext).unwrap(), "persisted PII");
+        let pii_entry = keyring_core::Entry::new(SERVICE_NAME, PII_KEY_NAME).unwrap();
+        pii_entry.set_password("invalid key encoding!").unwrap();
+        assert!(crate::PiiEncryptor::from_process_local_keyring().is_err());
+        assert_eq!(pii_entry.get_password().unwrap(), "invalid key encoding!");
     }
 
     #[test]
