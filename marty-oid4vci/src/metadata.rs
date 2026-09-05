@@ -12,7 +12,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::types::{CredentialFormat, CredentialTypeConfig, SigningAlgorithm};
+use crate::types::{ClaimDefinition, CredentialFormat, CredentialTypeConfig, SigningAlgorithm};
+
+pub use crate::types::{DisplayEntry, LogoEntry};
 
 // ── Public types ─────────────────────────────────────────────────────
 
@@ -98,32 +100,6 @@ pub struct ClaimMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<Vec<DisplayEntry>>,
 }
-
-/// Human-readable display information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DisplayEntry {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub locale: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logo: Option<LogoEntry>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub background_color: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_color: Option<String>,
-}
-
-/// Logo metadata.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogoEntry {
-    pub uri: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alt_text: Option<String>,
-}
-
-// ── Builder ──────────────────────────────────────────────────────────
 
 /// Builder for generating OID4VCI issuer metadata.
 ///
@@ -531,6 +507,24 @@ fn build_default_config(
     }
 }
 
+fn claim_metadata(name: &str, definition: &ClaimDefinition) -> ClaimMetadata {
+    ClaimMetadata {
+        mandatory: definition.mandatory.then_some(true),
+        value_type: definition
+            .value_type
+            .clone()
+            .or_else(|| Some("string".into())),
+        display: Some(vec![DisplayEntry {
+            name: name.replace('_', " "),
+            locale: Some("en-US".into()),
+            logo: None,
+            description: None,
+            background_color: None,
+            text_color: None,
+        }]),
+    }
+}
+
 /// Build claims metadata from a credential type config (for SD-JWT).
 fn build_claims_metadata(ctype: &CredentialTypeConfig) -> Option<HashMap<String, ClaimMetadata>> {
     if ctype.claims.is_empty() {
@@ -540,23 +534,7 @@ fn build_claims_metadata(ctype: &CredentialTypeConfig) -> Option<HashMap<String,
         ctype
             .claims
             .iter()
-            .map(|(name, def)| {
-                (
-                    name.clone(),
-                    ClaimMetadata {
-                        mandatory: if def.mandatory { Some(true) } else { None },
-                        value_type: def.value_type.clone().or_else(|| Some("string".into())),
-                        display: Some(vec![DisplayEntry {
-                            name: name.replace('_', " ").to_string(),
-                            locale: Some("en-US".into()),
-                            logo: None,
-                            description: None,
-                            background_color: None,
-                            text_color: None,
-                        }]),
-                    },
-                )
-            })
+            .map(|(name, def)| (name.clone(), claim_metadata(name, def)))
             .collect(),
     )
 }
@@ -578,21 +556,7 @@ fn build_mdoc_claims_metadata(
 
     let mut outer = HashMap::new();
     for (name, def) in &ctype.claims {
-        outer.insert(
-            format!("{}.{}", namespace, name),
-            ClaimMetadata {
-                mandatory: if def.mandatory { Some(true) } else { None },
-                value_type: def.value_type.clone().or_else(|| Some("string".into())),
-                display: Some(vec![DisplayEntry {
-                    name: name.replace('_', " ").to_string(),
-                    locale: Some("en-US".into()),
-                    logo: None,
-                    description: None,
-                    background_color: None,
-                    text_color: None,
-                }]),
-            },
-        );
+        outer.insert(format!("{}.{}", namespace, name), claim_metadata(name, def));
     }
     Some(outer)
 }
@@ -600,6 +564,55 @@ fn build_mdoc_claims_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_types_keep_both_public_paths_and_wire_fields() {
+        let display = serde_json::json!({
+            "name": "Permit", "locale": "fr-FR",
+            "logo": {"uri": "https://example.test/logo", "alt_text": "Logo"},
+            "description": "Description", "background_color": "#ffffff", "text_color": "#000000"
+        });
+        let through_types: crate::types::DisplayEntry =
+            serde_json::from_value(display.clone()).unwrap();
+        let through_metadata: DisplayEntry = through_types;
+        assert_eq!(serde_json::to_value(through_metadata).unwrap(), display);
+        let minimal: DisplayEntry =
+            serde_json::from_value(serde_json::json!({"name": "Permit"})).unwrap();
+        assert_eq!(
+            serde_json::to_value(minimal).unwrap(),
+            serde_json::json!({"name": "Permit"})
+        );
+    }
+
+    #[test]
+    fn shared_claim_mapping_preserves_defaults_and_format_namespaces() {
+        let mut config: CredentialTypeConfig = serde_json::from_value(serde_json::json!({
+            "id": "permit", "name": "Permit", "formats": [],
+            "doctype": "org.example.permit",
+            "claims": {"given_name": {"mandatory": true}, "age": {"value_type": "number"}}
+        }))
+        .unwrap();
+        let plain = build_claims_metadata(&config).unwrap();
+        let mdoc = build_mdoc_claims_metadata(&config).unwrap();
+        for name in ["given_name", "age"] {
+            assert_eq!(
+                serde_json::to_value(&plain[name]).unwrap(),
+                serde_json::to_value(&mdoc[&format!("org.example.{name}")]).unwrap()
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&plain["given_name"]).unwrap(),
+            serde_json::json!({
+                "mandatory": true, "value_type": "string",
+                "display": [{"name": "given name", "locale": "en-US"}]
+            })
+        );
+        assert!(plain["age"].mandatory.is_none());
+        assert_eq!(plain["age"].value_type.as_deref(), Some("number"));
+        config.claims.clear();
+        assert!(build_claims_metadata(&config).is_none());
+        assert!(build_mdoc_claims_metadata(&config).is_none());
+    }
 
     #[test]
     fn test_builder_minimal() {
