@@ -1912,7 +1912,6 @@ fn spki_to_raw_public_key<'py>(
 }
 
 /// Derive a key using HKDF-SHA256.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn hkdf_sha256<'py>(
     py: Python<'py>,
@@ -1926,7 +1925,6 @@ fn hkdf_sha256<'py>(
 }
 
 /// Derive a key using HKDF-SHA384.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn hkdf_sha384<'py>(
     py: Python<'py>,
@@ -1940,7 +1938,6 @@ fn hkdf_sha384<'py>(
 }
 
 /// Derive a key using PBKDF2-SHA256.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn pbkdf2_sha256<'py>(
     py: Python<'py>,
@@ -1958,7 +1955,6 @@ fn pbkdf2_sha256<'py>(
 // ============================================================================
 
 /// Encrypt data using AES-GCM.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn aes_gcm_encrypt<'py>(
     py: Python<'py>,
@@ -1981,7 +1977,6 @@ fn aes_gcm_encrypt<'py>(
 }
 
 /// Decrypt data using AES-GCM.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn aes_gcm_decrypt<'py>(
     py: Python<'py>,
@@ -2004,7 +1999,6 @@ fn aes_gcm_decrypt<'py>(
 }
 
 /// Encrypt data using 3DES-CBC.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn tdes_cbc_encrypt<'py>(
     py: Python<'py>,
@@ -2018,7 +2012,6 @@ fn tdes_cbc_encrypt<'py>(
 }
 
 /// Decrypt data using 3DES-CBC.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn tdes_cbc_decrypt<'py>(
     py: Python<'py>,
@@ -2360,10 +2353,12 @@ fn rsa_pss_sha512_verify(
 // ============================================================================
 
 /// Generate random bytes.
-#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 fn generate_random_bytes<'py>(py: Python<'py>, length: usize) -> Bound<'py, PyBytes> {
-    let bytes = marty_crypto::keygen::generate_random_bytes(length);
+    use rand::RngCore;
+
+    let mut bytes = vec![0u8; length];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
     PyBytes::new(py, &bytes)
 }
 
@@ -4441,13 +4436,6 @@ const FORBIDDEN_PRODUCTION_PYTHON_EXPORTS: &[&str] = &[
     "detect_private_key_type",
     "raw_private_key_to_pkcs8",
     "pkcs8_to_raw_private_key",
-    "hkdf_sha256",
-    "hkdf_sha384",
-    "pbkdf2_sha256",
-    "aes_gcm_encrypt",
-    "aes_gcm_decrypt",
-    "tdes_cbc_encrypt",
-    "tdes_cbc_decrypt",
     "ed25519_generate",
     "ed25519_sign",
     "x25519_generate",
@@ -4467,7 +4455,6 @@ const FORBIDDEN_PRODUCTION_PYTHON_EXPORTS: &[&str] = &[
     "rsa_pss_sha256_sign",
     "rsa_pss_sha384_sign",
     "rsa_pss_sha512_sign",
-    "generate_random_bytes",
     "generate_key",
     "Jwk",
     "jwk_generate",
@@ -4649,21 +4636,14 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spki_to_raw_public_key, m)?)?;
 
     // Crypto Operations - KDF
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha256, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha384, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pbkdf2_sha256, m)?)?;
 
     // Crypto Operations - Symmetric Encryption
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_encrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_decrypt, m)?)?;
 
     // Crypto Operations - Ed25519
@@ -4723,7 +4703,6 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rsa_pss_sha512_verify, m)?)?;
 
     // Crypto Operations - Key Generation
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_random_bytes, m)?)?;
     #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_key, m)?)?;
@@ -4957,21 +4936,14 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(spki_to_raw_public_key, m)?)?;
 
     // Crypto Operations - KDF
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha256, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(hkdf_sha384, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pbkdf2_sha256, m)?)?;
 
     // Crypto Operations - Symmetric Encryption
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_encrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(tdes_cbc_decrypt, m)?)?;
 
     // Crypto Operations - Ed25519
@@ -5031,7 +5003,6 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rsa_pss_sha512_verify, m)?)?;
 
     // Crypto Operations - Key Generation
-    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_random_bytes, m)?)?;
     #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_key, m)?)?;
@@ -5112,6 +5083,9 @@ mod kms_surface_tests {
         }
         for name in [
             "verify_signature",
+            "generate_random_bytes",
+            "aes_gcm_encrypt",
+            "aes_gcm_decrypt",
             "dtc_prepare_signing",
             "dtc_assemble_signature",
             "dtc_verify",
