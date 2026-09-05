@@ -12,24 +12,34 @@
 //! and broader curve/algorithm support remain explicit product capabilities to
 //! implement and test rather than implied claims of this wrapper.
 
-use affinidi_messaging_didcomm::crypto::key_agreement::{
-    Curve, PrivateKeyAgreement, PublicKeyAgreement,
-};
-use affinidi_messaging_didcomm::jwe::{decrypt, encrypt};
+use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PublicKeyAgreement};
+#[cfg(feature = "local-key-operations")]
+use affinidi_messaging_didcomm::crypto::key_agreement::PrivateKeyAgreement;
+#[cfg(feature = "local-key-operations")]
+use affinidi_messaging_didcomm::jwe::decrypt;
+use affinidi_messaging_didcomm::jwe::encrypt;
+#[cfg(feature = "local-key-operations")]
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(feature = "local-key-operations")]
 use base64::Engine;
+#[cfg(feature = "local-key-operations")]
 use serde::{Deserialize, Serialize};
 
 use crate::error::{DidcommError, DidcommResult};
 use crate::types::DidDocument;
 
+#[cfg(feature = "local-key-operations")]
 const DIDCOMM_ENCRYPTED_MEDIA_TYPE: &str = "application/didcomm-encrypted+json";
+#[cfg(feature = "local-key-operations")]
 const DIDCOMM_CONTENT_ENCRYPTION: &str = "A256CBC-HS512";
+#[cfg(feature = "local-key-operations")]
 const ANONCRYPT_ALGORITHM: &str = "ECDH-ES+A256KW";
+#[cfg(feature = "local-key-operations")]
 const AUTHCRYPT_ALGORITHM: &str = "ECDH-1PU+A256KW";
 
 /// Strict sender-authenticated decryption result for the key that opened the envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg(feature = "local-key-operations")]
 pub struct AuthenticatedDecryption {
     pub plaintext: String,
     pub sender_kid: String,
@@ -63,6 +73,7 @@ pub fn encrypt_for_recipient(
 /// authorized by the sender DID document's `keyAgreement` relationship. The
 /// plaintext `from` and `to` values are bound to the sender and recipient DIDs
 /// before ECDH-1PU encryption is attempted.
+#[cfg(feature = "local-key-operations")]
 pub fn encrypt_for_recipient_authenticated(
     plaintext: &str,
     sender_did_doc: &DidDocument,
@@ -94,6 +105,7 @@ pub fn encrypt_for_recipient_authenticated(
 /// This compatibility entry point retains the existing Python/Rust API while
 /// delegating all protected-header, key-derivation, key-wrap, and content-
 /// authentication validation to the maintained DIDComm implementation.
+#[cfg(feature = "local-key-operations")]
 pub fn decrypt_jwe(jwe_json: &str, recipient_private_key: &[u8; 32]) -> DidcommResult<String> {
     let jwe: serde_json::Value = serde_json::from_str(jwe_json)
         .map_err(|error| DidcommError::UnpackError(format!("invalid JWE JSON: {error}")))?;
@@ -150,6 +162,7 @@ pub fn decrypt_jwe(jwe_json: &str, recipient_private_key: &[u8; 32]) -> DidcommR
 /// This API rejects anoncrypt downgrade, non-normative/legacy ECDH-1PU key
 /// derivation, sender KID substitution, private-key/document mismatch, and a
 /// plaintext `from` or `to` value that disagrees with the authenticated DIDs.
+#[cfg(feature = "local-key-operations")]
 pub fn decrypt_authenticated_jwe(
     jwe_json: &str,
     recipient_private_key: &[u8; 32],
@@ -256,6 +269,7 @@ fn public_keys(
         .collect()
 }
 
+#[cfg(feature = "local-key-operations")]
 fn private_key_bound_to_document(
     private_key: &[u8; 32],
     document: &DidDocument,
@@ -276,6 +290,7 @@ fn private_key_bound_to_document(
     )))
 }
 
+#[cfg(feature = "local-key-operations")]
 fn protected_sender_kid(envelope: &serde_json::Value) -> DidcommResult<String> {
     let protected = envelope
         .get("protected")
@@ -307,6 +322,7 @@ fn protected_sender_kid(envelope: &serde_json::Value) -> DidcommResult<String> {
     Ok(sender_kid.to_string())
 }
 
+#[cfg(feature = "local-key-operations")]
 fn validate_plaintext_parties(
     plaintext: &str,
     sender_did_doc: &DidDocument,
@@ -323,6 +339,7 @@ fn validate_plaintext_parties(
     Ok(())
 }
 
+#[cfg(feature = "local-key-operations")]
 fn validate_protected_profile(
     media_type: Option<&str>,
     algorithm: &str,
@@ -340,7 +357,7 @@ fn validate_protected_profile(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local-key-operations"))]
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;

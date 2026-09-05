@@ -32,6 +32,18 @@
 //! out of scope. For those methods, use the DIF Universal Resolver as an HTTP
 //! proxy and configure its HTTP(S) base URL explicitly.
 
+#[cfg(all(feature = "kms-only", feature = "local-key-operations"))]
+compile_error!("kms-only DIDComm builds cannot accept caller-supplied private keys");
+
+#[cfg(not(feature = "local-key-operations"))]
+/// Marker for public-recipient encryption builds that cannot accept local
+/// sender or recipient private keys.
+///
+/// ```compile_fail
+/// use marty_didcomm::{decrypt_jwe, encrypt_for_recipient_authenticated};
+/// ```
+pub struct NoLocalKeyOperations;
+
 pub mod did_identifier;
 pub mod did_resolver;
 pub mod encrypted_envelope;
@@ -41,9 +53,11 @@ pub mod types;
 
 pub use did_identifier::{derive_p256_did_identifier, derive_p256_did_jwk, derive_p256_did_key};
 pub use did_resolver::{DidResolutionResult, DidResolver};
+pub use encrypted_envelope::encrypt_for_recipient;
+#[cfg(feature = "local-key-operations")]
 pub use encrypted_envelope::{
-    decrypt_authenticated_jwe, decrypt_jwe, encrypt_for_recipient,
-    encrypt_for_recipient_authenticated, AuthenticatedDecryption,
+    decrypt_authenticated_jwe, decrypt_jwe, encrypt_for_recipient_authenticated,
+    AuthenticatedDecryption,
 };
 pub use envelope::{pack_credential_for_holder, unpack_didcomm_message};
 pub use error::{DidcommError, DidcommResult};

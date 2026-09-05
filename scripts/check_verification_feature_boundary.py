@@ -56,6 +56,7 @@ def check_repository(root: Path = ROOT) -> None:
     verification = load_toml(root / "marty-verification" / "Cargo.toml")
     oid4vci = load_toml(root / "marty-oid4vci" / "Cargo.toml")
     iso18013 = load_toml(root / "marty-iso18013" / "Cargo.toml")
+    didcomm = load_toml(root / "marty-didcomm" / "Cargo.toml")
     bindings = load_toml(root / "marty-bindings" / "Cargo.toml")
     verification_python = load_toml(root / "marty-verification" / "pyproject.toml")
 
@@ -138,10 +139,24 @@ def check_repository(root: Path = ROOT) -> None:
         set(bindings["features"]["kms-only"])
         == {
             "marty-crypto/kms-only",
+            "marty-didcomm/kms-only",
             "marty-oid4vci/kms-only",
             "marty-verification/kms-only",
         },
         "released bindings must propagate KMS enforcement",
+    )
+    require(
+        bindings["dependencies"]["marty-didcomm"].get("default-features") is False
+        and "local-key-operations"
+        not in bindings["dependencies"]["marty-didcomm"].get("features", [])
+        and bindings["features"]["didcomm-local-keys"]
+        == ["marty-didcomm/local-key-operations"],
+        "DIDComm caller-private-key APIs must require their own capability",
+    )
+    require(
+        didcomm["features"]["kms-only"] == []
+        and "local-key-operations" in didcomm["features"]["default"],
+        "DIDComm must preserve full defaults and provide a non-enabling KMS marker",
     )
 
     iso18013_crypto = iso18013["dependencies"]["marty-crypto"]

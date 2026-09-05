@@ -2043,7 +2043,7 @@ fn didcomm_encrypt(plaintext_json: &str, recipient_did_document_json: &str) -> P
 /// DID document's `keyAgreement` relationship. The plaintext `from` and `to`
 /// values must identify the supplied sender and recipient documents.
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "didcomm-local-keys")]
 fn didcomm_encrypt_authcrypt(
     plaintext_json: &str,
     sender_did_document_json: &str,
@@ -2079,7 +2079,7 @@ fn didcomm_encrypt_authcrypt(
 /// Returns:
 ///     Decrypted plaintext (JSON string)
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "didcomm-local-keys")]
 fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyResult<String> {
     if recipient_x25519_private_key.len() != 32 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -2097,7 +2097,7 @@ fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyRes
 /// Anoncrypt, legacy ECDH-1PU derivation, unauthorized methods, key/document
 /// mismatch, and plaintext party substitution are rejected.
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "didcomm-local-keys")]
 fn didcomm_decrypt_authcrypt(
     jwe_json: &str,
     recipient_x25519_private_key: &[u8],
@@ -2764,7 +2764,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(didcomm_pack_credential, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_unpack_message, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_encrypt, m)?)?;
-    #[cfg(feature = "local-key-operations")]
+    #[cfg(feature = "didcomm-local-keys")]
     {
         m.add_function(wrap_pyfunction!(didcomm_encrypt_authcrypt, m)?)?;
         m.add_function(wrap_pyfunction!(didcomm_decrypt, m)?)?;
