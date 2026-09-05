@@ -1,0 +1,13 @@
+[package]
+name = "marty-python-adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Shared Python boundary adapters for Marty Rust libraries"
+
+[dependencies]
+marty-status = { path = "../marty-status", version = "0.1.45" }
+pyo3.workspace = true
+serde_json.workspace = true
