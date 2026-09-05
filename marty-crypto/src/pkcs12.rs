@@ -24,7 +24,7 @@
 use der::Decode;
 use serde::{Deserialize, Serialize};
 use x509_cert::Certificate;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{CryptoError, CryptoResult};
 
@@ -119,13 +119,19 @@ pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
         .map_err(|e| CryptoError::crypto_error(format!("Failed to parse PKCS#12: {:?}", e)))?;
 
     // Get the key bags (private keys) - returns Vec<Vec<u8>>
-    let key_bags = p12.key_bags(password).map_err(|e| {
+    let mut key_bags = p12.key_bags(password).map_err(|e| {
         CryptoError::crypto_error(format!("Failed to decrypt PKCS#12 key: {:?}", e))
     })?;
 
     if key_bags.is_empty() {
         return Err(CryptoError::crypto_error("No private key found in PKCS#12"));
     }
+
+    // Move the selected key into an error-safe zeroizing guard and wipe any
+    // additional private-key bags immediately. The guard retains ownership
+    // until every fallible parse/validation step has completed.
+    let mut private_key_der = Zeroizing::new(key_bags.swap_remove(0));
+    key_bags.zeroize();
 
     // Get the certificate bags - returns Vec<Vec<u8>> (DER-encoded)
     let cert_bags = p12.cert_x509_bags(password).map_err(|e| {
@@ -137,9 +143,6 @@ pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
             "No certificates found in PKCS#12",
         ));
     }
-
-    // First key bag is the private key (already in DER format)
-    let private_key_der = key_bags[0].clone();
 
     // Detect private key algorithm
     let private_key_algorithm = detect_key_algorithm(&private_key_der)?;
@@ -160,7 +163,7 @@ pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
     let friendly_name = None;
 
     Ok(Pkcs12Data {
-        private_key_der,
+        private_key_der: std::mem::take(&mut *private_key_der),
         private_key_algorithm,
         certificate_der,
         certificate_subject,
