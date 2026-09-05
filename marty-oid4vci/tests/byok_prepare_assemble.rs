@@ -101,7 +101,7 @@ fn assemble_produces_three_part_jwt() {
     // Simulate external signing: sign the signing_input bytes with the test key
     let signature = key.sign(signing_input.as_bytes()).expect("sign");
 
-    let result = assemble_jwt_vc(prepared, &signature);
+    let result = assemble_jwt_vc(prepared, &signature).unwrap();
 
     match result {
         SignedCredential::JwtVcJson { jwt, credential_id } => {
@@ -135,7 +135,7 @@ fn prepare_assemble_equivalent_to_sign_jwt_vc() {
     // Path B: prepare + sign + assemble
     let prepared = prepare_jwt_vc(&key, &claims).expect("prepare_jwt_vc");
     let signature = key.sign(prepared.signing_input.as_bytes()).expect("sign");
-    let assembled = assemble_jwt_vc(prepared, &signature);
+    let assembled = assemble_jwt_vc(prepared, &signature).unwrap();
 
     // Both should be JwtVcJson variants with valid JWTs
     match (&direct, &assembled) {

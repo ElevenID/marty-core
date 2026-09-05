@@ -1326,6 +1326,7 @@ fn create_verifiable_credential(
 /// Returns a tuple of (signing_input_base64, credential_id, format_hint).
 /// The caller signs `signing_input` externally and passes the result to
 /// `oid4vci_assemble_credential()`.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (issuer_id, algorithm, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
@@ -1458,6 +1459,7 @@ fn oid4vci_prepare_credential(
 ///
 /// Takes the signing_input (from prepare), signature bytes (base64url), and
 /// format/credential_id. Returns (credential_str, credential_id).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[pyo3(signature = (signing_input, signature_b64, credential_id, format))]
 fn oid4vci_assemble_credential(
@@ -1476,11 +1478,39 @@ fn oid4vci_assemble_credential(
 
     match format {
         "jwt_vc_json" => {
-            let prepared = marty_oid4vci::formats::jwt_vc::PreparedJwtVc {
-                signing_input: signing_input.to_string(),
-                credential_id: credential_id.to_string(),
+            let header_segment = signing_input.split('.').next().ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid JWT signing input")
+            })?;
+            let header: serde_json::Value =
+                serde_json::from_slice(&b64.decode(header_segment).map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Invalid JWT header: {e}"
+                    ))
+                })?)
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                        "Invalid JWT header: {e}"
+                    ))
+                })?;
+            let algorithm = match header.get("alg").and_then(serde_json::Value::as_str) {
+                Some("ES256") => marty_oid4vci::types::SigningAlgorithm::ES256,
+                Some("ES384") => marty_oid4vci::types::SigningAlgorithm::ES384,
+                Some("ES256K") => marty_oid4vci::types::SigningAlgorithm::ES256K,
+                Some("EdDSA") => marty_oid4vci::types::SigningAlgorithm::EdDSA,
+                Some("RS256") => marty_oid4vci::types::SigningAlgorithm::RS256,
+                _ => {
+                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                        "Unsupported or missing JWT signing algorithm",
+                    ))
+                }
             };
-            let signed = marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(prepared, &signature);
+            let prepared = marty_oid4vci::formats::jwt_vc::PreparedJwtVc::from_signing_input(
+                signing_input.to_string(),
+                credential_id.to_string(),
+                algorithm,
+            );
+            let signed = marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(prepared, &signature)
+                .map_err(to_pyerr)?;
             match signed {
                 SignedCredential::JwtVcJson { jwt, credential_id } => Ok((jwt, credential_id)),
                 _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -1676,6 +1706,16 @@ fn oid4vci_assemble_mdoc(
     signature: Vec<u8>,
 ) -> PyResult<(String, String)> {
     use marty_oid4vci::types::SignedCredential;
+    prepared
+        .inner
+        .as_ref()
+        .ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "mDoc preparation may only be assembled once",
+            )
+        })?
+        .validate_signature(&signature)
+        .map_err(to_pyerr)?;
     let prepared = prepared.inner.take().ok_or_else(|| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
             "mDoc preparation may only be assembled once",
@@ -2737,7 +2777,9 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sd_jwt_create_presentation, m)?)?;
     #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
     m.add_class::<PreparedMdocForRemoteSigning>()?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_mdoc, m)?)?;
@@ -2807,6 +2849,8 @@ mod tests {
                 "haip_generate_response_encryption_key",
                 "haip_decrypt_response",
                 "oid4vci_create_proof_jwt",
+                "oid4vci_prepare_credential",
+                "oid4vci_assemble_credential",
                 "didcomm_encrypt_authcrypt",
                 "didcomm_decrypt",
                 "didcomm_decrypt_authcrypt",
@@ -2818,17 +2862,18 @@ mod tests {
             }
 
             #[cfg(not(feature = "ephemeral-session-keys"))]
-            for session_operation in [
-                "aes_256_cbc_encrypt",
-                "aes_256_cbc_decrypt",
-                "hmac_sha256",
-            ] {
-                assert!(!module.hasattr(session_operation).unwrap(), "{session_operation}");
+            for session_operation in ["aes_256_cbc_encrypt", "aes_256_cbc_decrypt", "hmac_sha256"] {
+                assert!(
+                    !module.hasattr(session_operation).unwrap(),
+                    "{session_operation}"
+                );
             }
 
             for remote_signing_operation in [
-                "oid4vci_prepare_credential",
-                "oid4vci_assemble_credential",
+                "oid4vci_prepare_sd_jwt",
+                "oid4vci_assemble_sd_jwt",
+                "oid4vci_prepare_jwt_vc",
+                "oid4vci_assemble_jwt_vc",
                 "oid4vci_prepare_mdoc",
                 "oid4vci_assemble_mdoc",
             ] {
@@ -3026,6 +3071,9 @@ mod tests {
             .1;
         let tbs_data = prepared.tbs_data().expect("live TBS bytes");
         let expected_credential_id = prepared.credential_id().expect("live credential ID");
+        assert!(oid4vci_assemble_mdoc(&mut prepared, vec![0; 63]).is_err());
+        assert!(prepared.tbs_data().is_ok());
+        assert!(prepared.credential_id().is_ok());
         let (secret_key, _) =
             marty_crypto::ecdsa::generate_p256_keypair().expect("P-256 key generation");
         let der_signature =

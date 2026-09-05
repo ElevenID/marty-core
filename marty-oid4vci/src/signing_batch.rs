@@ -1114,8 +1114,12 @@ impl BatchAssembler for CanonicalAssembler {
         signature: &ValidatedSignature,
     ) -> Result<SignedCredential, ()> {
         match prepared {
-            PreparedCredential::JwtVc(item) => Ok(assemble_jwt_vc(item.prepared, &signature.0)),
-            PreparedCredential::SdJwt(item) => Ok(assemble_sd_jwt(item.prepared, &signature.0)),
+            PreparedCredential::JwtVc(item) => {
+                assemble_jwt_vc(item.prepared, &signature.0).map_err(|_| ())
+            }
+            PreparedCredential::SdJwt(item) => {
+                assemble_sd_jwt(item.prepared, &signature.0).map_err(|_| ())
+            }
             PreparedCredential::Mdoc(item) => {
                 assemble_mdoc(*item.prepared, &signature.0).map_err(|_| ())
             }

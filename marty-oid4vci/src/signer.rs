@@ -54,6 +54,30 @@ pub trait CredentialSigner: std::fmt::Debug + Send + Sync {
     fn kid_url(&self) -> String;
 }
 
+/// Validate the raw signature encoding returned by a remote signer before it
+/// can be embedded into a JOSE or COSE credential.
+pub(crate) fn validate_remote_signature(
+    algorithm: SigningAlgorithm,
+    signature: &[u8],
+) -> Oid4vciResult<()> {
+    let valid = match algorithm {
+        SigningAlgorithm::ES256 | SigningAlgorithm::ES256K | SigningAlgorithm::EdDSA => {
+            signature.len() == 64
+        }
+        SigningAlgorithm::ES384 => signature.len() == 96,
+        // RS256 signatures have the width of the modulus. Enforce the minimum
+        // supported RSA strength while allowing larger KMS-managed keys.
+        SigningAlgorithm::RS256 => signature.len() >= 256,
+    };
+    if !valid {
+        return Err(Oid4vciError::SigningError(format!(
+            "invalid {algorithm} remote signature length: got {} bytes",
+            signature.len()
+        )));
+    }
+    Ok(())
+}
+
 // =============================================================================
 // IssuerKey as CredentialSigner (backward compat)
 // =============================================================================
@@ -237,5 +261,26 @@ pub(crate) fn get_algorithm_instance(jwk: &JWK) -> Oid4vciResult<AlgorithmInstan
         _ => Err(Oid4vciError::KeyError(
             "Unsupported key type for algorithm selection".into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod remote_signature_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_empty_wrong_width_and_der_ecdsa_signatures() {
+        assert!(validate_remote_signature(SigningAlgorithm::ES256, &[]).is_err());
+        assert!(validate_remote_signature(SigningAlgorithm::ES256, &[0; 63]).is_err());
+
+        let mut der = [0u8; 70];
+        der[0] = 0x30;
+        assert!(validate_remote_signature(SigningAlgorithm::ES256, &der).is_err());
+
+        assert!(validate_remote_signature(SigningAlgorithm::ES256, &[0; 64]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::ES384, &[0; 96]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::EdDSA, &[0; 64]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[0; 255]).is_err());
+        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[0; 256]).is_ok());
     }
 }

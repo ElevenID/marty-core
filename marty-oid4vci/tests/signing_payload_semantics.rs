@@ -140,12 +140,14 @@ fn scalar_es256_jwt_vc_signs_one_complete_payload_and_forwards_raw_signature() {
     );
 
     let expected = assemble_jwt_vc(
-        PreparedJwtVc {
+        PreparedJwtVc::from_signing_input(
             signing_input,
-            credential_id: credential_id.clone(),
-        },
+            credential_id.clone(),
+            SigningAlgorithm::ES256,
+        ),
         &RAW_ES256_SIGNATURE,
-    );
+    )
+    .unwrap();
     let SignedCredential::JwtVcJson {
         jwt: expected_jwt,
         credential_id: expected_credential_id,

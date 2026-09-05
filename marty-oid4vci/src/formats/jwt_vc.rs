@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use crate::error::{Oid4vciError, Oid4vciResult};
 #[cfg(any(test, feature = "local-key-operations"))]
 use crate::signer::validate_issuer_key_algorithm;
-use crate::signer::CredentialSigner;
+use crate::signer::{validate_remote_signature, CredentialSigner};
 #[cfg(any(test, feature = "local-key-operations"))]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
@@ -154,7 +154,7 @@ pub fn sign_jwt_vc_with_signer(
 ) -> Oid4vciResult<SignedCredential> {
     let prepared = prepare_jwt_vc(signer, claims)?;
     let signature = signer.sign(prepared.signing_input.as_bytes())?;
-    Ok(assemble_jwt_vc(prepared, &signature))
+    assemble_jwt_vc(prepared, &signature)
 }
 
 /// Intermediate state between JWT-VC preparation and signing.
@@ -166,12 +166,37 @@ pub struct PreparedJwtVc {
     pub signing_input: String,
     /// The credential ID (urn:uuid:...) assigned during preparation.
     pub credential_id: String,
+    algorithm: crate::types::SigningAlgorithm,
 }
 
 impl PreparedJwtVc {
+    /// Reconstruct prepared JWT state for compatibility adapters that retain
+    /// the exact signing input and algorithm out of process.
+    pub fn from_signing_input(
+        signing_input: String,
+        credential_id: String,
+        algorithm: crate::types::SigningAlgorithm,
+    ) -> Self {
+        Self {
+            signing_input,
+            credential_id,
+            algorithm,
+        }
+    }
+
     /// Borrow the complete base64url-encoded `header.payload` signing input.
     pub fn signing_payload(&self) -> &[u8] {
         self.signing_input.as_bytes()
+    }
+
+    /// Algorithm the remote signer must use.
+    pub fn algorithm(&self) -> crate::types::SigningAlgorithm {
+        self.algorithm
+    }
+
+    /// Check a remote signer's raw output without consuming prepared state.
+    pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
+        validate_remote_signature(self.algorithm, signature)
     }
 }
 
@@ -616,6 +641,7 @@ pub fn prepare_jwt_vc_with_options(
     Ok(PreparedJwtVc {
         signing_input: format!("{}.{}", header_b64, payload_b64),
         credential_id,
+        algorithm: signer.algorithm(),
     })
 }
 
@@ -623,12 +649,16 @@ pub fn prepare_jwt_vc_with_options(
 ///
 /// The `signature` must be the raw bytes produced by signing
 /// `prepared.signing_input` with the issuer's key.
-pub fn assemble_jwt_vc(prepared: PreparedJwtVc, signature: &[u8]) -> SignedCredential {
+pub fn assemble_jwt_vc(
+    prepared: PreparedJwtVc,
+    signature: &[u8],
+) -> Oid4vciResult<SignedCredential> {
+    prepared.validate_signature(signature)?;
     let signature_b64 = B64.encode(signature);
-    SignedCredential::JwtVcJson {
+    Ok(SignedCredential::JwtVcJson {
         jwt: format!("{}.{}", prepared.signing_input, signature_b64),
         credential_id: prepared.credential_id,
-    }
+    })
 }
 
 /// Encode header and payload as base64url, sign, and produce a compact JWT.

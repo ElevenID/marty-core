@@ -294,8 +294,8 @@ impl BenchmarkPrepared {
 
     fn assemble(self, signature: &[u8]) -> SignedCredential {
         match self {
-            Self::JwtVc(prepared) => assemble_jwt_vc(prepared, signature),
-            Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature),
+            Self::JwtVc(prepared) => assemble_jwt_vc(prepared, signature).unwrap(),
+            Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature).unwrap(),
             Self::Mdoc(prepared) => assemble_mdoc(*prepared, signature).unwrap(),
         }
     }

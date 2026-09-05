@@ -23,10 +23,11 @@ use sd_jwt_rs::SDJWTSerializationFormat;
 use sha2::{Digest, Sha256};
 #[cfg(any(test, feature = "local-key-operations"))]
 use ssi_jwk::Params;
+#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
 use ssi_jwk::JWK;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::CredentialSigner;
+use crate::signer::{validate_remote_signature, CredentialSigner};
 #[cfg(any(test, feature = "local-key-operations"))]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
@@ -197,6 +198,7 @@ pub(crate) fn sign_sd_jwt_with_holder_public_jwk(
     sign_sd_jwt_with_optional_confirmation(issuer_key, claims, Some(&confirmation))
 }
 
+#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
 fn holder_public_jwk_confirmation(holder_jwk: &JWK) -> Oid4vciResult<serde_json::Value> {
     Ok(serde_json::json!({
         "jwk": serde_json::to_value(holder_jwk.to_public())?,
@@ -375,6 +377,19 @@ pub struct PreparedSdJwt {
     pub disclosures_suffix: String,
     /// The credential ID (urn:uuid:...) assigned during preparation.
     pub credential_id: String,
+    algorithm: crate::types::SigningAlgorithm,
+}
+
+impl PreparedSdJwt {
+    /// Algorithm the remote signer must use.
+    pub fn algorithm(&self) -> crate::types::SigningAlgorithm {
+        self.algorithm
+    }
+
+    /// Check a remote signer's raw output without consuming prepared state.
+    pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
+        validate_remote_signature(self.algorithm, signature)
+    }
 }
 
 /// Optional protocol fields used when an external issuer profile prepares an
@@ -403,7 +418,7 @@ pub fn sign_sd_jwt_with_signer(
 ) -> Oid4vciResult<SignedCredential> {
     let prepared = prepare_sd_jwt(signer, claims)?;
     let signature = signer.sign(prepared.signing_input.as_bytes())?;
-    Ok(assemble_sd_jwt(prepared, &signature))
+    assemble_sd_jwt(prepared, &signature)
 }
 
 /// Prepare an SD-JWT for signing (build header + payload + disclosures, but don't sign).
@@ -425,6 +440,7 @@ pub fn prepare_sd_jwt(
 /// Proof verification, including nonce, audience, age, signature, and optional
 /// key-attestation policy, must complete before this boundary. Only the public
 /// projection of `holder_jwk` is retained in the issuer-signed `cnf.jwk` claim.
+#[cfg(feature = "issuer")]
 pub(crate) fn prepare_sd_jwt_with_holder_public_jwk(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -751,6 +767,7 @@ fn assemble_sd_jwt_preparation(
         signing_input: format!("{}.{}", header_b64, payload_b64),
         disclosures_suffix,
         credential_id,
+        algorithm: signer.algorithm(),
     })
 }
 
@@ -758,15 +775,19 @@ fn assemble_sd_jwt_preparation(
 ///
 /// The `signature` must be the raw bytes produced by signing
 /// `prepared.signing_input` with the issuer's key.
-pub fn assemble_sd_jwt(prepared: PreparedSdJwt, signature: &[u8]) -> SignedCredential {
+pub fn assemble_sd_jwt(
+    prepared: PreparedSdJwt,
+    signature: &[u8],
+) -> Oid4vciResult<SignedCredential> {
+    prepared.validate_signature(signature)?;
     let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
-    SignedCredential::SdJwt {
+    Ok(SignedCredential::SdJwt {
         compact: format!(
             "{}.{}{}",
             prepared.signing_input, signature_b64, prepared.disclosures_suffix
         ),
         credential_id: prepared.credential_id,
-    }
+    })
 }
 
 fn plan_sd_jwt_disclosure(
@@ -2420,7 +2441,7 @@ mod tests {
 
         // Assemble with a dummy signature
         let dummy_sig = vec![0u8; 64];
-        let result = assemble_sd_jwt(prepared, &dummy_sig);
+        let result = assemble_sd_jwt(prepared, &dummy_sig).unwrap();
         match result {
             SignedCredential::SdJwt {
                 compact,

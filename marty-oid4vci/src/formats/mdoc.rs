@@ -20,7 +20,7 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::CredentialSigner;
+use crate::signer::{validate_remote_signature, CredentialSigner};
 #[cfg(any(test, feature = "local-key-operations"))]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
@@ -197,12 +197,23 @@ pub struct PreparedMdoc {
     namespace: String,
     /// The tagged CBOR IssuerSignedItem entries.
     issuer_signed_items: Vec<CborValue>,
+    algorithm: crate::types::SigningAlgorithm,
 }
 
 impl PreparedMdoc {
     /// Borrow the complete COSE_Sign1 Sig_structure signing payload.
     pub fn signing_payload(&self) -> &[u8] {
         &self.tbs_data
+    }
+
+    /// Algorithm the remote signer must use.
+    pub fn algorithm(&self) -> crate::types::SigningAlgorithm {
+        self.algorithm
+    }
+
+    /// Check a remote signer's raw output without consuming prepared state.
+    pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
+        validate_remote_signature(self.algorithm, signature)
     }
 }
 
@@ -621,6 +632,16 @@ fn finish_mdoc_preparation(
         cose_algorithm,
         issuer_claims: _,
     } = preparation;
+    let algorithm = match cose_algorithm {
+        iana::Algorithm::ES256 => crate::types::SigningAlgorithm::ES256,
+        iana::Algorithm::ES384 => crate::types::SigningAlgorithm::ES384,
+        iana::Algorithm::EdDSA => crate::types::SigningAlgorithm::EdDSA,
+        _ => {
+            return Err(Oid4vciError::MdocError(
+                "unsupported prepared mDoc signing algorithm".into(),
+            ))
+        }
+    };
 
     // Build MSO
     let mso = build_mobile_security_object(
@@ -652,6 +673,7 @@ fn finish_mdoc_preparation(
         mobile_security_object_bytes,
         namespace,
         issuer_signed_items: digest_assembly.issuer_signed_items,
+        algorithm,
     })
 }
 
@@ -673,6 +695,7 @@ fn mdoc_cose_algorithm(
 
 /// Assemble a signed mDoc from the prepared data and a raw COSE signature.
 pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<SignedCredential> {
+    prepared.validate_signature(signature)?;
     let cose_sign1 = CoseSign1Builder::new()
         .protected(prepared.protected_header)
         .unprotected(prepared.unprotected_header)
@@ -2000,10 +2023,15 @@ mod tests {
     ) -> (u64, String, Vec<u8>, String) {
         let credential_id = prepared.credential_id.clone();
         let tbs_data = prepared.tbs_data.clone();
+        let signature_len = match prepared.algorithm() {
+            SigningAlgorithm::ES256 | SigningAlgorithm::EdDSA | SigningAlgorithm::ES256K => 64,
+            SigningAlgorithm::ES384 => 96,
+            SigningAlgorithm::RS256 => 256,
+        };
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id: assembled_id,
-        } = assemble_mdoc(prepared, &[0xa5; 96]).unwrap()
+        } = assemble_mdoc(prepared, &vec![0xa5; signature_len]).unwrap()
         else {
             panic!("batch fixture must assemble an mdoc")
         };
