@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
@@ -43,10 +42,30 @@ pub struct VerificationHistoryEntry {
 
 /// Secure storage manager
 pub struct SecureStorage {
-    conn: Arc<Mutex<Connection>>,
+    conn: Mutex<Connection>,
 }
 
 impl SecureStorage {
+    /// Initialize app-owned repositories before sharing this storage instance.
+    ///
+    /// Core has already opened the database and applied shared migrations. The
+    /// exclusive borrow lets extensions initialize synchronously without taking
+    /// a blocking async lock. Extensions must own only their application tables
+    /// and use a separate migration marker from the shared schema.
+    pub fn initialize_extension<T>(&mut self, operation: impl FnOnce(&mut Connection) -> T) -> T {
+        operation(self.conn.get_mut())
+    }
+
+    /// Run an application repository operation on the shared database connection.
+    ///
+    /// The synchronous closure holds the same lock as core repositories and may
+    /// start a transaction. Connection borrows cannot escape the closure. Do not
+    /// block on another storage method inside it: that would reacquire this lock.
+    pub async fn with_connection<T>(&self, operation: impl FnOnce(&mut Connection) -> T) -> T {
+        let mut conn = self.conn.lock().await;
+        operation(&mut conn)
+    }
+
     /// Create new secure storage at the given path
     pub fn new(data_dir: &Path) -> Result<Self, StorageError> {
         Self::new_with_keychain(data_dir, KeychainManager::new())
@@ -110,7 +129,7 @@ impl SecureStorage {
         tracing::info!(?db_path, "Secure storage initialized");
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Mutex::new(conn),
         })
     }
 
@@ -2263,7 +2282,7 @@ impl SecureStorage {
             [SCHEMA_VERSION.to_string()],
         )?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Mutex::new(conn),
         })
     }
 
@@ -3963,12 +3982,94 @@ mod tests {
             assert_eq!(trust_domain_index, 1);
 
             let storage = SecureStorage {
-                conn: Arc::new(Mutex::new(conn)),
+                conn: Mutex::new(conn),
             };
             let records = storage.get_open_badge_trust_records().await.unwrap();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].method.id, "legacy-key");
             assert!(records[0].provenance.is_none());
         });
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn extension_operations_share_core_records_and_rollback_transactions() {
+        let mut storage = SecureStorage::new_in_memory().unwrap();
+        storage
+            .initialize_extension(|conn| {
+                conn.execute_batch(
+                    "CREATE TABLE app_notes (event_id TEXT PRIMARY KEY, note TEXT NOT NULL);",
+                )
+            })
+            .unwrap();
+        storage
+            .store_verification_event("event-1", "emrtd", &"valid")
+            .await
+            .unwrap();
+        let outcome: Result<(), rusqlite::Error> = storage
+            .with_connection(|conn| {
+                let transaction = conn.transaction()?;
+                transaction.execute("INSERT INTO app_notes VALUES ('event-1', 'draft')", [])?;
+                transaction.execute(
+                    "UPDATE verification_events SET status = 'failed' WHERE id = 'event-1'",
+                    [],
+                )?;
+                // A failed operation must leave both app and core records unchanged.
+                transaction.execute("INSERT INTO app_notes VALUES ('event-1', 'duplicate')", [])?;
+                transaction.commit()
+            })
+            .await;
+        assert!(outcome.is_err());
+        let count: i64 = storage
+            .with_connection(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM app_notes", [], |row| row.get(0))
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let history = storage.get_verification_history(10).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, serde_json::to_string("valid").unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_extension_operations_use_one_connection() {
+        let mut storage = SecureStorage::new_in_memory().unwrap();
+        storage.initialize_extension(|conn| conn.execute_batch("CREATE TABLE app_counter (value INTEGER NOT NULL); INSERT INTO app_counter VALUES (0);")).unwrap();
+        let storage = Arc::new(storage);
+        let mut tasks = Vec::new();
+        let barrier = Arc::new(tokio::sync::Barrier::new(33));
+        for _ in 0..32 {
+            let storage = Arc::clone(&storage);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                storage
+                    .with_connection(|conn| {
+                        let tx = conn.transaction()?;
+                        let value: i64 =
+                            tx.query_row("SELECT value FROM app_counter", [], |row| row.get(0))?;
+                        tx.execute("UPDATE app_counter SET value = ?", [value + 1])?;
+                        tx.commit()
+                    })
+                    .await
+            }));
+        }
+        barrier.wait().await;
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+        let value: i64 = storage
+            .with_connection(|conn| {
+                conn.query_row("SELECT value FROM app_counter", [], |row| row.get(0))
+            })
+            .await
+            .unwrap();
+        assert_eq!(value, 32);
     }
 }
