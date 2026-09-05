@@ -20,6 +20,7 @@ pub struct RequestedAttribute {
 
 // ── Error codes ───────────────────────────────────────────────────────
 
+#[cfg(feature = "prover")]
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MdocProverErrorCode {
@@ -78,6 +79,7 @@ pub enum MdocVerifierErrorCode {
     InvalidCbor = 11,
 }
 
+#[cfg(feature = "prover")]
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum CircuitGenerationErrorCode {
@@ -113,6 +115,7 @@ pub const NUM_ZK_SPECS: usize = 12;
 // ── Extern functions ──────────────────────────────────────────────────
 
 extern "C" {
+    #[cfg(feature = "prover")]
     /// Generate a compressed circuit for the given ZK spec.
     /// Caller must free `*cb` via `libc::free`.
     pub fn generate_circuit(
@@ -121,6 +124,7 @@ extern "C" {
         clen: *mut size_t,
     ) -> CircuitGenerationErrorCode;
 
+    #[cfg(feature = "prover")]
     /// Prove a set of mDoc attributes in zero-knowledge.
     /// Caller must free `*prf` via `libc::free`.
     pub fn run_mdoc_prover(

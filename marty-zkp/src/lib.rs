@@ -1,5 +1,19 @@
 mod ffi;
+#[cfg(feature = "prover")]
 pub mod mdoc_support;
+
+#[cfg(not(feature = "prover"))]
+/// Marker for verifier-only artifacts, where proof and circuit generation are
+/// not present in the Rust API or selected native source set.
+///
+/// ```compile_fail
+/// let _ = marty_zkp::Circuit::generate(1);
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_zkp::Prover;
+/// ```
+pub struct VerifierOnly;
 
 // Belt-and-suspenders: the build script already hard-errors, but this
 // compile_error! catches any path where cfg(zk_mock) leaks into a release build.
@@ -164,6 +178,7 @@ pub enum ZkError {
     Unknown(u32),
 }
 
+#[cfg(feature = "prover")]
 impl From<ffi::MdocProverErrorCode> for ZkError {
     fn from(code: ffi::MdocProverErrorCode) -> Self {
         ZkError::ProverError(code as u32)
@@ -176,6 +191,7 @@ impl From<ffi::MdocVerifierErrorCode> for ZkError {
     }
 }
 
+#[cfg(feature = "prover")]
 impl From<ffi::CircuitGenerationErrorCode> for ZkError {
     fn from(code: ffi::CircuitGenerationErrorCode) -> Self {
         ZkError::CircuitError(code as u32)
@@ -295,11 +311,27 @@ impl std::fmt::Debug for Circuit {
 }
 
 impl Circuit {
+    /// Load a pre-generated compressed circuit for verifier-only use.
+    pub fn from_bytes(bytes: Vec<u8>, num_attributes: usize) -> Result<Self, ZkError> {
+        const MAX_CIRCUIT_SIZE: usize = 64 * 1024 * 1024;
+        if bytes.is_empty() || bytes.len() > MAX_CIRCUIT_SIZE {
+            return Err(ZkError::InvalidInput);
+        }
+        let spec_index = unsafe {
+            (0..ffi::NUM_ZK_SPECS)
+                .filter(|&i| ffi::kZkSpecs[i].num_attributes == num_attributes)
+                .max_by_key(|&i| ffi::kZkSpecs[i].version)
+                .ok_or(ZkError::InvalidInput)?
+        };
+        Ok(Self { bytes, spec_index })
+    }
+
     /// Generate a compressed circuit for the ZK spec that supports exactly
     /// `num_attributes` attributes.
     ///
     /// `kZkSpecs` is searched for the highest-version matching entry.
     /// Returns an error if no such spec exists or if the generator fails.
+    #[cfg(feature = "prover")]
     pub fn generate(num_attributes: usize) -> Result<Self, ZkError> {
         let spec_index = unsafe {
             (0..ffi::NUM_ZK_SPECS)
@@ -346,8 +378,10 @@ impl Circuit {
 
 // ── Prover ────────────────────────────────────────────────────────────
 
+#[cfg(feature = "prover")]
 pub struct Prover;
 
+#[cfg(feature = "prover")]
 impl Prover {
     /// Generate a ZK proof that the mDoc attributes in `input` satisfy
     /// the requested values without revealing the underlying document.
@@ -512,6 +546,7 @@ pub mod python {
     #[allow(clippy::too_many_arguments)]
     #[pyfunction]
     pub fn verify_mdoc_zk(
+        circuits: &[u8],
         mdoc: &[u8],
         issuer_pkx: &str,
         issuer_pky: &str,
@@ -523,7 +558,7 @@ pub mod python {
         doc_type: &str,
         proof: &[u8],
     ) -> PyResult<bool> {
-        let circuit = Circuit::generate(1)
+        let circuit = Circuit::from_bytes(circuits.to_vec(), 1)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let input = MdocProveInput {
