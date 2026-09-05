@@ -18,7 +18,7 @@ marty-python-adapters = { path = "../marty-python-adapters" }
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "hashing", "public-key-codec", "rsa-verification", "symmetric"] }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", features = ["lti"] }
 marty-didcomm = { version = "0.1.5", path = "../marty-didcomm" }
-marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013" }
+marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013", default-features = false, features = ["verifier"] }
 marty-verification = { version = "0.1.5", path = "../marty-verification", default-features = false }
 marty-types = { version = "0.1.5", path = "../marty-types" }
 marty-status = { version = "0.1.45", path = "../marty-status" }

@@ -141,8 +141,29 @@ def check_repository(root: Path = ROOT) -> None:
     iso18013_crypto = iso18013["dependencies"]["marty-crypto"]
     require(
         iso18013_crypto.get("default-features") is False
-        and set(iso18013_crypto["features"]) == {"ecdh", "kdf", "symmetric"},
-        "ISO 18013 bindings must not transitively restore marty-crypto defaults",
+        and iso18013_crypto.get("optional") is True
+        and not iso18013_crypto.get("features", []),
+        "passive ISO 18013 verification must not compile session cryptography",
+    )
+    require(
+        set(iso18013["features"]["session-protocol"])
+        >= {
+            "verifier",
+            "dep:marty-crypto",
+            "marty-crypto/ecdh",
+            "marty-crypto/kdf",
+            "marty-crypto/symmetric",
+        },
+        "ISO 18013 session cryptography must require an explicit capability",
+    )
+    require(
+        iso18013["features"]["default"] == ["session-protocol"],
+        "the historical ISO 18013 API must remain available in default builds",
+    )
+    require(
+        bindings["dependencies"]["marty-iso18013"].get("default-features") is False
+        and bindings["dependencies"]["marty-iso18013"].get("features") == ["verifier"],
+        "aggregate KMS bindings must use passive ISO 18013 verification only",
     )
 
     wheel_features = set(verification_python["tool"]["maturin"]["features"])
