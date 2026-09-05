@@ -751,6 +751,7 @@ fn oid4vci_verify_pkce_s256(code_verifier: &str, code_challenge: &str) -> bool {
 /// Raises:
 ///     `RuntimeError` on key generation or signing failure
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn oid4vci_create_proof_jwt(aud: &str, c_nonce: &str) -> PyResult<String> {
     marty_oid4vci::proof::create_proof_jwt(aud, c_nonce).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Proof JWT creation failed: {e}"))
@@ -2049,6 +2050,7 @@ fn didcomm_encrypt(plaintext_json: &str, recipient_did_document_json: &str) -> P
 /// DID document's `keyAgreement` relationship. The plaintext `from` and `to`
 /// values must identify the supplied sender and recipient documents.
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn didcomm_encrypt_authcrypt(
     plaintext_json: &str,
     sender_did_document_json: &str,
@@ -2084,6 +2086,7 @@ fn didcomm_encrypt_authcrypt(
 /// Returns:
 ///     Decrypted plaintext (JSON string)
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyResult<String> {
     if recipient_x25519_private_key.len() != 32 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -2101,6 +2104,7 @@ fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyRes
 /// Anoncrypt, legacy ECDH-1PU derivation, unauthorized methods, key/document
 /// mismatch, and plaintext party substitution are rejected.
 #[pyfunction]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn didcomm_decrypt_authcrypt(
     jwe_json: &str,
     recipient_x25519_private_key: &[u8],
@@ -2694,6 +2698,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_create_authorization_response, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_exchange_auth_code_for_token, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_compact_jwt, m)?)?;
@@ -2763,9 +2768,12 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(didcomm_pack_credential, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_unpack_message, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_encrypt, m)?)?;
-    m.add_function(wrap_pyfunction!(didcomm_encrypt_authcrypt, m)?)?;
-    m.add_function(wrap_pyfunction!(didcomm_decrypt, m)?)?;
-    m.add_function(wrap_pyfunction!(didcomm_decrypt_authcrypt, m)?)?;
+    #[cfg(feature = "local-key-operations")]
+    {
+        m.add_function(wrap_pyfunction!(didcomm_encrypt_authcrypt, m)?)?;
+        m.add_function(wrap_pyfunction!(didcomm_decrypt, m)?)?;
+        m.add_function(wrap_pyfunction!(didcomm_decrypt_authcrypt, m)?)?;
+    }
     Ok(())
 }
 
@@ -2800,6 +2808,12 @@ mod tests {
                 "vds_nc_sign_profile",
                 "oid4vci_sign_credential",
                 "create_verifiable_credential",
+                "haip_generate_response_encryption_key",
+                "haip_decrypt_response",
+                "oid4vci_create_proof_jwt",
+                "didcomm_encrypt_authcrypt",
+                "didcomm_decrypt",
+                "didcomm_decrypt_authcrypt",
             ] {
                 assert!(
                     !module.hasattr(private_operation).unwrap(),
