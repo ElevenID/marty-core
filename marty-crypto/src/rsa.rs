@@ -1,23 +1,37 @@
 //! RSA signature signing and verification (PKCS#1 v1.5 and PSS).
 
+#[cfg(feature = "rsa-local-signing")]
 use rand::rngs::OsRng;
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
-use rsa::signature::{RandomizedSigner, SignatureEncoding, Verifier};
+#[cfg(feature = "rsa-local-signing")]
+use rsa::pkcs8::DecodePrivateKey;
+use rsa::pkcs8::DecodePublicKey;
+use rsa::signature::Verifier;
+#[cfg(feature = "rsa-local-signing")]
+use rsa::signature::{RandomizedSigner, SignatureEncoding};
+#[cfg(feature = "rsa-local-signing")]
 use rsa::{
-    pkcs1v15::{
-        Signature as Pkcs1Signature, SigningKey as Pkcs1SigningKey,
-        VerifyingKey as Pkcs1VerifyingKey,
-    },
-    pss::{
-        Signature as PssSignature, SigningKey as PssSigningKey, VerifyingKey as PssVerifyingKey,
-    },
+    pkcs1v15::SigningKey as Pkcs1SigningKey, pss::SigningKey as PssSigningKey, RsaPrivateKey,
+};
+use rsa::{
+    pkcs1v15::{Signature as Pkcs1Signature, VerifyingKey as Pkcs1VerifyingKey},
+    pss::{Signature as PssSignature, VerifyingKey as PssVerifyingKey},
     traits::PublicKeyParts,
-    RsaPrivateKey, RsaPublicKey,
+    RsaPublicKey,
 };
 use sha1::Sha1;
 use sha2::{Sha256, Sha384, Sha512};
 
 use crate::{CryptoError, CryptoResult};
+
+#[cfg(not(feature = "rsa-local-signing"))]
+/// Marker documenting the verifier-only RSA API boundary.
+///
+/// Private-key generation and local signing do not exist in this build:
+///
+/// ```compile_fail
+/// let _ = marty_crypto::rsa::generate_rsa_keypair(2048);
+/// ```
+pub struct VerificationOnly;
 
 // ============================================================================
 // RSA Key Generation
@@ -32,6 +46,7 @@ use crate::{CryptoError, CryptoResult};
 /// # Returns
 ///
 /// Tuple of (private_key_pkcs8_der, public_key_spki_der).
+#[cfg(feature = "rsa-local-signing")]
 pub fn generate_rsa_keypair(bits: usize) -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     if bits < 2048 {
         return Err(CryptoError::internal(
@@ -75,6 +90,7 @@ pub fn generate_rsa_keypair(bits: usize) -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 /// # Returns
 ///
 /// Signature bytes.
+#[cfg(feature = "rsa-local-signing")]
 pub fn sign_pkcs1_sha256(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let private_key = parse_rsa_private_key(private_key_der)?;
     let signing_key = Pkcs1SigningKey::<Sha256>::new(private_key);
@@ -83,6 +99,7 @@ pub fn sign_pkcs1_sha256(private_key_der: &[u8], message: &[u8]) -> CryptoResult
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 and SHA-384 (RS384).
+#[cfg(feature = "rsa-local-signing")]
 pub fn sign_pkcs1_sha384(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let private_key = parse_rsa_private_key(private_key_der)?;
     let signing_key = Pkcs1SigningKey::<Sha384>::new(private_key);
@@ -91,6 +108,7 @@ pub fn sign_pkcs1_sha384(private_key_der: &[u8], message: &[u8]) -> CryptoResult
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 and SHA-512 (RS512).
+#[cfg(feature = "rsa-local-signing")]
 pub fn sign_pkcs1_sha512(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let private_key = parse_rsa_private_key(private_key_der)?;
     let signing_key = Pkcs1SigningKey::<Sha512>::new(private_key);
@@ -105,6 +123,7 @@ pub fn sign_pkcs1_sha512(private_key_der: &[u8], message: &[u8]) -> CryptoResult
 /// Sign a message with RSA-PSS and SHA-256 (PS256).
 ///
 /// Uses salt length equal to hash length (32 bytes).
+#[cfg(feature = "rsa-local-signing")]
 pub fn sign_pss_sha256(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let private_key = parse_rsa_private_key(private_key_der)?;
     let signing_key = PssSigningKey::<Sha256>::new(private_key);
@@ -113,6 +132,7 @@ pub fn sign_pss_sha256(private_key_der: &[u8], message: &[u8]) -> CryptoResult<V
 }
 
 /// Sign a message with RSA-PSS and SHA-384 (PS384).
+#[cfg(feature = "rsa-local-signing")]
 pub fn sign_pss_sha384(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let private_key = parse_rsa_private_key(private_key_der)?;
     let signing_key = PssSigningKey::<Sha384>::new(private_key);
@@ -121,6 +141,7 @@ pub fn sign_pss_sha384(private_key_der: &[u8], message: &[u8]) -> CryptoResult<V
 }
 
 /// Sign a message with RSA-PSS and SHA-512 (PS512).
+#[cfg(feature = "rsa-local-signing")]
 pub fn sign_pss_sha512(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let private_key = parse_rsa_private_key(private_key_der)?;
     let signing_key = PssSigningKey::<Sha512>::new(private_key);
@@ -361,6 +382,7 @@ fn parse_rsa_public_key(der: &[u8]) -> CryptoResult<RsaPublicKey> {
 /// Parse RSA private key from DER bytes.
 ///
 /// Tries PKCS#8 format first, then PKCS#1 format.
+#[cfg(feature = "rsa-local-signing")]
 fn parse_rsa_private_key(der: &[u8]) -> CryptoResult<RsaPrivateKey> {
     // Try PKCS#8 format first
     RsaPrivateKey::from_pkcs8_der(der)
@@ -399,6 +421,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "rsa-local-signing")]
     fn test_rsa_pkcs1_sign_verify_roundtrip() {
         let (private_key, public_key) = generate_rsa_keypair(2048).unwrap();
 
@@ -415,6 +438,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "rsa-local-signing")]
     fn test_rsa_pss_sign_verify_roundtrip() {
         let (private_key, public_key) = generate_rsa_keypair(2048).unwrap();
 
@@ -431,6 +455,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "rsa-local-signing")]
     fn test_rsa_key_size() {
         let (_, public_key) = generate_rsa_keypair(2048).unwrap();
         let size = get_rsa_key_size(&public_key).unwrap();

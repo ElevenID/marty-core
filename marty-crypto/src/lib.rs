@@ -20,15 +20,9 @@
 //! ```rust,ignore
 //! use marty_crypto::{ecdsa, certificate, SignatureAlgorithm};
 //!
-//! // Generate a P-256 key pair
-//! let (private_key, public_key) = ecdsa::generate_p256_keypair()?;
-//!
-//! // Sign a message
-//! let message = b"Hello, World!";
-//! let signature = ecdsa::sign_p256(&private_key, message)?;
-//!
-//! // Verify the signature
-//! ecdsa::verify_p256(&public_key, message, &signature)?;
+//! // Verification-only builds expose no private-key operations:
+//! // cargo build -p marty-crypto --no-default-features \
+//! //   --features signature-verification
 //! ```
 
 #[cfg(feature = "signature-verification")]
@@ -45,16 +39,16 @@ pub mod crl;
 pub mod des;
 #[cfg(feature = "ecdh")]
 pub mod ecdh;
-#[cfg(feature = "ecdsa")]
+#[cfg(feature = "ecdsa-verification")]
 pub mod ecdsa;
-#[cfg(feature = "eddsa")]
+#[cfg(feature = "eddsa-verification")]
 pub mod ed25519;
-#[cfg(feature = "eddsa")]
+#[cfg(feature = "eddsa-verification")]
 pub mod ed448;
 pub mod error;
 #[cfg(feature = "hashing")]
 pub mod hashing;
-#[cfg(feature = "rsa")]
+#[cfg(feature = "rsa-verification")]
 pub mod iso9796;
 #[cfg(feature = "jwk")]
 pub mod jwk;
@@ -66,7 +60,7 @@ pub mod keygen;
 pub mod ocsp;
 #[cfg(feature = "pkcs12")]
 pub mod pkcs12;
-#[cfg(feature = "rsa")]
+#[cfg(feature = "rsa-verification")]
 pub mod rsa;
 #[cfg(feature = "serialization")]
 pub mod serialization;

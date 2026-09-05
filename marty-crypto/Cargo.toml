@@ -18,14 +18,22 @@ crate-type = ["rlib"]
 # Preserve the historical feature-complete default while allowing consumers
 # with a narrow security boundary to compile only the primitives they use.
 default = ["full"]
-ecdsa = []           # ECDSA with P-256/P-384/P-521
-eddsa = []           # Ed25519 and Ed448
-rsa = ["dep:rsa"]   # RSA PKCS#1 v1.5 and PSS
+# Compatibility aliases retain the historical signing + verification surface.
+ecdsa = ["ecdsa-local-signing"]
+eddsa = ["eddsa-local-signing"]
+rsa = ["rsa-local-signing"]
+# Positive capabilities let verifier/KMS builds exclude private-key APIs.
+ecdsa-verification = []
+ecdsa-local-signing = ["ecdsa-verification"]
+eddsa-verification = []
+eddsa-local-signing = ["eddsa-verification"]
+rsa-verification = ["dep:rsa"]
+rsa-local-signing = ["rsa-verification"]
 bbs = ["dep:zkryptium"] # BBS+ with BLS12-381 (SHA-256/SHAKE-256)
 jwk = []             # Public SPKI/certificate to RFC 7517 conversion
 ecdh = []            # P-256/P-384/X25519 agreement
 hashing = []         # SHA-1/SHA-2 and HMAC helpers
-signature-verification = ["ecdsa", "eddsa", "rsa"]
+signature-verification = ["ecdsa-verification", "eddsa-verification", "rsa-verification"]
 x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
 crl = ["x509"]
@@ -165,6 +173,10 @@ required-features = ["hashing"]
 [[test]]
 name = "public_jwk_vectors"
 required-features = ["jwk"]
+
+[[test]]
+name = "verification_only"
+required-features = ["signature-verification"]
 
 [[test]]
 name = "rfc5869_hkdf"

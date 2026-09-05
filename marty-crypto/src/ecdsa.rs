@@ -1,19 +1,33 @@
 //! ECDSA signature signing and verification for P-256, P-384, and P-521 curves.
 
+#[cfg(feature = "ecdsa-local-signing")]
 use ecdsa::signature::Signer;
+#[cfg(feature = "ecdsa-local-signing")]
+use p256::ecdsa::SigningKey as P256SigningKey;
 use p256::ecdsa::{
-    signature::Verifier as P256Verifier, Signature as P256Signature, SigningKey as P256SigningKey,
+    signature::Verifier as P256Verifier, Signature as P256Signature,
     VerifyingKey as P256VerifyingKey,
 };
-use p384::ecdsa::{
-    Signature as P384Signature, SigningKey as P384SigningKey, VerifyingKey as P384VerifyingKey,
-};
-use p521::ecdsa::{
-    Signature as P521Signature, SigningKey as P521SigningKey, VerifyingKey as P521VerifyingKey,
-};
+#[cfg(feature = "ecdsa-local-signing")]
+use p384::ecdsa::SigningKey as P384SigningKey;
+use p384::ecdsa::{Signature as P384Signature, VerifyingKey as P384VerifyingKey};
+#[cfg(feature = "ecdsa-local-signing")]
+use p521::ecdsa::SigningKey as P521SigningKey;
+use p521::ecdsa::{Signature as P521Signature, VerifyingKey as P521VerifyingKey};
+#[cfg(feature = "ecdsa-local-signing")]
 use rand::rngs::OsRng;
 
 use crate::{CryptoError, CryptoResult};
+
+#[cfg(not(feature = "ecdsa-local-signing"))]
+/// Marker documenting the verifier-only ECDSA API boundary.
+///
+/// Local signing and key generation do not exist in this build:
+///
+/// ```compile_fail
+/// let _ = marty_crypto::ecdsa::generate_p256_keypair();
+/// ```
+pub struct VerificationOnly;
 
 // ============================================================================
 // ECDSA Key Generation
@@ -25,6 +39,7 @@ use crate::{CryptoError, CryptoResult};
 ///
 /// Tuple of (private_key_bytes, public_key_bytes).
 /// Private key is 32 bytes, public key is 65 bytes (uncompressed).
+#[cfg(feature = "ecdsa-local-signing")]
 pub fn generate_p256_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = P256SigningKey::random(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
@@ -41,6 +56,7 @@ pub fn generate_p256_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 ///
 /// Tuple of (private_key_bytes, public_key_bytes).
 /// Private key is 48 bytes, public key is 97 bytes (uncompressed).
+#[cfg(feature = "ecdsa-local-signing")]
 pub fn generate_p384_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = P384SigningKey::random(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
@@ -57,6 +73,7 @@ pub fn generate_p384_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 ///
 /// Tuple of (private_key_bytes, public_key_bytes).
 /// Private key is 66 bytes, public key is 133 bytes (uncompressed).
+#[cfg(feature = "ecdsa-local-signing")]
 pub fn generate_p521_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = P521SigningKey::random(&mut OsRng);
     // Get verifying key via the inner signing key's public key method
@@ -82,6 +99,7 @@ pub fn generate_p521_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 /// # Returns
 ///
 /// DER-encoded signature.
+#[cfg(feature = "ecdsa-local-signing")]
 pub fn sign_p256_sha256(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != 32 {
         return Err(CryptoError::internal(
@@ -107,6 +125,7 @@ pub fn sign_p256_sha256(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<
 /// # Returns
 ///
 /// DER-encoded signature.
+#[cfg(feature = "ecdsa-local-signing")]
 pub fn sign_p384_sha384(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != 48 {
         return Err(CryptoError::internal(
@@ -132,6 +151,7 @@ pub fn sign_p384_sha384(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<
 /// # Returns
 ///
 /// DER-encoded signature.
+#[cfg(feature = "ecdsa-local-signing")]
 pub fn sign_p521_sha512(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != 66 {
         return Err(CryptoError::internal(
@@ -344,7 +364,7 @@ pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Ve
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ecdsa-local-signing"))]
 mod tests {
     use super::*;
 
