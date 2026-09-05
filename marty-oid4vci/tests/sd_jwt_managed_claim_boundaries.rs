@@ -95,7 +95,7 @@ fn claims(format: CredentialPayloadFormat) -> CredentialClaims {
 }
 
 fn payload_from_prepared(prepared: &PreparedSdJwt) -> serde_json::Value {
-    let payload = prepared.signing_input.split('.').nth(1).unwrap();
+    let payload = prepared.signing_input().split('.').nth(1).unwrap();
     serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap()
 }
 
@@ -245,7 +245,7 @@ fn ietf_preserves_unmanaged_optional_raw_claims_and_exact_generated_identity() {
     )
     .unwrap();
     let payload = payload_from_prepared(&prepared);
-    assert_eq!(prepared.credential_id, EXPLICIT_CREDENTIAL_ID);
+    assert_eq!(prepared.credential_id(), EXPLICIT_CREDENTIAL_ID);
     assert_eq!(payload["jti"], EXPLICIT_CREDENTIAL_ID);
     assert_eq!(payload["iss"], "did:example:managed-claim-test-issuer");
     assert_eq!(
@@ -291,7 +291,7 @@ fn direct_preparation_preserves_every_typed_canonical_field_and_explicit_id() {
     let payload = payload_from_prepared(&prepared);
     let issued_at = payload["iat"].as_i64().unwrap();
 
-    assert_eq!(prepared.credential_id, EXPLICIT_CREDENTIAL_ID);
+    assert_eq!(prepared.credential_id(), EXPLICIT_CREDENTIAL_ID);
     assert_eq!(payload["jti"], EXPLICIT_CREDENTIAL_ID);
     assert_eq!(payload["iss"], "did:example:managed-claim-test-issuer");
     assert_eq!(
@@ -302,7 +302,7 @@ fn direct_preparation_preserves_every_typed_canonical_field_and_explicit_id() {
     assert_eq!(payload["nbf"].as_i64(), Some(issued_at));
     assert_eq!(payload["exp"].as_i64(), Some(issued_at + 3_600));
     assert_eq!(payload["cnf"], confirmation);
-    assert_eq!(prepared.disclosures_suffix, "~");
+    assert_eq!(prepared.disclosures_suffix(), "~");
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn ietf_sub_iat_jti_and_aud_selectors_remain_unrestricted() {
         "https://credentials.example/ManagedBoundary"
     );
 
-    let disclosures = decoded_disclosures(&prepared.disclosures_suffix);
+    let disclosures = decoded_disclosures(prepared.disclosures_suffix());
     let names = disclosures
         .iter()
         .map(|disclosure| disclosure[1].as_str().unwrap())
@@ -426,7 +426,7 @@ fn w3c_subject_id_collision_is_conditional_and_generated_id_remains_selectable()
     let payload = payload_from_prepared(&prepared);
     assert_eq!(payload["jti"], EXPLICIT_CREDENTIAL_ID);
     assert!(payload["credentialSubject"].get("id").is_none());
-    let disclosures = decoded_disclosures(&prepared.disclosures_suffix);
+    let disclosures = decoded_disclosures(prepared.disclosures_suffix());
     assert_eq!(disclosures.len(), 1);
     assert_eq!(disclosures[0][1], "id");
     assert_eq!(disclosures[0][2], "did:example:canonical-holder");
@@ -438,7 +438,7 @@ fn w3c_subject_id_collision_is_conditional_and_generated_id_remains_selectable()
         .insert("id".into(), serde_json::json!("did:example:caller-subject"));
     caller_id.selective_disclosure_claims = vec!["id".into()];
     let prepared = prepare_sd_jwt(&SignerSpy::default(), &caller_id).unwrap();
-    let disclosures = decoded_disclosures(&prepared.disclosures_suffix);
+    let disclosures = decoded_disclosures(prepared.disclosures_suffix());
     assert_eq!(disclosures[0][2], "did:example:caller-subject");
 }
 
@@ -464,7 +464,7 @@ fn w3c_subject_names_do_not_inherit_flat_ietf_selector_policy() {
         payload["vct"],
         "https://credentials.example/ManagedBoundary"
     );
-    let names = decoded_disclosures(&prepared.disclosures_suffix)
+    let names = decoded_disclosures(prepared.disclosures_suffix())
         .into_iter()
         .map(|disclosure| disclosure[1].as_str().unwrap().to_owned())
         .collect::<HashSet<_>>();
@@ -511,7 +511,7 @@ fn remote_preparation_preserves_conditional_claims_and_unrestricted_selectors() 
     ]);
     let prepared = prepare_remote_sd_jwt(raw_optional).unwrap();
     let payload = payload_from_prepared(&prepared);
-    assert_eq!(prepared.credential_id, EXPLICIT_CREDENTIAL_ID);
+    assert_eq!(prepared.credential_id(), EXPLICIT_CREDENTIAL_ID);
     assert_eq!(payload["jti"], EXPLICIT_CREDENTIAL_ID);
     assert_eq!(payload["iss"], "did:web:issuer.example");
     assert_eq!(payload["nbf"], payload["iat"]);
@@ -527,7 +527,7 @@ fn remote_preparation_preserves_conditional_claims_and_unrestricted_selectors() 
         vec!["sub".into(), "iat".into(), "jti".into(), "aud".into()];
     let prepared = prepare_remote_sd_jwt(allowed).unwrap();
     let payload = payload_from_prepared(&prepared);
-    assert_eq!(prepared.credential_id, EXPLICIT_CREDENTIAL_ID);
+    assert_eq!(prepared.credential_id(), EXPLICIT_CREDENTIAL_ID);
     let not_before = payload["nbf"].as_i64().unwrap();
     assert!(payload.get("sub").is_none());
     assert!(payload.get("iat").is_none());
@@ -536,7 +536,7 @@ fn remote_preparation_preserves_conditional_claims_and_unrestricted_selectors() 
     assert_eq!(payload["cnf"]["jwk"]["kty"], "EC");
     assert!(payload["cnf"]["jwk"].get("d").is_none());
 
-    let disclosures = decoded_disclosures(&prepared.disclosures_suffix);
+    let disclosures = decoded_disclosures(prepared.disclosures_suffix());
     let names = disclosures
         .iter()
         .map(|disclosure| disclosure[1].as_str().unwrap())
@@ -572,7 +572,7 @@ fn reserved_matching_is_exact_and_unknown_selectors_keep_legacy_skip_behavior() 
     submitted.selective_disclosure_claims = vec!["ISS".into(), "missing".into()];
 
     let prepared = prepare_sd_jwt(&SignerSpy::default(), &submitted).unwrap();
-    let disclosures = decoded_disclosures(&prepared.disclosures_suffix);
+    let disclosures = decoded_disclosures(prepared.disclosures_suffix());
     assert_eq!(disclosures.len(), 1);
     assert_eq!(disclosures[0][1], "ISS");
     assert_eq!(disclosures[0][2], "upper-issuer");

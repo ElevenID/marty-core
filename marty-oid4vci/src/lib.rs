@@ -57,6 +57,7 @@ pub mod error;
 pub mod formats;
 #[cfg(any(test, feature = "holder-key-operations"))]
 pub mod holder_key;
+#[cfg(feature = "issuer")]
 pub mod issuer;
 pub mod jose;
 #[cfg(feature = "lti")]
@@ -114,6 +115,7 @@ mod local_issuer_key_compile_boundary {}
 /// ```
 mod holder_key_compile_boundary {}
 
+#[cfg(feature = "issuer")]
 pub use issuer::{generate_pkce_challenge_s256, verify_pkce_s256, IssuanceEngine};
 pub use signer::CredentialSigner;
 pub use types::{

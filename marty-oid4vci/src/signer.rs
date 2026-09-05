@@ -61,21 +61,44 @@ pub(crate) fn validate_remote_signature(
     signature: &[u8],
 ) -> Oid4vciResult<()> {
     let valid = match algorithm {
-        SigningAlgorithm::ES256 | SigningAlgorithm::ES256K | SigningAlgorithm::EdDSA => {
-            signature.len() == 64
+        SigningAlgorithm::ES256 => p256::ecdsa::Signature::from_slice(signature).is_ok(),
+        SigningAlgorithm::ES256K => k256::ecdsa::Signature::from_slice(signature).is_ok(),
+        SigningAlgorithm::ES384 => p384::ecdsa::Signature::from_slice(signature).is_ok(),
+        SigningAlgorithm::EdDSA => validate_ed25519_encoding(signature),
+        // RSA signatures have the width of their KMS-managed modulus. The
+        // prepared state does not yet carry that public modulus, so preserve
+        // supported 2048-bit and larger keys while rejecting trivial output.
+        SigningAlgorithm::RS256 => {
+            signature.len() >= 256 && signature.iter().any(|byte| *byte != 0)
         }
-        SigningAlgorithm::ES384 => signature.len() == 96,
-        // RS256 signatures have the width of the modulus. Enforce the minimum
-        // supported RSA strength while allowing larger KMS-managed keys.
-        SigningAlgorithm::RS256 => signature.len() >= 256,
     };
     if !valid {
         return Err(Oid4vciError::SigningError(format!(
-            "invalid {algorithm} remote signature length: got {} bytes",
+            "invalid {algorithm} remote signature encoding: got {} bytes",
             signature.len()
         )));
     }
     Ok(())
+}
+
+fn validate_ed25519_encoding(signature: &[u8]) -> bool {
+    let Ok(bytes) = <&[u8; 64]>::try_from(signature) else {
+        return false;
+    };
+    let (encoded_r, encoded_s) = bytes.split_at(32);
+    let Ok(encoded_r) = <[u8; 32]>::try_from(encoded_r) else {
+        return false;
+    };
+    let Ok(encoded_s) = <[u8; 32]>::try_from(encoded_s) else {
+        return false;
+    };
+    let Some(point) = curve25519_dalek::edwards::CompressedEdwardsY(encoded_r).decompress() else {
+        return false;
+    };
+    point.compress().to_bytes() == encoded_r
+        && !point.is_small_order()
+        && bool::from(curve25519_dalek::scalar::Scalar::from_canonical_bytes(encoded_s).is_some())
+        && signature.iter().any(|byte| *byte != 0)
 }
 
 // =============================================================================
@@ -113,6 +136,7 @@ impl CredentialSigner for IssuerKey {
 /// `alg` is deliberately excluded from this decision. Callers validate that
 /// optional metadata separately so it can only narrow, never override, the
 /// key type and exact curve.
+#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
 pub(crate) fn derive_signing_algorithm(
     key_type: Option<&str>,
     curve: Option<&str>,
@@ -143,6 +167,7 @@ pub(crate) fn derive_signing_algorithm(
 }
 
 /// Require optional JWK `alg` metadata to agree with the structural family.
+#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
 pub(crate) fn validate_declared_jwk_algorithm(
     structural_algorithm: SigningAlgorithm,
     declared_algorithm: Option<&str>,
@@ -277,10 +302,32 @@ mod remote_signature_tests {
         der[0] = 0x30;
         assert!(validate_remote_signature(SigningAlgorithm::ES256, &der).is_err());
 
-        assert!(validate_remote_signature(SigningAlgorithm::ES256, &[0; 64]).is_ok());
-        assert!(validate_remote_signature(SigningAlgorithm::ES384, &[0; 96]).is_ok());
-        assert!(validate_remote_signature(SigningAlgorithm::EdDSA, &[0; 64]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::ES256, &[0; 64]).is_err());
+        assert!(validate_remote_signature(SigningAlgorithm::ES256, &[0xff; 64]).is_err());
+        let mut valid_es256 = [0u8; 64];
+        valid_es256[31] = 1;
+        valid_es256[63] = 1;
+        assert!(validate_remote_signature(SigningAlgorithm::ES256, &valid_es256).is_ok());
+
+        let mut valid_es384 = [0u8; 96];
+        valid_es384[47] = 1;
+        valid_es384[95] = 1;
+        assert!(validate_remote_signature(SigningAlgorithm::ES384, &valid_es384).is_ok());
+
+        let mut valid_es256k = [0u8; 64];
+        valid_es256k[31] = 1;
+        valid_es256k[63] = 1;
+        assert!(validate_remote_signature(SigningAlgorithm::ES256K, &valid_es256k).is_ok());
+
+        let mut valid_ed25519 = [0x66u8; 64];
+        valid_ed25519[0] = 0x58;
+        valid_ed25519[32..].fill(0);
+        valid_ed25519[32] = 1;
+        assert!(validate_remote_signature(SigningAlgorithm::EdDSA, &valid_ed25519).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::EdDSA, &[0; 64]).is_err());
         assert!(validate_remote_signature(SigningAlgorithm::RS256, &[0; 255]).is_err());
-        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[0; 256]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[0; 256]).is_err());
+        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 256]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 384]).is_ok());
     }
 }

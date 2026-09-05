@@ -20,7 +20,9 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <memory>
+#include <new>
 #include <vector>
 
 #include "algebra/convolution.h"
@@ -120,6 +122,25 @@ static constexpr bool enforce_circuit_id_in_prover = false;
 static constexpr bool enforce_circuit_id_in_verifier = false;
 
 // =========== Helper methods for the main exported C functions.
+
+bool is_canonical_utc_time(const char* now) {
+  if (strlen(now) != 20 || now[4] != '-' || now[7] != '-' || now[10] != 'T' ||
+      now[13] != ':' || now[16] != ':' || now[19] != 'Z') {
+    return false;
+  }
+  constexpr size_t kDigitIndexes[] = {0, 1, 2, 3, 5, 6, 8,
+                                      9, 11, 12, 14, 15, 17, 18};
+  for (size_t index : kDigitIndexes) {
+    if (now[index] < '0' || now[index] > '9') {
+      return false;
+    }
+  }
+  auto pair = [now](size_t index) {
+    return static_cast<unsigned>((now[index] - '0') * 10 + now[index + 1] - '0');
+  };
+  return pair(5) >= 1 && pair(5) <= 12 && pair(8) >= 1 && pair(8) <= 31 &&
+         pair(11) <= 23 && pair(14) <= 59 && pair(17) <= 59;
+}
 
 // Specialization for filling the mac when using f_128.
 template <>
@@ -412,11 +433,14 @@ MdocProverErrorCode run_mdoc_prover(
     const uint8_t* transcript, size_t tr_len, /* session transcript */
     const RequestedAttribute* attrs, size_t attrs_len,
     const char* now, /* time formatted as "2023-11-02T09:00:00Z" */
-    uint8_t** prf, size_t* proof_len, const ZkSpecStruct* zk_spec) {
+    uint8_t** prf, size_t* proof_len, const ZkSpecStruct* zk_spec) try {
   if (bcp == nullptr || mdoc == nullptr || pkx == nullptr || pky == nullptr ||
       transcript == nullptr || attrs == nullptr || now == nullptr ||
       prf == nullptr || proof_len == nullptr || zk_spec == nullptr) {
     return MDOC_PROVER_NULL_INPUT;
+  }
+  if (!is_canonical_utc_time(now)) {
+    return MDOC_PROVER_INVALID_INPUT;
   }
 
   Elt pkX, pkY;
@@ -437,8 +461,7 @@ MdocProverErrorCode run_mdoc_prover(
   std::unique_ptr<Circuit<Fp256Base>> c_sig = nullptr;
   std::unique_ptr<Circuit<f_128>> c_hash = nullptr;
   /* scope for the bytes array */ {
-    size_t len = kCircuitSizeMax;
-    std::vector<uint8_t> bytes(len);
+    std::vector<uint8_t> bytes;
     size_t full_size = decompress(bytes, bcp, bcsz);
 
     if (full_size == 0) {
@@ -547,6 +570,15 @@ MdocProverErrorCode run_mdoc_prover(
   }
   memcpy(*prf, buf.data(), buf.size());
   return MDOC_PROVER_SUCCESS;
+} catch (const std::bad_alloc&) {
+  log(ERROR, "mdoc prover allocation failed");
+  return MDOC_PROVER_MEMORY_ALLOCATION_FAILURE;
+} catch (const std::exception& error) {
+  log(ERROR, "mdoc prover failed: %s", error.what());
+  return MDOC_PROVER_GENERAL_FAILURE;
+} catch (...) {
+  log(ERROR, "mdoc prover failed with an unknown exception");
+  return MDOC_PROVER_GENERAL_FAILURE;
 }
 #endif
 
@@ -557,11 +589,14 @@ MdocVerifierErrorCode run_mdoc_verifier(
     const RequestedAttribute* attrs, size_t attrs_len,
     const char* now, /* time formatted as "2023-11-02T09:00:00Z" */
     const uint8_t* zkproof, size_t proof_len, const char* docType,
-    const ZkSpecStruct* zk_spec) {
+    const ZkSpecStruct* zk_spec) try {
   if (bcp == nullptr || pkx == nullptr || pky == nullptr ||
       transcript == nullptr || now == nullptr || attrs == nullptr ||
       zkproof == nullptr || docType == nullptr || zk_spec == nullptr) {
     return MDOC_VERIFIER_NULL_INPUT;
+  }
+  if (!is_canonical_utc_time(now)) {
+    return MDOC_VERIFIER_INVALID_INPUT;
   }
 
   Elt pkX, pkY;
@@ -593,9 +628,11 @@ MdocVerifierErrorCode run_mdoc_verifier(
   const f2_p256 p256_2(p256_base);
 
   // Parse circuits from cached byte representation.
-  size_t len = kCircuitSizeMax;
-  std::vector<uint8_t> bytes(len);
+  std::vector<uint8_t> bytes;
   size_t full_size = decompress(bytes, bcp, bcsz);
+  if (full_size == 0) {
+    return MDOC_VERIFIER_CIRCUIT_PARSING_FAILURE;
+  }
 
   // For now, we are not using the ZKSpec version anywhere and assuming no
   // backwards compatibility. As soon as we have a use case for it, we have to
@@ -633,8 +670,7 @@ MdocVerifierErrorCode run_mdoc_verifier(
       pr_hash.param.block, pr_hash.param.nrow, pr_sig.param.block,
       pr_sig.param.nrow);
 
-  const std::vector<uint8_t> zbuf(zkproof, zkproof + proof_len);
-  ReadBuffer rb(zbuf);
+  ReadBuffer rb(zkproof, proof_len);
 
   // Read macs from proof string.
   // The sanity check above ensures that the proof is big enough for the MACs.
@@ -703,6 +739,15 @@ MdocVerifierErrorCode run_mdoc_verifier(
   bool ok2 = sig_v.verify(pr_sig, pub_sig, tv);
 
   return ok && ok2 ? MDOC_VERIFIER_SUCCESS : MDOC_VERIFIER_GENERAL_FAILURE;
+} catch (const std::bad_alloc&) {
+  log(ERROR, "mdoc verifier allocation failed");
+  return MDOC_VERIFIER_GENERAL_FAILURE;
+} catch (const std::exception& error) {
+  log(ERROR, "mdoc verifier failed: %s", error.what());
+  return MDOC_VERIFIER_GENERAL_FAILURE;
+} catch (...) {
+  log(ERROR, "mdoc verifier failed with an unknown exception");
+  return MDOC_VERIFIER_GENERAL_FAILURE;
 }
 
 } /* extern "C" */

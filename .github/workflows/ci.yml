@@ -163,6 +163,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
       - name: Install native cryptography dependencies
         run: sudo apt-get update && sudo apt-get install --yes binutils libssl-dev libzstd-dev
       - name: Test the real verifier and registered circuit identity
@@ -173,7 +177,7 @@ jobs:
           archive="$(find target/debug/build -name liblongfellow_zk.a -print -quit)"
           test -n "$archive"
           symbols="$(nm -C "$archive")"
-          if grep -Eq 'run_mdoc_prover|SecureRandomEngine|ZkProver|Mdoc(Hash|Signature)Witness' <<<"$symbols"; then
+          if grep -Eq 'generate_circuit|run_mdoc_prover|CompilerBackend|SecureRandomEngine|ZkProver|Mdoc(Hash|Signature)Witness' <<<"$symbols"; then
             printf '%s\n' "$symbols"
             exit 1
           fi
@@ -323,6 +327,8 @@ jobs:
           cargo check --locked -p marty-verification --no-default-features --features kms-only,python,iaca,csca,eudi
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
+          USE_ZK_MOCK=1 cargo test --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib
+          USE_ZK_MOCK=1 cargo clippy --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib -- -D warnings
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
           cargo check --locked -p marty-bindings --no-default-features --features kms-only,extension-module
           if cargo check --locked -p marty-crypto --no-default-features --features kms-only,keygen; then exit 1; fi

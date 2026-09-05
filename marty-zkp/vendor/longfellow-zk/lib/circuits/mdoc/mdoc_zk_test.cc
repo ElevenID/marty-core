@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "circuits/mdoc/mdoc_examples.h"
+#include "circuits/mdoc/mdoc_decompress.h"
 #include "circuits/mdoc/mdoc_test_attributes.h"
 #include "random/secure_random_engine.h"
 #include "util/log.h"
@@ -32,6 +33,20 @@
 
 namespace proofs {
 namespace {
+
+TEST(MdocDecompressTest, RejectsOversizedDeclaredFrameBeforeAllocation) {
+  // Zstandard magic + single-segment frame header with an 8-byte content size.
+  // No payload is needed: the allocation guard reads and rejects the declared
+  // size before decompression.
+  constexpr uint64_t kDeclaredSize = 130000001;
+  std::vector<uint8_t> frame = {0x28, 0xb5, 0x2f, 0xfd, 0xe0};
+  for (size_t i = 0; i < sizeof(kDeclaredSize); ++i) {
+    frame.push_back(static_cast<uint8_t>(kDeclaredSize >> (8 * i)));
+  }
+  std::vector<uint8_t> output;
+  EXPECT_EQ(decompress(output, frame.data(), frame.size()), 0);
+  EXPECT_TRUE(output.empty());
+}
 
 // Test fixture for MdocZK that handles 1 and 2 attribute circuits.
 // This class produces static versions of the 1- and 2- attribute circuits
@@ -335,6 +350,18 @@ TEST_F(MdocZKTest, bad_arguments) {
                             pk, tr, sizeof(tr), attrs, num_attrs, now,
                             (uint8_t**)&zkproof, &proof_len, nullptr),
             MDOC_PROVER_NULL_INPUT);
+
+  for (const char* invalid_now : {"x", "2023-11-02T09:00:000Z"}) {
+    EXPECT_EQ(run_mdoc_prover(circuit, sizeof(circuit), mdoc, sizeof(mdoc), pk,
+                              pk, tr, sizeof(tr), attrs, num_attrs, invalid_now,
+                              (uint8_t**)&zkproof, &proof_len, &zk_spec_1),
+              MDOC_PROVER_INVALID_INPUT);
+    EXPECT_EQ(run_mdoc_verifier(circuit, sizeof(circuit), pk, pk, tr,
+                                sizeof(tr), attrs, num_attrs, invalid_now,
+                                zkproof, sizeof(zkproof), kDefaultDocType,
+                                &zk_spec_1),
+              MDOC_VERIFIER_INVALID_INPUT);
+  }
 
   // Invalid pk.
   EXPECT_EQ(run_mdoc_prover(circuit, sizeof(circuit), mdoc, sizeof(mdoc), pk2,

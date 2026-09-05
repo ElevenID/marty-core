@@ -773,8 +773,8 @@ mod tests {
             issuer_certificate_chain: vec!["leaf".to_owned(), "issuer".to_owned()],
         })
         .expect("SD-JWT preparation");
-        let header = segment(&prepared.signing_input, 0);
-        let payload = segment(&prepared.signing_input, 1);
+        let header = segment(prepared.signing_input(), 0);
+        let payload = segment(prepared.signing_input(), 1);
         assert_eq!(header["typ"], "dc+sd-jwt");
         assert_eq!(header["x5c"], serde_json::json!(["leaf", "issuer"]));
         assert!(payload["cnf"]["jwk"].get("d").is_none());
@@ -800,7 +800,7 @@ mod tests {
             achievement_id: None,
         })
         .expect("JWT-VC preparation");
-        let payload = segment(&prepared.signing_input, 1);
+        let payload = segment(prepared.signing_input(), 1);
         assert!(payload.get("sub").is_none());
         assert_eq!(
             payload["vc"]["credentialStatus"]["type"],

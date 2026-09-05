@@ -3173,7 +3173,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 [[package]]
 name = "isomdl"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=5492c609a3a0d194778d40d1daabc739b78787e7#5492c609a3a0d194778d40d1daabc739b78787e7"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=dfd0ca68405b43f5afed0ad218b3c282cc21be61#dfd0ca68405b43f5afed0ad218b3c282cc21be61"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3196,6 +3196,7 @@ dependencies = [
  "isomdl-macros",
  "p256",
  "p384",
+ "p521",
  "pem-rfc7468 0.7.0",
  "rand 0.8.7",
  "sec1",
@@ -3217,7 +3218,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=5492c609a3a0d194778d40d1daabc739b78787e7#5492c609a3a0d194778d40d1daabc739b78787e7"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=dfd0ca68405b43f5afed0ad218b3c282cc21be61#dfd0ca68405b43f5afed0ad218b3c282cc21be61"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4215,10 +4216,13 @@ dependencies = [
  "ciborium",
  "coset",
  "criterion",
+ "curve25519-dalek",
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
+ "k256",
  "marty-crypto",
+ "marty-iso18013",
  "marty-zkp",
  "p256",
  "p384",
@@ -6418,11 +6422,14 @@ dependencies = [
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=6d7865fb4eb54a8380a4a706d814aad6f3f0df33#6d7865fb4eb54a8380a4a706d814aad6f3f0df33"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=18049cadba138d9b67a21f753f67c9238cdeae0a#18049cadba138d9b67a21f753f67c9238cdeae0a"
 dependencies = [
  "base64 0.21.7",
+ "curve25519-dalek",
  "getrandom 0.2.17",
  "jsonwebtoken",
+ "p256",
+ "p384",
  "rand 0.8.7",
  "serde",
  "serde_json",

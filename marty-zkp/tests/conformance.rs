@@ -469,7 +469,7 @@ fn predicate_display_matches_id() {
 /// predicate variant — this drives look-up in the claim_value secrets map.
 #[test]
 fn predicate_required_claim_names() {
-    assert_eq!(ZkPredicate::AgeOver(18).required_claim(), "birth_date");
+    assert_eq!(ZkPredicate::AgeOver(18).required_claim(), "age_over_18");
     assert_eq!(
         ZkPredicate::ValueInRange { min: 0, max: 10 }.required_claim(),
         "value"

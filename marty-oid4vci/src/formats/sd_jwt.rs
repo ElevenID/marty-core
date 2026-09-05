@@ -372,15 +372,31 @@ fn sign_sd_jwt_with_optional_confirmation(
 /// with an external signer and passes the result to [`assemble_sd_jwt()`].
 pub struct PreparedSdJwt {
     /// The base64url-encoded `header.payload` string to be signed.
-    pub signing_input: String,
+    signing_input: String,
     /// The disclosure suffix (e.g. `~disc1~disc2~`), including leading `~`.
-    pub disclosures_suffix: String,
+    disclosures_suffix: String,
     /// The credential ID (urn:uuid:...) assigned during preparation.
-    pub credential_id: String,
+    credential_id: String,
     algorithm: crate::types::SigningAlgorithm,
 }
 
 impl PreparedSdJwt {
+    pub fn signing_input(&self) -> &str {
+        &self.signing_input
+    }
+
+    pub fn signing_payload(&self) -> &[u8] {
+        self.signing_input.as_bytes()
+    }
+
+    pub fn disclosures_suffix(&self) -> &str {
+        &self.disclosures_suffix
+    }
+
+    pub fn credential_id(&self) -> &str {
+        &self.credential_id
+    }
+
     /// Algorithm the remote signer must use.
     pub fn algorithm(&self) -> crate::types::SigningAlgorithm {
         self.algorithm
@@ -417,7 +433,7 @@ pub fn sign_sd_jwt_with_signer(
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
     let prepared = prepare_sd_jwt(signer, claims)?;
-    let signature = signer.sign(prepared.signing_input.as_bytes())?;
+    let signature = signer.sign(prepared.signing_payload())?;
     assemble_sd_jwt(prepared, &signature)
 }
 
@@ -2440,7 +2456,9 @@ mod tests {
         assert!(payload.get("_sd").is_none(), "no _sd without disclosures");
 
         // Assemble with a dummy signature
-        let dummy_sig = vec![0u8; 64];
+        let mut dummy_sig = vec![0u8; 64];
+        dummy_sig[31] = 1;
+        dummy_sig[63] = 1;
         let result = assemble_sd_jwt(prepared, &dummy_sig).unwrap();
         match result {
             SignedCredential::SdJwt {

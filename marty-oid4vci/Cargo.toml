@@ -20,7 +20,7 @@ default = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
 kms-only = ["marty-crypto/kms-only"] # Reject in-process credential/holder private-key capabilities
 issuer = []         # OID4VCI credential issuer support
 verifier = []       # OID4VP verifiable presentation support
-wallet = ["dep:reqwest", "dep:tokio", "holder-key-operations", "sd_jwt"]  # OID4VCI/OID4VP wallet/holder support
+wallet = ["dep:reqwest", "dep:tokio", "holder-key-operations", "sd_jwt", "sd-jwt-rs/holder", "verifier"]  # OID4VCI/OID4VP wallet/holder support
 lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
 holder-key-operations = [] # Wallet/authenticator-owned holder and device keys
 local-key-operations = [
@@ -34,10 +34,11 @@ local-key-operations = [
 jwt_vc_json = []    # W3C VC-JWT credential format
 sd_jwt = ["dep:sd-jwt-rs", "sd-jwt-rs/verifier"] # IETF SD-JWT credential format
 mso_mdoc = ["dep:isomdl", "isomdl/issuer-planning"] # ISO 18013-5 mDoc credential format
-zk_mdoc = ["mso_mdoc", "dep:marty-zkp"]  # ZK proof support for mDoc (Longfellow/Ligero)
+zk_mdoc = ["dep:marty-zkp", "dep:marty-iso18013"]  # ZK proof verification; issuance additionally selects issuer,mso_mdoc
 
 [dependencies]
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification"] }
+marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013", default-features = false, features = ["verifier"], optional = true }
 
 # Serialization
 serde = { workspace = true }
@@ -46,11 +47,11 @@ serde_json = { workspace = true }
 # Crypto and signing
 ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "6d7865fb4eb54a8380a4a706d814aad6f3f0df33", default-features = false, optional = true }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "18049cadba138d9b67a21f753f67c9238cdeae0a", default-features = false, optional = true }
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 
 # ISO 18013-5 mDoc
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "5492c609a3a0d194778d40d1daabc739b78787e7", default-features = false, optional = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "dfd0ca68405b43f5afed0ad218b3c282cc21be61", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -60,6 +61,8 @@ base64 = { workspace = true }
 # Key management
 p256 = { workspace = true }
 p384 = { workspace = true }
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+curve25519-dalek = "4.1"
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
@@ -84,8 +87,8 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true }
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "5492c609a3a0d194778d40d1daabc739b78787e7" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "6d7865fb4eb54a8380a4a706d814aad6f3f0df33" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "dfd0ca68405b43f5afed0ad218b3c282cc21be61" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "18049cadba138d9b67a21f753f67c9238cdeae0a" }
 
 [[bench]]
 name = "mdoc_issuance"

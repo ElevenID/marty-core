@@ -46,6 +46,15 @@ pub mod chip_io;
 pub mod credential_format;
 pub mod device_auth;
 pub mod dtc;
+
+#[cfg(not(feature = "local-key-operations"))]
+/// KMS-only and verification builds do not expose in-process DTC signing.
+///
+/// ```compile_fail
+/// use marty_verification::dtc::sign_dtc_json;
+/// let _ = sign_dtc_json("{}");
+/// ```
+mod dtc_local_signing_compile_boundary {}
 #[cfg(feature = "csca")]
 pub mod eac;
 #[cfg(feature = "csca")]

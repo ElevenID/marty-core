@@ -64,7 +64,7 @@ fn prepare_returns_valid_signing_input() {
     let prepared = prepare_jwt_vc(&key, &claims).expect("prepare_jwt_vc");
 
     // signing_input should be two base64url segments separated by a dot
-    let parts: Vec<&str> = prepared.signing_input.split('.').collect();
+    let parts: Vec<&str> = prepared.signing_input().split('.').collect();
     assert_eq!(parts.len(), 2, "signing_input should be header.payload");
 
     // Both parts should be valid base64url
@@ -86,7 +86,7 @@ fn prepare_returns_valid_signing_input() {
     assert_eq!(payload["sub"], "did:key:z6Mktest");
 
     // credential_id should be a URN
-    assert!(prepared.credential_id.starts_with("urn:uuid:"));
+    assert!(prepared.credential_id().starts_with("urn:uuid:"));
 }
 
 #[test]
@@ -95,8 +95,8 @@ fn assemble_produces_three_part_jwt() {
     let claims = base_claims();
 
     let prepared = prepare_jwt_vc(&key, &claims).expect("prepare_jwt_vc");
-    let cred_id = prepared.credential_id.clone();
-    let signing_input = prepared.signing_input.clone();
+    let cred_id = prepared.credential_id().to_owned();
+    let signing_input = prepared.signing_input().to_owned();
 
     // Simulate external signing: sign the signing_input bytes with the test key
     let signature = key.sign(signing_input.as_bytes()).expect("sign");
@@ -134,7 +134,7 @@ fn prepare_assemble_equivalent_to_sign_jwt_vc() {
 
     // Path B: prepare + sign + assemble
     let prepared = prepare_jwt_vc(&key, &claims).expect("prepare_jwt_vc");
-    let signature = key.sign(prepared.signing_input.as_bytes()).expect("sign");
+    let signature = key.sign(prepared.signing_payload()).expect("sign");
     let assembled = assemble_jwt_vc(prepared, &signature).unwrap();
 
     // Both should be JwtVcJson variants with valid JWTs

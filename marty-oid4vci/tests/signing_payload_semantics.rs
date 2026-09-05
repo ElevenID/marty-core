@@ -144,7 +144,8 @@ fn scalar_es256_jwt_vc_signs_one_complete_payload_and_forwards_raw_signature() {
             signing_input,
             credential_id.clone(),
             SigningAlgorithm::ES256,
-        ),
+        )
+        .unwrap(),
         &RAW_ES256_SIGNATURE,
     )
     .unwrap();
@@ -204,11 +205,11 @@ fn prepared_jwt_vc_borrows_the_existing_complete_signing_input() {
 
     assert_eq!(
         prepared.signing_payload(),
-        prepared.signing_input.as_bytes()
+        prepared.signing_input().as_bytes()
     );
     assert_eq!(
         prepared.signing_payload().as_ptr(),
-        prepared.signing_input.as_ptr(),
+        prepared.signing_input().as_ptr(),
         "the accessor must borrow the existing signing input without copying"
     );
     assert!(signer.signing_payloads.lock().unwrap().is_empty());

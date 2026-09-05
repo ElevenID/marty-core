@@ -736,15 +736,16 @@ impl CredentialPayloadFormat {
 
 /// Declares that a specific mDoc claim supports one or more ZK predicates.
 ///
-/// For example, a `birth_date` claim might support both `"age_over_18"` and
-/// `"age_over_21"` predicates.  This metadata is embedded in issued
-/// `ZkMdoc` credentials so wallets know which proofs they can generate.
+/// Longfellow proves an issuer-signed claim value; it does not derive a
+/// predicate from another hidden field. For example, an issuer-computed
+/// boolean `age_over_18` claim binds only to the `age_over_18` predicate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ZkPredicateBinding {
-    /// The mDoc claim name (e.g. `"birth_date"`).
+    /// The issuer-signed boolean mDoc claim name (e.g. `"age_over_18"`).
     pub claim_name: String,
     /// Predicate identifiers supported for this claim
-    /// (e.g. `["age_over_18", "age_over_21"]`).
+    /// This must contain exactly the same registered identifier as
+    /// `claim_name`.
     pub supported_predicates: Vec<String>,
 }
 

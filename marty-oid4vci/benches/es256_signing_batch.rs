@@ -287,7 +287,7 @@ impl BenchmarkPrepared {
     fn signing_payload(&self) -> &[u8] {
         match self {
             Self::JwtVc(prepared) => prepared.signing_payload(),
-            Self::SdJwt(prepared) => prepared.signing_input.as_bytes(),
+            Self::SdJwt(prepared) => prepared.signing_payload(),
             Self::Mdoc(prepared) => prepared.signing_payload(),
         }
     }

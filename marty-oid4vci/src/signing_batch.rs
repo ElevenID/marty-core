@@ -717,7 +717,7 @@ impl PreparedCredential {
     fn signing_payload(&self) -> &[u8] {
         match self {
             Self::JwtVc(item) => item.prepared.signing_payload(),
-            Self::SdJwt(item) => item.prepared.signing_input.as_bytes(),
+            Self::SdJwt(item) => item.prepared.signing_payload(),
             Self::Mdoc(item) => item.prepared.signing_payload(),
         }
     }

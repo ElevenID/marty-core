@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <new>
 #include <vector>
 
 #include "util/log.h"
@@ -28,6 +29,22 @@ namespace proofs {
 // the size of the uncompressed string.
 size_t decompress(std::vector<uint8_t>& bytes, const uint8_t* compressed,
                   size_t compressed_len) {
+  constexpr unsigned long long kMaxDecompressedCircuitBytes = 130000000;
+  const unsigned long long frame_size =
+      ZSTD_getFrameContentSize(compressed, compressed_len);
+  if (frame_size == ZSTD_CONTENTSIZE_ERROR ||
+      frame_size == ZSTD_CONTENTSIZE_UNKNOWN || frame_size == 0 ||
+      frame_size > kMaxDecompressedCircuitBytes) {
+    log(ERROR, "invalid or excessive circuit frame size: %llu", frame_size);
+    return 0;
+  }
+  try {
+    bytes.clear();
+    bytes.resize(static_cast<size_t>(frame_size));
+  } catch (const std::bad_alloc&) {
+    log(ERROR, "circuit allocation failed");
+    return 0;
+  }
   size_t res =
       ZSTD_decompress(bytes.data(), bytes.size(), compressed, compressed_len);
 

@@ -30,7 +30,8 @@
 //! # ZK Predicate Verification
 //!
 //! When a presentation definition includes a ZK predicate constraint
-//! (e.g., prove age >= 18 without revealing birth date), the verifier:
+//! (e.g., prove an issuer-signed `age_over_18` boolean without revealing
+//! other claims), the verifier:
 //!
 //! 1. Generates a challenge nonce via [`VerificationEngine::create_zk_challenge`]
 //! 2. Includes the nonce + predicate in the presentation definition
@@ -42,8 +43,8 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-
-const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
+#[cfg(feature = "zk_mdoc")]
+use crate::formats::ZK_PROOF_TYPE_LIGERO;
 
 // ── OID4VP Types ─────────────────────────────────────────────────────
 
@@ -125,6 +126,9 @@ pub struct ZkPredicateRequest {
     pub proof_type: String,
     /// Challenge nonce for this ZK proof (base64url-encoded).
     pub nonce: String,
+    /// Verifier-selected canonical UTC time used as the proof's public input.
+    #[serde(default)]
+    pub verification_time: String,
 }
 
 // ── Presentation Submission ──────────────────────────────────────────
@@ -149,22 +153,118 @@ pub struct DescriptorMapEntry {
 
 // ── ZK Types ─────────────────────────────────────────────────────────
 
-/// A ZK challenge session, analogous to `ZkChallengeSession` in Python.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Public half of a ZK challenge. Verification requires binding it to the
+/// exact canonical ISO SessionTranscript bytes for the OID4VP exchange.
+#[cfg(feature = "zk_mdoc")]
+#[derive(Debug, Serialize)]
 pub struct ZkChallenge {
     /// Unique session identifier.
-    pub session_id: String,
+    session_id: String,
     /// The challenge nonce (base64url-encoded).
-    pub nonce: String,
-    /// The raw nonce bytes (not serialized — for internal use).
-    #[serde(skip)]
-    pub nonce_bytes: Vec<u8>,
+    nonce: String,
     /// The predicate being proved.
-    pub predicate: String,
+    predicate: String,
+    /// Exact mDoc namespace containing the boolean predicate claim.
+    namespace: String,
+    /// Verifier-selected proof reference time shared with the wallet.
+    verification_time: String,
     /// Timestamp when the challenge was created.
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    created_at: chrono::DateTime<chrono::Utc>,
     /// Expiration duration in seconds.
-    pub expires_in_seconds: i64,
+    expires_in_seconds: i64,
+}
+
+#[cfg(feature = "zk_mdoc")]
+impl ZkChallenge {
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn nonce(&self) -> &str {
+        &self.nonce
+    }
+
+    pub fn predicate(&self) -> &str {
+        &self.predicate
+    }
+
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+
+    pub fn verification_time(&self) -> &str {
+        &self.verification_time
+    }
+}
+
+/// Server-owned, one-use challenge state bound to an authenticated session.
+///
+/// This value is intentionally process-local: it cannot be cloned, serialized,
+/// or reconstructed from a presentation response. A restart or request routed
+/// to another replica must fail closed and begin a fresh authorization flow.
+#[cfg(feature = "zk_mdoc")]
+#[derive(Debug)]
+pub struct BoundZkChallenge {
+    session_id: String,
+    predicate: String,
+    namespace: String,
+    expected_session_transcript: Vec<u8>,
+    trusted_issuer_pkx: String,
+    trusted_issuer_pky: String,
+    expected_doc_type: String,
+    verification_time: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    expires_in_seconds: i64,
+}
+
+/// Trust-resolved verifier inputs for an mDoc ZK proof.
+///
+/// Construct this only from issuer trust configuration, never from values in
+/// the holder's presentation response.
+#[cfg(feature = "zk_mdoc")]
+#[derive(Debug)]
+pub struct TrustedMdocZkInputs {
+    issuer_pkx: String,
+    issuer_pky: String,
+    doc_type: String,
+}
+
+#[cfg(feature = "zk_mdoc")]
+impl TrustedMdocZkInputs {
+    pub fn new(
+        issuer_pkx: impl Into<String>,
+        issuer_pky: impl Into<String>,
+        doc_type: impl Into<String>,
+    ) -> Oid4vciResult<Self> {
+        let value = Self {
+            issuer_pkx: issuer_pkx.into(),
+            issuer_pky: issuer_pky.into(),
+            doc_type: doc_type.into(),
+        };
+        if value.issuer_pkx.is_empty()
+            || value.issuer_pkx.len() > 140
+            || value.issuer_pky.is_empty()
+            || value.issuer_pky.len() > 140
+            || value.doc_type.is_empty()
+            || value.doc_type.len() > 256
+        {
+            return Err(Oid4vciError::InvalidRequest(
+                "trusted mDoc ZK issuer key or docType is invalid".into(),
+            ));
+        }
+        Ok(value)
+    }
+}
+
+#[cfg(feature = "zk_mdoc")]
+impl BoundZkChallenge {
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn predicate(&self) -> &str {
+        &self.predicate
+    }
 }
 
 /// Result of verifying a ZK predicate proof.
@@ -377,16 +477,19 @@ impl VerificationEngine {
     ///
     /// # Arguments
     /// * `id` — descriptor identifier
-    /// * `claim_path` — JSONPath to the claim (e.g., `$.org\.iso\.18013\.5\.1.birth_date`)
-    /// * `predicate` — the predicate name (e.g., `"age_over_18"`)
-    /// * `nonce` — challenge nonce (base64url-encoded)
+    /// * `challenge` — verifier-created state that supplies the exact signed
+    ///   predicate claim path and challenge nonce
+    #[cfg(feature = "zk_mdoc")]
     pub fn zk_predicate_descriptor(
         &self,
         id: impl Into<String>,
-        claim_path: &str,
-        predicate: &str,
-        nonce: &str,
+        challenge: &ZkChallenge,
     ) -> InputDescriptor {
+        let claim_path = format!(
+            "$.{}.{}",
+            challenge.namespace.replace('.', "\\."),
+            challenge.predicate
+        );
         let mut format = HashMap::new();
         format.insert(
             "zk_mdoc".into(),
@@ -397,21 +500,22 @@ impl VerificationEngine {
 
         InputDescriptor {
             id: id.into(),
-            name: Some(format!("ZK Predicate: {}", predicate)),
+            name: Some(format!("ZK Predicate: {}", challenge.predicate)),
             purpose: Some(format!(
                 "Prove {} without revealing the underlying value",
-                predicate
+                challenge.predicate
             )),
             format: Some(format),
             constraints: Constraints {
                 fields: vec![FieldConstraint {
-                    path: vec![claim_path.to_string()],
+                    path: vec![claim_path],
                     filter: None,
                     optional: Some(false),
                     zk_predicate: Some(ZkPredicateRequest {
-                        predicate: predicate.to_string(),
+                        predicate: challenge.predicate.clone(),
                         proof_type: ZK_PROOF_TYPE_LIGERO.to_string(),
-                        nonce: nonce.to_string(),
+                        nonce: challenge.nonce.clone(),
+                        verification_time: challenge.verification_time.clone(),
                     }),
                 }],
                 limit_disclosure: Some("required".into()),
@@ -423,9 +527,29 @@ impl VerificationEngine {
     ///
     /// Generates a random 32-byte nonce to be used as a challenge in a
     /// ZK predicate proof request.
-    pub fn create_zk_challenge(&self, predicate: &str) -> Oid4vciResult<ZkChallenge> {
+    #[cfg(feature = "zk_mdoc")]
+    pub fn create_zk_challenge(
+        &self,
+        predicate: &str,
+        namespace: &str,
+    ) -> Oid4vciResult<ZkChallenge> {
         use base64::Engine;
         use rand::RngCore;
+
+        if !matches!(
+            marty_zkp::ZkPredicate::from_id(predicate),
+            marty_zkp::ZkPredicate::AgeOver(18 | 21)
+        ) || predicate.len() > 32
+        {
+            return Err(Oid4vciError::InvalidRequest(
+                "only registered age_over_N boolean ZK predicates are supported".into(),
+            ));
+        }
+        if namespace.is_empty() || namespace.len() > 64 {
+            return Err(Oid4vciError::InvalidRequest(
+                "ZK predicate namespace must contain 1..=64 bytes".into(),
+            ));
+        }
 
         let mut nonce_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
@@ -433,14 +557,46 @@ impl VerificationEngine {
         let nonce_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
 
         let session_id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Utc::now();
 
         Ok(ZkChallenge {
             session_id,
             nonce: nonce_b64,
-            nonce_bytes: nonce_bytes.to_vec(),
             predicate: predicate.to_string(),
-            created_at: chrono::Utc::now(),
+            namespace: namespace.to_string(),
+            verification_time: created_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            created_at,
             expires_in_seconds: self.nonce_max_age,
+        })
+    }
+
+    /// Bind a generated challenge to the canonical ISO 18013-7 OpenID4VP
+    /// SessionTranscript derived from verifier-owned request state.
+    #[cfg(feature = "zk_mdoc")]
+    pub fn bind_zk_challenge(
+        &self,
+        challenge: ZkChallenge,
+        trusted_inputs: TrustedMdocZkInputs,
+        response_encryption_jwk_json: Option<&str>,
+    ) -> Oid4vciResult<BoundZkChallenge> {
+        let expected_session_transcript = marty_iso18013::openid4vp::build_mdoc_session_transcript(
+            &self.verifier_id,
+            &challenge.nonce,
+            &self.response_uri,
+            response_encryption_jwk_json,
+        )
+        .map_err(|error| Oid4vciError::InvalidRequest(error.to_string()))?;
+        Ok(BoundZkChallenge {
+            session_id: challenge.session_id,
+            predicate: challenge.predicate,
+            namespace: challenge.namespace,
+            expected_session_transcript,
+            trusted_issuer_pkx: trusted_inputs.issuer_pkx,
+            trusted_issuer_pky: trusted_inputs.issuer_pky,
+            expected_doc_type: trusted_inputs.doc_type,
+            verification_time: challenge.verification_time,
+            created_at: challenge.created_at,
+            expires_in_seconds: challenge.expires_in_seconds,
         })
     }
 
@@ -448,21 +604,18 @@ impl VerificationEngine {
     ///
     /// Dispatches to the appropriate ZK circuit based on the predicate
     /// identifier carried in `challenge.predicate` (e.g. `"age_over_18"`,
-    /// `"age_over_21"`).  New predicates are supported automatically as long
-    /// as `marty-zkp` implements the corresponding circuit — no changes are
-    /// needed here.
+    /// `"age_over_21"`). Only explicitly registered boolean predicates can
+    /// reach this boundary.
     ///
     /// # Arguments
     /// * `challenge` — the original ZK challenge that was sent to the wallet
     /// * `circuit`   — pre-generated circuit for the attribute count
-    /// * `input`     — the mDoc prove input (mdoc bytes, issuer key, attributes, etc.)
     /// * `proof`     — the ZK proof bytes from the wallet
     #[cfg(feature = "zk_mdoc")]
     pub fn verify_zk_predicate(
         &self,
-        challenge: &ZkChallenge,
+        challenge: BoundZkChallenge,
         circuit: &marty_zkp::Circuit,
-        input: &marty_zkp::MdocProveInput,
         proof: &[u8],
     ) -> ZkVerificationResult {
         use chrono::Utc;
@@ -471,16 +624,30 @@ impl VerificationEngine {
         let elapsed = Utc::now()
             .signed_duration_since(challenge.created_at)
             .num_seconds();
-        if elapsed > challenge.expires_in_seconds {
+        if elapsed < 0 || elapsed > challenge.expires_in_seconds {
             return ZkVerificationResult {
                 valid: false,
                 predicate: challenge.predicate.clone(),
                 proof_type: ZK_PROOF_TYPE_LIGERO.to_string(),
-                error: Some("ZK challenge has expired".into()),
+                error: Some("ZK challenge timestamp is outside its validity window".into()),
             };
         }
 
-        match marty_zkp::Verifier::verify(circuit, input, proof) {
+        let trusted_input = marty_zkp::MdocProveInput {
+            mdoc: Vec::new(),
+            issuer_pkx: challenge.trusted_issuer_pkx.clone(),
+            issuer_pky: challenge.trusted_issuer_pky.clone(),
+            transcript: challenge.expected_session_transcript.clone(),
+            attributes: vec![marty_zkp::AttributeRequest::new(
+                &challenge.namespace,
+                &challenge.predicate,
+                vec![0xf5],
+            )],
+            now: challenge.verification_time.clone(),
+            doc_type: challenge.expected_doc_type.clone(),
+        };
+
+        match marty_zkp::Verifier::verify(circuit, &trusted_input, proof) {
             Ok(true) => ZkVerificationResult {
                 valid: true,
                 predicate: challenge.predicate.clone(),
@@ -1530,17 +1697,14 @@ impl VerificationEngine {
 /// Build a presentation definition for age verification using ZK proofs.
 ///
 /// This is a convenience function for the most common ZK use case:
-/// verifying that a holder is 18+ without learning their birth date.
+/// proving an issuer-signed `age_over_18` or `age_over_21` boolean without
+/// revealing other mDoc claims.
+#[cfg(feature = "zk_mdoc")]
 pub fn age_verification_definition(
     verifier: &VerificationEngine,
-    nonce: &str,
+    challenge: &ZkChallenge,
 ) -> Oid4vciResult<PresentationDefinition> {
-    let descriptor = verifier.zk_predicate_descriptor(
-        "age_verification",
-        "$.org\\.iso\\.18013\\.5\\.1.birth_date",
-        "age_over_18",
-        nonce,
-    );
+    let descriptor = verifier.zk_predicate_descriptor("age_verification", challenge);
 
     verifier.create_presentation_definition("age_verification_request", vec![descriptor])
 }
@@ -1579,32 +1743,153 @@ mod tests {
         assert!(err.to_string().contains("at least one input descriptor"));
     }
 
+    #[cfg(feature = "zk_mdoc")]
     #[test]
     fn test_zk_predicate_descriptor() {
         let engine = test_engine();
-        let desc = engine.zk_predicate_descriptor(
-            "age_check",
-            "$.org\\.iso\\.18013\\.5\\.1.birth_date",
-            "age_over_18",
-            "dGVzdG5vbmNl",
-        );
+        let challenge = engine
+            .create_zk_challenge("age_over_18", "org.iso.18013.5.1")
+            .unwrap();
+        let desc = engine.zk_predicate_descriptor("age_check", &challenge);
 
         assert_eq!(desc.id, "age_check");
         let zk = desc.constraints.fields[0].zk_predicate.as_ref().unwrap();
         assert_eq!(zk.predicate, "age_over_18");
         assert_eq!(zk.proof_type, "longfellow-zk-ligero");
-        assert_eq!(zk.nonce, "dGVzdG5vbmNl");
+        assert_eq!(zk.nonce, challenge.nonce());
+        assert_eq!(zk.verification_time, challenge.verification_time());
+        assert_eq!(
+            serde_json::to_value(&desc).unwrap()["constraints"]["fields"][0]["zk_predicate"]
+                ["verification_time"],
+            challenge.verification_time()
+        );
+        assert_eq!(
+            desc.constraints.fields[0].path[0],
+            "$.org\\.iso\\.18013\\.5\\.1.age_over_18"
+        );
     }
 
+    #[cfg(feature = "zk_mdoc")]
     #[test]
     fn test_create_zk_challenge() {
         let engine = test_engine();
-        let challenge = engine.create_zk_challenge("age_over_18").unwrap();
+        let challenge = engine
+            .create_zk_challenge("age_over_18", "org.iso.18013.5.1")
+            .unwrap();
 
         assert_eq!(challenge.predicate, "age_over_18");
         assert!(!challenge.nonce.is_empty());
-        assert_eq!(challenge.nonce_bytes.len(), 32);
+        assert_eq!(challenge.namespace, "org.iso.18013.5.1");
         assert_eq!(challenge.expires_in_seconds, 600);
+        assert_eq!(challenge.verification_time().len(), 20);
+        assert_eq!(
+            serde_json::to_value(&challenge).unwrap()["verification_time"],
+            challenge.verification_time()
+        );
+    }
+
+    #[cfg(feature = "zk_mdoc")]
+    fn oid4vp_session_transcript(nonce: &str, client_id: &str, response_uri: &str) -> Vec<u8> {
+        marty_iso18013::openid4vp::build_mdoc_session_transcript(
+            client_id,
+            nonce,
+            response_uri,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[cfg(feature = "zk_mdoc")]
+    fn trusted_zk_inputs() -> TrustedMdocZkInputs {
+        TrustedMdocZkInputs::new("0x01", "0x02", "org.iso.18013.5.1.mDL").unwrap()
+    }
+
+    #[cfg(feature = "zk_mdoc")]
+    #[test]
+    fn zk_verification_binds_exact_transcript_attribute_and_one_time_state() {
+        let engine = test_engine();
+        let challenge = engine
+            .create_zk_challenge("age_over_18", "org.iso.18013.5.1")
+            .unwrap();
+        let nonce = challenge.nonce().to_owned();
+        let transcript =
+            oid4vp_session_transcript(&nonce, &engine.verifier_id, &engine.response_uri);
+        let bound = engine
+            .bind_zk_challenge(challenge, trusted_zk_inputs(), None)
+            .unwrap();
+        let circuit = marty_zkp::Circuit::from_bytes(vec![1], 1).unwrap();
+
+        // Cross a wall-clock second to prove verification uses the retained,
+        // verifier-selected reference time carried by the challenge.
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        let valid = engine.verify_zk_predicate(bound, &circuit, &transcript);
+        assert!(valid.valid);
+    }
+
+    #[cfg(feature = "zk_mdoc")]
+    #[test]
+    fn zk_verification_rejects_transcript_substitution() {
+        let engine = test_engine();
+        let circuit = marty_zkp::Circuit::from_bytes(vec![1], 1).unwrap();
+
+        for case in 0..3 {
+            let challenge = engine
+                .create_zk_challenge("age_over_18", "org.iso.18013.5.1")
+                .unwrap();
+            let nonce = challenge.nonce().to_owned();
+            let bound = engine
+                .bind_zk_challenge(challenge, trusted_zk_inputs(), None)
+                .unwrap();
+            let transcript = match case {
+                0 => oid4vp_session_transcript(
+                    "wrong-nonce",
+                    &engine.verifier_id,
+                    &engine.response_uri,
+                ),
+                1 => oid4vp_session_transcript(
+                    &nonce,
+                    "https://attacker.example/client",
+                    &engine.response_uri,
+                ),
+                _ => oid4vp_session_transcript(
+                    &nonce,
+                    &engine.verifier_id,
+                    "https://attacker.example/response",
+                ),
+            };
+            assert!(
+                !engine
+                    .verify_zk_predicate(bound, &circuit, &transcript)
+                    .valid
+            );
+        }
+    }
+
+    #[cfg(feature = "zk_mdoc")]
+    #[test]
+    fn zk_challenge_rejects_unregistered_predicates_and_future_timestamps() {
+        let engine = test_engine();
+        assert!(engine
+            .create_zk_challenge("membership", "org.iso.18013.5.1")
+            .is_err());
+        let challenge = engine
+            .create_zk_challenge("age_over_18", "org.iso.18013.5.1")
+            .unwrap();
+        let transcript = oid4vp_session_transcript(
+            challenge.nonce(),
+            "https://verifier.example/client",
+            "https://verifier.example/response",
+        );
+        let mut bound = engine
+            .bind_zk_challenge(challenge, trusted_zk_inputs(), None)
+            .unwrap();
+        bound.created_at = chrono::Utc::now() + chrono::Duration::seconds(60);
+        let circuit = marty_zkp::Circuit::from_bytes(vec![1], 1).unwrap();
+        assert!(
+            !engine
+                .verify_zk_predicate(bound, &circuit, &transcript)
+                .valid
+        );
     }
 
     #[test]
@@ -1872,10 +2157,14 @@ mod tests {
         assert!(result.errors[0].contains("ASCII URL-safe"));
     }
 
+    #[cfg(feature = "zk_mdoc")]
     #[test]
     fn test_age_verification_definition() {
         let engine = test_engine();
-        let pd = age_verification_definition(&engine, "testnonce123").unwrap();
+        let challenge = engine
+            .create_zk_challenge("age_over_18", "org.iso.18013.5.1")
+            .unwrap();
+        let pd = age_verification_definition(&engine, &challenge).unwrap();
 
         assert_eq!(pd.id, "age_verification_request");
         assert_eq!(pd.input_descriptors.len(), 1);
@@ -1942,11 +2231,14 @@ mod tests {
         assert!(result.errors[0].contains("No presentation public key"));
     }
 
+    #[cfg(feature = "zk_mdoc")]
     #[test]
     fn test_presentation_definition_serialization() {
         let engine = test_engine();
-        let desc =
-            engine.zk_predicate_descriptor("age_check", "$.birth_date", "age_over_18", "nonce123");
+        let challenge = engine
+            .create_zk_challenge("age_over_18", "org.iso.18013.5.1")
+            .unwrap();
+        let desc = engine.zk_predicate_descriptor("age_check", &challenge);
         let pd = engine
             .create_presentation_definition("pd_1", vec![desc])
             .unwrap();
@@ -1954,7 +2246,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&pd).unwrap();
         assert!(json.contains("age_over_18"));
         assert!(json.contains("longfellow-zk-ligero"));
-        assert!(json.contains("nonce123"));
+        assert!(json.contains(challenge.nonce()));
 
         // Round-trip
         let parsed: PresentationDefinition = serde_json::from_str(&json).unwrap();

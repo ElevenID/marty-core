@@ -163,9 +163,9 @@ pub fn sign_jwt_vc_with_signer(
 /// and passes the result to [`assemble_jwt_vc()`].
 pub struct PreparedJwtVc {
     /// The base64url-encoded `header.payload` string to be signed.
-    pub signing_input: String,
+    signing_input: String,
     /// The credential ID (urn:uuid:...) assigned during preparation.
-    pub credential_id: String,
+    credential_id: String,
     algorithm: crate::types::SigningAlgorithm,
 }
 
@@ -176,17 +176,55 @@ impl PreparedJwtVc {
         signing_input: String,
         credential_id: String,
         algorithm: crate::types::SigningAlgorithm,
-    ) -> Self {
-        Self {
+    ) -> Oid4vciResult<Self> {
+        let mut segments = signing_input.split('.');
+        let header_segment = segments.next().ok_or_else(|| {
+            Oid4vciError::SigningError("JWT signing input is missing its protected header".into())
+        })?;
+        if segments.next().is_none() || segments.next().is_some() {
+            return Err(Oid4vciError::SigningError(
+                "JWT signing input must contain exactly header.payload".into(),
+            ));
+        }
+        let header: serde_json::Value =
+            serde_json::from_slice(&B64.decode(header_segment).map_err(|error| {
+                Oid4vciError::SigningError(format!("invalid protected JWT header: {error}"))
+            })?)?;
+        let protected_algorithm = match header.get("alg").and_then(serde_json::Value::as_str) {
+            Some("ES256") => crate::types::SigningAlgorithm::ES256,
+            Some("ES384") => crate::types::SigningAlgorithm::ES384,
+            Some("ES256K") => crate::types::SigningAlgorithm::ES256K,
+            Some("EdDSA") => crate::types::SigningAlgorithm::EdDSA,
+            Some("RS256") => crate::types::SigningAlgorithm::RS256,
+            _ => {
+                return Err(Oid4vciError::SigningError(
+                    "unsupported or missing protected JWT algorithm".into(),
+                ))
+            }
+        };
+        if protected_algorithm != algorithm {
+            return Err(Oid4vciError::SigningError(
+                "requested algorithm does not match protected JWT header".into(),
+            ));
+        }
+        Ok(Self {
             signing_input,
             credential_id,
             algorithm,
-        }
+        })
     }
 
     /// Borrow the complete base64url-encoded `header.payload` signing input.
     pub fn signing_payload(&self) -> &[u8] {
         self.signing_input.as_bytes()
+    }
+
+    pub fn signing_input(&self) -> &str {
+        &self.signing_input
+    }
+
+    pub fn credential_id(&self) -> &str {
+        &self.credential_id
     }
 
     /// Algorithm the remote signer must use.

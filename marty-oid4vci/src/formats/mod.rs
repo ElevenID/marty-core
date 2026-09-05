@@ -14,8 +14,14 @@ pub mod mdoc;
 pub mod sd_jwt;
 pub mod vds_nc;
 pub mod vds_nc_profile;
-#[cfg(feature = "zk_mdoc")]
+#[cfg(all(feature = "zk_mdoc", feature = "issuer", feature = "mso_mdoc"))]
 pub mod zk_mdoc;
+
+/// The ZK proof protocol identifier used by Longfellow/Ligero.
+///
+/// This wire identifier is shared by wallet and verifier-only builds and does
+/// not require compiling the optional ZK implementation.
+pub const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::CredentialSigner;
@@ -40,7 +46,7 @@ pub fn sign_credential(
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt(issuer_key, claims),
         #[cfg(feature = "mso_mdoc")]
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc(issuer_key, claims),
-        #[cfg(feature = "zk_mdoc")]
+        #[cfg(all(feature = "zk_mdoc", feature = "issuer", feature = "mso_mdoc"))]
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc(issuer_key, claims),
         CredentialFormat::VdsNc => vds_nc::sign_vds_nc(issuer_key, claims),
         #[allow(unreachable_patterns)]
@@ -66,7 +72,7 @@ pub fn sign_credential_with_signer(
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt_with_signer(signer, claims),
         #[cfg(feature = "mso_mdoc")]
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc_with_signer(signer, claims),
-        #[cfg(feature = "zk_mdoc")]
+        #[cfg(all(feature = "zk_mdoc", feature = "issuer", feature = "mso_mdoc"))]
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc_with_signer(signer, claims),
         CredentialFormat::VdsNc => vds_nc::sign_vds_nc_with_signer(signer, claims),
         #[allow(unreachable_patterns)]

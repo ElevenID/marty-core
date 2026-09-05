@@ -31,8 +31,8 @@ impl PreparedRemoteCredential {
     #[getter]
     fn signing_input(&self) -> PyResult<String> {
         match self.inner.as_ref() {
-            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.signing_input.clone()),
-            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.signing_input.clone()),
+            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.signing_input().to_owned()),
+            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.signing_input().to_owned()),
             None => Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "credential preparation has already been assembled",
             )),
@@ -42,8 +42,8 @@ impl PreparedRemoteCredential {
     #[getter]
     fn credential_id(&self) -> PyResult<String> {
         match self.inner.as_ref() {
-            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.credential_id.clone()),
-            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.credential_id.clone()),
+            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.credential_id().to_owned()),
+            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.credential_id().to_owned()),
             None => Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "credential preparation has already been assembled",
             )),
@@ -360,13 +360,13 @@ mod tests {
         let PreparedCredential::SdJwt(state) = prepared.inner.expect("prepared state") else {
             panic!("expected SD-JWT state")
         };
-        let mut segments = state.signing_input.split('.');
+        let mut segments = state.signing_input().split('.');
         let header = decode_segment(segments.next().expect("header"));
         let payload = decode_segment(segments.next().expect("payload"));
         assert_eq!(header["kid"], "did:web:issuer.example#key-1");
         assert_eq!(header["typ"], "dc+sd-jwt");
         assert_eq!(header["x5c"], serde_json::json!(["leaf", "issuer"]));
-        assert_eq!(payload["jti"], state.credential_id);
+        assert_eq!(payload["jti"], state.credential_id());
         assert_eq!(payload["cnf"]["jwk"]["x"], "x");
         assert!(payload["cnf"]["jwk"].get("d").is_none());
         assert!(payload.get("nbf").is_some());
@@ -393,11 +393,11 @@ mod tests {
         let PreparedCredential::JwtVc(state) = prepared.inner.expect("prepared state") else {
             panic!("expected JWT-VC state")
         };
-        let mut segments = state.signing_input.split('.');
+        let mut segments = state.signing_input().split('.');
         let header = decode_segment(segments.next().expect("header"));
         let payload = decode_segment(segments.next().expect("payload"));
         assert_eq!(header["kid"], "did:web:issuer.example#key-1");
-        assert_eq!(payload["jti"], state.credential_id);
+        assert_eq!(payload["jti"], state.credential_id());
         assert!(payload.get("sub").is_none());
         assert!(payload.get("nbf").is_some());
         assert_eq!(
@@ -429,7 +429,7 @@ mod tests {
         let PreparedCredential::JwtVc(state) = prepared.inner.expect("prepared state") else {
             panic!("expected JWT-VC state")
         };
-        let payload = decode_segment(state.signing_input.split('.').nth(1).expect("payload"));
+        let payload = decode_segment(state.signing_input().split('.').nth(1).expect("payload"));
         assert_eq!(
             payload["vc"]["type"],
             serde_json::json!(["VerifiableCredential", "OpenBadgeCredential"])
@@ -481,7 +481,10 @@ mod tests {
         assert!(assemble_sd_jwt_impl(&mut prepared, &malformed).is_err());
         assert!(prepared.inner.is_some());
 
-        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 64]);
+        let mut valid_signature = [0u8; 64];
+        valid_signature[31] = 1;
+        valid_signature[63] = 1;
+        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
         assert!(assemble_sd_jwt_impl(&mut prepared, &valid_width).is_ok());
         assert!(prepared.inner.is_none());
     }
@@ -507,7 +510,10 @@ mod tests {
         assert!(assemble_jwt_vc_impl(&mut prepared, &malformed).is_err());
         assert!(prepared.inner.is_some());
 
-        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 64]);
+        let mut valid_signature = [0u8; 64];
+        valid_signature[31] = 1;
+        valid_signature[63] = 1;
+        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
         assert!(assemble_jwt_vc_impl(&mut prepared, &valid_width).is_ok());
         assert!(prepared.inner.is_none());
     }

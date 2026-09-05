@@ -1,10 +1,48 @@
 # KMS-only Rust build surface plan
 
-Status: approved implementation plan; implementation not started
+Status: implementation and corrective security review in progress
 
 Recorded: 2026-09-05
 
 Scope owner: ElevenID
+
+## Recovery checkpoint (2026-09-05)
+
+The positive-capability/KMS-only implementation is substantially complete and
+is being corrected under independent maintainer/security review. The current
+ElevenID-only review branch is `codex/kms-only-build-surface`; marty-core PR 308
+tracks it. No upstream pull request or push has been made.
+
+Committed marty-core implementation currently ends at `18fa9cc`, with the
+corrective review batch still uncommitted so it can be tested as one coherent
+Marty checkpoint. Published ElevenID fork heads on
+`codex/kms-only-build-surface` are isomdl
+`dfd0ca68405b43f5afed0ad218b3c282cc21be61`, sd-jwt
+`18049cadba138d9b67a21f753f67c9238cdeae0a`, and Longfellow
+`2b55340a2e9930e6699a647501225bae3e5468b0`. The public-fork corrections are
+split into small DCO-signed commits. Marty now pins the exact isomdl and sd-jwt
+heads; no upstream branch was pushed and no upstream pull request was opened.
+
+Review corrections already implemented include fail-closed remote signature
+assembly (including VDS-NC), private-DTC signing feature gates, wallet feature
+closure, real native-ZKP CI setup, exact fork pins, circuit-ID authentication,
+bounded Longfellow archive decompression, declared-size archive allocation,
+native C ABI exception containment, strict verifier timestamps, proof parsing
+without copies, and explicit output-allocation failure handling. ZK verifier
+state is now opaque, one-use, and bound internally to the canonical OID4VP
+SessionTranscript, an exact registered issuer-signed boolean predicate, the
+trust-resolved issuer key and docType, and a retained verifier-selected time.
+
+Remaining release blockers are: complete the native Longfellow CI run; rerun
+all strict role matrices and unchanged third-party compliance suites; record
+dependency/build/final-artifact measurements; commit the Marty correction
+batch without the unrelated tracked bytecode; replace the current Marty PR
+history with a DCO-clean branch based on the current target; and obtain a clean
+independent maintainer/security re-review before merge.
+
+Security disclosure remains deferred by instruction. Candidate confidential,
+anonymous upstream reports are the inherited Longfellow circuit/archive and
+native allocation/DoS boundaries after ElevenID corrections are validated.
 
 ## Purpose
 
@@ -362,7 +400,9 @@ The goal is complete only when:
 ## Disclosure assessment
 
 The investigation found an ElevenID architectural enforcement gap and excess
-compiled capability, not an upstream remotely exploitable vulnerability. No
-upstream disclosure is currently required. Reassess if implementation uncovers
-a reachable key exposure, unintended local-signing fallback, secret logging, or
-cryptographic protocol flaw.
+compiled capability. It also found inherited Longfellow native input/resource
+boundaries (archive allocation, exception containment, timestamp validation,
+and circuit-generation allocation handling) that remain candidates for a
+confidential upstream security report after ElevenID validation. Disclosure is
+deferred by instruction and must use an anonymous secure channel; no upstream
+issue, push, or pull request is authorized by this plan.

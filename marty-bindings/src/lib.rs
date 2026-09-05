@@ -1427,8 +1427,8 @@ fn oid4vci_prepare_credential(
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
             // signing_input is already a string (header_b64.payload_b64)
             Ok((
-                prepared.signing_input,
-                prepared.credential_id,
+                prepared.signing_input().to_owned(),
+                prepared.credential_id().to_owned(),
                 "jwt_vc_json".to_string(),
             ))
         }
@@ -1443,8 +1443,8 @@ fn oid4vci_prepare_credential(
             let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc(&signer, &cred_claims)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
             Ok((
-                prepared.signing_input,
-                prepared.credential_id,
+                prepared.signing_input().to_owned(),
+                prepared.credential_id().to_owned(),
                 "vds_nc".to_string(),
             ))
         }
@@ -1508,7 +1508,8 @@ fn oid4vci_assemble_credential(
                 signing_input.to_string(),
                 credential_id.to_string(),
                 algorithm,
-            );
+            )
+            .map_err(to_pyerr)?;
             let signed = marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(prepared, &signature)
                 .map_err(to_pyerr)?;
             match signed {
@@ -1524,7 +1525,8 @@ fn oid4vci_assemble_credential(
                 credential_id.to_string(),
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
-            let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc(prepared, &signature);
+            let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc(&prepared, &signature)
+                .map_err(to_pyerr)?;
             match signed {
                 SignedCredential::VdsNc {
                     barcode_data,
@@ -2406,7 +2408,7 @@ fn vds_nc_sign_profile(
         &credential_claims,
     )
     .map_err(vds_nc_error)?;
-    let message = prepared.signing_input.as_bytes();
+    let message = prepared.signing_payload();
     let signature = match algorithm {
         "ES256" | "ES384" | "EdDSA" => {
             let (raw_private_key, _) =
@@ -2425,7 +2427,8 @@ fn vds_nc_sign_profile(
         _ => unreachable!(),
     }
     .map_err(vds_nc_error)?;
-    let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc_raw(prepared, &signature);
+    let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc_raw(&prepared, &signature)
+        .map_err(vds_nc_error)?;
     let (barcode_data, credential_id) = match signed {
         SignedCredential::VdsNc {
             barcode_data,
