@@ -24,6 +24,7 @@
 use der::Decode;
 use serde::{Deserialize, Serialize};
 use x509_cert::Certificate;
+use zeroize::Zeroize;
 
 use crate::{CryptoError, CryptoResult};
 
@@ -32,7 +33,6 @@ use crate::{CryptoError, CryptoResult};
 // ============================================================================
 
 /// Parsed PKCS#12 data.
-#[derive(Debug, Clone)]
 pub struct Pkcs12Data {
     /// DER-encoded private key (PKCS#8 format)
     pub private_key_der: Vec<u8>,
@@ -46,6 +46,26 @@ pub struct Pkcs12Data {
     pub certificate_chain: Vec<Vec<u8>>,
     /// Friendly name (if present in the PKCS#12)
     pub friendly_name: Option<String>,
+}
+
+impl std::fmt::Debug for Pkcs12Data {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Pkcs12Data")
+            .field("private_key_der", &"[REDACTED]")
+            .field("private_key_algorithm", &self.private_key_algorithm)
+            .field("certificate_der_len", &self.certificate_der.len())
+            .field("certificate_subject", &self.certificate_subject)
+            .field("certificate_chain_len", &self.certificate_chain.len())
+            .field("friendly_name", &self.friendly_name)
+            .finish()
+    }
+}
+
+impl Drop for Pkcs12Data {
+    fn drop(&mut self) {
+        self.private_key_der.zeroize();
+    }
 }
 
 /// Private key algorithm types.
@@ -306,6 +326,24 @@ mod tests {
         assert_eq!(PrivateKeyAlgorithm::Rsa.to_string(), "RSA");
         assert_eq!(PrivateKeyAlgorithm::EcdsaP256.to_string(), "ECDSA-P256");
         assert_eq!(PrivateKeyAlgorithm::Ed25519.to_string(), "Ed25519");
+    }
+
+    #[test]
+    fn debug_redacts_private_key_material() {
+        let key = b"private-key-sentinel".to_vec();
+        let parsed = Pkcs12Data {
+            private_key_der: key.clone(),
+            private_key_algorithm: PrivateKeyAlgorithm::Ed25519,
+            certificate_der: vec![1, 2, 3],
+            certificate_subject: Some("issuer".to_string()),
+            certificate_chain: Vec::new(),
+            friendly_name: None,
+        };
+
+        let diagnostic = format!("{parsed:?}");
+        assert!(diagnostic.contains("[REDACTED]"));
+        assert!(!diagnostic.contains("private-key-sentinel"));
+        assert!(!diagnostic.contains(&format!("{:?}", key)));
     }
 
     #[test]

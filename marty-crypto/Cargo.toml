@@ -133,6 +133,7 @@ serde_json = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+zeroize = { workspace = true }
 
 # Hex encoding (for fingerprints)
 hex = "0.4"

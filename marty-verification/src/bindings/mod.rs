@@ -3002,8 +3002,7 @@ fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult
 // ============================================================================
 
 /// Parsed PKCS#12 data.
-#[pyclass(name = "Pkcs12Data", from_py_object)]
-#[derive(Clone)]
+#[pyclass(name = "Pkcs12Data")]
 pub struct PyPkcs12Data {
     #[pyo3(get)]
     pub private_key_algorithm: String,
@@ -3016,6 +3015,12 @@ pub struct PyPkcs12Data {
     private_key_der: Vec<u8>,
     certificate_der: Vec<u8>,
     certificate_chain: Vec<Vec<u8>>,
+}
+
+impl Drop for PyPkcs12Data {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.private_key_der);
+    }
 }
 
 #[pymethods]
@@ -3085,14 +3090,14 @@ impl PyPkcs12Data {
 ///     Pkcs12Data with private key, certificate, and chain
 #[pyfunction]
 fn pkcs12_parse(data: &[u8], password: &str) -> PyResult<PyPkcs12Data> {
-    let parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(to_pyerr)?;
+    let mut parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(to_pyerr)?;
 
     Ok(PyPkcs12Data {
         private_key_algorithm: parsed.private_key_algorithm.to_string(),
         certificate_subject: parsed.certificate_subject,
         friendly_name: parsed.friendly_name,
         chain_length: parsed.certificate_chain.len() + 1,
-        private_key_der: parsed.private_key_der,
+        private_key_der: std::mem::take(&mut parsed.private_key_der),
         certificate_der: parsed.certificate_der,
         certificate_chain: parsed.certificate_chain,
     })

@@ -4149,6 +4149,7 @@ dependencies = [
  "x25519-dalek",
  "x509-cert",
  "x509-ocsp",
+ "zeroize",
  "zkryptium",
 ]
 
