@@ -961,6 +961,7 @@ impl Drop for PaceCompatibilityHandshake {
 impl PaceCompatibilityHandshake {
     pub fn begin(password: &str, encrypted_nonce: &[u8]) -> VerificationResult<Self> {
         let (private_key, _) = marty_crypto::ecdh::p256_generate_keypair();
+        let private_key = zeroize::Zeroizing::new(private_key);
         Self::begin_with_private_key(password, encrypted_nonce, &private_key)
     }
 
@@ -974,27 +975,29 @@ impl PaceCompatibilityHandshake {
                 "PACE encrypted nonce must be non-empty and block aligned",
             ));
         }
-        let private_key: [u8; 32] = private_key
+        let private_key: &[u8; 32] = private_key
             .try_into()
             .map_err(|_| VerificationError::internal("PACE P-256 private key must be 32 bytes"))?;
-        let key = derive_compatibility_pace_password_key(password)?;
+        let key = zeroize::Zeroizing::new(derive_compatibility_pace_password_key(password)?);
+        let expanded_key = zeroize::Zeroizing::new(extend_to_24_bytes(&key));
         let iv = icao_3des_cbc_iv();
-        let decrypted =
-            marty_crypto::des::tdes_cbc_decrypt(&extend_to_24_bytes(&key), &iv, encrypted_nonce)
-                .map_err(|error| {
-                    VerificationError::internal(format!("PACE nonce decrypt: {error}"))
-                })?;
-        let nonce = iso7816_unpad(&decrypted)?;
+        let decrypted = zeroize::Zeroizing::new(
+            marty_crypto::des::tdes_cbc_decrypt(&expanded_key[..], &iv, encrypted_nonce).map_err(
+                |error| VerificationError::internal(format!("PACE nonce decrypt: {error}")),
+            )?,
+        );
+        let nonce = zeroize::Zeroizing::new(iso7816_unpad(&decrypted)?);
         if nonce.is_empty() {
             return Err(VerificationError::internal(
                 "PACE decrypted nonce must not be empty",
             ));
         }
-        let key_pair = marty_crypto::ecdh::P256KeyPair::from_secret_key(&private_key)?;
+        let key_pair = marty_crypto::ecdh::P256KeyPair::from_secret_key(private_key)?;
+        let public_key = key_pair.public_key_uncompressed();
         Ok(Self {
-            private_key,
-            public_key: key_pair.public_key_uncompressed(),
-            nonce,
+            private_key: *private_key,
+            public_key,
+            nonce: nonce.to_vec(),
         })
     }
 
@@ -1031,34 +1034,40 @@ impl PaceCompatibilityHandshake {
 pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationResult<[u8; 16]> {
     use sha1::{Digest, Sha1};
 
-    let seed = if password.chars().all(|value| value.is_ascii_digit())
-        && (6..=10).contains(&password.len())
-    {
-        Sha1::digest(password.as_bytes())[..16].to_vec()
-    } else {
-        let parsed = crate::mrz::parser::parse_mrz_string(password).map_err(|error| {
-            VerificationError::internal(format!("Unsupported PACE password format: {error}"))
-        })?;
-        let normalized: String = parsed
-            .document_number
-            .to_ascii_uppercase()
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .take(9)
-            .collect();
-        let document_number = format!("{normalized:<9}").replace(' ', "<");
-        let information = format!(
-            "{}{}{}{}{}{}",
-            document_number,
-            mrz_check_digit(document_number.as_bytes()) as char,
-            parsed.date_of_birth,
-            mrz_check_digit(parsed.date_of_birth.as_bytes()) as char,
-            parsed.date_of_expiry,
-            mrz_check_digit(parsed.date_of_expiry.as_bytes()) as char,
-        );
-        Sha1::digest(information.as_bytes())[..16].to_vec()
-    };
-    let mut key: [u8; 16] = seed.try_into().expect("SHA-1 prefix is 16 bytes");
+    let seed = zeroize::Zeroizing::new(
+        if password.chars().all(|value| value.is_ascii_digit())
+            && (6..=10).contains(&password.len())
+        {
+            Sha1::digest(password.as_bytes())[..16].to_vec()
+        } else {
+            let parsed = crate::mrz::parser::parse_mrz_string(password).map_err(|error| {
+                VerificationError::internal(format!("Unsupported PACE password format: {error}"))
+            })?;
+            let normalized = zeroize::Zeroizing::new(
+                parsed
+                    .document_number
+                    .to_ascii_uppercase()
+                    .chars()
+                    .filter(char::is_ascii_alphanumeric)
+                    .take(9)
+                    .collect::<String>(),
+            );
+            let document_number =
+                zeroize::Zeroizing::new(format!("{:<9}", normalized.as_str()).replace(' ', "<"));
+            let information = zeroize::Zeroizing::new(format!(
+                "{}{}{}{}{}{}",
+                document_number.as_str(),
+                mrz_check_digit(document_number.as_bytes()) as char,
+                parsed.date_of_birth,
+                mrz_check_digit(parsed.date_of_birth.as_bytes()) as char,
+                parsed.date_of_expiry,
+                mrz_check_digit(parsed.date_of_expiry.as_bytes()) as char,
+            ));
+            Sha1::digest(information.as_bytes())[..16].to_vec()
+        },
+    );
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&seed);
     adjust_des_parity(&mut key);
     Ok(key)
 }
