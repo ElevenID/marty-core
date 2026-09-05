@@ -3,6 +3,10 @@
 //! The Master List is a CMS-signed document containing CSCA certificates
 //! that are trusted by ICAO PKD subscribers.
 
+use super::cms_structure::{
+    exactly_one_signer, find_signer_certificate, signer_id_matches, single_signed_attribute_value,
+    DocumentKind,
+};
 use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
 use der::{Decode, Encode, Sequence};
@@ -96,9 +100,9 @@ pub fn parse_master_list(cms_der: &[u8]) -> VerificationResult<MasterList> {
     let (version, certificates) = parse_certificate_sequence(cert_list_bytes)?;
 
     let signer_certificate = if let Some(certs) = &signed_data.certificates {
-        let signer = exactly_one_signer(&signed_data)?;
+        let signer = exactly_one_signer(&signed_data, DocumentKind::MasterList)?;
         Some(
-            find_embedded_signer_certificate(certs, &signer.sid)?
+            find_signer_certificate(certs, &signer.sid, DocumentKind::MasterList)?
                 .tbs_certificate
                 .subject
                 .to_string(),
@@ -193,93 +197,6 @@ fn format_time(time: &x509_cert::time::Time) -> String {
     time.to_string()
 }
 
-fn exactly_one_signer(
-    signed_data: &SignedData,
-) -> VerificationResult<&cms::signed_data::SignerInfo> {
-    let mut signers = signed_data.signer_infos.0.iter();
-    let signer = signers.next().ok_or_else(|| {
-        VerificationError::der_error("Master List has no signer information".to_string())
-    })?;
-    if signers.next().is_some() {
-        return Err(VerificationError::der_error(
-            "Master List must contain exactly one signer".to_string(),
-        ));
-    }
-    Ok(signer)
-}
-
-fn signer_id_matches(
-    cert: &Certificate,
-    signer_id: &cms::signed_data::SignerIdentifier,
-) -> VerificationResult<bool> {
-    use cms::signed_data::SignerIdentifier;
-    use x509_cert::ext::pkix::SubjectKeyIdentifier;
-
-    match signer_id {
-        SignerIdentifier::IssuerAndSerialNumber(id) => Ok(cert.tbs_certificate.issuer == id.issuer
-            && cert.tbs_certificate.serial_number == id.serial_number),
-        SignerIdentifier::SubjectKeyIdentifier(expected) => Ok(cert
-            .tbs_certificate
-            .get::<SubjectKeyIdentifier>()
-            .map_err(|e| {
-                VerificationError::der_error(format!(
-                    "Invalid signer SubjectKeyIdentifier extension: {e}"
-                ))
-            })?
-            .is_some_and(|(_, actual)| actual == *expected)),
-    }
-}
-
-fn find_embedded_signer_certificate<'a>(
-    certs: &'a cms::signed_data::CertificateSet,
-    signer_id: &cms::signed_data::SignerIdentifier,
-) -> VerificationResult<&'a Certificate> {
-    let mut matched = None;
-    for choice in certs.0.iter() {
-        let cms::cert::CertificateChoices::Certificate(cert) = choice else {
-            continue;
-        };
-        if signer_id_matches(cert, signer_id)? {
-            if matched.is_some() {
-                return Err(VerificationError::der_error(
-                    "Multiple embedded certificates match the Master List signer".to_string(),
-                ));
-            }
-            matched = Some(cert);
-        }
-    }
-    matched.ok_or_else(|| {
-        VerificationError::der_error(
-            "No embedded certificate matches the Master List signer".to_string(),
-        )
-    })
-}
-
-fn single_signed_attribute_value(
-    attributes: &x509_cert::attr::Attributes,
-    oid: der::asn1::ObjectIdentifier,
-) -> VerificationResult<&der::Any> {
-    let mut matching = attributes.iter().filter(|attribute| attribute.oid == oid);
-    let attribute = matching.next().ok_or_else(|| {
-        VerificationError::der_error(format!("Missing required CMS signed attribute {oid}"))
-    })?;
-    if matching.next().is_some() {
-        return Err(VerificationError::der_error(format!(
-            "Duplicate CMS signed attribute {oid}"
-        )));
-    }
-    let mut values = attribute.values.iter();
-    let value = values.next().ok_or_else(|| {
-        VerificationError::der_error(format!("CMS signed attribute {oid} has no value"))
-    })?;
-    if values.next().is_some() {
-        return Err(VerificationError::der_error(format!(
-            "CMS signed attribute {oid} has multiple values"
-        )));
-    }
-    Ok(value)
-}
-
 /// Verify Master List signature.
 ///
 /// # Arguments
@@ -308,7 +225,7 @@ pub fn verify_master_list_signature(
     let signer_cert = Certificate::from_der(signer_cert_der).map_err(|e| {
         VerificationError::der_error(format!("Failed to parse signer certificate: {}", e))
     })?;
-    let signer_info = exactly_one_signer(&signed_data)?;
+    let signer_info = exactly_one_signer(&signed_data, DocumentKind::MasterList)?;
     if !signer_id_matches(&signer_cert, &signer_info.sid)? {
         return Err(VerificationError::der_error(
             "Supplied certificate does not match the Master List signer identifier".to_string(),
