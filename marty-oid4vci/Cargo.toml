@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "OID4VCI/OID4VP protocol engine for Marty digital identity platform"
 keywords = ["oid4vci", "oid4vp", "openid4vc", "verifiable-credentials", "issuance"]
 categories = ["authentication", "cryptography"]
+autotests = false
 
 [lib]
 name = "marty_oid4vci"
@@ -18,8 +19,10 @@ crate-type = ["rlib"]
 default = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
 issuer = []         # OID4VCI credential issuer support
 verifier = []       # OID4VP verifiable presentation support
-wallet = ["dep:reqwest", "dep:tokio"]  # OID4VCI/OID4VP wallet/holder support
+wallet = ["dep:reqwest", "dep:tokio", "holder-key-operations"]  # OID4VCI/OID4VP wallet/holder support
 lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
+holder-key-operations = [] # Wallet/authenticator-owned holder and device keys
+local-key-operations = ["holder-key-operations"] # Development/migration-only issuer private keys
 jwt_vc_json = []    # W3C VC-JWT credential format
 sd_jwt = []         # IETF SD-JWT credential format
 mso_mdoc = []       # ISO 18013-5 mDoc credential format
@@ -89,3 +92,62 @@ harness = false
 [[bench]]
 name = "es256_signing_batch"
 harness = false
+
+# Tests that exercise legacy in-process issuer keys run only when that explicit
+# compatibility capability is enabled. The test sources, including conformance
+# cases, remain unchanged.
+[[test]]
+name = "byok_prepare_assemble"
+path = "tests/byok_prepare_assemble.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "dif_pex_conformance"
+path = "tests/dif_pex_conformance.rs"
+
+[[test]]
+name = "es256_signing_matrix"
+path = "tests/es256_signing_matrix.rs"
+
+[[test]]
+name = "issuer_key_algorithm_binding"
+path = "tests/issuer_key_algorithm_binding.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "mdoc_x5chain_conformance"
+path = "tests/mdoc_x5chain_conformance.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "oid4vp_conformance"
+path = "tests/oid4vp_conformance.rs"
+
+[[test]]
+name = "scalar_sd_jwt_holder_binding"
+path = "tests/scalar_sd_jwt_holder_binding.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_managed_claim_boundaries"
+path = "tests/sd_jwt_managed_claim_boundaries.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_structural_boundaries"
+path = "tests/sd_jwt_structural_boundaries.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_vc_conformance"
+path = "tests/sd_jwt_vc_conformance.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_wallet_verified_presentation"
+path = "tests/sd_jwt_wallet_verified_presentation.rs"
+required-features = ["local-key-operations", "wallet"]
+
+[[test]]
+name = "signing_payload_semantics"
+path = "tests/signing_payload_semantics.rs"

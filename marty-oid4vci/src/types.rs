@@ -492,6 +492,7 @@ pub struct LogoEntry {
 // =============================================================================
 
 /// Issuer key material for credential signing.
+#[cfg(any(test, feature = "local-key-operations"))]
 #[derive(Clone)]
 pub struct IssuerKey {
     /// The DID or key identifier for the issuer.
@@ -502,20 +503,24 @@ pub struct IssuerKey {
     pub algorithm: SigningAlgorithm,
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 const REDACTED_ISSUER_KEY_DIAGNOSTIC: &str = "IssuerKey([redacted])";
 
+#[cfg(any(test, feature = "local-key-operations"))]
 impl std::fmt::Debug for IssuerKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
     }
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 impl std::fmt::Display for IssuerKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
     }
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 impl IssuerKey {
     /// Returns the `kid` value to use in JWT/SD-JWT headers.
     ///
@@ -914,7 +919,8 @@ pub struct IssuerConfig {
     pub issuer_name: String,
     /// Credential types this issuer supports.
     pub credential_types: Vec<CredentialTypeConfig>,
-    /// The issuer's signing key.
+    /// Development/migration-only in-process issuer signing key.
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub issuer_key: IssuerKey,
     /// Token endpoint URL (if different from default).
     pub token_endpoint: Option<String>,

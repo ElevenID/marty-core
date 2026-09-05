@@ -12,16 +12,24 @@
 //!   SD JSONPath selectors: `$.credentialSubject.claim_name`
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+#[cfg(any(test, feature = "local-key-operations"))]
 use p256::pkcs8::EncodePrivateKey;
 use rand::RngCore;
+#[cfg(any(test, feature = "local-key-operations"))]
 use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
-use sd_jwt_rs::{SDJWTIssuer, SDJWTSerializationFormat};
+#[cfg(any(test, feature = "local-key-operations"))]
+use sd_jwt_rs::SDJWTIssuer;
+use sd_jwt_rs::SDJWTSerializationFormat;
 use sha2::{Digest, Sha256};
-use ssi_jwk::{Params, JWK};
+#[cfg(any(test, feature = "local-key-operations"))]
+use ssi_jwk::Params;
+use ssi_jwk::JWK;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::CredentialSigner;
-use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
 
 const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
 const SD_JWT_DISCLOSURE_STAGE_FAILURE: &str = "SD-JWT disclosure preparation failed";
@@ -167,6 +175,7 @@ fn checked_sd_jwt_vcdm_expiration(
 ///
 /// Claims listed in `selective_disclosure_claims` will be made selectively
 /// disclosable. All other claims are included directly in the JWT payload.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_sd_jwt(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -178,6 +187,7 @@ pub fn sign_sd_jwt(
 ///
 /// Scalar local issuance uses this boundary after proof verification. Direct
 /// format issuance remains unbound because it has no proof context.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn sign_sd_jwt_with_holder_public_jwk(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -193,6 +203,7 @@ fn holder_public_jwk_confirmation(holder_jwk: &JWK) -> Oid4vciResult<serde_json:
     }))
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_sd_jwt_with_optional_confirmation(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -1232,6 +1243,7 @@ fn validate_key_binding_jwt(
 ///
 /// SD-JWT compact format: `<JWS>~[disclosure~...]`
 /// JWS: `<base64url-header>.<base64url-payload>.<signature>`
+#[cfg(any(test, feature = "local-key-operations"))]
 fn inject_kid_header(
     sd_jwt: &str,
     kid: &str,
@@ -1285,6 +1297,7 @@ fn inject_kid_header(
 }
 
 /// Get the signing algorithm string and the JWK-derived EncodingKey for sd-jwt-rs.
+#[cfg(any(test, feature = "local-key-operations"))]
 fn get_sd_jwt_signing_params(
     jwk: &JWK,
     issuer_key: &IssuerKey,

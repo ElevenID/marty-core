@@ -8,12 +8,17 @@
 //! VCDM v2  — `https://www.w3.org/ns/credentials/v2`,  `validFrom`,    `validUntil`
 
 use base64::Engine;
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_jwk::JWK;
 use std::collections::HashMap;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::{validate_issuer_key_algorithm, CredentialSigner};
-use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::signer::validate_issuer_key_algorithm;
+use crate::signer::CredentialSigner;
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 const JWT_VC_EXPIRATION_OUT_OF_RANGE: &str = "JWT-VC expiration is out of range";
@@ -41,6 +46,7 @@ fn checked_jwt_vc_expiration(
 /// Branches on `claims.credential_payload_format`:
 /// - `W3cVcdmV2JwtVc` → VCDM v2 (`validFrom`/`validUntil`, v2 `@context`)
 /// - any other value  → VCDM v1 (`issuanceDate`/`expirationDate`, v1 `@context`)
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_jwt_vc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -626,6 +632,7 @@ pub fn assemble_jwt_vc(prepared: PreparedJwtVc, signature: &[u8]) -> SignedCrede
 }
 
 /// Encode header and payload as base64url, sign, and produce a compact JWT.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn encode_and_sign_jwt(
     jwk: &JWK,
     header: &serde_json::Value,

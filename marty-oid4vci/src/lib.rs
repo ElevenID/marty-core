@@ -49,6 +49,7 @@
 pub mod discovery;
 pub mod error;
 pub mod formats;
+#[cfg(any(test, feature = "holder-key-operations"))]
 pub mod holder_key;
 pub mod issuer;
 pub mod jose;
@@ -72,10 +73,28 @@ pub mod wallet;
 mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
+#[cfg(feature = "holder-key-operations")]
 pub use holder_key::{
     generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
     DidJwkHolderKeyMaterial,
 };
+
+#[cfg(not(feature = "local-key-operations"))]
+/// The default issuer surface cannot construct or use an in-process issuer key.
+///
+/// ```compile_fail
+/// use marty_oid4vci::types::{IssuerKey, SigningAlgorithm};
+/// let _ = IssuerKey {
+///     issuer_id: "did:example:issuer".into(),
+///     jwk_json: "{\"d\":\"private\"}".into(),
+///     algorithm: SigningAlgorithm::ES256,
+/// };
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::issuer::generate_p256_jwk_pair;
+/// ```
+mod local_issuer_key_compile_boundary {}
 pub use issuer::{generate_pkce_challenge_s256, verify_pkce_s256, IssuanceEngine};
 pub use signer::CredentialSigner;
 pub use types::{

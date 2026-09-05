@@ -7,11 +7,15 @@
 //! `IssuerKey` implements `CredentialSigner` directly, preserving full backward
 //! compatibility — existing call-sites that pass `&IssuerKey` work unchanged.
 
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_crypto::AlgorithmInstance;
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_jwk::{Params, JWK};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::types::{IssuerKey, SigningAlgorithm};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::SigningAlgorithm;
 
 // =============================================================================
 // CredentialSigner trait
@@ -54,6 +58,7 @@ pub trait CredentialSigner: std::fmt::Debug + Send + Sync {
 // IssuerKey as CredentialSigner (backward compat)
 // =============================================================================
 
+#[cfg(any(test, feature = "local-key-operations"))]
 impl CredentialSigner for IssuerKey {
     fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
         let jwk: JWK = serde_json::from_str(&self.jwk_json)
@@ -141,6 +146,7 @@ pub(crate) fn validate_declared_jwk_algorithm(
     Ok(())
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> {
     let (key_type, curve) = match &jwk.params {
         Params::OKP(params) => (Some("OKP"), Some(params.curve.as_str())),
@@ -157,6 +163,7 @@ fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> {
 }
 
 /// Bind an [`IssuerKey`]'s public algorithm hint to its actual JWK family.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn validate_issuer_key_algorithm(
     issuer_key: &IssuerKey,
     jwk: &JWK,
@@ -172,6 +179,7 @@ pub(crate) fn validate_issuer_key_algorithm(
 }
 
 /// Sign a message using a JWK's private key.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
     let secret_key = extract_secret_key(jwk)?;
     let alg_instance = get_algorithm_instance(jwk)?;
@@ -182,6 +190,7 @@ pub(crate) fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>>
 }
 
 /// Extract a [`SecretKey`](ssi_crypto::SecretKey) from a JWK for signing.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::SecretKey> {
     match &jwk.params {
         Params::OKP(params) => {
@@ -213,6 +222,7 @@ pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::SecretK
 }
 
 /// Get the [`AlgorithmInstance`] for a JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn get_algorithm_instance(jwk: &JWK) -> Oid4vciResult<AlgorithmInstance> {
     match &jwk.params {
         Params::OKP(_) => Ok(AlgorithmInstance::EdDSA),

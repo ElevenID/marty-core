@@ -21,7 +21,9 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::CredentialSigner;
-use crate::types::{CredentialClaims, IssuerKey, SignedCredential};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, SignedCredential};
 
 // ── CBOR tag number for `encoded-cbor` (tag 24, RFC 8949 §3.4.5.1) ──
 // Used for tagged CBOR byte strings inside IssuerSignedItem and issuerAuth.
@@ -46,6 +48,7 @@ const MDOC_RS256_UNSUPPORTED: &str = "RS256 is not supported for mDoc COSE signi
 ///   - `issuerAuth`: COSE_Sign1(MobileSecurityObject)
 ///
 /// The resulting credential is base64url-encoded for transport.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -58,6 +61,7 @@ pub fn sign_mdoc(
 /// This remains crate-private so remote/BYOK flows continue through explicit
 /// prepare/sign/assemble APIs while scalar local issuance preserves the legacy
 /// issuer-key parsing, configured-algorithm, and signing error boundaries.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn sign_mdoc_with_device_key(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -66,6 +70,7 @@ pub(crate) fn sign_mdoc_with_device_key(
     sign_mdoc_with_optional_device_key(issuer_key, claims, Some(holder_public_jwk))
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_mdoc_with_optional_device_key(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -811,6 +816,7 @@ fn encode_validated_issuer_signed_item_bytes(
     Ok((issuer_signed_item_bytes, encoded_issuer_signed_item_bytes))
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn plan_mdoc_digests<'a>(
     credential_id: u64,
     issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
@@ -1191,6 +1197,7 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
 /// Sign a payload with COSE_Sign1 using the issuer's JWK.
 ///
 /// Returns the serialized COSE_Sign1 bytes.
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_cose_sign1(
     payload: &[u8],
     jwk: &ssi_jwk::JWK,

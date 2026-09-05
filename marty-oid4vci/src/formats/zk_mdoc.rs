@@ -1,7 +1,9 @@
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::formats::mdoc;
 use crate::signer::CredentialSigner;
-use crate::types::{CredentialClaims, IssuerKey, SignedCredential, ZkPredicateBinding};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, SignedCredential, ZkPredicateBinding};
 
 /// The ZK proof protocol identifier used by Longfellow/Ligero.
 pub const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
@@ -21,6 +23,7 @@ pub const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
 /// predicates the wallet may prove from it (e.g. `["age_over_18", "age_over_21"]`).
 /// Adding new predicates requires only updating the binding at issuance time
 /// and ensuring `marty-zkp` implements the matching circuit.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_zk_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,

@@ -538,6 +538,7 @@ fn _dummy_engine() -> marty_oid4vci::IssuanceEngine {
         credential_issuer_url: String::new(),
         issuer_name: String::new(),
         credential_types: vec![],
+        #[cfg(any(test, feature = "local-key-operations"))]
         issuer_key: IssuerKey {
             issuer_id: String::new(),
             jwk_json: String::new(),

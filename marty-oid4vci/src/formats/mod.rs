@@ -16,13 +16,16 @@ pub mod zk_mdoc;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::CredentialSigner;
-use crate::types::{CredentialClaims, CredentialFormat, IssuerKey, SignedCredential};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, CredentialFormat, SignedCredential};
 
 /// Sign a credential in the requested format.
 ///
 /// This is the central dispatch function that routes to the correct signing
 /// pipeline based on the `format` parameter. All format-specific complexity
 /// is handled internally.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_credential(
     format: &CredentialFormat,
     issuer_key: &IssuerKey,

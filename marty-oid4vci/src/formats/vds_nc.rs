@@ -6,7 +6,9 @@
 
 use crate::error::Oid4vciResult;
 use crate::signer::CredentialSigner;
-use crate::types::{CredentialClaims, IssuerKey, SignedCredential};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, SignedCredential};
 
 use base64::Engine;
 
@@ -38,6 +40,7 @@ impl PreparedVdsNc {
 }
 
 /// Sign a VDS-NC credential using a local issuer key.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_vds_nc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
