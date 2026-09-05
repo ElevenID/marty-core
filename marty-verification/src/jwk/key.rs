@@ -9,6 +9,17 @@ use std::collections::HashMap;
 
 use crate::{VerificationError, VerificationResult};
 
+#[cfg(not(any(test, feature = "local-key-operations")))]
+fn reject_private_key_material<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde_json::Value::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "private JWK material is disabled in this build",
+    ))
+}
+
 // ============================================================================
 // JWK Structure
 // ============================================================================
@@ -65,8 +76,16 @@ pub struct Jwk {
     pub y: Option<String>,
 
     /// D value (EC/OKP private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub d: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) d: Option<String>,
 
     // RSA parameters
     /// Modulus (RSA)
@@ -78,33 +97,89 @@ pub struct Jwk {
     pub e: Option<String>,
 
     /// Private exponent (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rsa_d: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) rsa_d: Option<String>,
 
     /// First prime factor (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub p: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) p: Option<String>,
 
     /// Second prime factor (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) q: Option<String>,
 
     /// First factor CRT exponent (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dp: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) dp: Option<String>,
 
     /// Second factor CRT exponent (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dq: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) dq: Option<String>,
 
     /// First CRT coefficient (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qi: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) qi: Option<String>,
 
     // Symmetric key
     /// Key value (symmetric key, base64url-encoded)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub k: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) k: Option<String>,
 
     /// Additional parameters
     #[serde(flatten)]

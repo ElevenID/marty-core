@@ -30,6 +30,11 @@ pub use public_key::*;
 /// # use marty_verification::jwk::{Jwk, JwsHeader};
 /// let _ = marty_verification::jwk::jws_sign(&JwsHeader::new("ES256"), b"payload", &Jwk::default());
 /// ```
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let _ = Jwk { d: Some("secret".into()), ..Jwk::default() };
+/// ```
 pub struct VerificationOnly;
 
 #[cfg(not(feature = "ephemeral-session-keys"))]
