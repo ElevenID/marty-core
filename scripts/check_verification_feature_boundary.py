@@ -125,6 +125,12 @@ def check_repository(root: Path = ROOT) -> None:
         "released bindings must exclude authority-only crypto features",
     )
     require(
+        "symmetric" not in bindings_crypto["features"]
+        and "marty-crypto/symmetric"
+        in bindings["features"]["ephemeral-session-keys"],
+        "aggregate bindings must compile symmetric secret APIs only on explicit request",
+    )
+    require(
         bindings["dependencies"]["marty-verification"].get("default-features") is False,
         "released bindings must select verification capabilities explicitly",
     )

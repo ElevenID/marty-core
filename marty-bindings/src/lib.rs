@@ -1851,6 +1851,7 @@ fn verify_presentation_structure(
 // ============================================================================
 
 /// AES-256-CBC encrypt with PKCS7 padding.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 fn aes_256_cbc_encrypt<'py>(
     py: Python<'py>,
@@ -1864,6 +1865,7 @@ fn aes_256_cbc_encrypt<'py>(
 }
 
 /// AES-256-CBC decrypt with PKCS7 padding.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 fn aes_256_cbc_decrypt<'py>(
     py: Python<'py>,
@@ -1877,6 +1879,7 @@ fn aes_256_cbc_decrypt<'py>(
 }
 
 /// HMAC-SHA256.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 fn hmac_sha256<'py>(py: Python<'py>, key: &[u8], data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let mac = marty_crypto::symmetric::hmac_sha256(key, data)
@@ -2746,8 +2749,11 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_presentation_structure, m)?)?;
 
     // Symmetric Crypto (EAC secure messaging)
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(aes_256_cbc_encrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(aes_256_cbc_decrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(hmac_sha256, m)?)?;
     m.add_function(wrap_pyfunction!(sha256, m)?)?;
 
@@ -2809,6 +2815,15 @@ mod tests {
                     !module.hasattr(private_operation).unwrap(),
                     "{private_operation}"
                 );
+            }
+
+            #[cfg(not(feature = "ephemeral-session-keys"))]
+            for session_operation in [
+                "aes_256_cbc_encrypt",
+                "aes_256_cbc_decrypt",
+                "hmac_sha256",
+            ] {
+                assert!(!module.hasattr(session_operation).unwrap(), "{session_operation}");
             }
 
             for remote_signing_operation in [

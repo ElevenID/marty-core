@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 marty-python-adapters = { path = "../marty-python-adapters" }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "hashing", "public-key-codec", "rsa-verification", "symmetric"] }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "hashing", "public-key-codec", "rsa-verification"] }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", features = ["lti"] }
 marty-didcomm = { version = "0.1.5", path = "../marty-didcomm" }
 marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013", default-features = false, features = ["verifier"] }
@@ -60,7 +60,7 @@ extension-module = ["pyo3/extension-module"]
 kms-only = ["marty-crypto/kms-only", "marty-oid4vci/kms-only", "marty-verification/kms-only"]
 # Short-lived HAIP/OID4VP response-encryption keys. This is intentionally
 # independent from development-only credential issuer keys.
-ephemeral-session-keys = ["marty-verification/ephemeral-session-keys"]
+ephemeral-session-keys = ["marty-crypto/symmetric", "marty-verification/ephemeral-session-keys"]
 # Development and offline migration utilities that place private key material
 # in this process. Production issuer builds must leave this disabled and use
 # the prepare -> remote sign -> assemble APIs.
