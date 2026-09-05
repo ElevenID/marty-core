@@ -65,11 +65,14 @@ pub mod metadata;
 pub mod oidc;
 pub mod presentation_request;
 pub mod proof;
+#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 pub mod remote_credential;
 pub mod signer;
+#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 pub mod signing_batch;
 pub mod siop;
 pub mod types;
+#[cfg(feature = "verifier")]
 pub mod verifier;
 pub mod wallet_input;
 
@@ -101,6 +104,16 @@ pub use holder_key::{
 /// use marty_oid4vci::issuer::generate_p256_jwk_pair;
 /// ```
 mod local_issuer_key_compile_boundary {}
+
+#[cfg(not(feature = "holder-key-operations"))]
+/// Issuer and verifier artifacts cannot create holder proof keys.
+///
+/// ```compile_fail
+/// use marty_oid4vci::proof::create_proof_jwt;
+/// let _ = create_proof_jwt("https://issuer.example", "nonce");
+/// ```
+mod holder_key_compile_boundary {}
+
 pub use issuer::{generate_pkce_challenge_s256, verify_pkce_s256, IssuanceEngine};
 pub use signer::CredentialSigner;
 pub use types::{
@@ -108,6 +121,7 @@ pub use types::{
     AuthorizationRequest, AuthorizationResponse, AuthorizationSession, CodeChallengeMethod,
     CredentialFormat, GrantType, ZkPredicateBinding,
 };
+#[cfg(feature = "verifier")]
 pub use verifier::VerificationEngine;
 pub use wallet_input::{
     classify_wallet_input, normalize_credential_offer_uri, ClassifiedWalletInput, WalletInputKind,

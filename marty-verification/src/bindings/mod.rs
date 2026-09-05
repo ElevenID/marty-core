@@ -578,7 +578,10 @@ mod kms_surface_tests {
             "tdes_cbc_encrypt",
             "tdes_cbc_decrypt",
         ] {
-            assert!(module.hasattr(name).unwrap(), "missing session export: {name}");
+            assert!(
+                module.hasattr(name).unwrap(),
+                "missing session export: {name}"
+            );
         }
 
         #[cfg(not(feature = "ephemeral-session-keys"))]

@@ -43,6 +43,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 
+const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
+
 // ── OID4VP Types ─────────────────────────────────────────────────────
 
 /// Presentation definition (OID4VP §5.1).
@@ -408,7 +410,7 @@ impl VerificationEngine {
                     optional: Some(false),
                     zk_predicate: Some(ZkPredicateRequest {
                         predicate: predicate.to_string(),
-                        proof_type: crate::formats::zk_mdoc::ZK_PROOF_TYPE_LIGERO.to_string(),
+                        proof_type: ZK_PROOF_TYPE_LIGERO.to_string(),
                         nonce: nonce.to_string(),
                     }),
                 }],
@@ -473,7 +475,7 @@ impl VerificationEngine {
             return ZkVerificationResult {
                 valid: false,
                 predicate: challenge.predicate.clone(),
-                proof_type: crate::formats::zk_mdoc::ZK_PROOF_TYPE_LIGERO.to_string(),
+                proof_type: ZK_PROOF_TYPE_LIGERO.to_string(),
                 error: Some("ZK challenge has expired".into()),
             };
         }
@@ -482,19 +484,19 @@ impl VerificationEngine {
             Ok(true) => ZkVerificationResult {
                 valid: true,
                 predicate: challenge.predicate.clone(),
-                proof_type: crate::formats::zk_mdoc::ZK_PROOF_TYPE_LIGERO.to_string(),
+                proof_type: ZK_PROOF_TYPE_LIGERO.to_string(),
                 error: None,
             },
             Ok(false) => ZkVerificationResult {
                 valid: false,
                 predicate: challenge.predicate.clone(),
-                proof_type: crate::formats::zk_mdoc::ZK_PROOF_TYPE_LIGERO.to_string(),
+                proof_type: ZK_PROOF_TYPE_LIGERO.to_string(),
                 error: Some("ZK proof verification returned false".into()),
             },
             Err(e) => ZkVerificationResult {
                 valid: false,
                 predicate: challenge.predicate.clone(),
-                proof_type: crate::formats::zk_mdoc::ZK_PROOF_TYPE_LIGERO.to_string(),
+                proof_type: ZK_PROOF_TYPE_LIGERO.to_string(),
                 error: Some(format!("ZK verification error: {}", e)),
             },
         }

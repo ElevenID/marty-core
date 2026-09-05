@@ -12,9 +12,9 @@
 //! and broader curve/algorithm support remain explicit product capabilities to
 //! implement and test rather than implied claims of this wrapper.
 
-use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PublicKeyAgreement};
 #[cfg(feature = "local-key-operations")]
 use affinidi_messaging_didcomm::crypto::key_agreement::PrivateKeyAgreement;
+use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PublicKeyAgreement};
 #[cfg(feature = "local-key-operations")]
 use affinidi_messaging_didcomm::jwe::decrypt;
 use affinidi_messaging_didcomm::jwe::encrypt;

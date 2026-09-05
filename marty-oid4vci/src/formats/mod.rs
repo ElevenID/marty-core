@@ -8,10 +8,13 @@
 //! - `vds_nc` → ICAO 9303 VDS-NC barcode payload
 
 pub mod jwt_vc;
+#[cfg(feature = "mso_mdoc")]
 pub mod mdoc;
+#[cfg(feature = "sd_jwt")]
 pub mod sd_jwt;
 pub mod vds_nc;
 pub mod vds_nc_profile;
+#[cfg(feature = "zk_mdoc")]
 pub mod zk_mdoc;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
@@ -33,10 +36,18 @@ pub fn sign_credential(
 ) -> Oid4vciResult<SignedCredential> {
     match format {
         CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc(issuer_key, claims),
+        #[cfg(feature = "sd_jwt")]
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt(issuer_key, claims),
+        #[cfg(feature = "mso_mdoc")]
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc(issuer_key, claims),
+        #[cfg(feature = "zk_mdoc")]
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc(issuer_key, claims),
         CredentialFormat::VdsNc => vds_nc::sign_vds_nc(issuer_key, claims),
+        #[allow(unreachable_patterns)]
+        _ => Err(Oid4vciError::UnsupportedFormat(format!(
+            "Credential format '{}' is not compiled into this build",
+            format.as_str()
+        ))),
     }
 }
 
@@ -51,10 +62,18 @@ pub fn sign_credential_with_signer(
 ) -> Oid4vciResult<SignedCredential> {
     match format {
         CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc_with_signer(signer, claims),
+        #[cfg(feature = "sd_jwt")]
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt_with_signer(signer, claims),
+        #[cfg(feature = "mso_mdoc")]
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc_with_signer(signer, claims),
+        #[cfg(feature = "zk_mdoc")]
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc_with_signer(signer, claims),
         CredentialFormat::VdsNc => vds_nc::sign_vds_nc_with_signer(signer, claims),
+        #[allow(unreachable_patterns)]
+        _ => Err(Oid4vciError::UnsupportedFormat(format!(
+            "Credential format '{}' is not compiled into this build",
+            format.as_str()
+        ))),
     }
 }
 
