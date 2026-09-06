@@ -9,37 +9,70 @@ rust-version.workspace = true
 description = "OID4VCI/OID4VP protocol engine for Marty digital identity platform"
 keywords = ["oid4vci", "oid4vp", "openid4vc", "verifiable-credentials", "issuance"]
 categories = ["authentication", "cryptography"]
+autotests = false
 
 [lib]
 name = "marty_oid4vci"
 crate-type = ["rlib"]
 
 [features]
-default = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
-issuer = []         # OID4VCI credential issuer support
-verifier = []       # OID4VP verifiable presentation support
-wallet = ["dep:reqwest", "dep:tokio"]  # OID4VCI/OID4VP wallet/holder support
+default = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
+kms-only = ["marty-crypto/kms-only"] # Reject in-process credential/holder private-key capabilities
+issuer = [
+    "isomdl?/issuer-planning",
+    "sd-jwt-rs?/issuer-planning",
+    "p256/ecdsa-core",
+    "p384/ecdsa-core",
+] # OID4VCI issuer preparation and remote-signature assembly support
+verifier = ["jsonwebtoken/rust_crypto", "sd-jwt-rs?/verifier"] # OID4VP signature verification support
+wallet = ["dep:reqwest", "dep:tokio", "holder-key-operations", "sd_jwt", "sd-jwt-rs/holder", "verifier"]  # OID4VCI/OID4VP wallet/holder support
 lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
+holder-key-operations = [
+    "ed25519-dalek/pkcs8",
+    "ed25519-dalek/rand_core",
+    "jsonwebtoken/rust_crypto",
+    "p256/ecdsa",
+    "p256/pkcs8",
+] # Wallet/authenticator-owned holder and device keys
+local-key-operations = [
+    "issuer",
+    "holder-key-operations",
+    "jwt_vc_json",
+    "sd_jwt",
+    "mso_mdoc",
+    "isomdl/issuer-local-signing",
+    "sd-jwt-rs/issuer-local",
+    "dep:ssi-crypto",
+    "ssi-crypto/ed25519",
+    "ssi-crypto/secp256r1",
+    "ssi-crypto/secp256k1",
+    "ssi-crypto/secp384r1",
+    "ssi-jwk/ed25519",
+    "ssi-jwk/secp256r1",
+    "ssi-jwk/secp256k1",
+    "ssi-jwk/secp384r1",
+] # Development/migration-only issuer private keys
 jwt_vc_json = []    # W3C VC-JWT credential format
-sd_jwt = []         # IETF SD-JWT credential format
-mso_mdoc = []       # ISO 18013-5 mDoc credential format
-zk_mdoc = ["dep:marty-zkp"]  # ZK proof support for mDoc (Longfellow/Ligero)
+sd_jwt = ["dep:sd-jwt-rs"] # IETF SD-JWT format; role features select implementation capabilities
+mso_mdoc = ["dep:isomdl"] # ISO 18013-5 mDoc format; issuer adds planning
+zk_mdoc = ["dep:marty-zkp", "dep:marty-iso18013"]  # ZK proof verification; issuance additionally selects issuer,mso_mdoc
 
 [dependencies]
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa"] }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification"] }
+marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013", default-features = false, features = ["verifier"], optional = true }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Crypto and signing
-ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
-ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "2799b5fff011342aefe8ac5e9653d5b084e2a20c" }
-jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+ssi-crypto = { version = "0.2.1", default-features = false, optional = true }
+ssi-jwk = { version = "0.4.0", default-features = false }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "302984b4431c331408c58c62f23a07339394c986", default-features = false, optional = true }
+jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
-isomdl = "0.2"
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -47,8 +80,10 @@ ciborium = { workspace = true }
 base64 = { workspace = true }
 
 # Key management
-p256 = { workspace = true }
-p384 = { workspace = true }
+p256 = { workspace = true, features = ["arithmetic"] }
+p384 = { workspace = true, features = ["arithmetic"] }
+k256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa-core", "sha256"] }
+curve25519-dalek = "4.1"
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
@@ -73,6 +108,10 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "302984b4431c331408c58c62f23a07339394c986" }
+ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
+ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 
 [[bench]]
 name = "mdoc_issuance"
@@ -89,3 +128,73 @@ harness = false
 [[bench]]
 name = "es256_signing_batch"
 harness = false
+
+# Tests that exercise legacy in-process issuer keys run only when that explicit
+# compatibility capability is enabled. The test sources, including conformance
+# cases, remain unchanged.
+[[test]]
+name = "byok_prepare_assemble"
+path = "tests/byok_prepare_assemble.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "dif_pex_conformance"
+path = "tests/dif_pex_conformance.rs"
+required-features = ["verifier"]
+
+[[test]]
+name = "es256_signing_matrix"
+path = "tests/es256_signing_matrix.rs"
+
+[[test]]
+name = "issuer_key_algorithm_binding"
+path = "tests/issuer_key_algorithm_binding.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "mdoc_x5chain_conformance"
+path = "tests/mdoc_x5chain_conformance.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "oid4vp_conformance"
+path = "tests/oid4vp_conformance.rs"
+required-features = ["verifier"]
+
+[[test]]
+name = "scalar_sd_jwt_holder_binding"
+path = "tests/scalar_sd_jwt_holder_binding.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_managed_claim_boundaries"
+path = "tests/sd_jwt_managed_claim_boundaries.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_structural_boundaries"
+path = "tests/sd_jwt_structural_boundaries.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_vc_conformance"
+path = "tests/sd_jwt_vc_conformance.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "sd_jwt_wallet_verified_presentation"
+path = "tests/sd_jwt_wallet_verified_presentation.rs"
+required-features = ["local-key-operations", "wallet"]
+
+[[test]]
+name = "signing_payload_semantics"
+path = "tests/signing_payload_semantics.rs"
+
+[[test]]
+name = "issuance_input"
+path = "tests/issuance_input.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "benchmark_support"
+path = "tests/benchmark_support.rs"

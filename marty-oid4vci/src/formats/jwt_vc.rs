@@ -7,15 +7,26 @@
 //! VCDM v1  — `https://www.w3.org/2018/credentials/v1`, `issuanceDate`, `expirationDate`
 //! VCDM v2  — `https://www.w3.org/ns/credentials/v2`,  `validFrom`,    `validUntil`
 
+#[cfg(any(test, feature = "issuer"))]
 use base64::Engine;
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_jwk::JWK;
+#[cfg(any(test, feature = "issuer"))]
 use std::collections::HashMap;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::{validate_issuer_key_algorithm, CredentialSigner};
-use crate::types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::signer::validate_issuer_key_algorithm;
+#[cfg(any(test, feature = "issuer"))]
+use crate::signer::{validate_remote_signature, CredentialSigner};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+#[cfg(any(test, feature = "issuer"))]
+use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
 
+#[cfg(any(test, feature = "issuer"))]
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(any(test, feature = "issuer"))]
 const JWT_VC_EXPIRATION_OUT_OF_RANGE: &str = "JWT-VC expiration is out of range";
 
 /// Canonical 1EdTech Open Badges 3.0 JSON-LD context.
@@ -23,6 +34,7 @@ pub const OPEN_BADGES_V3_CONTEXT: &str = "https://purl.imsglobal.org/spec/ob/v3p
 /// Canonical W3C credential type for an Open Badges 3.0 credential.
 pub const OPEN_BADGES_V3_CREDENTIAL_TYPE: &str = "OpenBadgeCredential";
 
+#[cfg(any(test, feature = "issuer"))]
 /// Compute an optional JWT VC expiration without overflowing the time range.
 pub fn checked_jwt_vc_expiration(
     issued_at: chrono::DateTime<chrono::Utc>,
@@ -42,6 +54,7 @@ pub fn checked_jwt_vc_expiration(
 /// Branches on `claims.credential_payload_format`:
 /// - `W3cVcdmV2JwtVc` → VCDM v2 (`validFrom`/`validUntil`, v2 `@context`)
 /// - any other value  → VCDM v1 (`issuanceDate`/`expirationDate`, v1 `@context`)
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_jwt_vc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -143,35 +156,111 @@ pub fn sign_jwt_vc(
 ///
 /// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
 /// For remote/KMS signing, pass a custom `CredentialSigner` implementation.
+#[cfg(any(test, feature = "issuer"))]
 pub fn sign_jwt_vc_with_signer(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
     let prepared = prepare_jwt_vc(signer, claims)?;
     let signature = signer.sign(prepared.signing_input.as_bytes())?;
-    Ok(assemble_jwt_vc(prepared, &signature))
+    assemble_jwt_vc(prepared, &signature)
 }
 
 /// Intermediate state between JWT-VC preparation and signing.
 ///
 /// Returned by [`prepare_jwt_vc()`] — the caller signs `signing_input`
 /// and passes the result to [`assemble_jwt_vc()`].
+#[cfg(any(test, feature = "issuer"))]
 pub struct PreparedJwtVc {
     /// The base64url-encoded `header.payload` string to be signed.
-    pub signing_input: String,
+    signing_input: String,
     /// The credential ID (urn:uuid:...) assigned during preparation.
-    pub credential_id: String,
+    credential_id: String,
+    algorithm: crate::types::SigningAlgorithm,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 impl PreparedJwtVc {
+    /// Reconstruct prepared JWT state for compatibility adapters that retain
+    /// the exact signing input and algorithm out of process.
+    #[cfg(feature = "local-key-operations")]
+    pub fn from_signing_input(
+        signing_input: String,
+        credential_id: String,
+        algorithm: crate::types::SigningAlgorithm,
+    ) -> Oid4vciResult<Self> {
+        let mut segments = signing_input.split('.');
+        let header_segment = segments.next().ok_or_else(|| {
+            Oid4vciError::SigningError("JWT signing input is missing its protected header".into())
+        })?;
+        if segments.next().is_none() || segments.next().is_some() {
+            return Err(Oid4vciError::SigningError(
+                "JWT signing input must contain exactly header.payload".into(),
+            ));
+        }
+        let header: serde_json::Value =
+            serde_json::from_slice(&B64.decode(header_segment).map_err(|error| {
+                Oid4vciError::SigningError(format!("invalid protected JWT header: {error}"))
+            })?)?;
+        let protected_algorithm = match header.get("alg").and_then(serde_json::Value::as_str) {
+            Some("ES256") => crate::types::SigningAlgorithm::ES256,
+            Some("ES384") => crate::types::SigningAlgorithm::ES384,
+            Some("ES256K") => crate::types::SigningAlgorithm::ES256K,
+            Some("EdDSA") => crate::types::SigningAlgorithm::EdDSA,
+            Some("RS256") => crate::types::SigningAlgorithm::RS256,
+            _ => {
+                return Err(Oid4vciError::SigningError(
+                    "unsupported or missing protected JWT algorithm".into(),
+                ))
+            }
+        };
+        if protected_algorithm != algorithm {
+            return Err(Oid4vciError::SigningError(
+                "requested algorithm does not match protected JWT header".into(),
+            ));
+        }
+        Ok(Self {
+            signing_input,
+            credential_id,
+            algorithm,
+        })
+    }
+
     /// Borrow the complete base64url-encoded `header.payload` signing input.
     pub fn signing_payload(&self) -> &[u8] {
         self.signing_input.as_bytes()
     }
+
+    pub fn signing_input(&self) -> &str {
+        &self.signing_input
+    }
+
+    pub fn credential_id(&self) -> &str {
+        &self.credential_id
+    }
+
+    /// Algorithm the remote signer must use.
+    pub fn algorithm(&self) -> crate::types::SigningAlgorithm {
+        self.algorithm
+    }
+
+    /// Check a remote signer's raw output without consuming prepared state.
+    pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
+        validate_remote_signature(self.algorithm, signature)
+    }
 }
+
+#[cfg(all(feature = "issuer", not(feature = "local-key-operations")))]
+/// Marker documenting that KMS issuer builds cannot reconstruct prepared JWT state.
+///
+/// ```compile_fail
+/// let _ = marty_oid4vci::formats::jwt_vc::PreparedJwtVc::from_signing_input;
+/// ```
+pub struct NoPreparedJwtVcReconstruction;
 
 /// Optional protocol fields used by external issuer profiles.
 #[derive(Debug, Clone)]
+#[cfg(any(test, feature = "issuer"))]
 pub struct JwtVcPreparationOptions {
     /// Preserve a service-assigned credential identifier when supplied.
     pub credential_id: Option<String>,
@@ -188,6 +277,7 @@ pub struct JwtVcPreparationOptions {
     pub include_nbf: bool,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 impl Default for JwtVcPreparationOptions {
     fn default() -> Self {
         Self {
@@ -208,6 +298,7 @@ impl Default for JwtVcPreparationOptions {
 /// application claims are preserved on the `AchievementSubject`; only the
 /// legacy `achievement_name` and `achievement_description` aliases are moved
 /// into the required OB3 `achievement` object.
+#[cfg(any(test, feature = "issuer"))]
 pub fn apply_open_badge_v3_profile(
     claims: &mut CredentialClaims,
     options: &mut JwtVcPreparationOptions,
@@ -414,6 +505,7 @@ fn require_string_array_member(
     }
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn take_optional_non_empty_string(
     object: &mut serde_json::Map<String, serde_json::Value>,
     field: &str,
@@ -430,6 +522,7 @@ fn take_optional_non_empty_string(
     })
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn merge_required_string(
     object: &mut serde_json::Map<String, serde_json::Value>,
     field: &str,
@@ -456,6 +549,7 @@ fn merge_required_string(
     Ok(())
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn ensure_required_type(
     object: &mut serde_json::Map<String, serde_json::Value>,
     required: &str,
@@ -493,6 +587,7 @@ fn ensure_required_type(
 ///
 /// Returns a [`PreparedJwtVc`] whose `signing_input` field contains the
 /// base64url-encoded `header.payload` ready for an external signer.
+#[cfg(any(test, feature = "issuer"))]
 pub fn prepare_jwt_vc(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -501,6 +596,7 @@ pub fn prepare_jwt_vc(
 }
 
 /// Prepare a JWT-VC with explicit remote-issuer protocol fields.
+#[cfg(any(test, feature = "issuer"))]
 pub fn prepare_jwt_vc_with_options(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -611,6 +707,7 @@ pub fn prepare_jwt_vc_with_options(
     Ok(PreparedJwtVc {
         signing_input: format!("{}.{}", header_b64, payload_b64),
         credential_id,
+        algorithm: signer.algorithm(),
     })
 }
 
@@ -618,14 +715,20 @@ pub fn prepare_jwt_vc_with_options(
 ///
 /// The `signature` must be the raw bytes produced by signing
 /// `prepared.signing_input` with the issuer's key.
-pub fn assemble_jwt_vc(prepared: PreparedJwtVc, signature: &[u8]) -> SignedCredential {
+#[cfg(any(test, feature = "issuer"))]
+pub fn assemble_jwt_vc(
+    prepared: PreparedJwtVc,
+    signature: &[u8],
+) -> Oid4vciResult<SignedCredential> {
+    prepared.validate_signature(signature)?;
     let signature_b64 = B64.encode(signature);
-    SignedCredential::JwtVcJson {
+    Ok(SignedCredential::JwtVcJson {
         jwt: format!("{}.{}", prepared.signing_input, signature_b64),
         credential_id: prepared.credential_id,
-    }
+    })
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) use crate::jose::sign_compact_jwt as encode_and_sign_jwt;
 
 #[cfg(test)]

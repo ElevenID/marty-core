@@ -1,6 +1,12 @@
 //! Python adapters for chain.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+
+// ============================================================================
+// Certificate Chain Validation Bindings
+// ============================================================================
 
 /// Python wrapper for validation configuration.
 ///

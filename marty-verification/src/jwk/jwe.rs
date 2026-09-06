@@ -6,21 +6,52 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::{base64url_decode, base64url_encode, Jwk};
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+use super::base64url_encode;
+use super::{base64url_decode, Jwk};
 use crate::{VerificationError, VerificationResult};
 
 const MAX_JWE_PLAINTEXT_BYTES: usize = 1024 * 1024;
-const MAX_COMPACT_JWE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_PROTECTED_HEADER_BYTES: usize = 16 * 1024;
+/// Largest compact JWE accepted by public parsing and decryption APIs.
+pub const MAX_COMPACT_JWE_BYTES: usize = 2 * 1024 * 1024;
+/// Largest decoded protected header accepted by JWE APIs.
+pub const MAX_PROTECTED_HEADER_BYTES: usize = 16 * 1024;
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 const MAX_PARTY_INFO_BYTES: usize = 1024;
 const AES_GCM_IV_BYTES: usize = 12;
 const AES_GCM_TAG_BYTES: usize = 16;
+const MODELED_JWE_HEADER_MEMBERS: [&str; 11] = [
+    "alg", "enc", "typ", "cty", "kid", "jku", "jwk", "epk", "apu", "apv", "zip",
+];
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HaipSessionPrivateJwk {
+    kty: String,
+    crv: String,
+    x: String,
+    y: String,
+    d: zeroize::Zeroizing<String>,
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    alg: Option<String>,
+    #[serde(rename = "use", default)]
+    use_: Option<String>,
+}
 
 // ============================================================================
 // JWE Header
 // ============================================================================
 
 /// JWE Header (JOSE Header).
+///
+/// ```compile_fail
+/// use marty_verification::jwk::JweHeader;
+/// let mut header = JweHeader::new("ECDH-ES", "A256GCM");
+/// header.additional.insert("epk".into(), serde_json::json!({"d":"secret"}));
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JweHeader {
     /// Algorithm for encrypting the CEK
@@ -68,7 +99,7 @@ pub struct JweHeader {
     /// Unsupported protected parameters are retained so strict operations can
     /// reject them instead of silently ignoring security-relevant headers.
     #[serde(flatten)]
-    pub additional: HashMap<String, serde_json::Value>,
+    additional: HashMap<String, serde_json::Value>,
 }
 
 impl JweHeader {
@@ -90,6 +121,28 @@ impl JweHeader {
         }
     }
 
+    /// Return unsupported extension parameters without permitting unchecked mutation.
+    pub fn additional(&self) -> &HashMap<String, serde_json::Value> {
+        &self.additional
+    }
+
+    /// Add unsupported extension parameters after rejecting modeled-name collisions.
+    pub fn with_additional(
+        mut self,
+        additional: HashMap<String, serde_json::Value>,
+    ) -> VerificationResult<Self> {
+        if let Some(member) = MODELED_JWE_HEADER_MEMBERS
+            .iter()
+            .find(|member| additional.contains_key(**member))
+        {
+            return Err(VerificationError::internal(format!(
+                "JWE extension collides with modeled header member '{member}'"
+            )));
+        }
+        self.additional = additional;
+        Ok(self)
+    }
+
     /// Serialize to JSON bytes.
     pub fn to_json(&self) -> VerificationResult<Vec<u8>> {
         serde_json::to_vec(self).map_err(|e| {
@@ -99,7 +152,14 @@ impl JweHeader {
 
     /// Parse from JSON bytes.
     pub fn from_json(json: &[u8]) -> VerificationResult<Self> {
-        serde_json::from_slice(json)
+        if json.len() > MAX_PROTECTED_HEADER_BYTES {
+            return Err(VerificationError::internal(
+                "JWE protected header exceeds the configured size limit".to_string(),
+            ));
+        }
+        let value = crate::key_attestation::parse_unique_json(json)
+            .map_err(|e| VerificationError::internal(format!("JWE header parsing failed: {e}")))?;
+        serde_json::from_value(value)
             .map_err(|e| VerificationError::internal(format!("JWE header parsing failed: {}", e)))
     }
 }
@@ -118,6 +178,7 @@ fn content_encryption_key_len(enc: &str) -> VerificationResult<usize> {
     }
 }
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn decode_party_info(value: Option<&str>) -> VerificationResult<Vec<u8>> {
     let decoded = match value {
         Some(value) => base64url_decode(value)?,
@@ -136,8 +197,26 @@ fn decode_party_info(value: Option<&str>) -> VerificationResult<Vec<u8>> {
 /// The public and private JSON values carry the same random key identifier and
 /// JOSE encryption metadata. Callers may wrap the private JSON with their KMS,
 /// but key generation and JWK construction remain canonical Rust behavior.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(String, String)> {
-    let mut private = super::generate_ec_p256()?;
+    use elliptic_curve::sec1::ToEncodedPoint;
+    use p256::SecretKey;
+    use rand::rngs::OsRng;
+
+    let secret = SecretKey::random(&mut OsRng);
+    let point = secret.public_key().to_encoded_point(false);
+    let mut private = Jwk {
+        kty: "EC".to_string(),
+        crv: Some("P-256".to_string()),
+        x: Some(base64url_encode(point.x().ok_or_else(|| {
+            VerificationError::internal("HAIP P-256 key has no x coordinate".to_string())
+        })?)),
+        y: Some(base64url_encode(point.y().ok_or_else(|| {
+            VerificationError::internal("HAIP P-256 key has no y coordinate".to_string())
+        })?)),
+        d: Some(base64url_encode(&secret.to_bytes())),
+        ..Default::default()
+    };
     private.kid = Some(format!("oid4vp-haip-{}", uuid::Uuid::new_v4()));
     private.alg = Some("ECDH-ES".to_string());
     private.use_ = Some("enc".to_string());
@@ -146,6 +225,24 @@ pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(Strin
 }
 
 /// Decrypt a bounded ECDH-ES compact JWE using a P-256 private JWK JSON value.
+///
+/// The private JSON is accepted only by this session-scoped HAIP entry point;
+/// generic [`Jwk::from_json`] remains public-key-only without
+/// `local-key-operations`.
+///
+/// ```
+/// use marty_verification::jwk::{
+///     decrypt_haip_response, generate_haip_response_encryption_jwk_pair,
+///     jwe_encrypt_direct, Jwk,
+/// };
+///
+/// let (public_json, private_json) = generate_haip_response_encryption_jwk_pair()?;
+/// let public = Jwk::from_json(&public_json)?;
+/// let encrypted = jwe_encrypt_direct(b"session payload", &public, "A256GCM")?;
+/// assert_eq!(decrypt_haip_response(&encrypted, &private_json)?, b"session payload");
+/// # Ok::<(), Box<marty_verification::VerificationError>>(())
+/// ```
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn decrypt_haip_response(
     compact_jwe: &str,
     private_jwk_json: &str,
@@ -155,37 +252,63 @@ pub fn decrypt_haip_response(
             "HAIP private JWK exceeds the configured size limit".to_string(),
         ));
     }
-    let private_jwk = Jwk::from_json(private_jwk_json)?;
-    if private_jwk.kty != "EC"
-        || private_jwk.crv.as_deref() != Some("P-256")
-        || private_jwk.d.is_none()
-        || private_jwk
-            .alg
-            .as_deref()
-            .is_some_and(|alg| alg != "ECDH-ES")
-        || private_jwk
-            .use_
-            .as_deref()
-            .is_some_and(|usage| usage != "enc")
+    let private_key = parse_haip_session_private_jwk(private_jwk_json)?;
+    validate_haip_response_header(compact_jwe)?;
+    jwe_decrypt_with_p256_session_key(compact_jwe, &private_key)
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn parse_haip_session_private_jwk(private_jwk_json: &str) -> VerificationResult<p256::SecretKey> {
+    use elliptic_curve::sec1::ToEncodedPoint;
+    use p256::SecretKey;
+
+    let raw: HaipSessionPrivateJwk = serde_json::from_str(private_jwk_json).map_err(|_| {
+        VerificationError::internal("HAIP private session JWK is invalid".to_string())
+    })?;
+    if raw.kty != "EC"
+        || raw.crv != "P-256"
+        || raw.alg.as_deref().is_some_and(|alg| alg != "ECDH-ES")
+        || raw.use_.as_deref().is_some_and(|usage| usage != "enc")
+        || raw.kid.as_deref().is_some_and(str::is_empty)
     {
         return Err(VerificationError::internal(
             "HAIP decryption requires a private P-256 ECDH-ES encryption JWK".to_string(),
         ));
     }
-    validate_haip_response_header(compact_jwe)?;
-    jwe_decrypt(compact_jwe, &private_jwk)
+
+    let secret_bytes = zeroize::Zeroizing::new(base64url_decode(raw.d.as_str())?);
+    let supplied_x = base64url_decode(&raw.x)?;
+    let supplied_y = base64url_decode(&raw.y)?;
+    if secret_bytes.len() != 32 || supplied_x.len() != 32 || supplied_y.len() != 32 {
+        return Err(VerificationError::internal(
+            "HAIP P-256 private and public parameters must be 32 bytes".to_string(),
+        ));
+    }
+    let secret = SecretKey::from_slice(&secret_bytes).map_err(|_| {
+        VerificationError::internal("HAIP P-256 private key is invalid".to_string())
+    })?;
+    let expected = secret.public_key().to_encoded_point(false);
+    if expected.x().is_none_or(|x| x.as_slice() != supplied_x)
+        || expected.y().is_none_or(|y| y.as_slice() != supplied_y)
+    {
+        return Err(VerificationError::internal(
+            "HAIP P-256 private and public JWK parameters do not match".to_string(),
+        ));
+    }
+
+    Ok(secret)
 }
 
 /// Validate a HAIP compact-JWE envelope before a caller performs KMS unwrap.
 pub fn validate_haip_response_header(compact_jwe: &str) -> VerificationResult<JweHeader> {
-    let (_, header, _) = parse_and_validate_direct_jwe(compact_jwe)?;
-    let epk = header.epk.as_ref().ok_or_else(|| {
+    let parsed = parse_and_validate_direct_jwe(compact_jwe)?;
+    let epk = parsed.header.epk.as_ref().ok_or_else(|| {
         VerificationError::internal("ECDH-ES requires ephemeral public key (epk)".to_string())
     })?;
     if epk.kty != "EC"
         || epk.crv.as_deref() != Some("P-256")
         || epk.is_private()
-        || !epk.extra.is_empty()
+        || !epk.extensions().is_empty()
     {
         return Err(VerificationError::internal(
             "HAIP ECDH-ES requires a public P-256 epk".to_string(),
@@ -211,7 +334,7 @@ pub fn validate_haip_response_header(compact_jwe: &str) -> VerificationResult<Jw
     point.extend_from_slice(&y);
     p256::PublicKey::from_sec1_bytes(&point)
         .map_err(|error| VerificationError::internal(format!("Invalid HAIP epk: {error}")))?;
-    Ok(header)
+    Ok(parsed.header)
 }
 
 /// Create a JWE in compact serialization format using direct key agreement.
@@ -227,6 +350,7 @@ pub fn validate_haip_response_header(compact_jwe: &str) -> VerificationResult<Jw
 /// # Returns
 ///
 /// JWE in compact serialization format.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub fn jwe_encrypt_direct(
     plaintext: &[u8],
     recipient_key: &Jwk,
@@ -320,10 +444,16 @@ pub fn jwe_encrypt_direct(
                 ))
             }
         };
+    let shared_secret = zeroize::Zeroizing::new(shared_secret);
 
     // RFC 7518 section 4.6.2: direct ECDH-ES uses `enc` as AlgorithmID.
-    let cek =
-        marty_crypto::kdf::concat_kdf_sha256(&shared_secret, enc.as_bytes(), &[], &[], key_len)?;
+    let cek = zeroize::Zeroizing::new(marty_crypto::kdf::concat_kdf_sha256(
+        &shared_secret,
+        enc.as_bytes(),
+        &[],
+        &[],
+        key_len,
+    )?);
 
     // Generate IV
     use rand::RngCore;
@@ -372,25 +502,72 @@ pub fn jwe_encrypt_direct(
     ))
 }
 
-fn parse_and_validate_direct_jwe(jwe: &str) -> VerificationResult<(Vec<&str>, JweHeader, usize)> {
+const fn max_jwe_encoded_len(decoded_len: usize) -> usize {
+    decoded_len.saturating_add(2) / 3 * 4
+}
+
+fn split_compact_jwe(jwe: &str) -> VerificationResult<[&str; 5]> {
     if jwe.is_empty() || jwe.len() > MAX_COMPACT_JWE_BYTES {
         return Err(VerificationError::internal(
             "JWE is empty or exceeds the configured size limit".to_string(),
         ));
     }
-    let parts: Vec<&str> = jwe.split('.').collect();
-    if parts.len() != 5 {
+    let mut segments = jwe.splitn(6, '.');
+    let protected = segments.next().unwrap_or_default();
+    let encrypted_key = segments.next();
+    let iv = segments.next();
+    let ciphertext = segments.next();
+    let tag = segments.next();
+    if encrypted_key.is_none()
+        || iv.is_none()
+        || ciphertext.is_none()
+        || tag.is_none()
+        || segments.next().is_some()
+    {
         return Err(VerificationError::internal(
             "Invalid JWE format: expected 5 parts".to_string(),
         ));
     }
-    if parts[0].is_empty() || parts[0].len() > MAX_PROTECTED_HEADER_BYTES {
+    let parts = [
+        protected,
+        encrypted_key.expect("checked"),
+        iv.expect("checked"),
+        ciphertext.expect("checked"),
+        tag.expect("checked"),
+    ];
+    if parts[0].is_empty()
+        || parts[0].len() > max_jwe_encoded_len(MAX_PROTECTED_HEADER_BYTES)
+        || parts[2].len() > max_jwe_encoded_len(AES_GCM_IV_BYTES)
+        || parts[3].len() > max_jwe_encoded_len(MAX_JWE_PLAINTEXT_BYTES)
+        || parts[4].len() > max_jwe_encoded_len(AES_GCM_TAG_BYTES)
+    {
         return Err(VerificationError::internal(
-            "JWE protected header is empty or exceeds the configured size limit".to_string(),
+            "JWE segment is empty or exceeds the configured size limit".to_string(),
         ));
     }
+    Ok(parts)
+}
 
-    let header = JweHeader::from_json(&base64url_decode(parts[0])?)?;
+#[cfg_attr(not(any(test, feature = "ephemeral-session-keys")), allow(dead_code))]
+struct ParsedDirectJwe<'a> {
+    parts: [&'a str; 5],
+    header: JweHeader,
+    key_len: usize,
+    iv: Vec<u8>,
+    ciphertext: Vec<u8>,
+    tag: Vec<u8>,
+}
+
+fn parse_and_validate_direct_jwe(jwe: &str) -> VerificationResult<ParsedDirectJwe<'_>> {
+    let parts = split_compact_jwe(jwe)?;
+
+    let header_bytes = base64url_decode(parts[0])?;
+    if header_bytes.len() > MAX_PROTECTED_HEADER_BYTES {
+        return Err(VerificationError::internal(
+            "JWE protected header exceeds the configured size limit".to_string(),
+        ));
+    }
+    let header = JweHeader::from_json(&header_bytes)?;
     if header.alg != "ECDH-ES" {
         return Err(VerificationError::internal(format!(
             "Unsupported key algorithm: {}",
@@ -420,14 +597,24 @@ fn parse_and_validate_direct_jwe(jwe: &str) -> VerificationResult<(Vec<&str>, Jw
 
     let key_len = content_encryption_key_len(&header.enc)?;
     let iv = base64url_decode(parts[2])?;
-    let _ciphertext = base64url_decode(parts[3])?;
+    let ciphertext = base64url_decode(parts[3])?;
     let tag = base64url_decode(parts[4])?;
-    if iv.len() != AES_GCM_IV_BYTES || tag.len() != AES_GCM_TAG_BYTES {
+    if iv.len() != AES_GCM_IV_BYTES
+        || ciphertext.len() > MAX_JWE_PLAINTEXT_BYTES
+        || tag.len() != AES_GCM_TAG_BYTES
+    {
         return Err(VerificationError::internal(
-            "JWE AES-GCM IV or authentication tag has an invalid length".to_string(),
+            "JWE AES-GCM component has an invalid length".to_string(),
         ));
     }
-    Ok((parts, header, key_len))
+    Ok(ParsedDirectJwe {
+        parts,
+        header,
+        key_len,
+        iv,
+        ciphertext,
+        tag,
+    })
 }
 
 /// Decrypt a JWE in compact serialization format.
@@ -440,27 +627,30 @@ fn parse_and_validate_direct_jwe(jwe: &str) -> VerificationResult<(Vec<&str>, Jw
 /// # Returns
 ///
 /// Decrypted plaintext.
+#[cfg(any(
+    test,
+    all(feature = "ephemeral-session-keys", feature = "local-key-operations")
+))]
 pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>> {
-    let (parts, header, key_len) = parse_and_validate_direct_jwe(jwe)?;
-    let protected_b64 = parts[0];
-    let iv_b64 = parts[2];
-    let ciphertext_b64 = parts[3];
-    let tag_b64 = parts[4];
+    jwe_decrypt_with_session_key(jwe, recipient_key)
+}
 
-    // Decode components
-    let iv = base64url_decode(iv_b64)?;
-    let ciphertext = base64url_decode(ciphertext_b64)?;
-    let tag = base64url_decode(tag_b64)?;
+#[cfg(any(
+    test,
+    all(feature = "ephemeral-session-keys", feature = "local-key-operations")
+))]
+fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>> {
+    let parsed = parse_and_validate_direct_jwe(jwe)?;
 
     // Derive shared secret from ECDH
-    let shared_secret = match header.alg.as_str() {
+    let shared_secret = match parsed.header.alg.as_str() {
         "ECDH-ES" => {
-            let epk = header.epk.as_ref().ok_or_else(|| {
+            let epk = parsed.header.epk.as_ref().ok_or_else(|| {
                 VerificationError::internal(
                     "ECDH-ES requires ephemeral public key (epk)".to_string(),
                 )
             })?;
-            if epk.is_private() || !epk.extra.is_empty() {
+            if epk.is_private() || !epk.extensions().is_empty() {
                 return Err(VerificationError::internal(
                     "ECDH-ES epk must be a public JWK without extension fields".to_string(),
                 ));
@@ -481,7 +671,7 @@ pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>
                             "X25519 key missing d (private key)".to_string(),
                         )
                     })?;
-                    let d_bytes = base64url_decode(d)?;
+                    let d_bytes = zeroize::Zeroizing::new(base64url_decode(d)?);
                     if d_bytes.len() != 32 {
                         return Err(VerificationError::internal(
                             "X25519 private key must be 32 bytes".to_string(),
@@ -516,7 +706,7 @@ pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>
                     let d = recipient_key.d.as_ref().ok_or_else(|| {
                         VerificationError::internal("P-256 key missing d".to_string())
                     })?;
-                    let d_bytes = base64url_decode(d)?;
+                    let d_bytes = zeroize::Zeroizing::new(base64url_decode(d)?);
                     if d_bytes.len() != 32 {
                         return Err(VerificationError::internal(
                             "P-256 private key must be 32 bytes".to_string(),
@@ -584,32 +774,85 @@ pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>
         _ => {
             return Err(VerificationError::internal(format!(
                 "Unsupported key algorithm: {}",
-                header.alg
+                parsed.header.alg
             )))
         }
     };
+    let shared_secret = zeroize::Zeroizing::new(shared_secret);
+    decrypt_parsed_direct_jwe(parsed, &shared_secret)
+}
 
-    let party_u_info = decode_party_info(header.apu.as_deref())?;
-    let party_v_info = decode_party_info(header.apv.as_deref())?;
-    let cek = marty_crypto::kdf::concat_kdf_sha256(
-        &shared_secret,
-        header.enc.as_bytes(),
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn jwe_decrypt_with_p256_session_key(
+    jwe: &str,
+    private_key: &p256::SecretKey,
+) -> VerificationResult<Vec<u8>> {
+    let parsed = parse_and_validate_direct_jwe(jwe)?;
+    let epk = parsed.header.epk.as_ref().ok_or_else(|| {
+        VerificationError::internal("ECDH-ES requires ephemeral public key (epk)".to_string())
+    })?;
+    if epk.kty != "EC"
+        || epk.crv.as_deref() != Some("P-256")
+        || epk.is_private()
+        || !epk.extensions().is_empty()
+    {
+        return Err(VerificationError::internal(
+            "ECDH-ES epk does not match the P-256 session key".to_string(),
+        ));
+    }
+    let x = base64url_decode(
+        epk.x
+            .as_ref()
+            .ok_or_else(|| VerificationError::jwk_missing_field("epk.x"))?,
+    )?;
+    let y = base64url_decode(
+        epk.y
+            .as_ref()
+            .ok_or_else(|| VerificationError::jwk_missing_field("epk.y"))?,
+    )?;
+    if x.len() != 32 || y.len() != 32 {
+        return Err(VerificationError::internal(
+            "P-256 epk coordinates must be 32 bytes".to_string(),
+        ));
+    }
+    let mut point = Vec::with_capacity(65);
+    point.push(0x04);
+    point.extend_from_slice(&x);
+    point.extend_from_slice(&y);
+    let public_key = p256::PublicKey::from_sec1_bytes(&point)
+        .map_err(|error| VerificationError::internal(format!("Invalid EPK: {error}")))?;
+    let shared =
+        p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), public_key.as_affine());
+    let shared_secret = zeroize::Zeroizing::new(shared.raw_secret_bytes().to_vec());
+    decrypt_parsed_direct_jwe(parsed, &shared_secret)
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn decrypt_parsed_direct_jwe(
+    parsed: ParsedDirectJwe<'_>,
+    shared_secret: &[u8],
+) -> VerificationResult<Vec<u8>> {
+    let party_u_info = decode_party_info(parsed.header.apu.as_deref())?;
+    let party_v_info = decode_party_info(parsed.header.apv.as_deref())?;
+    let cek = zeroize::Zeroizing::new(marty_crypto::kdf::concat_kdf_sha256(
+        shared_secret,
+        parsed.header.enc.as_bytes(),
         &party_u_info,
         &party_v_info,
-        key_len,
-    )?;
+        parsed.key_len,
+    )?);
 
     // Combine ciphertext and tag for decryption
-    let mut ciphertext_with_tag = ciphertext;
-    ciphertext_with_tag.extend_from_slice(&tag);
+    let mut ciphertext_with_tag = parsed.ciphertext;
+    ciphertext_with_tag.extend_from_slice(&parsed.tag);
 
     // Decrypt
     use marty_crypto::symmetric::{aes_128_gcm_decrypt, aes_256_gcm_decrypt};
-    let aad = protected_b64.as_bytes();
+    let aad = parsed.parts[0].as_bytes();
 
-    let plaintext = match key_len {
-        16 => aes_128_gcm_decrypt(&cek, &iv, &ciphertext_with_tag, aad)?,
-        32 => aes_256_gcm_decrypt(&cek, &iv, &ciphertext_with_tag, aad)?,
+    let plaintext = match parsed.key_len {
+        16 => aes_128_gcm_decrypt(&cek, &parsed.iv, &ciphertext_with_tag, aad)?,
+        32 => aes_256_gcm_decrypt(&cek, &parsed.iv, &ciphertext_with_tag, aad)?,
         _ => {
             return Err(VerificationError::internal(
                 "Unsupported key length".to_string(),
@@ -622,17 +865,7 @@ pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>
 
 /// Get the header from a JWE without decrypting.
 pub fn jwe_get_header(jwe: &str) -> VerificationResult<JweHeader> {
-    if jwe.is_empty() || jwe.len() > MAX_COMPACT_JWE_BYTES {
-        return Err(VerificationError::internal(
-            "JWE is empty or exceeds the configured size limit".to_string(),
-        ));
-    }
-    let parts: Vec<&str> = jwe.split('.').collect();
-    if parts.len() != 5 || parts[0].is_empty() || parts[0].len() > MAX_PROTECTED_HEADER_BYTES {
-        return Err(VerificationError::internal(
-            "Invalid JWE format".to_string(),
-        ));
-    }
+    let parts = split_compact_jwe(jwe)?;
 
     let header_bytes = base64url_decode(parts[0])?;
     JweHeader::from_json(&header_bytes)
@@ -646,6 +879,18 @@ pub fn jwe_get_header(jwe: &str) -> VerificationResult<JweHeader> {
 mod tests {
     use super::super::{generate_ec_p256, generate_x25519};
     use super::*;
+
+    #[test]
+    fn jwe_extensions_cannot_replace_modeled_key_headers() {
+        for member in ["jwk", "epk"] {
+            let mut additional = HashMap::new();
+            additional.insert(member.into(), serde_json::json!({"d":"secret"}));
+            assert!(JweHeader::new("ECDH-ES", "A256GCM")
+                .with_additional(additional)
+                .is_err());
+        }
+        assert!(JweHeader::new("ECDH-ES", "A256GCM").additional().is_empty());
+    }
 
     #[test]
     fn test_jwe_x25519_roundtrip() {
@@ -791,5 +1036,44 @@ mod tests {
         private.y = other.y;
         let compact = jwe_encrypt_direct(b"secret", &private.to_public(), "A256GCM").unwrap();
         assert!(decrypt_haip_response(&compact, &private.to_json().unwrap()).is_err());
+    }
+
+    #[test]
+    fn haip_private_parser_accepts_only_the_session_key_schema() {
+        let (_, private_json) = generate_haip_response_encryption_jwk_pair().unwrap();
+        let mut private: serde_json::Value = serde_json::from_str(&private_json).unwrap();
+        private["p"] = serde_json::json!("credential-private-material");
+        assert!(parse_haip_session_private_jwk(&private.to_string()).is_err());
+
+        let mut private: serde_json::Value = serde_json::from_str(&private_json).unwrap();
+        private["alg"] = serde_json::json!("ES256");
+        assert!(parse_haip_session_private_jwk(&private.to_string()).is_err());
+    }
+
+    #[test]
+    fn public_jwe_parsers_reject_extra_and_oversized_segments() {
+        for malformed in ["a..b.c.d.e", "a..b.c.d.e.f"] {
+            assert!(jwe_get_header(malformed).is_err());
+            assert!(validate_haip_response_header(malformed).is_err());
+        }
+
+        let header = "a".repeat(max_jwe_encoded_len(MAX_PROTECTED_HEADER_BYTES) + 1);
+        assert!(jwe_get_header(&format!("{header}..AA.AA.AA")).is_err());
+
+        let ciphertext = "a".repeat(max_jwe_encoded_len(MAX_JWE_PLAINTEXT_BYTES) + 1);
+        assert!(jwe_get_header(&format!("e30..AA.{ciphertext}.AA")).is_err());
+
+        let tag = "a".repeat(max_jwe_encoded_len(AES_GCM_TAG_BYTES) + 1);
+        assert!(jwe_get_header(&format!("e30..AA.AA.{tag}")).is_err());
+    }
+
+    #[test]
+    fn jwe_headers_reject_duplicate_members_recursively() {
+        let protected = base64url_encode(
+            br#"{"alg":"ECDH-ES","enc":"A256GCM","epk":{"kty":"EC","kty":"OKP"}}"#,
+        );
+        let compact = format!("{protected}..AAAAAAAAAAAAAAAA.AA.AAAAAAAAAAAAAAAAAAAAAA");
+        assert!(jwe_get_header(&compact).is_err());
+        assert!(validate_haip_response_header(&compact).is_err());
     }
 }

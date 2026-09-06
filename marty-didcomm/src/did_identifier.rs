@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 const P256_COORDINATE_BYTES: usize = 32;
+const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 fn invalid_jwk(reason: impl Into<String>) -> DidcommError {
     DidcommError::Crypto(format!("invalid P-256 public JWK: {}", reason.into()))
@@ -23,7 +24,10 @@ fn public_p256_jwk(jwk_json: &str) -> DidcommResult<BTreeMap<String, Value>> {
     {
         return Err(invalid_jwk("kty must be EC and crv must be P-256"));
     }
-    if object.contains_key("d") {
+    if PRIVATE_JWK_MEMBERS
+        .iter()
+        .any(|member| object.contains_key(*member))
+    {
         return Err(invalid_jwk("private key material is not accepted"));
     }
 
@@ -135,8 +139,11 @@ mod tests {
 
     #[test]
     fn rejects_private_or_invalid_public_keys() {
-        let private = PUBLIC_JWK.replace("\"kid\":\"key-1\"", "\"d\":\"secret\"");
-        assert!(derive_p256_did_jwk(&private).is_err());
+        for member in PRIVATE_JWK_MEMBERS {
+            let private =
+                PUBLIC_JWK.replace("\"kid\":\"key-1\"", &format!("\"{member}\":\"secret\""));
+            assert!(derive_p256_did_jwk(&private).is_err(), "accepted {member}");
+        }
         let invalid_point = PUBLIC_JWK.replace(
             "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

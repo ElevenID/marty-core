@@ -1,6 +1,12 @@
 //! Python adapters for crl.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyList;
+
+// ============================================================================
+// CRL Checking Bindings
+// ============================================================================
 
 /// Python wrapper for CRL information.
 #[pyclass(name = "CrlInfo", from_py_object)]

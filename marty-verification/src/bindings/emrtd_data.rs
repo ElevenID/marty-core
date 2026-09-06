@@ -1,6 +1,6 @@
 //! Python adapters for emrtd data.
 
-use super::*;
+use pyo3::prelude::*;
 
 #[cfg(feature = "csca")]
 pub(super) fn emrtd_data_pyerr(error: crate::emrtd_data::EmrtdDataError) -> PyErr {

@@ -13,20 +13,20 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # Internal dependencies
-marty-types = { version = "0.1.5", path = "../marty-types" }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdh", "kdf", "symmetric"] }
+marty-types = { version = "0.1.5", path = "../marty-types", optional = true }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, optional = true }
 
 # CBOR and COSE
 ciborium = "0.2"
-coset = "0.3"
-isomdl = "0.2"
+coset = { version = "0.3", optional = true }
+isomdl = { version = "0.2", optional = true }
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
+tokio = { version = "1", features = ["full"], optional = true }
+async-trait = { version = "0.1", optional = true }
 
 # Cryptography
-rand = "0.8"
+rand = { version = "0.8", optional = true }
 sha2 = "0.10"
 hex = "0.4"
 
@@ -39,30 +39,52 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # QR code generation
-qrcode = "0.14"
-image = "0.25"
+qrcode = { version = "0.14", optional = true }
+image = { version = "0.25", optional = true }
 
 # HTTP client
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
 
 # Logging
-tracing = "0.1"
+tracing = { version = "0.1", optional = true }
 
 # Optional: Python bindings
 pyo3 = { workspace = true, optional = true }
 
 # Optional: BLE transport
 btleplug = { version = "0.11", optional = true }
-uuid = "1.0"
+uuid = { version = "1.0", optional = true }
 
 # Optional: NFC transport
 pcsc = { version = "2.8", optional = true }
 
 [features]
-default = []
-python = ["pyo3", "marty-types/python"]
-ble = ["btleplug"]
-nfc = ["pcsc"]
+default = ["session-protocol"]
+# Passive OpenID4VP transcript binding and diagnostics. This capability does
+# not create, import, or retain a device/session private key.
+verifier = []
+# Holder/reader engagement, ephemeral ECDH, secure messaging, QR, and HTTPS.
+session-protocol = [
+    "verifier",
+    "dep:async-trait",
+    "dep:coset",
+    "dep:image",
+    "dep:isomdl",
+    "dep:marty-crypto",
+    "dep:marty-types",
+    "dep:qrcode",
+    "dep:rand",
+    "dep:reqwest",
+    "dep:tokio",
+    "dep:tracing",
+    "dep:uuid",
+    "marty-crypto/ecdh",
+    "marty-crypto/kdf",
+    "marty-crypto/symmetric",
+]
+python = ["session-protocol", "pyo3", "marty-types/python"]
+ble = ["session-protocol", "btleplug"]
+nfc = ["session-protocol", "pcsc"]
 all-transports = ["ble", "nfc"]
 
 [dev-dependencies]
@@ -70,7 +92,29 @@ tempfile = "3.14"
 proptest = "1.5"
 criterion = { workspace = true }
 marty-verification = { version = "0.1.5", path = "../marty-verification" }
+rand = "0.8"
+
+[[test]]
+name = "cbor_conformance"
+required-features = ["session-protocol"]
+
+[[test]]
+name = "cose_conformance"
+required-features = ["session-protocol"]
+
+[[test]]
+name = "mdoc_structure"
+required-features = ["session-protocol"]
+
+[[test]]
+name = "selective_disclosure"
+required-features = ["session-protocol"]
+
+[[test]]
+name = "session_conformance"
+required-features = ["session-protocol"]
 
 [[bench]]
 name = "session_processing"
 harness = false
+required-features = ["session-protocol"]

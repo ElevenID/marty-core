@@ -295,7 +295,9 @@ pub struct AuthorizationSession {
 impl AuthorizationSession {
     /// Check whether this session has expired.
     pub fn is_expired(&self, now_unix: u64) -> bool {
-        now_unix > self.created_at + self.expires_in
+        self.created_at
+            .checked_add(self.expires_in)
+            .is_none_or(|deadline| now_unix > deadline)
     }
 }
 
@@ -492,6 +494,7 @@ pub struct LogoEntry {
 // =============================================================================
 
 /// Issuer key material for credential signing.
+#[cfg(any(test, feature = "local-key-operations"))]
 #[derive(Clone)]
 pub struct IssuerKey {
     /// The DID or key identifier for the issuer.
@@ -502,20 +505,24 @@ pub struct IssuerKey {
     pub algorithm: SigningAlgorithm,
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 const REDACTED_ISSUER_KEY_DIAGNOSTIC: &str = "IssuerKey([redacted])";
 
+#[cfg(any(test, feature = "local-key-operations"))]
 impl std::fmt::Debug for IssuerKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
     }
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 impl std::fmt::Display for IssuerKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
     }
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 impl IssuerKey {
     /// Returns the `kid` value to use in JWT/SD-JWT headers.
     ///
@@ -535,11 +542,33 @@ impl IssuerKey {
 
 #[cfg(test)]
 mod issuer_key_diagnostic_tests {
-    use super::{IssuerKey, SigningAlgorithm, REDACTED_ISSUER_KEY_DIAGNOSTIC};
+    use super::{
+        AuthorizationSession, IssuerKey, SigningAlgorithm, REDACTED_ISSUER_KEY_DIAGNOSTIC,
+    };
     use crate::signer::CredentialSigner;
 
     struct TestSigningExecutor<'a> {
         _signer: &'a dyn CredentialSigner,
+    }
+
+    #[test]
+    fn authorization_session_expiry_overflow_fails_closed() {
+        let session = AuthorizationSession {
+            code: String::new(),
+            client_id: String::new(),
+            redirect_uri: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            issuer_state: None,
+            credential_configuration_ids: Vec::new(),
+            created_at: u64::MAX,
+            expires_in: 1,
+        };
+        assert!(session.is_expired(0));
+
+        let mut boundary = session;
+        boundary.created_at = u64::MAX - 1;
+        assert!(!boundary.is_expired(u64::MAX));
     }
 
     impl std::fmt::Debug for TestSigningExecutor<'_> {
@@ -731,15 +760,16 @@ impl CredentialPayloadFormat {
 
 /// Declares that a specific mDoc claim supports one or more ZK predicates.
 ///
-/// For example, a `birth_date` claim might support both `"age_over_18"` and
-/// `"age_over_21"` predicates.  This metadata is embedded in issued
-/// `ZkMdoc` credentials so wallets know which proofs they can generate.
+/// Longfellow proves an issuer-signed claim value; it does not derive a
+/// predicate from another hidden field. For example, an issuer-computed
+/// boolean `age_over_18` claim binds only to the `age_over_18` predicate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ZkPredicateBinding {
-    /// The mDoc claim name (e.g. `"birth_date"`).
+    /// The issuer-signed boolean mDoc claim name (e.g. `"age_over_18"`).
     pub claim_name: String,
     /// Predicate identifiers supported for this claim
-    /// (e.g. `["age_over_18", "age_over_21"]`).
+    /// This must contain exactly the same registered identifier as
+    /// `claim_name`.
     pub supported_predicates: Vec<String>,
 }
 
@@ -929,7 +959,8 @@ pub struct IssuerConfig {
     pub issuer_name: String,
     /// Credential types this issuer supports.
     pub credential_types: Vec<CredentialTypeConfig>,
-    /// The issuer's signing key.
+    /// Development/migration-only in-process issuer signing key.
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub issuer_key: IssuerKey,
     /// Token endpoint URL (if different from default).
     pub token_endpoint: Option<String>,
@@ -946,6 +977,30 @@ pub struct IssuerConfig {
 }
 
 impl IssuerConfig {
+    /// Construct a key-free configuration for stateless protocol helpers.
+    ///
+    /// The compatibility key field, when compiled, is initialized internally
+    /// so downstream KMS-only crates never need to name `IssuerKey`.
+    pub fn stateless() -> Self {
+        Self {
+            credential_issuer_url: String::new(),
+            issuer_name: String::new(),
+            credential_types: Vec::new(),
+            #[cfg(any(test, feature = "local-key-operations"))]
+            issuer_key: IssuerKey {
+                issuer_id: String::new(),
+                jwk_json: String::new(),
+                algorithm: SigningAlgorithm::EdDSA,
+            },
+            token_endpoint: None,
+            credential_endpoint: None,
+            authorization_endpoint: None,
+            deferred_credential_endpoint: None,
+            binding_methods: Vec::new(),
+            proof_signing_alg_values: Vec::new(),
+        }
+    }
+
     /// Get the token endpoint, defaulting to `{credential_issuer_url}/token`.
     pub fn token_endpoint(&self) -> String {
         self.token_endpoint

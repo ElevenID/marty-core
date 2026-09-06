@@ -5,42 +5,27 @@ use crate::VerificationResult;
 
 impl From<marty_crypto::jwk::PublicJwk> for Jwk {
     fn from(value: marty_crypto::jwk::PublicJwk) -> Self {
-        // Exhaustive destructuring makes added source fields a compile-time review point.
-        let marty_crypto::jwk::PublicJwk {
-            kty,
-            use_,
-            key_ops,
-            alg,
-            kid,
-            x5u,
-            x5c,
-            x5t,
-            x5t_s256,
-            crv,
-            x,
-            y,
-            n,
-            e,
-            extra,
-        } = value;
-        Self {
-            kty,
-            use_,
-            key_ops,
-            alg,
-            kid,
-            x5u,
-            x5c,
-            x5t,
-            x5t_s256,
-            crv,
-            x,
-            y,
-            n,
-            e,
-            extra,
+        let extensions = value.extensions().clone();
+        let mut jwk = Self {
+            kty: value.kty,
+            use_: value.use_,
+            key_ops: value.key_ops,
+            alg: value.alg,
+            kid: value.kid,
+            x5u: value.x5u,
+            x5c: value.x5c,
+            x5t: value.x5t,
+            x5t_s256: value.x5t_s256,
+            crv: value.crv,
+            x: value.x,
+            y: value.y,
+            n: value.n,
+            e: value.e,
             ..Self::default()
-        }
+        };
+        jwk.set_public_extensions(extensions)
+            .expect("PublicJwk extensions are validated at every construction boundary");
+        jwk
     }
 }
 

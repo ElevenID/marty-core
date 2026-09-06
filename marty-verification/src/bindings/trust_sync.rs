@@ -1,6 +1,6 @@
 //! Python adapters for trust sync.
 
-use super::*;
+use pyo3::prelude::*;
 
 pub(super) fn trust_sync_pyerr(error: crate::trust_sync::TrustSyncError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(error.to_string())

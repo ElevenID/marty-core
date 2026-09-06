@@ -12,22 +12,57 @@ use crate::error::{VerificationError, VerificationResult};
 
 use super::x509_verification_method::X509VerificationKey2021;
 
-/// Wrapper enum for Open Badge verification methods.
+const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+const PRIVATE_METHOD_MEMBERS: [&str; 5] = [
+    "privateKeyJwk",
+    "privateKeyPem",
+    "privateKeyBase58",
+    "privateKeyMultibase",
+    "privateKeyHex",
+];
+
+pub(super) fn ensure_public_verification_method(value: &Value) -> VerificationResult<()> {
+    if let Some(member) = PRIVATE_METHOD_MEMBERS
+        .iter()
+        .find(|member| value.get(**member).is_some())
+    {
+        return Err(VerificationError::open_badges(format!(
+            "verification method contains private key member '{member}'"
+        )));
+    }
+    let Some(jwk) = value.get("publicKeyJwk").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    if let Some(member) = PRIVATE_JWK_MEMBERS
+        .iter()
+        .find(|member| jwk.contains_key(**member))
+    {
+        return Err(VerificationError::open_badges(format!(
+            "verification method publicKeyJwk contains private member '{member}'"
+        )));
+    }
+    Ok(())
+}
+
+/// Opaque wrapper for validated Open Badge verification methods.
 ///
 /// Combines SSI's standard verification methods (JsonWebKey2020, Ed25519VerificationKey2018/2020)
 /// with custom X509VerificationKey2021 for certificate-based verification.
 #[derive(Debug, Clone)]
-pub enum OpenBadgeMethod {
-    /// Standard SSI verification method (JsonWebKey2020, Ed25519, etc.).
-    Ssi(AnyMethod),
+pub struct OpenBadgeMethod {
+    inner: OpenBadgeMethodKind,
+}
 
-    /// X.509 certificate-based verification method.
+#[derive(Debug, Clone)]
+enum OpenBadgeMethodKind {
+    Ssi(AnyMethod),
     X509(X509VerificationKey2021),
 }
 
 impl OpenBadgeMethod {
     /// Parse from JSON value, attempting X509 first, then falling back to SSI methods.
     pub fn from_json(value: &Value) -> VerificationResult<Self> {
+        ensure_public_verification_method(value)?;
         // Check if it's an X509 method
         if let Some(type_str) = value.get("type").and_then(|v| v.as_str()) {
             if type_str == "X509VerificationKey2021" {
@@ -38,7 +73,9 @@ impl OpenBadgeMethod {
                             e
                         ))
                     })?;
-                return Ok(OpenBadgeMethod::X509(x509));
+                return Ok(Self {
+                    inner: OpenBadgeMethodKind::X509(x509),
+                });
             }
         }
 
@@ -58,34 +95,36 @@ impl OpenBadgeMethod {
             })?
         };
 
-        Ok(OpenBadgeMethod::Ssi(method))
+        Ok(Self {
+            inner: OpenBadgeMethodKind::Ssi(method),
+        })
     }
 
     /// Get the verification method ID.
     pub fn id(&self) -> &iref::Iri {
-        match self {
-            OpenBadgeMethod::Ssi(m) => m.id(),
-            OpenBadgeMethod::X509(m) => m.id(),
+        match &self.inner {
+            OpenBadgeMethodKind::Ssi(m) => m.id(),
+            OpenBadgeMethodKind::X509(m) => m.id(),
         }
     }
 
     /// Check if this is an X509 verification method.
     pub fn is_x509(&self) -> bool {
-        matches!(self, OpenBadgeMethod::X509(_))
+        matches!(&self.inner, OpenBadgeMethodKind::X509(_))
     }
 
     /// Get X509 method reference, if applicable.
     pub fn as_x509(&self) -> Option<&X509VerificationKey2021> {
-        match self {
-            OpenBadgeMethod::X509(m) => Some(m),
+        match &self.inner {
+            OpenBadgeMethodKind::X509(m) => Some(m),
             _ => None,
         }
     }
 
     /// Get SSI method reference, if applicable.
     pub fn as_ssi(&self) -> Option<&AnyMethod> {
-        match self {
-            OpenBadgeMethod::Ssi(m) => Some(m),
+        match &self.inner {
+            OpenBadgeMethodKind::Ssi(m) => Some(m),
             _ => None,
         }
     }
@@ -93,16 +132,16 @@ impl OpenBadgeMethod {
 
 impl VerificationMethod for OpenBadgeMethod {
     fn id(&self) -> &iref::Iri {
-        match self {
-            OpenBadgeMethod::Ssi(m) => m.id(),
-            OpenBadgeMethod::X509(m) => m.id(),
+        match &self.inner {
+            OpenBadgeMethodKind::Ssi(m) => m.id(),
+            OpenBadgeMethodKind::X509(m) => m.id(),
         }
     }
 
     fn controller(&self) -> Option<&iref::Iri> {
-        match self {
-            OpenBadgeMethod::Ssi(m) => m.controller(),
-            OpenBadgeMethod::X509(m) => m.controller(),
+        match &self.inner {
+            OpenBadgeMethodKind::Ssi(m) => m.controller(),
+            OpenBadgeMethodKind::X509(m) => m.controller(),
         }
     }
 }
@@ -168,6 +207,41 @@ mod tests {
         let method = OpenBadgeMethod::from_json(&json).unwrap();
         assert!(!method.is_x509());
         assert!(method.as_ssi().is_some());
+    }
+
+    #[test]
+    fn test_parse_jwk_method_rejects_private_members() {
+        for member in PRIVATE_JWK_MEMBERS {
+            let mut jwk = serde_json::json!({"kty":"OKP","crv":"Ed25519","x":"public"});
+            jwk.as_object_mut()
+                .unwrap()
+                .insert(member.to_owned(), serde_json::json!("secret"));
+            let method = serde_json::json!({
+                "id": "did:example:issuer#key-1",
+                "type": "JsonWebKey2020",
+                "controller": "did:example:issuer",
+                "publicKeyJwk": jwk
+            });
+            assert!(OpenBadgeMethod::from_json(&method).is_err());
+        }
+    }
+
+    #[test]
+    fn test_parse_method_rejects_private_key_extensions_without_value_echo() {
+        for member in PRIVATE_METHOD_MEMBERS {
+            let mut method = serde_json::json!({
+                "id": "did:example:issuer#key-1",
+                "type": "JsonWebKey2020",
+                "controller": "did:example:issuer"
+            });
+            method
+                .as_object_mut()
+                .unwrap()
+                .insert(member.into(), serde_json::json!("secret-sentinel"));
+            let error = OpenBadgeMethod::from_json(&method).unwrap_err();
+            assert!(error.to_string().contains("private key member"));
+            assert!(!error.to_string().contains("secret-sentinel"));
+        }
     }
 
     #[test]

@@ -192,7 +192,7 @@ fn assert_prepared(
 ) {
     use isomdl::definitions::IssuerSigned;
 
-    assert_eq!(prepared.credential_id, credential_id);
+    assert_eq!(prepared.credential_id(), credential_id);
     let credential = assemble_mdoc(prepared, &[0xa5; 64]).expect("fixture must assemble");
     let SignedCredential::MsoMdoc {
         issuer_signed_b64,
@@ -461,7 +461,7 @@ fn assert_matrix_prepared(
 ) {
     use isomdl::definitions::IssuerSigned;
 
-    assert_eq!(prepared.credential_id, expected_credential_id);
+    assert_eq!(prepared.credential_id(), expected_credential_id);
     let credential = assemble_mdoc(prepared, &[0xa5; 64]).expect("matrix fixture must assemble");
     let SignedCredential::MsoMdoc {
         issuer_signed_b64,

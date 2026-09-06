@@ -30,17 +30,8 @@
 //! - `DeviceResponse` - Parsed mDL DeviceResponse
 //! - `parse_device_response()` - Parse CBOR DeviceResponse
 
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
-
 use crate::error::VerificationError;
-#[cfg(feature = "csca")]
-use crate::trust_anchor::csca::CscaRegistry;
-use crate::trust_anchor::eudi::{EuMemberState, EudiRegistry, TrustServiceProvider, TspStatus};
-use crate::trust_anchor::{
-    BasicTrustRegistry, IacaRegistry, PemTrustAnchor, TrustPurpose, TrustRegistry,
-};
-use crate::verification::mdl::{AuthStatus, MdlVerificationResult, ValidationRuleset};
+use pyo3::prelude::*;
 
 mod registries;
 pub use registries::*;
@@ -55,15 +46,16 @@ pub use mdoc::*;
 mod chain;
 pub use chain::*;
 mod crypto;
+#[cfg(feature = "local-key-operations")]
 pub use crypto::PyPkcs12Data;
 use crypto::*;
+#[cfg(feature = "local-key-operations")]
 mod jwk;
+#[cfg(feature = "local-key-operations")]
 pub use jwk::*;
 mod open_badges;
 use open_badges::*;
-#[cfg(feature = "csca")]
 mod passport_transport;
-#[cfg(feature = "csca")]
 use passport_transport::*;
 #[cfg(feature = "csca")]
 mod active_authentication;
@@ -75,9 +67,9 @@ mod eac;
 use eac::*;
 mod ocsp;
 use ocsp::*;
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 mod certificate_builder;
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 pub use certificate_builder::*;
 mod dtc;
 use dtc::*;
@@ -116,6 +108,57 @@ impl IntoPyErr for Box<VerificationError> {
 fn to_pyerr<E: IntoPyErr>(e: E) -> PyErr {
     e.into_pyerr()
 }
+
+#[cfg(all(test, not(feature = "local-key-operations")))]
+const FORBIDDEN_PRODUCTION_PYTHON_EXPORTS: &[&str] = &[
+    "ed448_generate",
+    "ed448_sign",
+    "Pkcs12Data",
+    "pkcs12_parse",
+    "iso9796_scheme1_sign",
+    "eac_sign_terminal_challenge",
+    "eac_calculate_mac",
+    "load_private_key_pem",
+    "load_private_key_der",
+    "save_private_key_pem",
+    "extract_public_key",
+    "detect_private_key_type",
+    "raw_private_key_to_pkcs8",
+    "pkcs8_to_raw_private_key",
+    "ed25519_generate",
+    "ed25519_sign",
+    "x25519_generate",
+    "x25519_agree",
+    "p256_generate",
+    "p256_agree",
+    "ecdsa_p256_generate",
+    "ecdsa_p384_generate",
+    "ecdsa_p521_generate",
+    "ecdsa_p256_sign",
+    "ecdsa_p384_sign",
+    "ecdsa_p521_sign",
+    "rsa_generate",
+    "rsa_pkcs1_sha256_sign",
+    "rsa_pkcs1_sha384_sign",
+    "rsa_pkcs1_sha512_sign",
+    "rsa_pss_sha256_sign",
+    "rsa_pss_sha384_sign",
+    "rsa_pss_sha512_sign",
+    "generate_key",
+    "Jwk",
+    "jwk_generate",
+    "jws_sign",
+    "jws_verify",
+    "jwe_encrypt",
+    "jwe_decrypt",
+    "open_badge_ob2_issue",
+    "open_badge_ob3_issue",
+    "dtc_sign",
+    "CertProfile",
+    "CertificateBuilderConfig",
+    "build_self_signed_certificate",
+    "build_self_signed_certificate_with_key",
+];
 
 /// Create the Python module for marty_verification.
 #[pymodule]
@@ -168,7 +211,9 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "csca")]
     {
         m.add_class::<PyCscaRegistry>()?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativeBacSession>()?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativePaceSession>()?;
         m.add_function(wrap_pyfunction!(apdu_encode, m)?)?;
         m.add_function(wrap_pyfunction!(apdu_parse_response, m)?)?;
@@ -213,17 +258,22 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed448_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ed448_verify, m)?)?;
 
     // Crypto Operations - PKCS#12
+    #[cfg(feature = "local-key-operations")]
     m.add_class::<PyPkcs12Data>()?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pkcs12_parse, m)?)?;
 
     // Crypto Operations - ISO 9796-2
     m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
     m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
     #[cfg(feature = "csca")]
     {
@@ -234,12 +284,16 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
         m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
         m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativeEacChipAuthentication>()?;
+        #[cfg(feature = "ephemeral-session-keys")]
         m.add_class::<PyNativeEacSecureMessaging>()?;
+        #[cfg(feature = "local-key-operations")]
         m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
         m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
         m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
         m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
+        #[cfg(feature = "local-key-operations")]
         m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
     }
 
@@ -255,8 +309,11 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_certificate_signature, m)?)?;
 
     // Crypto Operations - Key Serialization
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(load_private_key_pem, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(load_private_key_der, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(save_private_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_pem, m)?)?;
     m.add_function(wrap_pyfunction!(load_public_key_der, m)?)?;
@@ -266,12 +323,16 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(certificate_pem_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(certificate_der_to_jwk, m)?)?;
     m.add_function(wrap_pyfunction!(p256_public_jwk_to_pem, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(extract_public_key, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(detect_private_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(detect_public_key_type, m)?)?;
     m.add_function(wrap_pyfunction!(get_key_size, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(raw_private_key_to_pkcs8, m)?)?;
     m.add_function(wrap_pyfunction!(raw_public_key_to_spki, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(pkcs8_to_raw_private_key, m)?)?;
     m.add_function(wrap_pyfunction!(spki_to_raw_public_key, m)?)?;
 
@@ -281,40 +342,63 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pbkdf2_sha256, m)?)?;
 
     // Crypto Operations - Symmetric Encryption
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(tdes_cbc_encrypt, m)?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
     m.add_function(wrap_pyfunction!(tdes_cbc_decrypt, m)?)?;
 
     // Crypto Operations - Ed25519
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed25519_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ed25519_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ed25519_verify, m)?)?;
 
     // Crypto Operations - ECDH Key Agreement
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(x25519_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(x25519_agree, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(p256_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(p256_agree, m)?)?;
 
     // Crypto Operations - ECDSA Signing
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p256_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p384_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p521_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(ecdsa_p521_sign, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p256_verify, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p384_verify, m)?)?;
     m.add_function(wrap_pyfunction!(ecdsa_p521_verify, m)?)?;
 
     // Crypto Operations - RSA Signing
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha512_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha256_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha384_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(rsa_pss_sha512_sign, m)?)?;
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha256_verify, m)?)?;
     m.add_function(wrap_pyfunction!(rsa_pkcs1_sha384_verify, m)?)?;
@@ -325,14 +409,21 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Crypto Operations - Key Generation
     m.add_function(wrap_pyfunction!(generate_random_bytes, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(generate_key, m)?)?;
 
     // JWK/JWS/JWE
+    #[cfg(feature = "local-key-operations")]
     m.add_class::<PyJwk>()?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jwk_generate, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jws_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(jws_verify, m)?)?;
+    #[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
     m.add_function(wrap_pyfunction!(jwe_encrypt, m)?)?;
+    #[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
     m.add_function(wrap_pyfunction!(jwe_decrypt, m)?)?;
 
     // mDL Document Parsing
@@ -343,37 +434,6 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyChainValidationResult>()?;
     m.add_class::<PyChainValidator>()?;
 
-    // Ed448 Operations
-    m.add_function(wrap_pyfunction!(ed448_generate, m)?)?;
-    m.add_function(wrap_pyfunction!(ed448_sign, m)?)?;
-    m.add_function(wrap_pyfunction!(ed448_verify, m)?)?;
-
-    // PKCS#12 Operations
-    m.add_class::<PyPkcs12Data>()?;
-    m.add_function(wrap_pyfunction!(pkcs12_parse, m)?)?;
-
-    // ISO 9796-2 Operations
-    m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
-    m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
-    m.add_function(wrap_pyfunction!(iso9796_scheme1_sign, m)?)?;
-    #[cfg(feature = "csca")]
-    {
-        m.add_function(wrap_pyfunction!(
-            active_authentication_generate_challenge,
-            m
-        )?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_build_apdu, m)?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_parse_response, m)?)?;
-        m.add_function(wrap_pyfunction!(active_authentication_verify, m)?)?;
-        m.add_class::<PyNativeEacChipAuthentication>()?;
-        m.add_class::<PyNativeEacSecureMessaging>()?;
-        m.add_function(wrap_pyfunction!(eac_sign_terminal_challenge, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_verify_certificate_signature, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_certificate_fingerprint, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_serialize_certificate, m)?)?;
-        m.add_function(wrap_pyfunction!(eac_calculate_mac, m)?)?;
-    }
-
     // OCSP Operations
     m.add_function(wrap_pyfunction!(build_ocsp_request, m)?)?;
     m.add_function(wrap_pyfunction!(get_ocsp_responder_url, m)?)?;
@@ -382,8 +442,10 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(open_badge_ob2_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
     m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
@@ -392,11 +454,12 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dtc_create, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_prepare_signing, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_assemble_signature, m)?)?;
+    #[cfg(feature = "local-key-operations")]
     m.add_function(wrap_pyfunction!(dtc_sign, m)?)?;
     m.add_function(wrap_pyfunction!(dtc_verify, m)?)?;
 
     // Certificate Builder Operations (feature-gated)
-    #[cfg(feature = "cert-builder")]
+    #[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
     {
         m.add_class::<PyCertProfile>()?;
         m.add_class::<PyCertificateBuilderConfig>()?;
@@ -410,6 +473,214 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("RULESET_MDL_READER", "mdl_reader")?;
 
     Ok(())
+}
+
+#[cfg(all(test, not(feature = "local-key-operations")))]
+mod kms_surface_tests {
+    use super::*;
+    #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+    use pyo3::types::PyBytes;
+
+    #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+    fn assert_protocol_session_secrets_are_internal(module: &Bound<'_, PyModule>) {
+        for (class_name, forbidden_methods, safe_methods) in [
+            (
+                "NativeBacSession",
+                &[
+                    "derive_bac_keys",
+                    "start_bac_with_keys",
+                    "start_bac_with_random",
+                    "derive_session_keys",
+                    "set_session_keys",
+                    "session_keys",
+                ][..],
+                &[
+                    "start_bac",
+                    "finish_bac",
+                    "protect_command",
+                    "unprotect_response",
+                    "session_established",
+                ][..],
+            ),
+            (
+                "NativePaceSession",
+                &["derive_password_key", "start_pace_with_private_key"][..],
+                &[
+                    "start_pace",
+                    "complete_pace",
+                    "protect_command",
+                    "unprotect_response",
+                    "session_established",
+                ][..],
+            ),
+            (
+                "NativeEacChipAuthentication",
+                &["generate_ephemeral_keypair", "perform_chip_authentication"][..],
+                &[
+                    "generate_ephemeral_public_key",
+                    "establish_secure_messaging",
+                ][..],
+            ),
+            (
+                "NativeEacSecureMessaging",
+                &["encrypt_apdu_with_iv", "state"][..],
+                &["encrypt_apdu", "decrypt_apdu", "status"][..],
+            ),
+        ] {
+            let class = module.getattr(class_name).unwrap();
+            for method in forbidden_methods {
+                assert!(
+                    !class.hasattr(*method).unwrap(),
+                    "unexpected secret-bearing method: {class_name}.{method}"
+                );
+            }
+            for method in safe_methods {
+                assert!(
+                    class.hasattr(*method).unwrap(),
+                    "missing secret-retaining method: {class_name}.{method}"
+                );
+            }
+        }
+
+        let secure_messaging = module.getattr("NativeEacSecureMessaging").unwrap();
+        let shared_secret = PyBytes::new(module.py(), &[0x44; 32]);
+        assert!(
+            secure_messaging
+                .call1((shared_secret, "ecdh_p256_sha256"))
+                .is_err(),
+            "production must not construct EAC sessions from injected secrets"
+        );
+    }
+
+    fn assert_kms_only_surface(module: &Bound<'_, PyModule>) {
+        for name in FORBIDDEN_PRODUCTION_PYTHON_EXPORTS {
+            assert!(
+                !module.hasattr(*name).unwrap(),
+                "unexpected local export: {name}"
+            );
+        }
+        for name in [
+            "verify_signature",
+            "generate_random_bytes",
+            "dtc_prepare_signing",
+            "dtc_assemble_signature",
+            "dtc_verify",
+            "open_badge_ob2_verify",
+            "open_badge_ob3_verify",
+        ] {
+            assert!(module.hasattr(name).unwrap(), "missing safe export: {name}");
+        }
+
+        #[cfg(feature = "ephemeral-session-keys")]
+        for name in [
+            "aes_gcm_encrypt",
+            "aes_gcm_decrypt",
+            "tdes_cbc_encrypt",
+            "tdes_cbc_decrypt",
+        ] {
+            assert!(
+                module.hasattr(name).unwrap(),
+                "missing session export: {name}"
+            );
+        }
+
+        #[cfg(not(feature = "ephemeral-session-keys"))]
+        for name in [
+            "aes_gcm_encrypt",
+            "aes_gcm_decrypt",
+            "tdes_cbc_encrypt",
+            "tdes_cbc_decrypt",
+            "NativeBacSession",
+            "NativePaceSession",
+            "NativeEacChipAuthentication",
+            "NativeEacSecureMessaging",
+        ] {
+            assert!(
+                !module.hasattr(name).unwrap(),
+                "unexpected session-secret export: {name}"
+            );
+        }
+
+        #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+        assert_protocol_session_secrets_are_internal(module);
+    }
+
+    #[test]
+    fn production_modules_exclude_local_secret_key_operations() {
+        Python::initialize();
+        Python::attach(|py| {
+            let standalone = PyModule::new(py, "_marty_verification").unwrap();
+            _marty_verification(&standalone).unwrap();
+            assert_kms_only_surface(&standalone);
+
+            #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+            {
+                let session = crate::chip_io::BacSession::from_session_keys(
+                    [0x11; 16], [0x22; 16], [0x33; 8],
+                );
+                let state = bac_session_dict(py, &session).unwrap();
+                assert!(!state.contains("k_s_enc").unwrap());
+                assert!(!state.contains("k_s_mac").unwrap());
+                assert!(state.contains("ssc").unwrap());
+            }
+
+            let embedded = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_verification(&embedded).unwrap();
+            assert_kms_only_surface(&embedded);
+        });
+    }
+}
+
+#[cfg(all(test, feature = "csca", feature = "local-key-operations"))]
+mod local_key_surface_tests {
+    use super::*;
+
+    #[test]
+    fn local_build_preserves_explicit_protocol_secret_compatibility_methods() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_verification").unwrap();
+            _marty_verification(&module).unwrap();
+
+            for (class_name, methods) in [
+                (
+                    "NativeBacSession",
+                    &[
+                        "derive_bac_keys",
+                        "start_bac_with_keys",
+                        "start_bac_with_random",
+                        "derive_session_keys",
+                        "set_session_keys",
+                        "session_keys",
+                    ][..],
+                ),
+                (
+                    "NativePaceSession",
+                    &["derive_password_key", "start_pace_with_private_key"][..],
+                ),
+                (
+                    "NativeEacChipAuthentication",
+                    &["generate_ephemeral_keypair", "perform_chip_authentication"][..],
+                ),
+                (
+                    "NativeEacSecureMessaging",
+                    &["encrypt_apdu_with_iv", "state"][..],
+                ),
+            ] {
+                let class = module.getattr(class_name).unwrap();
+                for method in methods {
+                    assert!(class.hasattr(*method).unwrap(), "{class_name}.{method}");
+                }
+            }
+            assert!(module.hasattr("eac_calculate_mac").unwrap());
+
+            let session =
+                crate::chip_io::BacSession::from_session_keys([0x11; 16], [0x22; 16], [0x33; 8]);
+            let state = bac_session_dict(py, &session).unwrap();
+            assert!(state.contains("k_s_enc").unwrap());
+            assert!(state.contains("k_s_mac").unwrap());
+        });
+    }
 }
 
 #[cfg(test)]

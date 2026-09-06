@@ -22,14 +22,16 @@
 //! assert!(ed448_verify(&public_key, message, &signature)?);
 //! ```
 
+#[cfg(feature = "eddsa-local-signing")]
 use ed448_goldilocks_plus::rand_core::OsRng;
-use ed448_goldilocks_plus::{
-    Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH,
-};
+use ed448_goldilocks_plus::{Signature, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+#[cfg(feature = "eddsa-local-signing")]
+use ed448_goldilocks_plus::{SigningKey, SECRET_KEY_LENGTH};
 
 use crate::{CryptoError, CryptoResult};
 
 /// Ed448 private key size in bytes (57 bytes).
+#[cfg(feature = "eddsa-local-signing")]
 pub const ED448_PRIVATE_KEY_SIZE: usize = SECRET_KEY_LENGTH;
 
 /// Ed448 public key size in bytes (57 bytes).
@@ -42,6 +44,7 @@ pub const ED448_SIGNATURE_SIZE: usize = SIGNATURE_LENGTH;
 ///
 /// # Returns
 /// A tuple of (private_key, public_key) as byte vectors.
+#[cfg(feature = "eddsa-local-signing")]
 pub fn ed448_generate() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
@@ -60,6 +63,7 @@ pub fn ed448_generate() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 ///
 /// # Returns
 /// 114-byte signature
+#[cfg(feature = "eddsa-local-signing")]
 pub fn ed448_sign(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != ED448_PRIVATE_KEY_SIZE {
         return Err(CryptoError::crypto_error(format!(
@@ -90,6 +94,7 @@ pub fn ed448_sign(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
 ///
 /// # Returns
 /// 114-byte signature
+#[cfg(feature = "eddsa-local-signing")]
 pub fn ed448_sign_with_context(
     private_key: &[u8],
     message: &[u8],
@@ -310,7 +315,7 @@ pub fn verify_ed448_spki(
     Ok(verifying_key.verify_raw(&sig, message).is_ok())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "eddsa-local-signing"))]
 mod tests {
     use super::*;
 

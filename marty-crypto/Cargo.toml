@@ -18,25 +18,116 @@ crate-type = ["rlib"]
 # Preserve the historical feature-complete default while allowing consumers
 # with a narrow security boundary to compile only the primitives they use.
 default = ["full"]
-ecdsa = []           # ECDSA with P-256/P-384/P-521
-eddsa = []           # Ed25519 and Ed448
-rsa = ["dep:rsa"]   # RSA PKCS#1 v1.5 and PSS
+# Enforcement marker for processes whose long-term credential keys live in a
+# remote KMS. It enables no primitives by itself; lib.rs rejects combinations
+# that would restore an in-process credential private-key capability.
+kms-only = []
+# Compatibility aliases retain the historical signing + verification surface.
+ecdsa = ["ecdsa-local-signing"]
+eddsa = ["eddsa-local-signing"]
+rsa = ["rsa-local-signing"]
+# Positive capabilities let verifier/KMS builds exclude private-key APIs.
+ecdsa-verification = [
+    "dep:ecdsa-core",
+    "ecdsa-core/verifying",
+    "dep:elliptic-curve",
+    "dep:p256",
+    "dep:p384",
+    "dep:p521",
+    "dep:sha2",
+    "p256/ecdsa-core",
+    "p256/arithmetic",
+    "p256/sha256",
+    "p256/pkcs8",
+    "p256/std",
+    "p384/ecdsa-core",
+    "p384/arithmetic",
+    "p384/sha384",
+    "p384/pkcs8",
+    "p384/std",
+    "p521/ecdsa-core",
+    "p521/arithmetic",
+    "p521/sha512",
+    "p521/std",
+]
+ecdsa-local-signing = [
+    "ecdsa-verification",
+    "ecdsa-core/signing",
+    "dep:rand",
+    "p256/ecdsa",
+    "p384/ecdsa",
+    "p521/ecdsa",
+    "p521/getrandom",
+]
+eddsa-verification = [
+    "dep:ed25519-dalek",
+    "dep:ed448-goldilocks-plus",
+    "ed25519-dalek/pkcs8",
+]
+eddsa-local-signing = ["eddsa-verification", "dep:rand", "ed25519-dalek/rand_core"]
+rsa-verification = ["dep:rsa", "dep:sha1", "dep:sha2"]
+rsa-local-signing = ["rsa-verification", "dep:rand"]
 bbs = ["dep:zkryptium"] # BBS+ with BLS12-381 (SHA-256/SHAKE-256)
-jwk = []             # Public SPKI/certificate to RFC 7517 conversion
-ecdh = []            # P-256/P-384/X25519 agreement
-hashing = []         # SHA-1/SHA-2 and HMAC helpers
-signature-verification = ["ecdsa", "eddsa", "rsa"]
+jwk = [
+    "dep:elliptic-curve",
+    "dep:p256",
+    "dep:p384",
+    "dep:p521",
+    "p256/arithmetic",
+    "p384/arithmetic",
+    "p521/arithmetic",
+] # Public SPKI/certificate to RFC 7517 conversion
+ecdh = [
+    "dep:elliptic-curve",
+    "dep:p256",
+    "dep:p384",
+    "dep:rand",
+    "dep:x25519-dalek",
+    "p256/ecdh",
+    "p384/ecdh",
+    "kdf",
+    "symmetric",
+]
+hashing = ["dep:sha1", "dep:sha2"]
+signature-verification = ["ecdsa-verification", "eddsa-verification", "rsa-verification"]
 x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
-crl = ["x509"]
+crl = ["x509", "dep:pem-rfc7468"]
 crl-builder = ["crl", "cert-builder"]
-ocsp = ["x509"]
-symmetric = []       # AES-GCM, AES-CBC, 3DES
-kdf = ["hashing"]    # HKDF, PBKDF2, and transcript-bound mDoc key derivation
-pkcs12 = []          # PKCS#12 bundle parsing
-serialization = ["rsa"]
-keygen = ["bbs", "ecdh", "eddsa", "rsa"]
-cert-builder = ["keygen", "x509"]
+ocsp = ["x509", "dep:x509-ocsp"]
+symmetric = ["dep:aes", "dep:aes-gcm", "dep:cbc", "dep:cipher", "dep:cmac", "dep:des", "dep:hmac", "dep:sha2"]
+kdf = ["hashing", "dep:hkdf", "dep:pbkdf2"]
+pkcs12 = ["dep:p12", "dep:pem-rfc7468", "dep:pkcs8", "dep:zeroize"]
+serialization = ["private-key-codec"]
+public-key-codec = [
+    "dep:ed25519-dalek",
+    "dep:elliptic-curve",
+    "dep:p256",
+    "dep:p384",
+    "dep:pkcs8",
+    "p256/pkcs8",
+    "p384/pkcs8",
+]
+private-key-codec = [
+    "public-key-codec",
+    "rsa-verification",
+    "dep:pem-rfc7468",
+    "ed25519-dalek/pem",
+    "p256/pem",
+    "p384/pem",
+    "p521/pem",
+]
+keygen = ["bbs", "ecdh", "ecdsa", "eddsa", "rsa", "dep:zeroize"]
+cert-builder = [
+    "keygen",
+    "x509",
+    "dep:signature",
+    "ed25519-dalek/pem",
+    "p256/pem",
+    "p384/pem",
+    "p521/pem",
+    "x509-cert/builder",
+]
 sod-builder = ["dep:cms", "cms/builder", "cert-builder"]
 # These features are defined for cfg guards but require external crates when used
 aamva-client = []    # AAMVA OCSP client (needs reqwest externally)
@@ -69,47 +160,46 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("reqwest")
 x509-cert = { workspace = true }
 der = { workspace = true }
 const-oid = { workspace = true }
-sha1 = { workspace = true }
-sha2 = { workspace = true }
-p256 = { workspace = true }
-p384 = { workspace = true }
-p521 = { workspace = true }
-ecdsa = { workspace = true }
-elliptic-curve = { workspace = true }
-pem-rfc7468 = { workspace = true }
-signature = { workspace = true }
+sha1 = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+p256 = { workspace = true, optional = true }
+p384 = { workspace = true, optional = true }
+p521 = { workspace = true, optional = true }
+ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, optional = true }
+elliptic-curve = { workspace = true, optional = true }
+pem-rfc7468 = { workspace = true, optional = true }
+signature = { workspace = true, optional = true }
 
 # RSA support
 rsa = { workspace = true, optional = true }
 
 # PKCS standards
-pkcs8 = { workspace = true }
-pkcs5 = { workspace = true }
+pkcs8 = { workspace = true, optional = true }
 spki = { workspace = true }
 
 # CMS/CRL/OCSP
 cms = { workspace = true, optional = true }
-x509-ocsp = { workspace = true }
+x509-ocsp = { workspace = true, optional = true }
 
 # Symmetric encryption
-aes-gcm = { workspace = true }
-aes = { workspace = true }
-cbc = { workspace = true }
-des = { workspace = true }
+aes-gcm = { workspace = true, optional = true }
+aes = { workspace = true, optional = true }
+cbc = { workspace = true, optional = true }
+des = { workspace = true, optional = true }
 
 # Key derivation
-hkdf = { workspace = true }
-pbkdf2 = { workspace = true }
-hmac = { workspace = true }
-cmac = { workspace = true }
-cipher = { workspace = true }
+hkdf = { workspace = true, optional = true }
+pbkdf2 = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+cmac = { workspace = true, optional = true }
+cipher = { workspace = true, optional = true }
 
 # Ed25519 and X25519
-ed25519-dalek = { workspace = true }
-x25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true, optional = true }
+x25519-dalek = { workspace = true, optional = true }
 
 # Ed448
-ed448-goldilocks-plus = { workspace = true }
+ed448-goldilocks-plus = { workspace = true, optional = true }
 
 # BBS+ signatures
 zkryptium = { workspace = true, optional = true }
@@ -121,11 +211,10 @@ chrono = { workspace = true }
 base64 = { workspace = true }
 
 # PKCS#12
-p12 = { workspace = true }
+p12 = { workspace = true, optional = true }
 
 # Random
-rand = { workspace = true }
-rand_core = { workspace = true }
+rand = { workspace = true, optional = true }
 
 # Serialization
 serde = { workspace = true }
@@ -133,11 +222,13 @@ serde_json = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
+zeroize = { workspace = true, optional = true }
 
 # Hex encoding (for fingerprints)
 hex = "0.4"
 
 [dev-dependencies]
+hmac = { workspace = true }
 tempfile = { workspace = true }
 rcgen = { workspace = true }
 
@@ -164,6 +255,14 @@ required-features = ["hashing"]
 [[test]]
 name = "public_jwk_vectors"
 required-features = ["jwk"]
+
+[[test]]
+name = "public_key_codec"
+required-features = ["public-key-codec"]
+
+[[test]]
+name = "verification_only"
+required-features = ["signature-verification"]
 
 [[test]]
 name = "rfc5869_hkdf"

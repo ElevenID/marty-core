@@ -29,13 +29,19 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::issuer::generate_pkce_challenge_s256;
 use crate::types::{
     AuthorizationDetail, AuthorizationRequest, CodeChallengeMethod, CredentialOffer,
     CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject, TokenResponse,
 };
 use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
 use crate::wallet_sd_jwt::{self, SdJwtIssuerKeyResolver};
+
+fn generate_pkce_challenge_s256(code_verifier: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(code_verifier.as_bytes()))
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Issuer metadata (wallet-parsed)
@@ -90,7 +96,9 @@ pub struct AuthorizationServerMetadata {
 /// A ZK proof for one input descriptor in a presentation.
 ///
 /// `predicate_id` follows the wire format (e.g. `"age_over_18"`, `"age_over_21"`).
-/// Generation is the caller's responsibility (via `marty-zkp::Prover::prove_by_id`).
+/// Generation is the caller's responsibility via `marty-zkp::Prover::prove`.
+/// The proof input must use the descriptor's exact predicate claim, nonce-derived
+/// canonical SessionTranscript, and verifier-selected `verification_time`.
 #[derive(Debug, Clone)]
 pub struct ZkProofEntry {
     /// The `InputDescriptor.id` this proof satisfies.
@@ -1049,7 +1057,7 @@ impl WalletEngine {
                     serde_json::json!({
                         "predicate": entry.predicate_id,
                         "proof": proof_b64,
-                        "proof_type": crate::formats::zk_mdoc::ZK_PROOF_TYPE_LIGERO,
+                        "proof_type": crate::formats::ZK_PROOF_TYPE_LIGERO,
                     }),
                 );
 

@@ -19,6 +19,7 @@
 
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::{CryptoError, CryptoResult};
 
@@ -60,7 +61,6 @@ pub enum KeyType {
 }
 
 /// Generated key pair or symmetric key.
-#[derive(Clone)]
 pub struct GeneratedKey {
     /// Key type
     pub key_type: KeyType,
@@ -95,6 +95,12 @@ impl GeneratedKey {
             KeyType::Rsa4096 => 4096,
             KeyType::Bls12381 => 256,
         }
+    }
+}
+
+impl Drop for GeneratedKey {
+    fn drop(&mut self) {
+        self.private_key.zeroize();
     }
 }
 

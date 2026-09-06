@@ -1,6 +1,12 @@
 //! Python adapters for mdoc.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+
+// ============================================================================
+// mDL Document Parsing Bindings
+// ============================================================================
 
 /// Python wrapper for parsed DeviceResponse.
 #[pyclass(name = "DeviceResponse", from_py_object)]

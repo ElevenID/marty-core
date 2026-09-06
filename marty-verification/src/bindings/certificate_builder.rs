@@ -1,16 +1,22 @@
 //! Python adapters for certificate builder.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+
+// ============================================================================
+// Certificate Builder Bindings (feature-gated)
+// ============================================================================
 
 /// Python-friendly certificate profile enum.
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyclass(name = "CertProfile", from_py_object)]
 #[derive(Clone)]
 pub struct PyCertProfile {
     inner: marty_crypto::cert_builder::CertProfile,
 }
 
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pymethods]
 impl PyCertProfile {
     /// Create a CA profile with optional path length constraint.
@@ -73,7 +79,7 @@ impl PyCertProfile {
 }
 
 /// Python-friendly certificate builder configuration.
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyclass(name = "CertificateBuilderConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyCertificateBuilderConfig {
@@ -87,7 +93,7 @@ pub struct PyCertificateBuilderConfig {
     key_type: String,
 }
 
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pymethods]
 impl PyCertificateBuilderConfig {
     /// Create a new certificate builder configuration with defaults.
@@ -339,7 +345,7 @@ impl PyCertificateBuilderConfig {
 ///
 /// Returns:
 ///     Tuple of (certificate_der_bytes, private_key_pem_str)
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyfunction]
 pub(super) fn build_self_signed_certificate<'py>(
     py: Python<'py>,
@@ -411,7 +417,7 @@ pub(super) fn build_self_signed_certificate<'py>(
 ///
 /// Returns:
 ///     DER-encoded certificate bytes
-#[cfg(feature = "cert-builder")]
+#[cfg(all(feature = "cert-builder", feature = "local-key-operations"))]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_self_signed_certificate_with_key<'py>(

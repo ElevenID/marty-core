@@ -5,7 +5,9 @@
 //!
 //! Structure: IssuerSigned { nameSpaces, issuerAuth(COSE_Sign1(MSO)) }
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+#[cfg(any(test, feature = "issuer"))]
+use std::collections::HashSet;
 
 use ciborium::Value as CborValue;
 use coset::{
@@ -20,8 +22,10 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::CredentialSigner;
-use crate::types::{CredentialClaims, IssuerKey, SignedCredential};
+use crate::signer::{validate_remote_signature, CredentialSigner};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, SignedCredential};
 
 // ── CBOR tag number for `encoded-cbor` (tag 24, RFC 8949 §3.4.5.1) ──
 // Used for tagged CBOR byte strings inside IssuerSignedItem and issuerAuth.
@@ -38,6 +42,7 @@ const MDOC_CLAIM_NESTING_TOO_DEEP: &str = "mdoc claim exceeds maximum nesting de
 const MDOC_UNSUPPORTED_NUMERIC_VALUE: &str = "mdoc claim contains an unsupported numeric value";
 const MDOC_VALIDITY_OUT_OF_RANGE: &str = "mdoc validity period is out of range";
 const MDOC_RS256_UNSUPPORTED: &str = "RS256 is not supported for mDoc COSE signing";
+const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 /// Sign an mDoc credential.
 ///
@@ -46,6 +51,7 @@ const MDOC_RS256_UNSUPPORTED: &str = "RS256 is not supported for mDoc COSE signi
 ///   - `issuerAuth`: COSE_Sign1(MobileSecurityObject)
 ///
 /// The resulting credential is base64url-encoded for transport.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -58,6 +64,7 @@ pub fn sign_mdoc(
 /// This remains crate-private so remote/BYOK flows continue through explicit
 /// prepare/sign/assemble APIs while scalar local issuance preserves the legacy
 /// issuer-key parsing, configured-algorithm, and signing error boundaries.
+#[cfg(any(test, all(feature = "issuer", feature = "local-key-operations")))]
 pub(crate) fn sign_mdoc_with_device_key(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -66,6 +73,7 @@ pub(crate) fn sign_mdoc_with_device_key(
     sign_mdoc_with_optional_device_key(issuer_key, claims, Some(holder_public_jwk))
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_mdoc_with_optional_device_key(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -168,19 +176,20 @@ pub fn sign_mdoc_with_signer(
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
     let prepared = prepare_mdoc(signer, claims)?;
-    let signature = signer.sign(&prepared.tbs_data)?;
+    let signature = signer.sign(prepared.signing_payload())?;
     assemble_mdoc(prepared, &signature)
 }
 
 /// Intermediate state between mDoc preparation and signing.
 ///
-/// Returned by [`prepare_mdoc()`] — the caller signs `tbs_data` and
-/// passes the result to [`assemble_mdoc()`].
+/// Returned by [`prepare_mdoc()`] — the caller signs
+/// [`PreparedMdoc::signing_payload`] and passes the result to
+/// [`assemble_mdoc()`].
 pub struct PreparedMdoc {
     /// The COSE_Sign1 to-be-signed bytes.
-    pub tbs_data: Vec<u8>,
+    tbs_data: Vec<u8>,
     /// The credential ID (urn:uuid:...) assigned during preparation.
-    pub credential_id: String,
+    credential_id: String,
     /// Serialized COSE protected header.
     protected_header: coset::Header,
     /// Serialized COSE unprotected header. ISO 18013-5 requires the issuer
@@ -192,12 +201,28 @@ pub struct PreparedMdoc {
     namespace: String,
     /// The tagged CBOR IssuerSignedItem entries.
     issuer_signed_items: Vec<CborValue>,
+    algorithm: crate::types::SigningAlgorithm,
 }
 
 impl PreparedMdoc {
     /// Borrow the complete COSE_Sign1 Sig_structure signing payload.
     pub fn signing_payload(&self) -> &[u8] {
         &self.tbs_data
+    }
+
+    /// Borrow the credential ID assigned during preparation.
+    pub fn credential_id(&self) -> &str {
+        &self.credential_id
+    }
+
+    /// Algorithm the remote signer must use.
+    pub fn algorithm(&self) -> crate::types::SigningAlgorithm {
+        self.algorithm
+    }
+
+    /// Check a remote signer's raw output without consuming prepared state.
+    pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
+        validate_remote_signature(self.algorithm, signature)
     }
 }
 
@@ -220,6 +245,7 @@ pub(crate) struct ValidatedMdocPreparation {
     issuer_claims: Vec<ValidatedMdocClaim>,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 enum ValidatedMdocCredentialId {
     Explicit { value: String, uuid: uuid::Uuid },
     Generated,
@@ -229,11 +255,13 @@ enum ValidatedMdocCredentialId {
 ///
 /// The state is crate-private and intentionally has no serialization, clone,
 /// or debug representation because it owns converted credential claims.
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) struct ValidatedMdocBatchPlanItem {
     credential_id: ValidatedMdocCredentialId,
     preparation: ValidatedMdocPreparation,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 impl ValidatedMdocBatchPlanItem {
     pub(crate) fn with_explicit_credential_id(
         credential_id: String,
@@ -262,6 +290,7 @@ impl ValidatedMdocBatchPlanItem {
 /// Every variant retains the failing caller ordinal for internal diagnostics,
 /// while the remote boundary deliberately maps it to the existing public error
 /// category and message without exposing routing metadata.
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) enum MdocBatchPlanError {
     DuplicateBatchIdentity {
         ordinal: usize,
@@ -279,6 +308,7 @@ pub(crate) enum MdocBatchPlanError {
     },
 }
 
+#[cfg(any(test, feature = "issuer"))]
 impl MdocBatchPlanError {
     pub(crate) fn ordinal(&self) -> usize {
         match self {
@@ -291,6 +321,7 @@ impl MdocBatchPlanError {
 }
 
 /// One already-validated mdoc preparation routed through a shared digest call.
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) struct MdocBatchPreparationInput {
     pub(crate) batch_id: u64,
     pub(crate) credential_id: String,
@@ -299,6 +330,7 @@ pub(crate) struct MdocBatchPreparationInput {
     pub(crate) preparation: ValidatedMdocPreparation,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 impl MdocBatchPreparationInput {
     pub(crate) fn new(
         batch_id: u64,
@@ -325,6 +357,7 @@ impl MdocBatchPreparationInput {
 /// allocated. A timestamp is then allocated only after an item's credential
 /// identity is accepted. These ordering rules preserve the remote API's error
 /// precedence and source-consumption contract.
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) fn plan_validated_mdoc_batch<T>(
     batch: Vec<(u64, T)>,
     mut validate_item: impl FnMut(T) -> Oid4vciResult<ValidatedMdocBatchPlanItem>,
@@ -372,6 +405,7 @@ pub(crate) fn plan_validated_mdoc_batch<T>(
 }
 
 /// One prepared mdoc restored to its caller-assigned batch identity.
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) struct PreparedMdocBatchPreparation {
     pub(crate) batch_id: u64,
     pub(crate) prepared_mdoc: PreparedMdoc,
@@ -400,7 +434,7 @@ struct MdocDigestAssembly {
 /// Prepare an mDoc credential for signing.
 ///
 /// Builds the MSO and COSE_Sign1 structure, returning a [`PreparedMdoc`]
-/// whose `tbs_data` field must be signed externally.
+/// whose [`PreparedMdoc::signing_payload`] must be signed externally.
 pub fn prepare_mdoc(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -432,6 +466,9 @@ pub fn prepare_mdoc_with_credential_id_and_device_key(
     reserved_credential_id: Option<&str>,
     holder_public_jwk: Option<&serde_json::Value>,
 ) -> Oid4vciResult<PreparedMdoc> {
+    if let Some(jwk) = holder_public_jwk {
+        validate_public_holder_jwk(jwk)?;
+    }
     let credential_id = match reserved_credential_id {
         Some(value) => {
             validate_mdoc_credential_id(value)?;
@@ -525,6 +562,7 @@ fn prepare_mdoc_with_inputs_and_digest_executor<'a>(
 /// Batch callers run this for the complete input collection before allocating
 /// UUIDs, timestamps, or salts. Scalar callers use the same conversion and
 /// finalization kernel, preserving their exact successful output bytes.
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) fn validate_mdoc_preparation(
     signing_algorithm: crate::types::SigningAlgorithm,
     claims: &CredentialClaims,
@@ -616,6 +654,16 @@ fn finish_mdoc_preparation(
         cose_algorithm,
         issuer_claims: _,
     } = preparation;
+    let algorithm = match cose_algorithm {
+        iana::Algorithm::ES256 => crate::types::SigningAlgorithm::ES256,
+        iana::Algorithm::ES384 => crate::types::SigningAlgorithm::ES384,
+        iana::Algorithm::EdDSA => crate::types::SigningAlgorithm::EdDSA,
+        _ => {
+            return Err(Oid4vciError::MdocError(
+                "unsupported prepared mDoc signing algorithm".into(),
+            ))
+        }
+    };
 
     // Build MSO
     let mso = build_mobile_security_object(
@@ -647,6 +695,7 @@ fn finish_mdoc_preparation(
         mobile_security_object_bytes,
         namespace,
         issuer_signed_items: digest_assembly.issuer_signed_items,
+        algorithm,
     })
 }
 
@@ -668,6 +717,7 @@ fn mdoc_cose_algorithm(
 
 /// Assemble a signed mDoc from the prepared data and a raw COSE signature.
 pub fn assemble_mdoc(prepared: PreparedMdoc, signature: &[u8]) -> Oid4vciResult<SignedCredential> {
+    prepared.validate_signature(signature)?;
     let cose_sign1 = CoseSign1Builder::new()
         .protected(prepared.protected_header)
         .unprotected(prepared.unprotected_header)
@@ -811,6 +861,7 @@ fn encode_validated_issuer_signed_item_bytes(
     Ok((issuer_signed_item_bytes, encoded_issuer_signed_item_bytes))
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn plan_mdoc_digests<'a>(
     credential_id: u64,
     issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
@@ -941,6 +992,7 @@ fn assemble_mdoc_digest_batch(
 /// digest executor call. The public remote wrapper validates duplicate routing
 /// and embedded credential identities before constructing these inputs; this
 /// kernel repeats the routing check so internal misuse also fails closed.
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) fn prepare_validated_mdoc_batch_with_digest_executor(
     batch: Vec<MdocBatchPreparationInput>,
     mut next_salt: impl FnMut() -> [u8; 32],
@@ -1112,11 +1164,12 @@ fn build_mobile_security_object(
 /// Convert a holder EC public JWK to the COSE_Key embedded in DeviceKeyInfo.
 ///
 /// ISO 18013-5 DeviceAuthentication currently uses EC2 keys in the supported
-/// Marty profiles. Only public coordinates are encoded, even if a caller
-/// accidentally supplies other JWK members.
+/// Marty profiles. Private JWK members are rejected before coordinates are
+/// decoded so callers cannot accidentally cross a private-key boundary.
 fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
     use base64::Engine;
 
+    validate_public_holder_jwk(jwk)?;
     let object = jwk
         .as_object()
         .ok_or_else(|| Oid4vciError::MdocError("holder public JWK must be a JSON object".into()))?;
@@ -1188,9 +1241,25 @@ fn jwk_to_cose_device_key(jwk: &serde_json::Value) -> Oid4vciResult<CborValue> {
     ]))
 }
 
+fn validate_public_holder_jwk(jwk: &serde_json::Value) -> Oid4vciResult<()> {
+    let object = jwk
+        .as_object()
+        .ok_or_else(|| Oid4vciError::MdocError("holder public JWK must be a JSON object".into()))?;
+    if let Some(member) = PRIVATE_JWK_MEMBERS
+        .iter()
+        .find(|member| object.contains_key(**member))
+    {
+        return Err(Oid4vciError::MdocError(format!(
+            "mDoc holder JWK must not contain private member '{member}'"
+        )));
+    }
+    Ok(())
+}
+
 /// Sign a payload with COSE_Sign1 using the issuer's JWK.
 ///
 /// Returns the serialized COSE_Sign1 bytes.
+#[cfg(any(test, feature = "local-key-operations"))]
 fn sign_cose_sign1(
     payload: &[u8],
     jwk: &ssi_jwk::JWK,
@@ -1993,10 +2062,15 @@ mod tests {
     ) -> (u64, String, Vec<u8>, String) {
         let credential_id = prepared.credential_id.clone();
         let tbs_data = prepared.tbs_data.clone();
+        let signature_len = match prepared.algorithm() {
+            SigningAlgorithm::ES256 | SigningAlgorithm::EdDSA | SigningAlgorithm::ES256K => 64,
+            SigningAlgorithm::ES384 => 96,
+            SigningAlgorithm::RS256 => 256,
+        };
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id: assembled_id,
-        } = assemble_mdoc(prepared, &[0xa5; 96]).unwrap()
+        } = assemble_mdoc(prepared, &vec![0xa5; signature_len]).unwrap()
         else {
             panic!("batch fixture must assemble an mdoc")
         };
@@ -3516,7 +3590,6 @@ mod tests {
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD,
                 &y,
             ),
-            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
         });
 
         let prepared =
@@ -3563,6 +3636,47 @@ mod tests {
                 (CborValue::Integer((-3i64).into()), CborValue::Bytes(y)),
             ])
         );
+    }
+
+    #[test]
+    fn test_prepare_mdoc_rejects_every_private_holder_jwk_member() {
+        let key = test_p256_key();
+        let claims = CredentialClaims {
+            subject_id: None,
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: Default::default(),
+            expiration_seconds: Some(86400),
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+
+        for member in PRIVATE_JWK_MEMBERS {
+            let mut holder_jwk = serde_json::json!({
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+            });
+            holder_jwk
+                .as_object_mut()
+                .unwrap()
+                .insert(member.to_owned(), serde_json::json!("secret"));
+
+            let error = prepare_mdoc_with_credential_id_and_device_key(
+                &key,
+                &claims,
+                None,
+                Some(&holder_jwk),
+            )
+            .err()
+            .expect("private holder JWK member must be rejected");
+            assert!(error.to_string().contains("private member"));
+        }
     }
 
     #[test]

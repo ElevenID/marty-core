@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 use pyo3::types::PyBytes;
 
 pyo3::create_exception!(_marty_rs, HaipJweError, PyValueError);
@@ -10,6 +11,7 @@ fn native_error(error: impl std::fmt::Display) -> PyErr {
 
 /// Generate public and private P-256 JWK JSON for one HAIP response flow.
 #[pyfunction]
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn haip_generate_response_encryption_key() -> PyResult<(String, String)> {
     marty_verification::jwk::generate_haip_response_encryption_jwk_pair().map_err(native_error)
 }
@@ -24,6 +26,7 @@ fn haip_validate_response_header(compact_jwe: &str) -> PyResult<String> {
 
 /// Decrypt a bounded ECDH-ES compact JWE with a private P-256 JWK JSON value.
 #[pyfunction]
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn haip_decrypt_response<'py>(
     py: Python<'py>,
     compact_jwe: &str,
@@ -36,12 +39,15 @@ fn haip_decrypt_response<'py>(
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("HaipJweError", module.py().get_type::<HaipJweError>())?;
-    module.add_function(wrap_pyfunction!(
-        haip_generate_response_encryption_key,
-        module
-    )?)?;
+    #[cfg(feature = "ephemeral-session-keys")]
+    {
+        module.add_function(wrap_pyfunction!(
+            haip_generate_response_encryption_key,
+            module
+        )?)?;
+        module.add_function(wrap_pyfunction!(haip_decrypt_response, module)?)?;
+    }
     module.add_function(wrap_pyfunction!(haip_validate_response_header, module)?)?;
-    module.add_function(wrap_pyfunction!(haip_decrypt_response, module)?)?;
     Ok(())
 }
 

@@ -1,6 +1,7 @@
 //! Build script for marty-zkp
 //!
-//! **Real library (default):** compiles 12 Longfellow source files directly.
+//! **Real library (default):** compiles the verifier source set directly.
+//! Enabling `prover` adds circuit and witness generation sources.
 //!
 //! **Mock stub (dev / CI only):** activated by either:
 //!   - the `zk-mock` Cargo feature  (`--features marty-zkp/zk-mock`), or
@@ -67,7 +68,7 @@ fn compile_libzk(lib_dir: &std::path::Path) {
     let is_msvc = target_env == "msvc";
 
     let mut build = cc::Build::new();
-    build.cpp(true).include(&lib_src);
+    build.cpp(true).include(&lib_src).include("src/cpp");
 
     if is_msvc {
         build
@@ -97,20 +98,30 @@ fn compile_libzk(lib_dir: &std::path::Path) {
         build.include("/opt/homebrew/include");
     }
 
+    let prover_enabled = env::var("CARGO_FEATURE_PROVER").is_ok();
+    if !prover_enabled {
+        build.define("MARTY_ZKP_VERIFIER_ONLY", None);
+    }
+
     build
         .file(lib_src.join("circuits/mdoc/mdoc_zk.cc"))
         .file(lib_src.join("circuits/mdoc/mdoc_decompress.cc"))
-        .file(lib_src.join("circuits/mdoc/mdoc_generate_circuit.cc"))
         .file(lib_src.join("circuits/mdoc/mdoc_circuit_id.cc"))
         .file(lib_src.join("circuits/mdoc/zk_spec.cc"))
-        .file(lib_src.join("circuits/sha/flatsha256_witness.cc"))
         .file(lib_src.join("circuits/sha/sha256_constants.cc"))
         .file(lib_src.join("ec/p256.cc"))
         .file(lib_src.join("algebra/nat.cc"))
         .file(lib_src.join("algebra/crt.cc"))
         .file(lib_src.join("util/log.cc"))
-        .file(lib_src.join("util/crypto.cc"))
-        .compile("longfellow_zk");
+        .file(lib_src.join("util/crypto.cc"));
+
+    if prover_enabled {
+        build
+            .file(lib_src.join("circuits/mdoc/mdoc_generate_circuit.cc"))
+            .file(lib_src.join("circuits/sha/flatsha256_witness.cc"));
+    }
+
+    build.compile("longfellow_zk");
 
     if target_os == "macos" {
         println!("cargo:rustc-link-search=/opt/homebrew/lib");

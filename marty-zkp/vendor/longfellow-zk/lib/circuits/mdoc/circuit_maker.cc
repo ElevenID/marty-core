@@ -80,8 +80,7 @@ void optimize_params(const uint8_t* circuit_bytes, size_t circuit_len,
   // Parse circuits.
   const f_128 Fs;
 
-  size_t len = 1 << 27;
-  std::vector<uint8_t> bytes(len);
+  std::vector<uint8_t> bytes;
   size_t full_size = proofs::decompress(bytes, circuit_bytes, circuit_len);
 
   // Ensure that the circuit was decompressed correctly.

@@ -1,6 +1,12 @@
 //! Python adapters for mrz.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+
+// ============================================================================
+// MRZ Parsing Bindings
+// ============================================================================
 
 /// Python wrapper for parsed MRZ data.
 #[pyclass(name = "MrzData", from_py_object)]

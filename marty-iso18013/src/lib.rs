@@ -21,8 +21,10 @@
 //! ## Example
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "session-protocol")]
 //! use marty_iso18013::{DeviceEngagement, Session, SessionConfig};
 //!
+//! # #[cfg(feature = "session-protocol")]
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create device engagement
 //! let engagement = DeviceEngagement::new_qr()?;
@@ -41,32 +43,57 @@
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-// Re-export marty-types for convenience
+#[cfg(not(feature = "session-protocol"))]
+/// Marker for passive verifier builds that cannot create or retain ISO 18013
+/// holder/reader session secrets.
+///
+/// ```compile_fail
+/// use marty_iso18013::{DeviceEngagement, Session};
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_iso18013::session::SessionKeyAgreement::new();
+/// ```
+pub struct NoSessionProtocol;
+
+// Re-export marty-types for full holder/reader applications.
+#[cfg(feature = "session-protocol")]
 pub use marty_types as types;
 
 // Core protocol modules
+#[cfg(feature = "session-protocol")]
 pub mod core;
+#[cfg(feature = "verifier")]
 pub mod openid4vp;
+#[cfg(feature = "session-protocol")]
 pub mod protocol;
+#[cfg(feature = "session-protocol")]
 pub mod selective;
+#[cfg(feature = "session-protocol")]
 pub mod session;
 
 // Transport layers
+#[cfg(feature = "session-protocol")]
 pub mod transport;
 #[cfg(feature = "python")]
 mod transport_bindings;
 
 // Applications
+#[cfg(feature = "session-protocol")]
 pub mod apps;
 
 // Error types
 pub mod error;
 
 // Convenience re-exports
+#[cfg(feature = "session-protocol")]
 pub use core::{DeviceEngagement, EngagementMethod, TransportMethod};
 pub use error::{Error, Result};
+#[cfg(feature = "session-protocol")]
 pub use protocol::{MdlRequest, MdlResponse, Session, SessionConfig, SessionState};
+#[cfg(feature = "session-protocol")]
 pub use selective::SelectiveDisclosure;
+#[cfg(feature = "session-protocol")]
 pub use transport::Transport;
 
 #[cfg(feature = "python")]

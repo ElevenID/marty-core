@@ -1,14 +1,22 @@
 //! Python adapters for jwk.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+
+// ============================================================================
+// JWK/JWS/JWE Bindings
+// ============================================================================
 
 /// Python wrapper for JWK.
+#[cfg(feature = "local-key-operations")]
 #[pyclass(name = "Jwk", from_py_object)]
 #[derive(Clone)]
 pub struct PyJwk {
     inner: crate::jwk::Jwk,
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pymethods]
 impl PyJwk {
     /// Get the key type.
@@ -90,6 +98,7 @@ impl PyJwk {
 }
 
 /// Generate a JWK of the specified type.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn jwk_generate(key_type: &str) -> PyResult<PyJwk> {
     let inner = match key_type.to_lowercase().as_str() {
@@ -111,6 +120,7 @@ pub(super) fn jwk_generate(key_type: &str) -> PyResult<PyJwk> {
 }
 
 /// Sign data and create a JWS.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn jws_sign(payload: &[u8], key: &PyJwk, algorithm: &str) -> PyResult<String> {
     let header = crate::jwk::JwsHeader::new(algorithm);
@@ -118,6 +128,7 @@ pub(super) fn jws_sign(payload: &[u8], key: &PyJwk, algorithm: &str) -> PyResult
 }
 
 /// Verify a JWS and return the payload.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn jws_verify<'py>(
     py: Python<'py>,
@@ -129,6 +140,7 @@ pub(super) fn jws_verify<'py>(
 }
 
 /// Encrypt data and create a JWE.
+#[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
 #[pyfunction]
 pub(super) fn jwe_encrypt(
     plaintext: &[u8],
@@ -139,6 +151,7 @@ pub(super) fn jwe_encrypt(
 }
 
 /// Decrypt a JWE.
+#[cfg(all(feature = "local-key-operations", feature = "ephemeral-session-keys"))]
 #[pyfunction]
 pub(super) fn jwe_decrypt<'py>(
     py: Python<'py>,

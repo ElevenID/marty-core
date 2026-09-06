@@ -16,3 +16,51 @@ pub use jwe::*;
 pub use jws::*;
 pub use key::*;
 pub use public_key::*;
+
+#[cfg(not(feature = "local-key-operations"))]
+/// Marker documenting the verification-only JWK boundary.
+///
+/// JWK generation and local JWS signing do not exist in this build:
+///
+/// ```compile_fail
+/// let _ = marty_verification::jwk::generate_ec_p256();
+/// ```
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::{Jwk, JwsHeader};
+/// let _ = marty_verification::jwk::jws_sign(&JwsHeader::new("ES256"), b"payload", &Jwk::default());
+/// ```
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let _ = Jwk { d: Some("secret".into()), ..Jwk::default() };
+/// ```
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let mut jwk = Jwk::default();
+/// jwk.extra.insert("d".into(), "secret".into());
+/// ```
+///
+/// Generic private-JWK decryption also requires the explicit local-key
+/// capability; HAIP production code uses the session-scoped helper instead:
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let _ = marty_verification::jwk::jwe_decrypt("compact", &Jwk::default());
+/// ```
+pub struct VerificationOnly;
+
+#[cfg(not(feature = "ephemeral-session-keys"))]
+/// The ordinary verifier surface can inspect HAIP headers but cannot create or
+/// decrypt JWE payloads or generate session keys.
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let _ = marty_verification::jwk::jwe_encrypt_direct(b"payload", &Jwk::default(), "A256GCM");
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_verification::jwk::generate_haip_response_encryption_jwk_pair();
+/// ```
+pub struct NoEphemeralSessionKeys;

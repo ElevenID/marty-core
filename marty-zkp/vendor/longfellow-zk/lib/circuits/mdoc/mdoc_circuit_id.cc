@@ -18,7 +18,9 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <memory>
+#include <new>
 #include <vector>
 
 #include "circuits/mdoc/mdoc_decompress.h"
@@ -39,16 +41,18 @@ using f_128 = GF2_128<>;
 extern "C" {
 
 int circuit_id(uint8_t id[/*kSHA256DigestSize*/], const uint8_t* bcp,
-               size_t bcsz, const ZkSpecStruct* zk_spec) {
+               size_t bcsz, const ZkSpecStruct* zk_spec) try {
   if (id == nullptr || bcp == nullptr || zk_spec == nullptr) {
     return 0;
   }
   SHA256 sha;
   uint8_t cid[kSHA256DigestSize];
 
-  size_t len = kCircuitSizeMax;
-  std::vector<uint8_t> bytes(len);
+  std::vector<uint8_t> bytes;
   size_t full_size = decompress(bytes, bcp, bcsz);
+  if (full_size == 0) {
+    return 0;
+  }
 
   ReadBuffer rb_circuit(bytes.data(), full_size);
   CircuitRep<Fp256Base> cr_s(p256_base, P256_ID);
@@ -79,6 +83,15 @@ int circuit_id(uint8_t id[/*kSHA256DigestSize*/], const uint8_t* bcp,
 
   sha.DigestData(id);
   return 1;
+} catch (const std::bad_alloc&) {
+  log(ERROR, "circuit ID allocation failed");
+  return 0;
+} catch (const std::exception& error) {
+  log(ERROR, "circuit ID failed: %s", error.what());
+  return 0;
+} catch (...) {
+  log(ERROR, "circuit ID failed with an unknown exception");
+  return 0;
 }
 
 } /* extern "C" */

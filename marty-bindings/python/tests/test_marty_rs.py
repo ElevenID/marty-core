@@ -4,9 +4,13 @@ These tests exercise the PyO3 FFI surface. They require the native extension
 to be built first:
 
     cd marty-core/marty-bindings
-    maturin develop --release
+    maturin develop --release --features local-key-operations
 
-Or for venv-based development:
+This suite covers the explicit offline/development key-operations surface.
+Production builds intentionally omit those symbols and are checked by the
+Rust ``production_module_excludes_private_key_operations`` regression test.
+
+Or for venv-based development (after building with that feature):
 
     pip install -e ".[dev]"
 """

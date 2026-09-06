@@ -12,14 +12,14 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 # Crypto and certificates
-x509-cert = { version = "0.2", features = ["pem", "builder"] }
+x509-cert = { version = "0.2", default-features = false, features = ["pem", "std"] }
 der = { version = "0.7", features = ["pem", "derive"] }
 const-oid = "0.9"
 sha1 = { version = "0.10", features = ["oid"] }
 sha2 = "0.10"
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "ecdh"] }
-p384 = { version = "0.13", features = ["ecdsa", "pkcs8", "ecdh"] }
-p521 = { version = "0.13", features = ["ecdsa", "pkcs8", "arithmetic"] }
+p256 = { version = "0.13", default-features = false }
+p384 = { version = "0.13", default-features = false }
+p521 = { version = "0.13", default-features = false }
 ecdsa = "0.16"
 elliptic-curve = "0.13"
 pem-rfc7468 = "0.7"
@@ -29,12 +29,11 @@ signature = "2.0"
 rsa = { version = "0.9", features = ["sha2", "pem"] }
 
 # PKCS standards
-pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
-pkcs5 = { version = "0.7", features = ["pbes2"] }
+pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
 spki = { version = "0.7", features = ["pem"] }
 
 # CMS/CRL/OCSP (PKCS#7, X.509 extensions)
-cms = { version = "0.2", features = ["builder"] }
+cms = { version = "0.2", features = ["std"] }
 x509-ocsp = "0.2"
 
 # Symmetric encryption
@@ -53,7 +52,7 @@ cmac = "0.7"
 cipher = { version = "0.4", features = ["block-padding"] }
 
 # Ed25519 and X25519
-ed25519-dalek = { version = "2.1", features = ["rand_core", "pem"] }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std", "zeroize"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 
 # Ed448 (for eMRTD Active Authentication)
@@ -133,4 +132,4 @@ ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0
 # Exact history is retained on a dedicated dependency ref in the existing SSI fork.
 linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
 # ElevenID-maintained security/interoperability fork, synchronized from upstream by reviewed monthly PRs.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "671044c9495aec101bf0cd381669d5ed6f64dd11" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9" }

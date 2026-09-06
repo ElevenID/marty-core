@@ -1,6 +1,17 @@
 //! Python adapters for crypto.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+use pyo3::types::PyDict;
+
+// ============================================================================
+// Key Derivation Bindings
+// ============================================================================
+
+// ============================================================================
+// Certificate Bindings
+// ============================================================================
 
 /// Load a certificate from PEM format, return DER bytes.
 #[pyfunction]
@@ -92,7 +103,12 @@ pub(super) fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -
     marty_crypto::certificate::verify_certificate_signature(cert_der, issuer_der).map_err(to_pyerr)
 }
 
+// ============================================================================
+// Key Serialization Bindings
+// ============================================================================
+
 /// Load a private key from PEM format, return PKCS#8 DER.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn load_private_key_pem<'py>(
     py: Python<'py>,
@@ -103,6 +119,7 @@ pub(super) fn load_private_key_pem<'py>(
 }
 
 /// Validate/load a private key from DER format.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn load_private_key_der<'py>(
     py: Python<'py>,
@@ -113,6 +130,7 @@ pub(super) fn load_private_key_der<'py>(
 }
 
 /// Save a private key to PEM format (PKCS#8).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn save_private_key_pem(private_key_der: &[u8]) -> PyResult<String> {
     marty_crypto::serialization::save_private_key_pem(private_key_der).map_err(to_pyerr)
@@ -219,6 +237,7 @@ pub(super) fn p256_public_jwk_to_pem(public_jwk_json: &str) -> PyResult<String> 
 }
 
 /// Extract public key from private key (PKCS#8 DER).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn extract_public_key<'py>(
     py: Python<'py>,
@@ -230,6 +249,7 @@ pub(super) fn extract_public_key<'py>(
 }
 
 /// Detect the type of a private key.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn detect_private_key_type(der_data: &[u8]) -> PyResult<String> {
     marty_crypto::serialization::detect_private_key_type(der_data).map_err(to_pyerr)
@@ -248,6 +268,7 @@ pub(super) fn get_key_size(public_key_der: &[u8]) -> PyResult<usize> {
 }
 
 /// Convert raw EC private key bytes to PKCS#8 DER format.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn raw_private_key_to_pkcs8<'py>(
     py: Python<'py>,
@@ -272,6 +293,7 @@ pub(super) fn raw_public_key_to_spki<'py>(
 }
 
 /// Extract raw private key bytes from PKCS#8 DER format.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn pkcs8_to_raw_private_key<'py>(
     py: Python<'py>,
@@ -332,7 +354,12 @@ pub(super) fn pbkdf2_sha256<'py>(
     Ok(PyBytes::new(py, &result))
 }
 
+// ============================================================================
+// Symmetric Encryption Bindings
+// ============================================================================
+
 /// Encrypt data using AES-GCM.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn aes_gcm_encrypt<'py>(
     py: Python<'py>,
@@ -355,6 +382,7 @@ pub(super) fn aes_gcm_encrypt<'py>(
 }
 
 /// Decrypt data using AES-GCM.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn aes_gcm_decrypt<'py>(
     py: Python<'py>,
@@ -377,6 +405,7 @@ pub(super) fn aes_gcm_decrypt<'py>(
 }
 
 /// Encrypt data using 3DES-CBC.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn tdes_cbc_encrypt<'py>(
     py: Python<'py>,
@@ -390,6 +419,7 @@ pub(super) fn tdes_cbc_encrypt<'py>(
 }
 
 /// Decrypt data using 3DES-CBC.
+#[cfg(feature = "ephemeral-session-keys")]
 #[pyfunction]
 pub(super) fn tdes_cbc_decrypt<'py>(
     py: Python<'py>,
@@ -402,7 +432,12 @@ pub(super) fn tdes_cbc_decrypt<'py>(
     Ok(PyBytes::new(py, &result))
 }
 
+// ============================================================================
+// Ed25519 Bindings
+// ============================================================================
+
 /// Generate an Ed25519 key pair.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ed25519_generate<'py>(
     py: Python<'py>,
@@ -412,6 +447,7 @@ pub(super) fn ed25519_generate<'py>(
 }
 
 /// Sign a message with Ed25519.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ed25519_sign<'py>(
     py: Python<'py>,
@@ -434,7 +470,12 @@ pub(super) fn ed25519_verify(
     ))
 }
 
+// ============================================================================
+// ECDH Bindings
+// ============================================================================
+
 /// Generate an X25519 key pair.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn x25519_generate<'py>(
     py: Python<'py>,
@@ -444,6 +485,7 @@ pub(super) fn x25519_generate<'py>(
 }
 
 /// Perform X25519 key agreement.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn x25519_agree<'py>(
     py: Python<'py>,
@@ -457,6 +499,7 @@ pub(super) fn x25519_agree<'py>(
 }
 
 /// Generate a P-256 key pair.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn p256_generate<'py>(
     py: Python<'py>,
@@ -466,6 +509,7 @@ pub(super) fn p256_generate<'py>(
 }
 
 /// Perform P-256 ECDH key agreement.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn p256_agree<'py>(
     py: Python<'py>,
@@ -476,7 +520,12 @@ pub(super) fn p256_agree<'py>(
     Ok(PyBytes::new(py, &result))
 }
 
+// ============================================================================
+// ECDSA Signing Bindings
+// ============================================================================
+
 /// Generate a P-256 ECDSA key pair for signing.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ecdsa_p256_generate<'py>(
     py: Python<'py>,
@@ -486,6 +535,7 @@ pub(super) fn ecdsa_p256_generate<'py>(
 }
 
 /// Generate a P-384 ECDSA key pair for signing.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ecdsa_p384_generate<'py>(
     py: Python<'py>,
@@ -495,6 +545,7 @@ pub(super) fn ecdsa_p384_generate<'py>(
 }
 
 /// Sign a message with ECDSA P-256 SHA-256 (ES256).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ecdsa_p256_sign<'py>(
     py: Python<'py>,
@@ -506,6 +557,7 @@ pub(super) fn ecdsa_p256_sign<'py>(
 }
 
 /// Sign a message with ECDSA P-384 SHA-384 (ES384).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ecdsa_p384_sign<'py>(
     py: Python<'py>,
@@ -537,6 +589,7 @@ pub(super) fn ecdsa_p384_verify(
 }
 
 /// Generate a P-521 ECDSA key pair for signing.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ecdsa_p521_generate<'py>(
     py: Python<'py>,
@@ -546,6 +599,7 @@ pub(super) fn ecdsa_p521_generate<'py>(
 }
 
 /// Sign a message with ECDSA P-521 SHA-512 (ES512).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ecdsa_p521_sign<'py>(
     py: Python<'py>,
@@ -566,7 +620,12 @@ pub(super) fn ecdsa_p521_verify(
     marty_crypto::ecdsa::verify_p521_sha512(public_key, message, signature).map_err(to_pyerr)
 }
 
+// ============================================================================
+// RSA Signing Bindings
+// ============================================================================
+
 /// Generate an RSA key pair (2048 bits by default).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[pyo3(signature = (bits = 2048))]
 pub(super) fn rsa_generate<'py>(
@@ -582,6 +641,7 @@ pub(super) fn rsa_generate<'py>(
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 SHA-256 (RS256).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn rsa_pkcs1_sha256_sign<'py>(
     py: Python<'py>,
@@ -594,6 +654,7 @@ pub(super) fn rsa_pkcs1_sha256_sign<'py>(
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 SHA-384 (RS384).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn rsa_pkcs1_sha384_sign<'py>(
     py: Python<'py>,
@@ -606,6 +667,7 @@ pub(super) fn rsa_pkcs1_sha384_sign<'py>(
 }
 
 /// Sign a message with RSA PKCS#1 v1.5 SHA-512 (RS512).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn rsa_pkcs1_sha512_sign<'py>(
     py: Python<'py>,
@@ -618,6 +680,7 @@ pub(super) fn rsa_pkcs1_sha512_sign<'py>(
 }
 
 /// Sign a message with RSA-PSS SHA-256 (PS256).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn rsa_pss_sha256_sign<'py>(
     py: Python<'py>,
@@ -630,6 +693,7 @@ pub(super) fn rsa_pss_sha256_sign<'py>(
 }
 
 /// Sign a message with RSA-PSS SHA-384 (PS384).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn rsa_pss_sha384_sign<'py>(
     py: Python<'py>,
@@ -642,6 +706,7 @@ pub(super) fn rsa_pss_sha384_sign<'py>(
 }
 
 /// Sign a message with RSA-PSS SHA-512 (PS512).
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn rsa_pss_sha512_sign<'py>(
     py: Python<'py>,
@@ -713,14 +778,22 @@ pub(super) fn rsa_pss_sha512_verify(
     marty_crypto::rsa::verify_pss_sha512(public_key_der, message, signature).map_err(to_pyerr)
 }
 
+// ============================================================================
+// Key Generation Bindings
+// ============================================================================
+
 /// Generate random bytes.
 #[pyfunction]
 pub(super) fn generate_random_bytes<'py>(py: Python<'py>, length: usize) -> Bound<'py, PyBytes> {
-    let bytes = marty_crypto::keygen::generate_random_bytes(length);
+    use rand::RngCore;
+
+    let mut bytes = vec![0u8; length];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
     PyBytes::new(py, &bytes)
 }
 
 /// Generate a cryptographic key.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn generate_key<'py>(
     py: Python<'py>,
@@ -756,10 +829,15 @@ pub(super) fn generate_key<'py>(
     ))
 }
 
+// ============================================================================
+// Ed448 Bindings
+// ============================================================================
+
 /// Generate an Ed448 key pair.
 ///
 /// Returns:
 ///     Tuple of (private_key_bytes, public_key_bytes)
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ed448_generate<'py>(
     py: Python<'py>,
@@ -779,6 +857,7 @@ pub(super) fn ed448_generate<'py>(
 ///
 /// Returns:
 ///     114-byte signature
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn ed448_sign<'py>(
     py: Python<'py>,
@@ -803,9 +882,13 @@ pub(super) fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) 
     marty_crypto::ed448::ed448_verify(public_key, message, signature).map_err(to_pyerr)
 }
 
+// ============================================================================
+// PKCS#12 Bindings
+// ============================================================================
+
 /// Parsed PKCS#12 data.
-#[pyclass(name = "Pkcs12Data", from_py_object)]
-#[derive(Clone)]
+#[cfg(feature = "local-key-operations")]
+#[pyclass(name = "Pkcs12Data")]
 pub struct PyPkcs12Data {
     #[pyo3(get)]
     pub private_key_algorithm: String,
@@ -820,6 +903,14 @@ pub struct PyPkcs12Data {
     certificate_chain: Vec<Vec<u8>>,
 }
 
+#[cfg(feature = "local-key-operations")]
+impl Drop for PyPkcs12Data {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.private_key_der);
+    }
+}
+
+#[cfg(feature = "local-key-operations")]
 #[pymethods]
 impl PyPkcs12Data {
     /// Get the private key in DER format.
@@ -885,20 +976,25 @@ impl PyPkcs12Data {
 ///
 /// Returns:
 ///     Pkcs12Data with private key, certificate, and chain
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn pkcs12_parse(data: &[u8], password: &str) -> PyResult<PyPkcs12Data> {
-    let parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(to_pyerr)?;
+    let mut parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(to_pyerr)?;
 
     Ok(PyPkcs12Data {
         private_key_algorithm: parsed.private_key_algorithm.to_string(),
-        certificate_subject: parsed.certificate_subject,
-        friendly_name: parsed.friendly_name,
+        certificate_subject: parsed.certificate_subject.take(),
+        friendly_name: parsed.friendly_name.take(),
         chain_length: parsed.certificate_chain.len() + 1,
-        private_key_der: parsed.private_key_der,
-        certificate_der: parsed.certificate_der,
-        certificate_chain: parsed.certificate_chain,
+        private_key_der: std::mem::take(&mut parsed.private_key_der),
+        certificate_der: std::mem::take(&mut parsed.certificate_der),
+        certificate_chain: std::mem::take(&mut parsed.certificate_chain),
     })
 }
+
+// ============================================================================
+// ISO 9796-2 Bindings
+// ============================================================================
 
 /// Verify an ISO 9796-2 signature.
 ///
@@ -1003,6 +1099,7 @@ pub(super) fn iso9796_recover<'py>(
 }
 
 /// Create a Scheme 1 signature for passport-chip simulators and tests.
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn iso9796_scheme1_sign<'py>(
     py: Python<'py>,
@@ -1014,6 +1111,7 @@ pub(super) fn iso9796_scheme1_sign<'py>(
     Ok(PyBytes::new(py, &signature))
 }
 
+#[cfg(feature = "csca")]
 pub(super) fn parse_iso9796_hash_algorithm(
     hash_algorithm: &str,
 ) -> PyResult<marty_crypto::iso9796::Iso9796HashAlgorithm> {

@@ -17,11 +17,14 @@
 //! service layer. The engine only performs protocol logic and credential signing.
 
 use crate::error::{Oid4vciError, Oid4vciResult};
+#[cfg(any(test, feature = "local-key-operations"))]
 use crate::formats;
 use crate::metadata::{IssuerMetadata, MetadataBuilder};
+#[cfg(any(test, feature = "local-key-operations"))]
 use crate::proof;
 use crate::types::*;
 
+#[cfg(any(test, feature = "local-key-operations"))]
 use std::collections::HashMap;
 
 // =============================================================================
@@ -318,6 +321,7 @@ impl IssuanceEngine {
     /// - `claims` — The claims to include in the credential (from the issuer's DB)
     /// - `expected_nonce` — The c_nonce the wallet should have used
     /// - `issuer_audience` — The expected audience in the PoP JWT (usually the issuer URL)
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn issue_credential(
         &self,
         request: &CredentialRequest,
@@ -342,6 +346,7 @@ impl IssuanceEngine {
 
         // 3. Sign the credential
         let signed = match format {
+            #[cfg(feature = "sd_jwt")]
             CredentialFormat::SdJwt => {
                 let holder_jwk = verified_proof.holder_jwk.as_ref().ok_or_else(|| {
                     Oid4vciError::ProofVerificationFailed(
@@ -354,6 +359,7 @@ impl IssuanceEngine {
                     holder_jwk,
                 )?
             }
+            #[cfg(feature = "mso_mdoc")]
             CredentialFormat::MsoMdoc => {
                 let holder_jwk = verified_proof.holder_jwk.as_ref().ok_or_else(|| {
                     Oid4vciError::ProofVerificationFailed(
@@ -379,6 +385,7 @@ impl IssuanceEngine {
     }
 
     /// Issue a credential in a specific format (bypassing negotiation).
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn issue_credential_in_format(
         &self,
         format: &CredentialFormat,
@@ -420,6 +427,7 @@ impl IssuanceEngine {
     // ── Internal helpers ─────────────────────────────────────────────
 
     /// Verify the proof of possession from a credential request.
+    #[cfg(any(test, feature = "local-key-operations"))]
     fn verify_request_proof(
         &self,
         request: &CredentialRequest,
@@ -528,6 +536,7 @@ pub use crate::offer_uri::generate_offer_uri;
 ///
 /// This is the direct replacement for `create_verifiable_credential` in marty-rs.
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn create_verifiable_credential(
     issuer_id: &str,
     jwk_json: &str,
@@ -571,6 +580,7 @@ pub fn create_verifiable_credential(
 }
 
 /// Detect the signing algorithm from a JWK JSON string.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn detect_algorithm(jwk_json: &str) -> Oid4vciResult<SigningAlgorithm> {
     let jwk: serde_json::Value = serde_json::from_str(jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid JWK JSON: {}", e)))?;
@@ -594,12 +604,14 @@ pub fn detect_algorithm(jwk_json: &str) -> Oid4vciResult<SigningAlgorithm> {
 ///
 /// Key generation and public-key derivation stay in Rust so Python callers do
 /// not need to interpret or transform private key material.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_p256_jwk_pair() -> Oid4vciResult<(String, String)> {
     let material = crate::holder_key::generate_p256_did_jwk_holder_key()?;
     Ok((material.private_jwk, material.public_jwk))
 }
 
 /// Generate a did:jwk issuer identifier and its P-256 private signing JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_p256_did_jwk() -> Oid4vciResult<(String, String)> {
     let material = crate::holder_key::generate_p256_did_jwk_holder_key()?;
     Ok((material.kid, material.private_jwk))

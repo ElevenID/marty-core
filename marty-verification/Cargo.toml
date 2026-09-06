@@ -13,16 +13,42 @@ name = "marty_verification"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["iaca", "csca", "icao-client"]
+default = ["iaca", "csca", "icao-client", "ephemeral-session-keys"]
+kms-only = ["marty-crypto/kms-only", "marty-oid4vci/kms-only"]
 iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
 eudi = []           # EU Digital Identity verification
-python = ["pyo3", "marty-crypto/keygen", "marty-crypto/pkcs12"]   # Python bindings
-aamva-client = ["reqwest", "tokio", "moka"]
-icao-client = ["reqwest", "tokio", "moka", "ldap3"]
-eudi-client = ["reqwest", "reqwest/stream", "tokio", "moka", "quick-xml"]
-cert-builder = ["marty-crypto/cert-builder"]   # Explicit certificate building utilities for Python bindings
-authority-issuance = ["csca", "marty-crypto/sod-builder"] # CSCA/DSC generation and passport personalization
+python = ["pyo3"]   # Verification-only Python bindings
+# Explicit opt-in for offline development and migration tools. Production
+# Python wheels omit every raw secret/private-key operation from the module.
+local-key-operations = [
+    "python",
+    "ephemeral-session-keys",
+    "marty-crypto/ecdsa-local-signing",
+    "marty-crypto/eddsa-local-signing",
+    "marty-crypto/keygen",
+    "marty-crypto/pkcs12",
+    "marty-crypto/private-key-codec",
+    "marty-crypto/rsa-local-signing",
+    "ed25519-dalek/pem",
+    "ed25519-dalek/rand_core",
+    "p256/pem",
+    "p384/pem",
+    "p521/pem",
+]
+# Short-lived protocol/session secrets, distinct from credential issuer keys.
+ephemeral-session-keys = [
+    "marty-crypto/ecdh",
+    "marty-crypto/symmetric",
+    "p256/ecdh",
+    "p384/ecdh",
+]
+network-tls-client = ["dep:reqwest"]
+aamva-client = ["network-tls-client", "tokio", "moka"]
+icao-client = ["network-tls-client", "tokio", "moka", "ldap3"]
+eudi-client = ["network-tls-client", "reqwest/stream", "tokio", "moka", "quick-xml"]
+cert-builder = ["marty-crypto/cert-builder", "x509-cert/builder"]   # Explicit certificate building utilities for Python bindings
+authority-issuance = ["csca", "marty-crypto/sod-builder", "cms/builder", "x509-cert/builder"] # CSCA/DSC generation and passport personalization
 cross-validation = []  # OpenSSL cross-validation tests
 serde = []
 test-fixtures = []  # Enable NIST PKITS test fixtures (requires downloading fixtures)
@@ -32,16 +58,14 @@ full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "s
 # Internal crate
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = [
     "crl",
-    "ecdh",
-    "ecdsa",
-    "eddsa",
+    "ecdsa-verification",
+    "eddsa-verification",
     "hashing",
     "jwk",
     "kdf",
     "ocsp",
-    "rsa",
-    "serialization",
-    "symmetric",
+    "rsa-verification",
+    "public-key-codec",
     "x509",
 ] }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false }
@@ -56,9 +80,9 @@ pem-rfc7468 = { workspace = true }
 cms = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
-p256 = { workspace = true }
-p384 = { workspace = true }
-p521 = { workspace = true }
+p256 = { workspace = true, features = ["ecdsa-core"] }
+p384 = { workspace = true, features = ["ecdsa-core"] }
+p521 = { workspace = true, features = ["ecdsa-core"] }
 elliptic-curve = { workspace = true }
 rand = { workspace = true }
 rsa = { workspace = true }
@@ -110,14 +134,16 @@ quick-xml = { version = "0.41", features = ["serialize"], optional = true }
 pyo3 = { workspace = true, optional = true }
 
 # mDoc/mDL support
-isomdl = "0.2.0"
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9", default-features = false, features = ["presentation-verifier"] }
 coset = "0.3.8"
 time = { version = "0.3", features = ["formatting"] }
 hex = "0.4"
-zeroize = { workspace = true }
+zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+cms = { workspace = true, features = ["builder"] }
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["crl-builder"] }
+marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["local-key-operations"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 rcgen = { workspace = true }
@@ -130,6 +156,30 @@ criterion = { workspace = true }
 name = "verification_kernels"
 harness = false
 required-features = ["authority-issuance"]
+
+[[test]]
+name = "eac_behavior"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "dtc_tests"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "passport_chip_behavior"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "open_badges_conformance"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "open_badges_tests"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "public_key_jwk_golden_vectors"
+required-features = ["local-key-operations"]
 
 [target.'cfg(unix)'.dev-dependencies]
 openssl = { version = "0.10", features = ["vendored"] }

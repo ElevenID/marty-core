@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 
+#[cfg(feature = "did_web")]
 const MAX_DID_DOCUMENT_BYTES: usize = 1024 * 1024;
 const MAX_DID_DOCUMENT_DEPTH: usize = 32;
 
@@ -327,15 +328,13 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                 id: format!("{did}#{multibase}"),
                 r#type: "JsonWebKey2020".to_string(),
                 controller: did.to_string(),
-                public_key_jwk: Some(Jwk {
-                    kty: "OKP".to_string(),
-                    crv: Some("Ed25519".to_string()),
-                    x: Some(x_b64.clone()),
-                    y: None,
-                    d: None,
-                    kid: Some(format!("{did}#{multibase}")),
-                    additional_properties: serde_json::Map::new(),
-                }),
+                public_key_jwk: Some(Jwk::new_public(
+                    "OKP",
+                    Some("Ed25519".to_string()),
+                    Some(x_b64.clone()),
+                    None,
+                    Some(format!("{did}#{multibase}")),
+                )),
                 public_key_multibase: None,
                 public_key_base58: None,
                 additional_properties: serde_json::Map::new(),
@@ -349,15 +348,13 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                     id: ka_id.clone(),
                     r#type: "X25519KeyAgreementKey2020".to_string(),
                     controller: did.to_string(),
-                    public_key_jwk: Some(Jwk {
-                        kty: "OKP".to_string(),
-                        crv: Some("X25519".to_string()),
-                        x: Some(x25519_b64),
-                        y: None,
-                        d: None,
-                        kid: Some(ka_id.clone()),
-                        additional_properties: serde_json::Map::new(),
-                    }),
+                    public_key_jwk: Some(Jwk::new_public(
+                        "OKP",
+                        Some("X25519".to_string()),
+                        Some(x25519_b64),
+                        None,
+                        Some(ka_id.clone()),
+                    )),
                     public_key_multibase: None,
                     public_key_base58: None,
                     additional_properties: serde_json::Map::new(),
@@ -372,15 +369,13 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                 id: ka_id.clone(),
                 r#type: "X25519KeyAgreementKey2020".to_string(),
                 controller: did.to_string(),
-                public_key_jwk: Some(Jwk {
-                    kty: "OKP".to_string(),
-                    crv: Some("X25519".to_string()),
-                    x: Some(x_b64),
-                    y: None,
-                    d: None,
-                    kid: Some(ka_id.clone()),
-                    additional_properties: serde_json::Map::new(),
-                }),
+                public_key_jwk: Some(Jwk::new_public(
+                    "OKP",
+                    Some("X25519".to_string()),
+                    Some(x_b64),
+                    None,
+                    Some(ka_id.clone()),
+                )),
                 public_key_multibase: None,
                 public_key_base58: None,
                 additional_properties: serde_json::Map::new(),
@@ -394,15 +389,13 @@ fn resolve_did_key(did: &str) -> DidcommResult<DidDocument> {
                 id: format!("{did}#{multibase}"),
                 r#type: "JsonWebKey2020".to_string(),
                 controller: did.to_string(),
-                public_key_jwk: Some(Jwk {
-                    kty: "EC".to_string(),
-                    crv: Some("P-256".to_string()),
-                    x: Some(x_b64),
-                    y: None,
-                    d: None,
-                    kid: Some(format!("{did}#{multibase}")),
-                    additional_properties: serde_json::Map::new(),
-                }),
+                public_key_jwk: Some(Jwk::new_public(
+                    "EC",
+                    Some("P-256".to_string()),
+                    Some(x_b64),
+                    None,
+                    Some(format!("{did}#{multibase}")),
+                )),
                 public_key_multibase: None,
                 public_key_base58: None,
                 additional_properties: serde_json::Map::new(),
@@ -1270,11 +1263,10 @@ fn valid_verification_method(method: &VerificationMethod, did: &str) -> bool {
 }
 
 fn valid_public_jwk(jwk: &Jwk) -> bool {
-    const PRIVATE_MEMBERS: [&str; 7] = ["p", "q", "dp", "dq", "qi", "oth", "k"];
-    if jwk.d.is_some()
-        || PRIVATE_MEMBERS
-            .iter()
-            .any(|member| jwk.additional_properties.contains_key(*member))
+    const PRIVATE_MEMBERS: [&str; 8] = ["rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+    if PRIVATE_MEMBERS
+        .iter()
+        .any(|member| jwk.additional_properties().contains_key(*member))
     {
         return false;
     }
@@ -1287,11 +1279,11 @@ fn valid_public_jwk(jwk: &Jwk) -> bool {
         }
         "RSA" => {
             present(
-                jwk.additional_properties
+                jwk.additional_properties()
                     .get("n")
                     .and_then(serde_json::Value::as_str),
             ) && present(
-                jwk.additional_properties
+                jwk.additional_properties()
                     .get("e")
                     .and_then(serde_json::Value::as_str),
             )
@@ -1328,15 +1320,13 @@ mod tests {
             id: format!("{did}#{fragment}"),
             r#type: "JsonWebKey2020".to_string(),
             controller: did.to_string(),
-            public_key_jwk: Some(Jwk {
-                kty: "OKP".to_string(),
-                crv: Some("X25519".to_string()),
-                x: Some("avH0O2Y4tqLAq8y9zpianr8ajii5m4F_mICrzNlatXs".to_string()),
-                y: None,
-                d: None,
-                kid: None,
-                additional_properties: serde_json::Map::new(),
-            }),
+            public_key_jwk: Some(Jwk::new_public(
+                "OKP",
+                Some("X25519".to_string()),
+                Some("avH0O2Y4tqLAq8y9zpianr8ajii5m4F_mICrzNlatXs".to_string()),
+                None,
+                None,
+            )),
             public_key_multibase: None,
             public_key_base58: None,
             additional_properties: serde_json::Map::new(),
@@ -1351,7 +1341,7 @@ mod tests {
         assert_eq!(doc.id, did);
         assert!(!doc.verification_method.is_empty());
         // Should have derived X25519 key agreement
-        assert!(doc.x25519_key_agreement().is_some());
+        assert!(doc.x25519_key_agreement().unwrap().is_some());
     }
 
     #[test]
@@ -1400,9 +1390,9 @@ mod tests {
             .as_ref()
             .unwrap();
 
-        assert_eq!(jwk.additional_properties["n"], "modulus");
-        assert_eq!(jwk.additional_properties["e"], "AQAB");
-        assert_eq!(jwk.additional_properties["use"], "sig");
+        assert_eq!(jwk.additional_properties()["n"], "modulus");
+        assert_eq!(jwk.additional_properties()["e"], "AQAB");
+        assert_eq!(jwk.additional_properties()["use"], "sig");
         assert_eq!(document.assertion_method, document.authentication);
     }
 
@@ -1657,17 +1647,26 @@ mod tests {
     #[test]
     fn resolved_document_rejects_private_or_ambiguous_key_material() {
         let did = "did:web:example.com";
-        let mut private = x25519_method(did, "private");
-        private.public_key_jwk.as_mut().unwrap().d = Some("secret".to_string());
+        let private = serde_json::from_value::<VerificationMethod>(serde_json::json!({
+            "id": format!("{did}#private"),
+            "type": "JsonWebKey2020",
+            "controller": did,
+            "publicKeyJwk": {
+                "kty": "OKP", "crv": "X25519",
+                "x": "avH0O2Y4tqLAq8y9zpianr8ajii5m4F_mICrzNlatXs", "d": "secret"
+            }
+        }));
+        assert!(
+            private.is_err(),
+            "private DID JWK must fail during deserialization"
+        );
         let mut ambiguous = x25519_method(did, "ambiguous");
         ambiguous.public_key_multibase = Some("z6LSdummy".to_string());
 
-        for method in [private, ambiguous] {
-            let mut document = empty_document(did);
-            document.verification_method = vec![method];
-            let error = validate_resolved_document(&document, did).unwrap_err();
-            assert!(error.to_string().contains("duplicate, foreign, or invalid"));
-        }
+        let mut document = empty_document(did);
+        document.verification_method = vec![ambiguous];
+        let error = validate_resolved_document(&document, did).unwrap_err();
+        assert!(error.to_string().contains("duplicate, foreign, or invalid"));
     }
 
     #[cfg(feature = "did_web")]

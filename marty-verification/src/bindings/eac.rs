@@ -1,25 +1,68 @@
 //! Python adapters for eac.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+#[cfg(feature = "ephemeral-session-keys")]
+use pyo3::types::PyDict;
 
-#[cfg(feature = "csca")]
+// ============================================================================
+// EAC Bindings
+// ============================================================================
+
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pyclass(name = "NativeEacChipAuthentication")]
 pub(super) struct PyNativeEacChipAuthentication {
     algorithm: crate::eac::EacAlgorithm,
+    algorithm_name: String,
+    handshake: Option<crate::eac::EacHandshake>,
+    #[cfg(feature = "local-key-operations")]
     private_key: Option<Vec<u8>>,
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+impl PyNativeEacChipAuthentication {
+    #[cfg(feature = "local-key-operations")]
+    fn store_private_key(&mut self, private_key: Vec<u8>) {
+        if let Some(mut previous) = self.private_key.replace(private_key) {
+            zeroize::Zeroize::zeroize(&mut previous);
+        }
+    }
+
+    #[cfg(feature = "local-key-operations")]
+    fn agree_local(&mut self, chip_public_key: &[u8]) -> PyResult<Vec<u8>> {
+        let private_key = zeroize::Zeroizing::new(self.private_key.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("EAC ephemeral keypair has not been generated")
+        })?);
+        crate::eac::agree(self.algorithm, &private_key, chip_public_key).map_err(to_pyerr)
+    }
+}
+
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+impl Drop for PyNativeEacChipAuthentication {
+    fn drop(&mut self) {
+        #[cfg(feature = "local-key-operations")]
+        if let Some(private_key) = self.private_key.as_mut() {
+            zeroize::Zeroize::zeroize(private_key);
+        }
+    }
+}
+
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pymethods]
 impl PyNativeEacChipAuthentication {
     #[new]
     fn new(algorithm: &str) -> PyResult<Self> {
         Ok(Self {
             algorithm: crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?,
+            algorithm_name: algorithm.to_string(),
+            handshake: None,
+            #[cfg(feature = "local-key-operations")]
             private_key: None,
         })
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn generate_ephemeral_keypair<'py>(
         &mut self,
         py: Python<'py>,
@@ -28,37 +71,59 @@ impl PyNativeEacChipAuthentication {
             crate::eac::generate_ephemeral_keypair(self.algorithm).map_err(to_pyerr)?;
         let private_key_der =
             crate::eac::encode_private_key(self.algorithm, &private_key).map_err(to_pyerr)?;
-        self.private_key = Some(private_key);
+        self.store_private_key(private_key);
         Ok((
             PyBytes::new(py, &public_key),
             PyBytes::new(py, &private_key_der),
         ))
     }
 
+    fn generate_ephemeral_public_key<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let handshake = crate::eac::EacHandshake::begin(self.algorithm).map_err(to_pyerr)?;
+        let public_key = PyBytes::new(py, handshake.public_key());
+        self.handshake = Some(handshake);
+        Ok(public_key)
+    }
+
+    #[cfg(feature = "local-key-operations")]
     fn perform_chip_authentication<'py>(
         &mut self,
         py: Python<'py>,
         chip_public_key: &[u8],
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let private_key = self.private_key.take().ok_or_else(|| {
+        let shared = self.agree_local(chip_public_key)?;
+        Ok(PyBytes::new(py, &shared))
+    }
+
+    fn establish_secure_messaging(
+        &mut self,
+        chip_public_key: &[u8],
+    ) -> PyResult<PyNativeEacSecureMessaging> {
+        let handshake = self.handshake.take().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("EAC ephemeral keypair has not been generated")
         })?;
-        let shared =
-            crate::eac::agree(self.algorithm, &private_key, chip_public_key).map_err(to_pyerr)?;
-        Ok(PyBytes::new(py, &shared))
+        let inner = handshake.complete(chip_public_key).map_err(to_pyerr)?;
+        Ok(PyNativeEacSecureMessaging {
+            inner,
+            algorithm: self.algorithm_name.clone(),
+        })
     }
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pyclass(name = "NativeEacSecureMessaging")]
 pub(super) struct PyNativeEacSecureMessaging {
     inner: crate::eac::EacSecureMessaging,
     algorithm: String,
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 #[pymethods]
 impl PyNativeEacSecureMessaging {
+    #[cfg(feature = "local-key-operations")]
     #[new]
     fn new(shared_secret: &[u8], algorithm: &str) -> PyResult<Self> {
         let parsed = crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?;
@@ -77,6 +142,7 @@ impl PyNativeEacSecureMessaging {
         Ok(PyBytes::new(py, &protected))
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn encrypt_apdu_with_iv<'py>(
         &mut self,
         py: Python<'py>,
@@ -99,6 +165,7 @@ impl PyNativeEacSecureMessaging {
         Ok(PyBytes::new(py, &plaintext))
     }
 
+    #[cfg(feature = "local-key-operations")]
     fn state<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
         let output = PyDict::new(py);
         let (mac_key, encryption_key) = self.inner.keys();
@@ -110,9 +177,19 @@ impl PyNativeEacSecureMessaging {
         output.set_item("algorithm", &self.algorithm)?;
         Ok(output.unbind())
     }
+
+    fn status<'py>(&self, py: Python<'py>) -> PyResult<Py<PyDict>> {
+        let output = PyDict::new(py);
+        let (send_counter, receive_counter) = self.inner.counters();
+        output.set_item("send_sequence_counter", send_counter)?;
+        output.set_item("receive_sequence_counter", receive_counter)?;
+        output.set_item("algorithm", &self.algorithm)?;
+        Ok(output.unbind())
+    }
 }
 
 #[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "local-key-operations"))]
 #[pyfunction]
 pub(super) fn eac_sign_terminal_challenge<'py>(
     py: Python<'py>,
@@ -173,7 +250,7 @@ pub(super) fn eac_serialize_certificate<'py>(
     Ok(PyBytes::new(py, &encoded))
 }
 
-#[cfg(feature = "csca")]
+#[cfg(all(feature = "csca", feature = "local-key-operations"))]
 #[pyfunction]
 pub(super) fn eac_calculate_mac<'py>(
     py: Python<'py>,

@@ -166,6 +166,6 @@ fn local_and_remote_signing_emit_iso_18013_x5chain() {
     assert_iso_18013_x5chain_location(sign_mdoc(&key, &claims).unwrap(), &certificates);
 
     let prepared = prepare_mdoc(&key, &claims).unwrap();
-    let signature = key.sign(&prepared.tbs_data).unwrap();
+    let signature = key.sign(prepared.signing_payload()).unwrap();
     assert_iso_18013_x5chain_location(assemble_mdoc(prepared, &signature).unwrap(), &certificates);
 }

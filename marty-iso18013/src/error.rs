@@ -28,6 +28,7 @@ pub enum Error {
     CborDecode(#[from] ciborium::de::Error<std::io::Error>),
 
     #[error("Cryptographic error: {0}")]
+    #[cfg(feature = "session-protocol")]
     Crypto(#[from] marty_crypto::CryptoError),
 
     #[error("Verification error: {0}")]

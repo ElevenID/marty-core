@@ -514,8 +514,10 @@ pub fn evaluate_device_key_eligibility(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
+    use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey, EncodeRsaPublicKey};
     use rsa::pkcs8::EncodePublicKey;
+    use rsa::pss::{Signature, SigningKey};
+    use rsa::signature::{RandomizedSigner, SignatureEncoding};
 
     #[derive(Deserialize)]
     struct ChallengeVectors {
@@ -568,13 +570,13 @@ mod tests {
         assert_eq!(inspection.public_key_kid.len(), 43);
         assert_eq!(inspection.public_key_sha256.len(), 64);
         let challenge = challenge(&inspection);
-        let signature =
-            marty_crypto::rsa::sign_pss_sha256(&private_der, &challenge.message().unwrap())
-                .unwrap();
+        let private_key = rsa::RsaPrivateKey::from_pkcs1_der(&private_der).unwrap();
+        let signature: Signature = SigningKey::<sha2::Sha256>::new(private_key)
+            .sign_with_rng(&mut rand::thread_rng(), &challenge.message().unwrap());
         verify_device_challenge_signature(
             &public_key_der,
             &challenge,
-            &URL_SAFE_NO_PAD.encode(signature),
+            &URL_SAFE_NO_PAD.encode(signature.to_bytes()),
         )
         .unwrap();
     }

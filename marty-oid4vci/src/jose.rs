@@ -8,16 +8,19 @@ use jsonwebtoken::{
     crypto::verify as verify_jws_signature, decode, decode_header, jwk::Jwk, Algorithm,
     DecodingKey, Validation,
 };
-use serde::de::{Error as DeError, MapAccess, Visitor};
-use serde::Deserializer;
+use serde::de::{self, Error as DeError, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::fmt;
 
+use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
 use crate::error::{Oid4vciError, Oid4vciResult};
 
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_jwk::JWK;
 
 /// Encode header and payload as base64url, sign, and produce a compact JWT.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_compact_jwt(
     jwk: &JWK,
     header: &serde_json::Value,
@@ -45,7 +48,20 @@ pub fn sign_compact_jwt(
 }
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-const PRIVATE_JWK_FIELDS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+const PRIVATE_JWK_FIELDS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+/// Maximum compact JWT accepted by the direct JOSE verification boundary.
+pub const MAX_COMPACT_JWT_BYTES: usize = 256 * 1024;
+/// Maximum public JWK JSON accepted by direct JOSE verification helpers.
+pub const MAX_PUBLIC_JWK_BYTES: usize = 16 * 1024;
+const MAX_JWT_HEADER_BYTES: usize = 144 * 1024;
+const MAX_JWT_CLAIMS_BYTES: usize = 64 * 1024;
+const MAX_JWT_SIGNATURE_BYTES: usize = crate::bounded_jwt::MAX_RSA_SIGNATURE_BYTES;
+const JWT_LIMITS: CompactJwtLimits = CompactJwtLimits {
+    total: MAX_COMPACT_JWT_BYTES,
+    header: MAX_JWT_HEADER_BYTES,
+    claims: MAX_JWT_CLAIMS_BYTES,
+    signature: MAX_JWT_SIGNATURE_BYTES,
+};
 
 /// A compact JWT whose signature has been verified with the supplied public JWK.
 #[derive(Debug, Clone)]
@@ -56,13 +72,73 @@ pub struct VerifiedCompactJwt {
     pub claims: Value,
 }
 
-struct UniqueObjectVisitor;
+struct UniqueValue(Value);
 
-impl<'de> Visitor<'de> for UniqueObjectVisitor {
-    type Value = Map<String, Value>;
+impl<'de> Deserialize<'de> for UniqueValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UniqueValueVisitor)
+    }
+}
+
+struct UniqueValueVisitor;
+
+impl<'de> Visitor<'de> for UniqueValueVisitor {
+    type Value = UniqueValue;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON object with unique member names")
+        formatter.write_str("JSON without duplicate object members")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Number(value.into())))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Number(value.into())))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .map(UniqueValue)
+            .ok_or_else(|| E::custom("non-finite JSON number"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value.to_owned())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element::<UniqueValue>()? {
+            values.push(value.0);
+        }
+        Ok(UniqueValue(Value::Array(values)))
     }
 
     fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
@@ -70,26 +146,24 @@ impl<'de> Visitor<'de> for UniqueObjectVisitor {
         A: MapAccess<'de>,
     {
         let mut object = Map::new();
-        while let Some((name, value)) = access.next_entry::<String, Value>()? {
-            if object.insert(name.clone(), value).is_some() {
-                return Err(A::Error::custom(format!(
-                    "duplicate JSON member is not allowed: {name}"
-                )));
+        while let Some((name, value)) = access.next_entry::<String, UniqueValue>()? {
+            if object.insert(name, value.0).is_some() {
+                return Err(A::Error::custom("duplicate JSON object member"));
             }
         }
-        Ok(object)
+        Ok(UniqueValue(Value::Object(object)))
     }
 }
 
 pub(crate) fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Value> {
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let object = deserializer
-        .deserialize_map(UniqueObjectVisitor)
+    let value = serde_json::from_slice::<UniqueValue>(bytes)
         .map_err(|error| Oid4vciError::JwtError(format!("Invalid {field} JSON: {error}")))?;
-    deserializer.end().map_err(|error| {
-        Oid4vciError::JwtError(format!("Invalid trailing data in {field}: {error}"))
-    })?;
-    Ok(Value::Object(object))
+    if !value.0.is_object() {
+        return Err(Oid4vciError::JwtError(format!(
+            "Invalid {field} JSON: expected an object"
+        )));
+    }
+    Ok(value.0)
 }
 
 /// Decode the protected header of a compact JWT without treating its claims as trusted.
@@ -106,18 +180,29 @@ pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vci
 /// The values remain untrusted until a protocol validator selects an allowed key
 /// and calls [`verify_compact_jwt_with_public_jwk`].
 pub(crate) fn decode_unverified_compact_jwt(compact_jwt: &str) -> Oid4vciResult<(Value, Value)> {
-    let parts: Vec<&str> = compact_jwt.split('.').collect();
-    if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
-        return Err(Oid4vciError::JwtError(
-            "Compact JWT must contain three non-empty parts".into(),
-        ));
-    }
-    let header_bytes = B64.decode(parts[0]).map_err(|error| {
-        Oid4vciError::JwtError(format!("Invalid JWT header base64url: {error}"))
-    })?;
-    let claims_bytes = B64.decode(parts[1]).map_err(|error| {
-        Oid4vciError::JwtError(format!("Invalid JWT claims base64url: {error}"))
-    })?;
+    let parts = split_compact_jwt(compact_jwt, JWT_LIMITS)
+        .map_err(|message| Oid4vciError::JwtError(message.into()))?;
+    let header_bytes = decode_segment(
+        parts.header,
+        MAX_JWT_HEADER_BYTES,
+        "compact JWT header is not base64url",
+        "compact JWT header exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::JwtError(message.into()))?;
+    let claims_bytes = decode_segment(
+        parts.claims,
+        MAX_JWT_CLAIMS_BYTES,
+        "compact JWT claims are not base64url",
+        "compact JWT claims exceed their size limit",
+    )
+    .map_err(|message| Oid4vciError::JwtError(message.into()))?;
+    decode_segment(
+        parts.signature,
+        MAX_JWT_SIGNATURE_BYTES,
+        "compact JWT signature is not base64url",
+        "compact JWT signature exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::JwtError(message.into()))?;
     Ok((
         parse_unique_object(&header_bytes, "JWT header")?,
         parse_unique_object(&claims_bytes, "JWT claims")?,
@@ -202,6 +287,11 @@ pub fn verify_compact_jwt_with_public_jwk(
         ));
     }
 
+    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Public JWK exceeds its size limit".into(),
+        ));
+    }
     let public_jwk_value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
     let public_jwk = validate_public_jwk(&public_jwk_value, expected_algorithm)?;
     let decoding_key = DecodingKey::from_jwk(&public_jwk).map_err(|error| {
@@ -236,6 +326,11 @@ pub fn verify_detached_signature_with_public_jwk(
     expected_algorithm: &str,
 ) -> Oid4vciResult<bool> {
     let expected = algorithm(expected_algorithm)?;
+    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Public JWK exceeds its size limit".into(),
+        ));
+    }
     let public_jwk_value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
     let public_jwk = validate_public_jwk(&public_jwk_value, expected_algorithm)?;
     let decoding_key = DecodingKey::from_jwk(&public_jwk).map_err(|error| {
@@ -304,6 +399,13 @@ mod tests {
     }
 
     #[test]
+    fn unique_json_parser_rejects_nested_duplicate_members() {
+        let error = parse_unique_object(br#"{"cnf":{"jwk":{"kty":"EC","kty":"oct"}}}"#, "claims")
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicate JSON object member"));
+    }
+
+    #[test]
     fn rejects_tampering_private_material_and_algorithm_confusion() {
         let (token, jwk) = signed_token();
         let mut tampered = token.into_bytes();
@@ -312,15 +414,41 @@ mod tests {
         let tampered = String::from_utf8(tampered).expect("ASCII JWT");
         assert!(verify_compact_jwt_with_public_jwk(&tampered, &jwk, "ES256").is_err());
 
-        let mut private_jwk: Value = serde_json::from_str(&jwk).expect("public JWK");
-        private_jwk["d"] = Value::String("private".into());
-        assert!(verify_compact_jwt_with_public_jwk(
-            &signed_token().0,
-            &private_jwk.to_string(),
-            "ES256"
-        )
-        .is_err());
+        for member in PRIVATE_JWK_FIELDS {
+            let mut private_jwk: Value = serde_json::from_str(&jwk).expect("public JWK");
+            private_jwk[*member] = Value::String("private".into());
+            assert!(verify_compact_jwt_with_public_jwk(
+                &signed_token().0,
+                &private_jwk.to_string(),
+                "ES256"
+            )
+            .is_err());
+        }
         assert!(verify_compact_jwt_with_public_jwk(&signed_token().0, &jwk, "PS256").is_err());
+    }
+
+    #[test]
+    fn direct_jose_inputs_are_bounded_before_decode_and_key_parsing() {
+        let oversized =
+            "secret-sentinel".repeat(MAX_COMPACT_JWT_BYTES / "secret-sentinel".len() + 1);
+        let error =
+            verify_compact_jwt_with_public_jwk(&oversized, "not-json", "ES256").unwrap_err();
+        assert!(error.to_string().contains("size limit"));
+        assert!(!error.to_string().contains("secret-sentinel"));
+
+        let many_parts = std::iter::repeat_n("secret-sentinel", 10_000)
+            .collect::<Vec<_>>()
+            .join(".");
+        let error =
+            verify_compact_jwt_with_public_jwk(&many_parts, "not-json", "ES256").unwrap_err();
+        assert!(error.to_string().contains("exactly three"));
+        assert!(!error.to_string().contains("secret-sentinel"));
+
+        let (token, _) = signed_token();
+        let oversized_jwk = " ".repeat(MAX_PUBLIC_JWK_BYTES + 1);
+        let error =
+            verify_compact_jwt_with_public_jwk(&token, &oversized_jwk, "ES256").unwrap_err();
+        assert!(error.to_string().contains("JWK exceeds"));
     }
 
     #[test]

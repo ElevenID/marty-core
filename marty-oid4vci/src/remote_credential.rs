@@ -28,7 +28,7 @@ use crate::{
     Oid4vciError, Oid4vciResult,
 };
 
-const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 const DUPLICATE_MDOC_BATCH_ID: &str = "mDoc preparation batch contains duplicate batch identity";
 const DUPLICATE_MDOC_CREDENTIAL_ID: &str =
     "mDoc preparation batch contains duplicate credential ID";
@@ -112,15 +112,20 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
         &request.verification_method_id,
         &request.algorithm,
     )?;
-    let confirmation = holder_confirmation(request.subject_id.as_deref(), request.holder_jwk)?;
     let claims = credential_claims(
-        request.subject_id,
+        request.subject_id.clone(),
         request.credential_type,
         request.claims,
         request.expiration_seconds,
         request.selective_disclosure_claims,
         CredentialPayloadFormat::IetfSdJwt,
     );
+    let raw_confirmation = request
+        .holder_jwk
+        .as_ref()
+        .map(|holder| serde_json::json!({"jwk": holder}));
+    crate::formats::sd_jwt::validate_sd_jwt_structural_markers(&claims, raw_confirmation.as_ref())?;
+    let confirmation = holder_confirmation(request.subject_id.as_deref(), request.holder_jwk)?;
     prepare_sd_jwt_with_options(
         &signer,
         &claims,
@@ -521,12 +526,17 @@ fn holder_confirmation(
     }
 }
 
-fn public_jwk(mut holder: Value) -> Oid4vciResult<Value> {
+fn public_jwk(holder: Value) -> Oid4vciResult<Value> {
     let object = holder
-        .as_object_mut()
+        .as_object()
         .ok_or_else(|| protocol_error("holder JWK must be an object"))?;
-    for secret in PRIVATE_JWK_MEMBERS {
-        object.remove(*secret);
+    if let Some(member) = PRIVATE_JWK_MEMBERS
+        .iter()
+        .find(|member| object.contains_key(**member))
+    {
+        return Err(protocol_error(format!(
+            "holder JWK must not contain private member '{member}'"
+        )));
     }
     Ok(holder)
 }
@@ -619,7 +629,7 @@ mod tests {
     use super::{
         prepare_remote_jwt_vc, prepare_remote_mdoc, prepare_remote_mdoc_batch,
         prepare_remote_mdoc_batch_with_sources, prepare_remote_sd_jwt, RemoteJwtVcRequest,
-        RemoteMdocBatchItem, RemoteMdocRequest, RemoteSdJwtRequest,
+        RemoteMdocBatchItem, RemoteMdocRequest, RemoteSdJwtRequest, PRIVATE_JWK_MEMBERS,
     };
 
     #[derive(Default)]
@@ -755,6 +765,75 @@ mod tests {
     }
 
     #[test]
+    fn sd_jwt_rejects_private_holder_jwk_before_remote_preparation() {
+        for member in PRIVATE_JWK_MEMBERS {
+            let mut holder = serde_json::json!({"kty":"EC","crv":"P-256","x":"x","y":"y"});
+            holder
+                .as_object_mut()
+                .unwrap()
+                .insert((*member).to_owned(), serde_json::json!("secret"));
+            let result = prepare_remote_sd_jwt(RemoteSdJwtRequest {
+                issuer_id: "did:web:issuer.example".to_owned(),
+                verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                algorithm: "ES256".to_owned(),
+                subject_id: Some("did:key:holder".to_owned()),
+                credential_type: "AccessBadge".to_owned(),
+                claims: HashMap::from([("name".to_owned(), serde_json::json!("Alice"))]),
+                expiration_seconds: Some(3600),
+                selective_disclosure_claims: vec!["name".to_owned()],
+                credential_format: Some("dc+sd-jwt".to_owned()),
+                credential_id: None,
+                holder_jwk: Some(holder),
+                issuer_certificate_chain: vec![],
+            });
+            let error = match result {
+                Err(error) => error,
+                Ok(_) => panic!("accepted private holder JWK member {member}"),
+            };
+            assert!(error.to_string().contains("private member"));
+        }
+    }
+
+    #[test]
+    fn sd_jwt_rejects_raw_private_confirmation_without_holder_override() {
+        let rejected = PRIVATE_JWK_MEMBERS
+            .iter()
+            .map(|member| {
+                let mut jwk = serde_json::json!({"kty":"EC","crv":"P-256","x":"x","y":"y"});
+                jwk.as_object_mut()
+                    .unwrap()
+                    .insert((*member).to_owned(), serde_json::json!("secret"));
+                jwk
+            })
+            .chain([serde_json::json!({"kty":"oct"})]);
+
+        for jwk in rejected {
+            let result = prepare_remote_sd_jwt(RemoteSdJwtRequest {
+                issuer_id: "did:web:issuer.example".to_owned(),
+                verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                algorithm: "ES256".to_owned(),
+                subject_id: None,
+                credential_type: "AccessBadge".to_owned(),
+                claims: HashMap::from([
+                    ("name".to_owned(), serde_json::json!("Alice")),
+                    ("cnf".to_owned(), serde_json::json!({"jwk": jwk})),
+                ]),
+                expiration_seconds: Some(3600),
+                selective_disclosure_claims: vec![],
+                credential_format: Some("dc+sd-jwt".to_owned()),
+                credential_id: None,
+                holder_jwk: None,
+                issuer_certificate_chain: vec![],
+            });
+            let error = match result {
+                Err(error) => error,
+                Ok(_) => panic!("accepted raw private confirmation JWK"),
+            };
+            assert!(error.to_string().contains("public asymmetric JWK only"));
+        }
+    }
+
+    #[test]
     fn sd_jwt_preserves_remote_security_metadata() {
         let prepared = prepare_remote_sd_jwt(RemoteSdJwtRequest {
             issuer_id: "did:web:issuer.example".to_owned(),
@@ -767,14 +846,12 @@ mod tests {
             selective_disclosure_claims: vec!["name".to_owned()],
             credential_format: Some("dc+sd-jwt".to_owned()),
             credential_id: Some("urn:uuid:00000000-0000-0000-0000-000000000123".to_owned()),
-            holder_jwk: Some(
-                serde_json::json!({"kty":"EC","crv":"P-256","x":"x","y":"y","d":"secret"}),
-            ),
+            holder_jwk: Some(serde_json::json!({"kty":"EC","crv":"P-256","x":"x","y":"y"})),
             issuer_certificate_chain: vec!["leaf".to_owned(), "issuer".to_owned()],
         })
         .expect("SD-JWT preparation");
-        let header = segment(&prepared.signing_input, 0);
-        let payload = segment(&prepared.signing_input, 1);
+        let header = segment(prepared.signing_input(), 0);
+        let payload = segment(prepared.signing_input(), 1);
         assert_eq!(header["typ"], "dc+sd-jwt");
         assert_eq!(header["x5c"], serde_json::json!(["leaf", "issuer"]));
         assert!(payload["cnf"]["jwk"].get("d").is_none());
@@ -800,7 +877,7 @@ mod tests {
             achievement_id: None,
         })
         .expect("JWT-VC preparation");
-        let payload = segment(&prepared.signing_input, 1);
+        let payload = segment(prepared.signing_input(), 1);
         assert!(payload.get("sub").is_none());
         assert_eq!(
             payload["vc"]["credentialStatus"]["type"],
@@ -822,15 +899,14 @@ mod tests {
                 "kty": "EC", "crv": "P-256", "alg": "ES256",
                 "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
                 "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
-                "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
             })),
         })
         .expect("mDoc preparation");
         assert_eq!(
-            prepared.credential_id,
+            prepared.credential_id(),
             "urn:uuid:00000000-0000-0000-0000-000000000789"
         );
-        assert!(!prepared.tbs_data.is_empty());
+        assert!(!prepared.signing_payload().is_empty());
     }
 
     #[test]
@@ -891,10 +967,10 @@ mod tests {
         );
         for (prepared, (_, suffix, _)) in prepared.iter().zip(requests) {
             assert_eq!(
-                prepared.prepared_mdoc().credential_id,
+                prepared.prepared_mdoc().credential_id(),
                 format!("urn:uuid:00000000-0000-0000-0000-{suffix}")
             );
-            assert!(!prepared.prepared_mdoc().tbs_data.is_empty());
+            assert!(!prepared.prepared_mdoc().signing_payload().is_empty());
             let debug = format!("{prepared:?}");
             for sensitive in ["Sensitive", suffix, "91", "42"] {
                 assert!(!debug.contains(sensitive));
@@ -902,7 +978,7 @@ mod tests {
         }
         let consumed = prepared.into_iter().next().unwrap().into_prepared_mdoc();
         assert_eq!(
-            consumed.credential_id,
+            consumed.credential_id(),
             "urn:uuid:00000000-0000-0000-0000-000000000091"
         );
     }
@@ -1204,16 +1280,15 @@ mod tests {
             "kty": "EC", "crv": "P-256", "alg": "ES256",
             "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
             "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
-            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
         }));
         let prepared = prepare_remote_mdoc_batch(vec![RemoteMdocBatchItem::new(789, request)])
             .expect("public batch preparation");
         assert_eq!(prepared.len(), 1);
         assert_eq!(prepared[0].batch_id(), 789);
         assert_eq!(
-            prepared[0].prepared_mdoc().credential_id,
+            prepared[0].prepared_mdoc().credential_id(),
             "urn:uuid:00000000-0000-0000-0000-000000000789"
         );
-        assert!(!prepared[0].prepared_mdoc().tbs_data.is_empty());
+        assert!(!prepared[0].prepared_mdoc().signing_payload().is_empty());
     }
 }
