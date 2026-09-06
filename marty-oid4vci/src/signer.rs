@@ -141,7 +141,7 @@ pub(crate) fn validate_declared_jwk_algorithm(
     Ok(())
 }
 
-fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> {
+pub(crate) fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> {
     let (key_type, curve) = match &jwk.params {
         Params::OKP(params) => (Some("OKP"), Some(params.curve.as_str())),
         Params::EC(params) => (Some("EC"), params.curve.as_deref()),

@@ -52,6 +52,7 @@ pub mod discovery;
 pub mod error;
 pub mod formats;
 pub mod holder_key;
+pub mod issuance_input;
 pub mod issuer;
 pub mod jose;
 #[cfg(feature = "lti")]
