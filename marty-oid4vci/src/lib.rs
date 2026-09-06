@@ -46,6 +46,8 @@
 //! }).unwrap();
 //! ```
 
+pub mod offer_uri;
+
 pub mod discovery;
 pub mod error;
 pub mod formats;
