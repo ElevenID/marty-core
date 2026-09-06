@@ -1,6 +1,6 @@
 # KMS-only Rust build surface plan
 
-Status: implementation and local validation complete; final review and CI are tracked in the ElevenID pull requests
+Status: implementation and local validation complete; final CI and merges are tracked in the ElevenID pull requests
 
 Recorded: 2026-09-05
 
@@ -15,17 +15,16 @@ request or push has been made. This document is the durable recovery record;
 the branch, exact commits, test evidence, and unresolved gates below supersede
 chat context.
 
-The last published DCO-clean Marty base checkpoint is
-`e05bde3d5ca5428a87c9ab8b5802c0874e4cdd36`. Corrective work after that
-checkpoint must be committed, pushed, and independently re-reviewed before
-merge. Published ElevenID fork heads are isomdl
-`2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9` on
-`codex/kms-only-build-surface`, sd-jwt
-`302984b4431c331408c58c62f23a07339394c986` on
-`codex/digest-lane-acceleration`, and Longfellow
-`1c9506823064b5b8e719d67698985a3015bef6f4`. The public-fork corrections are
-split into small DCO-signed commits. Marty now pins the exact isomdl and sd-jwt
-heads; no upstream branch was pushed and no upstream pull request was opened.
+The reviewed and published DCO-clean Marty checkpoint is
+`e7e1033574f865c86f196c9ec77f593017f87738`. Exact ElevenID fork heads are
+isomdl `2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9`, sd-jwt
+`302984b4431c331408c58c62f23a07339394c986`, and Longfellow
+`1acd01c032531732bb0cd6a28c6d8577393216d1`. Isomdl PR 17 and SD-JWT PR 33 are
+merged; the SD-JWT feature branch is deliberately retained because GitHub
+required a squash merge and Marty pins its reviewed tip. The public-fork
+corrections remain available as small DCO-signed commits. Marty pins the exact
+isomdl and sd-jwt heads; no upstream branch was pushed and no upstream pull
+request was opened.
 
 Review corrections implemented after the base checkpoint include fail-closed remote signature
 assembly (including VDS-NC), private-DTC signing feature gates, wallet feature
@@ -63,17 +62,30 @@ the dependency and API entirely. SD-JWT's WebAssembly-only `getrandom` adapter
 is now unconditional on that target because `jsonwebtoken` reaches entropy even
 without issuer planning; native dependency graphs are unchanged.
 
+Longfellow's full release workspace then exposed stale Rust v8 circuit registry
+identifiers: the registered values did not equal the deterministic combined IDs
+of the signature and hash circuits regenerated from the checked-in Rust sources.
+The new strict archive/spec binding correctly failed closed instead of accepting
+that mismatch. Longfellow now registers the four generated combined IDs and
+regenerates every current archive in its integration test to assert that each
+embedded ID equals the advertised specification ID. This restores current proof
+generation without weakening exact circuit authentication.
+
 The final local matrix is green: formatting, strict workspace and role-specific
 clippy, five negative KMS/local-capability compile probes, default verification
-tests, the full mock-ZKP workspace suite, and unchanged third-party compliance
-suites. Native Longfellow/ZKP cannot build in this Windows environment because
-its Linux C++ prerequisites are absent; the ElevenID Linux CI job remains the
-native gate. Remaining gates are a clean independent review, successful PR CI,
-and merge. The unrelated tracked Python bytecode remains excluded.
+tests, the full mock-ZKP workspace suite, unchanged third-party compliance
+suites, the corrected Longfellow current-v8 proof flow, runtime limit tests, and
+the verifier-only release build. Native Longfellow/ZKP C++ cannot build in this
+Windows environment because its Linux prerequisites are absent; the ElevenID
+Linux CI job remains that native gate. Remaining gates are successful PR CI and
+the Longfellow and Marty merges. The unrelated tracked Python bytecode remains
+excluded.
 
 Security disclosure remains deferred by instruction. Candidate confidential,
 anonymous upstream reports are the inherited Longfellow circuit/archive and
-native allocation/DoS boundaries after ElevenID corrections are validated.
+native allocation/DoS boundaries. The stale Rust v8 registry identifiers are
+supporting evidence for the circuit/spec-binding concern, not a separate
+vulnerability or disclosure item.
 
 ## Purpose
 
