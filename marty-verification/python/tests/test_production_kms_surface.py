@@ -51,6 +51,14 @@ def test_production_module_excludes_local_secret_key_operations():
         "CertificateBuilderConfig",
         "build_self_signed_certificate",
         "build_self_signed_certificate_with_key",
+        "aes_gcm_encrypt",
+        "aes_gcm_decrypt",
+        "tdes_cbc_encrypt",
+        "tdes_cbc_decrypt",
+        "NativeBacSession",
+        "NativePaceSession",
+        "NativeEacChipAuthentication",
+        "NativeEacSecureMessaging",
     }
 
     assert forbidden.isdisjoint(dir(marty_verification))
@@ -58,8 +66,6 @@ def test_production_module_excludes_local_secret_key_operations():
     for safe_name in (
         "verify_signature",
         "generate_random_bytes",
-        "aes_gcm_encrypt",
-        "aes_gcm_decrypt",
         "dtc_prepare_signing",
         "dtc_assemble_signature",
         "dtc_verify",
@@ -67,43 +73,3 @@ def test_production_module_excludes_local_secret_key_operations():
         "open_badge_ob3_verify",
     ):
         assert hasattr(marty_verification, safe_name), safe_name
-
-    session_surfaces = {
-        "NativeBacSession": {
-            "derive_bac_keys",
-            "start_bac_with_keys",
-            "start_bac_with_random",
-            "derive_session_keys",
-            "set_session_keys",
-            "session_keys",
-        },
-        "NativePaceSession": {
-            "derive_password_key",
-            "start_pace_with_private_key",
-        },
-        "NativeEacChipAuthentication": {
-            "generate_ephemeral_keypair",
-            "perform_chip_authentication",
-        },
-        "NativeEacSecureMessaging": {"encrypt_apdu_with_iv", "state"},
-    }
-    for class_name, secret_methods in session_surfaces.items():
-        session_class = getattr(marty_verification, class_name)
-        assert secret_methods.isdisjoint(dir(session_class)), class_name
-
-    assert hasattr(marty_verification.NativeBacSession, "protect_command")
-    assert hasattr(marty_verification.NativePaceSession, "protect_command")
-    assert hasattr(
-        marty_verification.NativeEacChipAuthentication,
-        "generate_ephemeral_public_key",
-    )
-    assert hasattr(marty_verification.NativeEacSecureMessaging, "status")
-
-    try:
-        marty_verification.NativeEacSecureMessaging(
-            b"not accepted in production", "ecdh_p256_sha256"
-        )
-    except TypeError:
-        pass
-    else:
-        raise AssertionError("production accepted injected EAC shared secret")

@@ -228,6 +228,7 @@ zeroize = { workspace = true, optional = true }
 hex = "0.4"
 
 [dev-dependencies]
+hmac = { workspace = true }
 tempfile = { workspace = true }
 rcgen = { workspace = true }
 

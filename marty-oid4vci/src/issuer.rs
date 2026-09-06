@@ -346,6 +346,7 @@ impl IssuanceEngine {
 
         // 3. Sign the credential
         let signed = match format {
+            #[cfg(feature = "sd_jwt")]
             CredentialFormat::SdJwt => {
                 let holder_jwk = verified_proof.holder_jwk.as_ref().ok_or_else(|| {
                     Oid4vciError::ProofVerificationFailed(
@@ -358,6 +359,7 @@ impl IssuanceEngine {
                     holder_jwk,
                 )?
             }
+            #[cfg(feature = "mso_mdoc")]
             CredentialFormat::MsoMdoc => {
                 let holder_jwk = verified_proof.holder_jwk.as_ref().ok_or_else(|| {
                     Oid4vciError::ProofVerificationFailed(

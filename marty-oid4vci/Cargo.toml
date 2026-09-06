@@ -140,6 +140,7 @@ required-features = ["local-key-operations"]
 [[test]]
 name = "dif_pex_conformance"
 path = "tests/dif_pex_conformance.rs"
+required-features = ["verifier"]
 
 [[test]]
 name = "es256_signing_matrix"
@@ -158,6 +159,7 @@ required-features = ["local-key-operations"]
 [[test]]
 name = "oid4vp_conformance"
 path = "tests/oid4vp_conformance.rs"
+required-features = ["verifier"]
 
 [[test]]
 name = "scalar_sd_jwt_holder_binding"
