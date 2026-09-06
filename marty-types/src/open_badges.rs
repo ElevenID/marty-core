@@ -35,6 +35,31 @@ impl std::fmt::Display for OpenBadgeKeySource {
     }
 }
 
+/// Detect private or symmetric key material in an Open Badge method document.
+/// This shared admission rule does not replace issuer, signature or provenance checks.
+pub fn contains_private_key_material(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => object.iter().any(|(key, nested)| {
+            if key.starts_with("privateKey") || key.starts_with("secretKey") {
+                return true;
+            }
+            if key == "publicKeyJwk" {
+                return nested.as_object().is_none_or(|jwk| {
+                    matches!(
+                        jwk.get("kty").and_then(serde_json::Value::as_str),
+                        Some("oct") | None
+                    ) || ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
+                        .iter()
+                        .any(|private| jwk.contains_key(*private))
+                });
+            }
+            contains_private_key_material(nested)
+        }),
+        serde_json::Value::Array(items) => items.iter().any(contains_private_key_material),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +130,42 @@ mod tests {
         assert!(back.controller.is_none());
         assert!(back.kid.is_none());
         assert!(back.status.is_none());
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::contains_private_key_material;
+    use serde_json::json;
+
+    #[test]
+    fn shared_document_admission_preserves_nested_key_rules() {
+        for valid in [
+            json!({"publicKeyJwk": {"kty": "EC", "x": "public"}}),
+            json!({"publicKeyJwk": {"kty": "RSA", "n": "public", "e": "AQAB"}}),
+            json!({"publicKeyJwk": {"kty": "OKP", "x": "public"}}),
+            json!({"extension": {"d": "ordinary metadata"}}),
+            json!(null),
+        ] {
+            assert!(!contains_private_key_material(&valid));
+        }
+        for invalid in [
+            json!({"privateKeyPem": "private"}),
+            json!({"secretKeyHex": "secret"}),
+            json!({"publicKeyJwk": {"kty": "oct"}}),
+            json!({"publicKeyJwk": {}}),
+            json!({"publicKeyJwk": null}),
+            json!({"publicKeyJwk": "malformed"}),
+        ] {
+            assert!(contains_private_key_material(&invalid));
+            assert!(contains_private_key_material(&json!({"nested": [invalid]})));
+        }
+        for field in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            let mut jwk = json!({"kty": "RSA"});
+            jwk[field] = json!("private");
+            assert!(contains_private_key_material(
+                &json!({"nested": [{"publicKeyJwk": jwk}]})
+            ));
+        }
     }
 }

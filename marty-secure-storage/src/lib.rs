@@ -7,6 +7,7 @@ mod database;
 mod encryption;
 mod error;
 mod keychain;
+mod migrations;
 mod models;
 mod schema;
 

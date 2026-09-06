@@ -64,6 +64,7 @@ pub mod jose;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
+pub mod offer_uri;
 pub mod oidc;
 pub mod presentation_request;
 pub mod proof;

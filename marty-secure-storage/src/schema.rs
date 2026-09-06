@@ -1,7 +1,8 @@
 //! Database schema definitions
 
 /// SQL schema for secure storage
-pub const SCHEMA: &str = r#"
+pub const SCHEMA: &str = concat!(
+    r#"
 -- Verification events table
 CREATE TABLE IF NOT EXISTS verification_events (
     id TEXT PRIMARY KEY,
@@ -85,22 +86,9 @@ CREATE INDEX IF NOT EXISTS idx_open_badge_keys_controller
 CREATE INDEX IF NOT EXISTS idx_open_badge_keys_status
     ON open_badge_keys(status);
 -- Last accepted mixed trust package for each governed trust domain.
-CREATE TABLE IF NOT EXISTS trust_packages (
-    trust_domain TEXT PRIMARY KEY,
-    sequence INTEGER NOT NULL,
-    package_version TEXT NOT NULL,
-    package_created_at TEXT NOT NULL,
-    package_expires_at TEXT,
-    signer_key_id TEXT NOT NULL,
-    next_signer_key_id TEXT,
-    recovery_signer_key_id TEXT,
-    package_digest TEXT NOT NULL,
-    imported_at TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- CRL cache
+"#,
+    include_str!("schema/trust_packages.sql"),
+    r#"-- CRL cache
 CREATE TABLE IF NOT EXISTS crl_cache (
     id TEXT PRIMARY KEY,
     issuer_hash TEXT NOT NULL,
@@ -203,7 +191,8 @@ CREATE TABLE IF NOT EXISTS config (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-"#;
+"#
+);
 
 /// Schema version for migrations
 pub const SCHEMA_VERSION: i32 = 4;
