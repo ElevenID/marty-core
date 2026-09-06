@@ -21,7 +21,7 @@ checkpoint must be committed, pushed, and independently re-reviewed before
 merge. Published ElevenID fork heads are isomdl
 `2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9` on
 `codex/kms-only-build-surface`, sd-jwt
-`15f20899fd7e4660919be7e0ca7b33b852cfe79a` on
+`69926e081feb80b0b74c1135f38643242c6645a6` on
 `codex/digest-lane-acceleration`, and Longfellow
 `1c9506823064b5b8e719d67698985a3015bef6f4`. The public-fork corrections are
 split into small DCO-signed commits. Marty now pins the exact isomdl and sd-jwt

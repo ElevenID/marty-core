@@ -68,7 +68,7 @@ serde_json = { workspace = true }
 # Crypto and signing
 ssi-crypto = { version = "0.2.1", default-features = false, optional = true }
 ssi-jwk = { version = "0.4.0", default-features = false }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "15f20899fd7e4660919be7e0ca7b33b852cfe79a", default-features = false, optional = true }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "69926e081feb80b0b74c1135f38643242c6645a6", default-features = false, optional = true }
 jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
@@ -109,7 +109,7 @@ tokio = { workspace = true, optional = true }
 criterion = { workspace = true }
 tokio = { workspace = true }
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "15f20899fd7e4660919be7e0ca7b33b852cfe79a" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "69926e081feb80b0b74c1135f38643242c6645a6" }
 ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 
