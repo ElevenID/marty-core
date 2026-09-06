@@ -30,7 +30,7 @@ serde_json = { workspace = true }
 ed25519-dalek = { workspace = true }
 p256 = { workspace = true }
 base64 = { workspace = true }
-affinidi-messaging-didcomm = "=0.14.0"
+affinidi-messaging-didcomm = "=0.15.8"
 
 # DID document parsing + resolution
 uuid = { workspace = true }
