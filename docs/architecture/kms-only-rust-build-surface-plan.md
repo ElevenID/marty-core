@@ -1,6 +1,6 @@
 # KMS-only Rust build surface plan
 
-Status: implementation and corrective security review in progress
+Status: implementation and local validation complete; independent review and CI pending
 
 Recorded: 2026-09-05
 
@@ -8,22 +8,27 @@ Scope owner: ElevenID
 
 ## Recovery checkpoint (2026-09-05)
 
-The positive-capability/KMS-only implementation is substantially complete and
-is being corrected under independent maintainer/security review. The current
-ElevenID-only review branch is `codex/kms-only-build-surface`; marty-core PR 308
-tracks it. No upstream pull request or push has been made.
+The positive-capability/KMS-only implementation is finalized on the local
+ElevenID-only branch `codex/kms-only-build-surface-clean`. Marty-core PR 308
+currently tracks the earlier published branch `codex/kms-only-build-surface`
+and must be updated from this clean branch after independent review. No upstream
+pull request or push has been made. This document is the durable recovery
+record; the branch, exact commits, test evidence, and unresolved gates below
+supersede chat context.
 
-Committed marty-core implementation currently ends at `18fa9cc`, with the
-corrective review batch still uncommitted so it can be tested as one coherent
-Marty checkpoint. Published ElevenID fork heads on
-`codex/kms-only-build-surface` are isomdl
-`dfd0ca68405b43f5afed0ad218b3c282cc21be61`, sd-jwt
-`18049cadba138d9b67a21f753f67c9238cdeae0a`, and Longfellow
+The last published DCO-clean Marty base checkpoint is
+`be45f53dee8be1c37d0c6ed27b28deecbf9e65e4`. Corrective work after that
+checkpoint must be committed, pushed, and independently re-reviewed before
+merge. Published ElevenID fork heads are isomdl
+`235ac776ce32d5ae9a1c0c458f6a22a395e9aed0` on
+`codex/kms-only-build-surface`, sd-jwt
+`8be26b1d9419de4aeee886f810bde40bc69b3ef5` on
+`codex/digest-lane-acceleration`, and Longfellow
 `2b55340a2e9930e6699a647501225bae3e5468b0`. The public-fork corrections are
 split into small DCO-signed commits. Marty now pins the exact isomdl and sd-jwt
 heads; no upstream branch was pushed and no upstream pull request was opened.
 
-Review corrections already implemented include fail-closed remote signature
+Review corrections implemented after the base checkpoint include fail-closed remote signature
 assembly (including VDS-NC), private-DTC signing feature gates, wallet feature
 closure, real native-ZKP CI setup, exact fork pins, circuit-ID authentication,
 bounded Longfellow archive decompression, declared-size archive allocation,
@@ -32,13 +37,30 @@ without copies, and explicit output-allocation failure handling. ZK verifier
 state is now opaque, one-use, and bound internally to the canonical OID4VP
 SessionTranscript, an exact registered issuer-signed boolean predicate, the
 trust-resolved issuer key and docType, and a retained verifier-selected time.
+Public JWK containers now reject all registered private members at parsing and
+validated-extension boundaries; DIDComm verification methods are public-key
+only; ordinary proof, remote credential, and signing-batch entry points reject
+rather than retain or silently strip holder private keys. Open Badges 3 local
+private-JWK issuance is excluded from verification/KMS-only Rust APIs.
 
-Remaining release blockers are: complete the native Longfellow CI run; rerun
-all strict role matrices and unchanged third-party compliance suites; record
-dependency/build/final-artifact measurements; commit the Marty correction
-batch without the unrelated tracked bytecode; replace the current Marty PR
-history with a DCO-clean branch based on the current target; and obtain a clean
-independent maintainer/security re-review before merge.
+The latest correction also narrows workspace curve, X.509, CMS, PKCS#8, and
+Ed25519 dependency defaults so public-key-only builds do not inherit Marty-owned
+ECDH, builder, private-key encryption, PEM-private-key, or key-generation
+features. Issuer-only remote-signature validation opts into the curve ECDSA
+type support it needs; ECDH remains under the ephemeral-session capability.
+Marty proof verification now uses verifier-only Ed25519, P-256, P-384, and
+secp256k1 paths rather than SSI signing backends. Isomdl presentation
+verification likewise uses public points and prehashed verification without its
+curve signing features. Static boundary tests and Cargo-tree negative checks
+enforce this split.
+
+The final local matrix is green: formatting, strict workspace and role-specific
+clippy, five negative KMS/local-capability compile probes, default verification
+tests, the full mock-ZKP workspace suite, and unchanged third-party compliance
+suites. Native Longfellow/ZKP cannot build in this Windows environment because
+its Linux C++ prerequisites are absent; the ElevenID Linux CI job remains the
+native gate. Remaining gates are a clean independent review, successful PR CI,
+and merge. The unrelated tracked Python bytecode remains excluded.
 
 Security disclosure remains deferred by instruction. Candidate confidential,
 anonymous upstream reports are the inherited Longfellow circuit/archive and
@@ -113,6 +135,15 @@ Conditional source compilation can remove ElevenID functions and modules, but
 it does not remove an unconditional dependency. Release LTO can discard
 unreachable machine code from a final binary, but that is not a compile-time API
 security boundary and does not avoid compiling the dependency.
+
+RustCrypto's P-256/P-384/P-521 `ecdsa` features combine verification and
+signing implementations inside the dependency. Marty verifier APIs expose only
+verification, but those dependency-internal signing implementations cannot be
+selected independently today. `jsonwebtoken` and SSI likewise enable broad
+curve backends for verification. CI therefore distinguishes prohibited
+Marty-owned feature leakage from documented, dependency-internal feature
+coupling; replacing or further forking those dependencies is a separate hard
+boundary if binary-level absence of every signing implementation is required.
 
 ### `marty-crypto`
 
@@ -209,6 +240,29 @@ only about 16 percent because nearly all cryptographic dependencies remained
 mandatory. The unique dependency-tree entry count changed only from 182 to 161.
 This confirms that optional dependencies and role-separated crates are required
 for material build savings.
+
+### Implemented role-build measurements
+
+Clean release builds from the DCO-clean Marty worktree produced:
+
+| `marty-oid4vci` release role | Time | Isolated target directory | Crate `.rlib` | Unique `cargo tree` lines |
+| --- | ---: | ---: | ---: | ---: |
+| current default | 75.79 s | 816,789,363 bytes | 10,641,010 bytes | 365 |
+| KMS issuer (`kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc`) | 76.93 s | 789,219,322 bytes | 9,722,842 bytes | 350 |
+| KMS verifier (`kms-only,verifier,jwt_vc_json,sd_jwt`) | 74.00 s | 778,966,769 bytes | 8,773,604 bytes | 348 |
+| ZK verifier (`verifier,zk_mdoc`) | not re-timed | not re-measured | not re-measured | 338 |
+| ZK verifier plus mdoc issuer planning | not re-timed | not re-measured | not re-measured | 360 |
+
+The isolated target directory is compiler cache/intermediate output and is not
+a shipped artifact. The `.rlib` is the protocol crate artifact, not a complete
+service binary or container. Against the current default, the KMS issuer removes
+15 unique dependency-tree lines, 3.4 percent of isolated build bytes, and 8.6
+percent of the protocol `.rlib`. The KMS verifier removes 17 lines, 4.6 percent
+of isolated build bytes, and 17.5 percent of the `.rlib`; its clean build was
+2.4 percent faster on this sample. Timing differences this small are noisy, but
+the graph and object reductions are deterministic. Final service/container
+measurements remain a deployment-repository task because this workspace does
+not contain the ElevenID production service roots.
 
 Re-measure clean builds, final executables/libraries, stripped symbols, and
 package/container size after each workstream. Do not treat target-directory
@@ -402,7 +456,9 @@ The goal is complete only when:
 The investigation found an ElevenID architectural enforcement gap and excess
 compiled capability. It also found inherited Longfellow native input/resource
 boundaries (archive allocation, exception containment, timestamp validation,
-and circuit-generation allocation handling) that remain candidates for a
-confidential upstream security report after ElevenID validation. Disclosure is
-deferred by instruction and must use an anonymous secure channel; no upstream
-issue, push, or pull request is authorized by this plan.
+and circuit-generation allocation handling), plus an inherited SD-JWT issuer
+path that accepted an `oct` holder confirmation JWK and could embed its shared
+secret in the issued credential. These remain candidates for confidential
+upstream security reports after ElevenID validation. Disclosure is deferred by
+instruction and must use an anonymous secure channel; no upstream issue, push,
+or pull request is authorized by this plan.

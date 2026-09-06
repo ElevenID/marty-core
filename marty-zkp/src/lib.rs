@@ -54,7 +54,8 @@ pub enum ZkPredicate {
     /// `pk_circuit` requires every bit of the raw private scalar `sk` for its
     /// double-and-add loop. No HSM exposes this. There is no compatible shim.
     /// This variant is recognised by [`ZkPredicate::from_id`] and causes
-    /// [`Prover::prove_key_ownership`] to return [`ZkError::HsmIncompatible`].
+    /// `Prover::prove_key_ownership` in prover-enabled builds to return
+    /// [`ZkError::HsmIncompatible`].
     KeyOwnership,
 }
 
@@ -362,10 +363,10 @@ static NATIVE_VERIFICATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 
 /// Pre-generated compressed circuit for a given number of attributes.
 ///
-/// Generate once with [`Circuit::generate`] and pass to every
-/// [`Prover::prove`] / [`Verifier::verify`] call.  Circuits are
-/// large (~100 MB uncompressed) and expensive to generate, so callers
-/// should cache them.
+/// In prover-enabled builds, generate once with `Circuit::generate` and pass
+/// to every `Prover::prove` call. Verifier-only builds load an authenticated
+/// circuit with [`Circuit::from_bytes`] and pass it to [`Verifier::verify`].
+/// Circuits are large (~100 MB uncompressed), so callers should cache them.
 pub struct Circuit {
     bytes: Vec<u8>,
     spec_index: usize,

@@ -35,7 +35,7 @@ use crate::formats::sd_jwt::{
 };
 use crate::signer::CredentialSigner;
 use crate::types::{CredentialClaims, SignedCredential, SigningAlgorithm};
-use ssi_jwk::JWK;
+use ssi_jwk::{Params, JWK};
 
 const ES256_SIGNATURE_LENGTH: usize = 64;
 
@@ -126,7 +126,8 @@ impl fmt::Debug for JwtVcSigningBatchInput {
 /// The supplied holder JWK must come from a successfully verified proof. Proof
 /// JWT signature, nonce, audience, age, and optional key-attestation policy
 /// verification remain the caller's responsibility and must complete before
-/// constructing this input. Only the JWK's public projection is retained.
+/// constructing this input. The JWK must already be public; private and
+/// symmetric keys are rejected rather than projected.
 pub struct SdJwtSigningBatchInput {
     route_id: SigningRouteId,
     claims: CredentialClaims,
@@ -135,17 +136,37 @@ pub struct SdJwtSigningBatchInput {
 
 impl SdJwtSigningBatchInput {
     /// Bind owned SD-JWT claims and a verified holder key to a batch-local route.
-    #[must_use]
+    ///
+    /// Private or symmetric JWKs are rejected rather than silently projected.
     pub fn new(
         route_id: SigningRouteId,
         claims: CredentialClaims,
         verified_holder_jwk: &JWK,
-    ) -> Self {
-        Self {
+    ) -> crate::Oid4vciResult<Self> {
+        let has_private_material = match &verified_holder_jwk.params {
+            Params::OKP(params) => params.private_key.is_some(),
+            Params::EC(params) => params.ecc_private_key.is_some(),
+            Params::RSA(params) => {
+                params.private_exponent.is_some()
+                    || params.first_prime_factor.is_some()
+                    || params.second_prime_factor.is_some()
+                    || params.first_prime_factor_crt_exponent.is_some()
+                    || params.second_prime_factor_crt_exponent.is_some()
+                    || params.first_crt_coefficient.is_some()
+                    || params.other_primes_info.is_some()
+            }
+            Params::Symmetric(_) => true,
+        };
+        if has_private_material {
+            return Err(crate::Oid4vciError::InvalidRequest(
+                "SD-JWT batch input requires a verified public holder JWK".into(),
+            ));
+        }
+        Ok(Self {
             route_id,
             claims,
-            holder_public_jwk: verified_holder_jwk.to_public(),
-        }
+            holder_public_jwk: verified_holder_jwk.clone(),
+        })
     }
 
     /// Return this input's opaque route identity.
@@ -1732,6 +1753,10 @@ mod tests {
         .unwrap()
     }
 
+    fn fixed_public_holder_jwk() -> JWK {
+        fixed_private_holder_jwk().to_public()
+    }
+
     fn mdoc_claims(label: &str) -> CredentialClaims {
         CredentialClaims {
             subject_id: Some(format!("did:example:holder-{label}")),
@@ -1776,8 +1801,9 @@ mod tests {
         SdJwtSigningBatchInput::new(
             SigningRouteId::new(route),
             sd_jwt_claims(label),
-            &fixed_private_holder_jwk(),
+            &fixed_public_holder_jwk(),
         )
+        .unwrap()
         .into()
     }
 
@@ -1793,8 +1819,9 @@ mod tests {
         SdJwtSigningBatchInput::new(
             SigningRouteId::new(route),
             invalid_sd_jwt_claims(),
-            &fixed_private_holder_jwk(),
+            &fixed_public_holder_jwk(),
         )
+        .unwrap()
         .into()
     }
 
@@ -1859,8 +1886,8 @@ mod tests {
                 })
                 .collect();
 
-            let verified_holder_jwk = fixed_private_holder_jwk();
-            assert!(!verified_holder_jwk.is_public());
+            let verified_holder_jwk = fixed_public_holder_jwk();
+            assert!(verified_holder_jwk.is_public());
 
             Self {
                 claims,
@@ -1889,7 +1916,8 @@ mod tests {
             for (ordinal, claims) in self.claims.iter().cloned().enumerate() {
                 let route_id = SigningRouteId::new(u64::try_from(ordinal).unwrap());
                 let input =
-                    SdJwtSigningBatchInput::new(route_id, claims, &self.verified_holder_jwk);
+                    SdJwtSigningBatchInput::new(route_id, claims, &self.verified_holder_jwk)
+                        .unwrap();
                 assert!(input.holder_public_jwk.is_public());
                 assert_eq!(
                     serde_json::to_value(&input.holder_public_jwk).unwrap(),
@@ -2166,46 +2194,36 @@ mod tests {
     }
 
     #[test]
-    fn sd_jwt_input_stores_only_verified_holder_public_material_and_is_redacted() {
-        let holders = vec![fixed_private_holder_jwk(), JWK::generate_ed25519().unwrap()];
-
-        for holder_jwk in holders {
-            assert!(!holder_jwk.is_public());
-            let input = SdJwtSigningBatchInput::new(
+    fn sd_jwt_input_rejects_private_material_and_retains_verified_public_key() {
+        for private in [fixed_private_holder_jwk(), JWK::generate_ed25519().unwrap()] {
+            assert!(SdJwtSigningBatchInput::new(
                 SigningRouteId::new(91),
                 sd_jwt_claims(CLAIM_SECRET),
-                &holder_jwk,
-            );
-            assert_eq!(input.route_id(), SigningRouteId::new(91));
-            assert!(input.holder_public_jwk.is_public());
-            let retained = serde_json::to_value(&input.holder_public_jwk).unwrap();
-            assert_eq!(
-                retained,
-                serde_json::to_value(holder_jwk.to_public()).unwrap()
-            );
-            for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
-                assert!(retained.get(private_member).is_none());
-            }
-
-            let diagnostics = format!("{input:?}");
-            assert_eq!(diagnostics, "SdJwtSigningBatchInput([redacted])");
-            for secret in [CLAIM_SECRET, "91"] {
-                assert!(!diagnostics.contains(secret));
-            }
-
-            let enum_input: Es256SigningBatchInput = input.into();
-            assert_eq!(
-                format!("{enum_input:?}"),
-                "Es256SigningBatchInput::SdJwt([redacted])"
-            );
+                &private,
+            )
+            .is_err());
         }
+
+        let holder_jwk = fixed_public_holder_jwk();
+        let input = SdJwtSigningBatchInput::new(
+            SigningRouteId::new(91),
+            sd_jwt_claims(CLAIM_SECRET),
+            &holder_jwk,
+        )
+        .unwrap();
+        assert_eq!(input.route_id(), SigningRouteId::new(91));
+        assert_eq!(
+            serde_json::to_value(&input.holder_public_jwk).unwrap(),
+            serde_json::to_value(&holder_jwk).unwrap()
+        );
+        assert_eq!(format!("{input:?}"), "SdJwtSigningBatchInput([redacted])");
     }
 
     #[test]
     fn jwt_sd_jwt_and_mdoc_sign_complete_payloads_and_preserve_raw_p1363_bytes() {
         let signer = RecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
-        let holder_jwk = JWK::generate_ed25519().unwrap();
+        let holder_jwk = JWK::generate_ed25519().unwrap().to_public();
         let credentials = scope
             .sign_batch(vec![
                 jwt_input(1, "jwt"),
@@ -2214,6 +2232,7 @@ mod tests {
                     sd_jwt_claims("sd-jwt"),
                     &holder_jwk,
                 )
+                .unwrap()
                 .into(),
                 mdoc_input(3, "mdoc"),
             ])
@@ -3224,8 +3243,9 @@ mod tests {
         let sd_jwt = SdJwtSigningBatchInput::new(
             route,
             sd_jwt_claims(CLAIM_SECRET),
-            &fixed_private_holder_jwk(),
-        );
+            &fixed_public_holder_jwk(),
+        )
+        .unwrap();
         let mdoc = MdocSigningBatchInput::new(route, mdoc_claims(CLAIM_SECRET));
         let enum_input = jwt_input(92, CLAIM_SECRET);
         let sd_jwt_enum_input = sd_jwt_input(93, CLAIM_SECRET);

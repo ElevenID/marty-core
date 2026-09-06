@@ -164,8 +164,7 @@ fn remote_request() -> RemoteSdJwtRequest {
             "kty": "EC",
             "crv": "P-256",
             "x": "public-x",
-            "y": "public-y",
-            "d": "Sensitive private key sentinel"
+            "y": "public-y"
         })),
         issuer_certificate_chain: vec![],
     }

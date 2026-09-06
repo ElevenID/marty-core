@@ -16,6 +16,36 @@ use x509_cert::Certificate;
 
 use crate::{CryptoError, CryptoResult};
 
+const RESERVED_JWK_MEMBERS: [&str; 23] = [
+    "kty", "use", "key_ops", "alg", "kid", "x5u", "x5c", "x5t", "x5t#S256", "crv", "x", "y", "n",
+    "e", "d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k",
+];
+
+fn validate_public_extensions(
+    extensions: &HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    if let Some(member) = RESERVED_JWK_MEMBERS
+        .iter()
+        .find(|member| extensions.contains_key(**member))
+    {
+        return Err(format!(
+            "JWK member '{member}' must use its typed field and cannot be an extension"
+        ));
+    }
+    Ok(())
+}
+
+fn deserialize_public_extensions<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let extensions = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    validate_public_extensions(&extensions).map_err(serde::de::Error::custom)?;
+    Ok(extensions)
+}
+
 /// Public-only RFC 7517 JSON Web Key parameters.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicJwk {
@@ -61,11 +91,35 @@ pub struct PublicJwk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub e: Option<String>,
     /// Extension members retained during serialization.
-    #[serde(flatten)]
-    pub extra: HashMap<String, serde_json::Value>,
+    #[serde(flatten, deserialize_with = "deserialize_public_extensions")]
+    extra: HashMap<String, serde_json::Value>,
 }
 
 impl PublicJwk {
+    /// Return the validated, non-key extension members.
+    pub fn extensions(&self) -> &HashMap<String, serde_json::Value> {
+        &self.extra
+    }
+
+    /// Replace extension members after rejecting private and modeled JWK names.
+    pub fn set_public_extensions(
+        &mut self,
+        extensions: HashMap<String, serde_json::Value>,
+    ) -> CryptoResult<()> {
+        validate_public_extensions(&extensions).map_err(CryptoError::key_error)?;
+        self.extra = extensions;
+        Ok(())
+    }
+
+    /// Add validated public extension members using a builder-style API.
+    pub fn with_extensions(
+        mut self,
+        extensions: HashMap<String, serde_json::Value>,
+    ) -> CryptoResult<Self> {
+        self.set_public_extensions(extensions)?;
+        Ok(self)
+    }
+
     /// Serialize the public JWK as JSON.
     pub fn to_json(&self) -> CryptoResult<String> {
         serde_json::to_string(self).map_err(|error| {

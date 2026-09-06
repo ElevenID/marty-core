@@ -42,6 +42,11 @@ type AnyPresentation = DataIntegrity<AnyJsonPresentation, AnySuite>;
 
 const VCDM_V2_BASE_CONTEXT: &str = "https://www.w3.org/ns/credentials/v2";
 const VCDM_V2_EXAMPLES_CONTEXT: &str = "https://www.w3.org/ns/credentials/examples/v2";
+/// Maximum serialized remote Data Integrity completion request accepted by the
+/// public Rust/Python/FFI boundary.
+pub const MAX_DATA_INTEGRITY_COMPLETION_REQUEST_BYTES: usize = 1_048_576;
+const ED25519_SIGNATURE_BYTES: usize = 64;
+const ED25519_UNPADDED_BASE64_BYTES: usize = 86;
 const PROTECTED_VCDM_TERMS: &[&str] = &[
     "VerifiableCredential",
     "VerifiablePresentation",
@@ -616,6 +621,9 @@ impl MessageSigner<AnySignatureAlgorithm> for CaptureMessageSigner {
 pub async fn prepare_vcdm_data_integrity_credential_json_async(
     request_json: &str,
 ) -> Result<String, String> {
+    if request_json.len() > MAX_DATA_INTEGRITY_COMPLETION_REQUEST_BYTES {
+        return Err("Data Integrity prepare request exceeds the safe size limit".into());
+    }
     let request: PrepareDataIntegrityCredentialRequest = serde_json::from_str(request_json)
         .map_err(|error| format!("Invalid Data Integrity prepare request: {error}"))?;
     validate_data_integrity_identity(
@@ -670,8 +678,11 @@ pub async fn prepare_vcdm_data_integrity_credential_json_async(
         .map_err(|_| "Data Integrity signing input lock was poisoned".to_string())?
         .take()
         .ok_or_else(|| "Data Integrity suite produced no signing input".to_string())?;
+    if captured.message.len() != ED25519_SIGNATURE_BYTES {
+        return Err("Data Integrity suite produced an invalid signing input".into());
+    }
 
-    serde_json::to_string(&PreparedDataIntegrityCredential {
+    let prepared = serde_json::to_string(&PreparedDataIntegrityCredential {
         credential: serde_json::to_value(prepared_credential)
             .map_err(|error| format!("Failed to serialize prepared credential: {error}"))?,
         issuer_did: request.issuer_did,
@@ -681,7 +692,11 @@ pub async fn prepare_vcdm_data_integrity_credential_json_async(
         algorithm: captured.algorithm,
         signing_input_b64: URL_SAFE_NO_PAD.encode(captured.message),
     })
-    .map_err(|error| format!("Failed to serialize Data Integrity signing request: {error}"))
+    .map_err(|error| format!("Failed to serialize Data Integrity signing request: {error}"))?;
+    if prepared.len() > MAX_DATA_INTEGRITY_COMPLETION_REQUEST_BYTES {
+        return Err("Prepared Data Integrity state exceeds the safe size limit".into());
+    }
+    Ok(prepared)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -698,9 +713,20 @@ pub fn prepare_vcdm_data_integrity_credential_json(request_json: &str) -> Result
 pub async fn complete_vcdm_data_integrity_credential_json_async(
     request_json: &str,
 ) -> Result<String, String> {
+    if request_json.len() > MAX_DATA_INTEGRITY_COMPLETION_REQUEST_BYTES {
+        return Err("Data Integrity completion request exceeds the safe size limit".into());
+    }
     let request: CompleteDataIntegrityCredentialRequest = serde_json::from_str(request_json)
         .map_err(|error| format!("Invalid Data Integrity completion request: {error}"))?;
     let mut prepared = request.prepared;
+    if prepared.signing_input_b64.len() != ED25519_UNPADDED_BASE64_BYTES
+        || !is_unpadded_base64url(&prepared.signing_input_b64)
+    {
+        return Err("Invalid prepared Data Integrity signing input".into());
+    }
+    if request.signature_b64.len() != ED25519_UNPADDED_BASE64_BYTES {
+        return Err("EdDSA Data Integrity signature must be 64 bytes".into());
+    }
     validate_data_integrity_identity(
         &prepared.credential,
         &prepared.issuer_did,
@@ -713,10 +739,6 @@ pub async fn complete_vcdm_data_integrity_credential_json_async(
             prepared.algorithm
         ));
     }
-    URL_SAFE_NO_PAD
-        .decode(&prepared.signing_input_b64)
-        .map_err(|error| format!("Invalid prepared signing input: {error}"))?;
-
     let public_jwk = parse_public_jwk(prepared.public_jwk.clone())?;
     let method = ed25519_multikey(
         &public_jwk,
@@ -727,11 +749,8 @@ pub async fn complete_vcdm_data_integrity_credential_json_async(
     let signature = URL_SAFE_NO_PAD
         .decode(&request.signature_b64)
         .map_err(|error| format!("Invalid Data Integrity signature encoding: {error}"))?;
-    if signature.len() != 64 {
-        return Err(format!(
-            "EdDSA Data Integrity signature must be 64 bytes, got {}",
-            signature.len()
-        ));
+    if signature.len() != ED25519_SIGNATURE_BYTES {
+        return Err("EdDSA Data Integrity signature must be 64 bytes".into());
     }
 
     let proof = prepared
@@ -777,6 +796,12 @@ pub async fn complete_vcdm_data_integrity_credential_json_async(
             "Completed Data Integrity credential proof verification failed: {error}"
         )),
     }
+}
+
+fn is_unpadded_base64url(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1946,6 +1971,45 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("credential proof is invalid"), "{error}");
+    }
+
+    #[test]
+    fn remote_data_integrity_completion_bounds_state_before_decode() {
+        let oversized = "A".repeat(MAX_DATA_INTEGRITY_COMPLETION_REQUEST_BYTES + 1);
+        assert_eq!(
+            prepare_vcdm_data_integrity_credential_json(&oversized).unwrap_err(),
+            "Data Integrity prepare request exceeds the safe size limit"
+        );
+        assert_eq!(
+            complete_vcdm_data_integrity_credential_json(&oversized).unwrap_err(),
+            "Data Integrity completion request exceeds the safe size limit"
+        );
+
+        let key = JWK::generate_ed25519().unwrap();
+        let prepared_json = prepare_vcdm_data_integrity_credential_json(
+            &remote_data_integrity_prepare_request(&key).to_string(),
+        )
+        .unwrap();
+        let mut prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+        prepared["signing_input_b64"] = json!("A".repeat(ED25519_UNPADDED_BASE64_BYTES + 1));
+        let request = json!({
+            "prepared": prepared,
+            "signature_b64": "A".repeat(ED25519_UNPADDED_BASE64_BYTES)
+        });
+        assert_eq!(
+            complete_vcdm_data_integrity_credential_json(&request.to_string()).unwrap_err(),
+            "Invalid prepared Data Integrity signing input"
+        );
+
+        let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
+        let request = json!({
+            "prepared": prepared,
+            "signature_b64": "A".repeat(ED25519_UNPADDED_BASE64_BYTES + 1)
+        });
+        assert_eq!(
+            complete_vcdm_data_integrity_credential_json(&request.to_string()).unwrap_err(),
+            "EdDSA Data Integrity signature must be 64 bytes"
+        );
     }
 
     #[test]

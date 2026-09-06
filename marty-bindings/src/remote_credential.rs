@@ -1,4 +1,5 @@
 use base64::Engine;
+use marty_oid4vci::signer::MAX_REMOTE_RSA_SIGNATURE_BYTES;
 use marty_oid4vci::{
     remote_credential::{
         prepare_remote_jwt_vc, prepare_remote_sd_jwt, RemoteJwtVcRequest, RemoteSdJwtRequest,
@@ -60,11 +61,39 @@ fn parse_claims(
 }
 
 fn decode_signature(signature_b64: &str) -> PyResult<Vec<u8>> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
+    const MAX_ENCODED_SIGNATURE_BYTES: usize = (MAX_REMOTE_RSA_SIGNATURE_BYTES * 4).div_ceil(3);
+    if signature_b64.len() > MAX_ENCODED_SIGNATURE_BYTES {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Remote signature exceeds the supported 8192-bit RSA limit",
+        ));
+    }
+    let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(signature_b64)
         .map_err(|error| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid signature base64: {error}"))
-        })
+        })?;
+    if signature.len() > MAX_REMOTE_RSA_SIGNATURE_BYTES {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Remote signature exceeds the supported 8192-bit RSA limit",
+        ));
+    }
+    Ok(signature)
+}
+
+#[cfg(test)]
+mod signature_decode_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_encoded_remote_signature_before_unbounded_decode() {
+        let at_limit = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode([1; MAX_REMOTE_RSA_SIGNATURE_BYTES]);
+        assert_eq!(decode_signature(&at_limit).unwrap().len(), 1024);
+
+        let over_limit = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode([1; MAX_REMOTE_RSA_SIGNATURE_BYTES + 1]);
+        assert!(decode_signature(&over_limit).is_err());
+    }
 }
 
 /// Prepare a complete SD-JWT issuer payload while retaining disclosure state
@@ -353,7 +382,7 @@ mod tests {
             vec!["name".to_string()],
             Some("dc+sd-jwt"),
             Some("urn:uuid:00000000-0000-0000-0000-000000000123"),
-            Some(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y","d":"secret"}"#),
+            Some(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y"}"#),
             vec!["leaf".to_string(), "issuer".to_string()],
         )
         .expect("native SD-JWT preparation");
@@ -372,6 +401,24 @@ mod tests {
         assert!(payload.get("nbf").is_some());
         assert!(payload.get("name").is_none());
         assert!(payload.get("_sd").is_some());
+
+        let private_error = oid4vci_prepare_sd_jwt(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key-1",
+            "ES256",
+            Some("did:key:holder"),
+            "AccessBadge",
+            r#"{"name":"Alice"}"#,
+            Some(3600),
+            vec!["name".to_string()],
+            Some("dc+sd-jwt"),
+            None,
+            Some(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y","d":"secret"}"#),
+            vec![],
+        )
+        .err()
+        .expect("private holder JWK must be rejected by the binding");
+        assert!(private_error.to_string().contains("private member"));
     }
 
     #[test]

@@ -15,18 +15,22 @@ use pyo3::types::PyDict;
 pub(super) struct PyNativeEacChipAuthentication {
     algorithm: crate::eac::EacAlgorithm,
     algorithm_name: String,
+    handshake: Option<crate::eac::EacHandshake>,
+    #[cfg(feature = "local-key-operations")]
     private_key: Option<Vec<u8>>,
 }
 
 #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 impl PyNativeEacChipAuthentication {
+    #[cfg(feature = "local-key-operations")]
     fn store_private_key(&mut self, private_key: Vec<u8>) {
         if let Some(mut previous) = self.private_key.replace(private_key) {
             zeroize::Zeroize::zeroize(&mut previous);
         }
     }
 
-    fn agree(&mut self, chip_public_key: &[u8]) -> PyResult<Vec<u8>> {
+    #[cfg(feature = "local-key-operations")]
+    fn agree_local(&mut self, chip_public_key: &[u8]) -> PyResult<Vec<u8>> {
         let private_key = zeroize::Zeroizing::new(self.private_key.take().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("EAC ephemeral keypair has not been generated")
         })?);
@@ -37,6 +41,7 @@ impl PyNativeEacChipAuthentication {
 #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 impl Drop for PyNativeEacChipAuthentication {
     fn drop(&mut self) {
+        #[cfg(feature = "local-key-operations")]
         if let Some(private_key) = self.private_key.as_mut() {
             zeroize::Zeroize::zeroize(private_key);
         }
@@ -51,6 +56,8 @@ impl PyNativeEacChipAuthentication {
         Ok(Self {
             algorithm: crate::eac::EacAlgorithm::parse(algorithm).map_err(to_pyerr)?,
             algorithm_name: algorithm.to_string(),
+            handshake: None,
+            #[cfg(feature = "local-key-operations")]
             private_key: None,
         })
     }
@@ -75,10 +82,10 @@ impl PyNativeEacChipAuthentication {
         &mut self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let (private_key, public_key) =
-            crate::eac::generate_ephemeral_keypair(self.algorithm).map_err(to_pyerr)?;
-        self.store_private_key(private_key);
-        Ok(PyBytes::new(py, &public_key))
+        let handshake = crate::eac::EacHandshake::begin(self.algorithm).map_err(to_pyerr)?;
+        let public_key = PyBytes::new(py, handshake.public_key());
+        self.handshake = Some(handshake);
+        Ok(public_key)
     }
 
     #[cfg(feature = "local-key-operations")]
@@ -87,7 +94,7 @@ impl PyNativeEacChipAuthentication {
         py: Python<'py>,
         chip_public_key: &[u8],
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let shared = self.agree(chip_public_key)?;
+        let shared = self.agree_local(chip_public_key)?;
         Ok(PyBytes::new(py, &shared))
     }
 
@@ -95,9 +102,10 @@ impl PyNativeEacChipAuthentication {
         &mut self,
         chip_public_key: &[u8],
     ) -> PyResult<PyNativeEacSecureMessaging> {
-        let shared = zeroize::Zeroizing::new(self.agree(chip_public_key)?);
-        let inner =
-            crate::eac::EacSecureMessaging::new(&shared, self.algorithm).map_err(to_pyerr)?;
+        let handshake = self.handshake.take().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("EAC ephemeral keypair has not been generated")
+        })?;
+        let inner = handshake.complete(chip_public_key).map_err(to_pyerr)?;
         Ok(PyNativeEacSecureMessaging {
             inner,
             algorithm: self.algorithm_name.clone(),

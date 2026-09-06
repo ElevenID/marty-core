@@ -21,6 +21,11 @@ use crate::types::SigningAlgorithm;
 // CredentialSigner trait
 // =============================================================================
 
+/// Smallest supported RSA remote-signing modulus (2048 bits).
+pub const MIN_REMOTE_RSA_SIGNATURE_BYTES: usize = 256;
+/// Largest supported RSA remote-signing modulus (8192 bits).
+pub const MAX_REMOTE_RSA_SIGNATURE_BYTES: usize = crate::bounded_jwt::MAX_RSA_SIGNATURE_BYTES;
+
 /// Trait for signing credential payloads.
 ///
 /// Abstracts key material so that signing can be performed locally (JWK),
@@ -28,7 +33,7 @@ use crate::types::SigningAlgorithm;
 ///
 /// # Implementors
 ///
-/// - [`IssuerKey`] — local JWK-based signer (in-process private key).
+/// - `IssuerKey` — local JWK-based signer in local-key-enabled builds.
 /// - (future) `KmsSigner` — delegates to an external KMS via callback.
 ///
 /// Implementors must ensure their [`std::fmt::Debug`] representation never
@@ -65,12 +70,9 @@ pub(crate) fn validate_remote_signature(
         SigningAlgorithm::ES256K => k256::ecdsa::Signature::from_slice(signature).is_ok(),
         SigningAlgorithm::ES384 => p384::ecdsa::Signature::from_slice(signature).is_ok(),
         SigningAlgorithm::EdDSA => validate_ed25519_encoding(signature),
-        // RSA signatures have the width of their KMS-managed modulus. The
-        // prepared state does not yet carry that public modulus, so preserve
-        // supported 2048-bit and larger keys while rejecting trivial output.
-        SigningAlgorithm::RS256 => {
-            signature.len() >= 256 && signature.iter().any(|byte| *byte != 0)
-        }
+        // The prepared state does not yet carry the KMS-managed modulus, so
+        // enforce the library's supported 2048..=8192-bit RSA range.
+        SigningAlgorithm::RS256 => validate_rsa_signature_encoding(signature),
     };
     if !valid {
         return Err(Oid4vciError::SigningError(format!(
@@ -79,6 +81,11 @@ pub(crate) fn validate_remote_signature(
         )));
     }
     Ok(())
+}
+
+pub(crate) fn validate_rsa_signature_encoding(signature: &[u8]) -> bool {
+    (MIN_REMOTE_RSA_SIGNATURE_BYTES..=MAX_REMOTE_RSA_SIGNATURE_BYTES).contains(&signature.len())
+        && signature.iter().any(|byte| *byte != 0)
 }
 
 fn validate_ed25519_encoding(signature: &[u8]) -> bool {
@@ -136,7 +143,7 @@ impl CredentialSigner for IssuerKey {
 /// `alg` is deliberately excluded from this decision. Callers validate that
 /// optional metadata separately so it can only narrow, never override, the
 /// key type and exact curve.
-#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn derive_signing_algorithm(
     key_type: Option<&str>,
     curve: Option<&str>,
@@ -167,7 +174,7 @@ pub(crate) fn derive_signing_algorithm(
 }
 
 /// Require optional JWK `alg` metadata to agree with the structural family.
-#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub(crate) fn validate_declared_jwk_algorithm(
     structural_algorithm: SigningAlgorithm,
     declared_algorithm: Option<&str>,
@@ -329,5 +336,7 @@ mod remote_signature_tests {
         assert!(validate_remote_signature(SigningAlgorithm::RS256, &[0; 256]).is_err());
         assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 256]).is_ok());
         assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 384]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 1024]).is_ok());
+        assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 1025]).is_err());
     }
 }

@@ -1,31 +1,48 @@
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use iref::{IriBuf, UriBuf};
+use iref::IriBuf;
+#[cfg(any(test, feature = "local-key-operations"))]
+use iref::UriBuf;
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_claims::data_integrity::CryptographicSuite;
-use ssi_claims::data_integrity::{AnySuite, DataIntegrity, ProofOptions};
+#[cfg(any(test, feature = "local-key-operations"))]
+use ssi_claims::data_integrity::ProofOptions;
+use ssi_claims::data_integrity::{AnySuite, DataIntegrity};
 use ssi_claims::vc::syntax::AnyJsonCredential;
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_claims::SignatureEnvironment;
 use ssi_claims::VerificationParameters;
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_json_ld::syntax::{Context, ContextEntry};
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_jwk::Params as JwkParams;
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_jwk::JWK;
 use ssi_verification_methods::VerificationMethod;
+use ssi_verification_methods::{AnyMethod, GenericVerificationMethod};
+#[cfg(any(test, feature = "local-key-operations"))]
 use ssi_verification_methods::{
-    AnyMethod, Ed25519VerificationKey2018, Ed25519VerificationKey2020, GenericVerificationMethod,
-    JsonWebKey2020, ProofPurpose, ReferenceOrOwned, SingleSecretSigner,
+    Ed25519VerificationKey2018, Ed25519VerificationKey2020, JsonWebKey2020, ProofPurpose,
+    ReferenceOrOwned, SingleSecretSigner,
 };
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 
-use super::contexts::{ob3_context_uri, open_badges_context_loader, security_v2_context_uri};
+#[cfg(any(test, feature = "local-key-operations"))]
+use super::contexts::security_v2_context_uri;
+use super::contexts::{ob3_context_uri, open_badges_context_loader};
+use super::method_wrapper::ensure_public_verification_method;
 use super::status::check_credential_status;
-use super::types::{
-    AuthenticatedStatusList, DocumentStore, OpenBadgesIssueResult, OpenBadgesVerificationResult,
-};
+#[cfg(any(test, feature = "local-key-operations"))]
+use super::types::OpenBadgesIssueResult;
+use super::types::{AuthenticatedStatusList, DocumentStore, OpenBadgesVerificationResult};
+#[cfg(any(test, feature = "local-key-operations"))]
 use super::x509_verification_method::X509VerificationKey2021;
 
+#[cfg(any(test, feature = "local-key-operations"))]
 #[derive(Debug, Deserialize)]
 struct IssueOb3Request {
     credential: Value,
@@ -39,6 +56,7 @@ struct VerifyOb3Request {
     document_store: Option<DocumentStore>,
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 #[derive(Debug, Deserialize)]
 struct Ob3SigningOptions {
     jwk: Value,
@@ -53,6 +71,7 @@ struct Ob3SigningOptions {
 
 pub(super) type AnyCredential = DataIntegrity<AnyJsonCredential, AnySuite>;
 
+#[cfg(any(test, feature = "local-key-operations"))]
 pub async fn issue_ob3_json_async(request_json: &str) -> VerificationResult<String> {
     let req: IssueOb3Request = serde_json::from_str(request_json)
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 issue request: {}", e)))?;
@@ -239,7 +258,10 @@ pub async fn verify_ob3_json_with_status_lists_async(
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(test, feature = "local-key-operations")
+))]
 pub fn issue_ob3_json(request_json: &str) -> VerificationResult<String> {
     futures::executor::block_on(issue_ob3_json_async(request_json))
 }
@@ -260,6 +282,7 @@ pub fn verify_ob3_json_with_status_lists(
     ))
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn build_verification_method(
     jwk: &JWK,
     verification_method: &IriBuf,
@@ -320,6 +343,7 @@ fn build_verification_method(
 }
 
 // For X509 verification methods, this function extracts PEM from the credential's verificationMethod
+#[cfg(any(test, feature = "local-key-operations"))]
 #[allow(dead_code)]
 fn build_x509_verification_method(
     pem: &str,
@@ -333,6 +357,7 @@ fn build_x509_verification_method(
     ))
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn ed25519_public_key_bytes(jwk: &JWK) -> VerificationResult<Vec<u8>> {
     match &jwk.params {
         JwkParams::OKP(params) if params.curve == "Ed25519" => Ok(params.public_key.0.clone()),
@@ -342,6 +367,7 @@ fn ed25519_public_key_bytes(jwk: &JWK) -> VerificationResult<Vec<u8>> {
     }
 }
 
+#[cfg(any(test, feature = "local-key-operations"))]
 fn ed25519_verifying_key(jwk: &JWK) -> VerificationResult<ed25519_dalek::VerifyingKey> {
     let public_key = ed25519_public_key_bytes(jwk)?;
     ed25519_dalek::VerifyingKey::try_from(public_key.as_slice())
@@ -598,6 +624,12 @@ fn parse_verification_method(
     warnings: &mut Vec<String>,
     key: &str,
 ) -> Option<(IriBuf, AnyMethod)> {
+    if let Err(error) = ensure_public_verification_method(value) {
+        warnings.push(format!(
+            "Failed to parse verification method {key}: {error}"
+        ));
+        return None;
+    }
     let method =
         if let Ok(generic) = serde_json::from_value::<GenericVerificationMethod>(value.clone()) {
             AnyMethod::try_from(generic).map_err(|e| e.to_string())
@@ -713,6 +745,35 @@ mod tests {
     }
 
     #[test]
+    fn document_store_rejects_private_verification_method_extensions() {
+        for member in [
+            "privateKeyJwk",
+            "privateKeyPem",
+            "privateKeyBase58",
+            "privateKeyMultibase",
+            "privateKeyHex",
+        ] {
+            let method_id = "did:example:issuer#key-1";
+            let mut method = authorization_method(method_id, "did:example:issuer");
+            method
+                .as_object_mut()
+                .unwrap()
+                .insert(member.into(), json!("secret-sentinel"));
+            let mut store = DocumentStore::new();
+            store.insert(method_id.into(), method);
+            let mut warnings = Vec::new();
+            let collected = collect_verification_methods(&store, &mut warnings);
+            assert!(collected.resolver.is_empty());
+            assert!(warnings
+                .iter()
+                .any(|warning| warning.contains("private key member")));
+            assert!(!warnings
+                .iter()
+                .any(|warning| warning.contains("secret-sentinel")));
+        }
+    }
+
+    #[test]
     fn controller_document_requires_assertion_relationship() {
         let issuer = "did:example:issuer";
         let method_id = "did:example:issuer#key-1";
@@ -759,6 +820,21 @@ mod tests {
             authorization_codes(&credential, &store),
             vec![error_codes::OPEN_BADGES_ISSUER_UNAUTHORIZED]
         );
+    }
+
+    #[test]
+    fn private_jwk_verification_methods_are_not_collected() {
+        let method_id = "did:example:issuer#key-1";
+        let mut method = authorization_method(method_id, "did:example:issuer");
+        method["publicKeyJwk"]["d"] = json!("secret");
+        let mut store = DocumentStore::new();
+        store.insert(method_id.to_string(), method);
+        let mut warnings = Vec::new();
+        let collected = collect_verification_methods(&store, &mut warnings);
+        assert!(collected.resolver.is_empty());
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("private member")));
     }
 
     #[test]

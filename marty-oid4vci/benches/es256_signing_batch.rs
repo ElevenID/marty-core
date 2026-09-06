@@ -245,6 +245,7 @@ fn signing_inputs(
                     claims,
                     holder_jwk.as_ref().expect("SD-JWT composition holder key"),
                 )
+                .expect("benchmark holder JWK is public")
                 .into(),
                 BenchmarkFormat::Mdoc => MdocSigningBatchInput::new(route, claims).into(),
             }
@@ -270,6 +271,7 @@ fn matrix_signing_inputs(
                     claims,
                     holder_jwk.as_ref().expect("SD-JWT matrix holder key"),
                 )
+                .expect("benchmark holder JWK is public")
                 .into(),
                 MatrixFormat::Mdoc => MdocSigningBatchInput::new(route, claims).into(),
             }

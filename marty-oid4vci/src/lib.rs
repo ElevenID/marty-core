@@ -52,6 +52,7 @@
 ))]
 compile_error!("kms-only builds cannot include local issuer or holder key operations");
 
+mod bounded_jwt;
 pub mod discovery;
 pub mod error;
 pub mod formats;
@@ -68,6 +69,7 @@ pub mod presentation_request;
 pub mod proof;
 #[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 pub mod remote_credential;
+#[cfg(any(test, feature = "issuer"))]
 pub mod signer;
 #[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 pub mod signing_batch;
@@ -104,6 +106,10 @@ pub use holder_key::{
 /// ```compile_fail
 /// use marty_oid4vci::issuer::generate_p256_jwk_pair;
 /// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::issuer::detect_algorithm;
+/// ```
 mod local_issuer_key_compile_boundary {}
 
 #[cfg(not(feature = "holder-key-operations"))]
@@ -115,8 +121,33 @@ mod local_issuer_key_compile_boundary {}
 /// ```
 mod holder_key_compile_boundary {}
 
+#[cfg(not(feature = "issuer"))]
+/// Verifier-only artifacts do not expose credential preparation or signer callbacks.
+///
+/// ```compile_fail
+/// use marty_oid4vci::CredentialSigner;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::sd_jwt::prepare_sd_jwt;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::jwt_vc::prepare_jwt_vc;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::mdoc::prepare_mdoc;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::vds_nc::sign_vds_nc_with_signer;
+/// ```
+mod verifier_role_compile_boundary {}
+
 #[cfg(feature = "issuer")]
 pub use issuer::{generate_pkce_challenge_s256, verify_pkce_s256, IssuanceEngine};
+#[cfg(feature = "issuer")]
 pub use signer::CredentialSigner;
 pub use types::{
     AuthorizationCodeGrant, AuthorizationCodeTokenRequest, AuthorizationDetail,

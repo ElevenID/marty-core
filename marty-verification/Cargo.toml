@@ -30,15 +30,25 @@ local-key-operations = [
     "marty-crypto/pkcs12",
     "marty-crypto/private-key-codec",
     "marty-crypto/rsa-local-signing",
+    "ed25519-dalek/pem",
+    "ed25519-dalek/rand_core",
+    "p256/pem",
+    "p384/pem",
+    "p521/pem",
 ]
 # Short-lived protocol/session secrets, distinct from credential issuer keys.
-ephemeral-session-keys = ["marty-crypto/ecdh", "marty-crypto/symmetric"]
+ephemeral-session-keys = [
+    "marty-crypto/ecdh",
+    "marty-crypto/symmetric",
+    "p256/ecdh",
+    "p384/ecdh",
+]
 network-tls-client = ["dep:reqwest"]
 aamva-client = ["network-tls-client", "tokio", "moka"]
 icao-client = ["network-tls-client", "tokio", "moka", "ldap3"]
 eudi-client = ["network-tls-client", "reqwest/stream", "tokio", "moka", "quick-xml"]
-cert-builder = ["marty-crypto/cert-builder"]   # Explicit certificate building utilities for Python bindings
-authority-issuance = ["csca", "marty-crypto/sod-builder"] # CSCA/DSC generation and passport personalization
+cert-builder = ["marty-crypto/cert-builder", "x509-cert/builder"]   # Explicit certificate building utilities for Python bindings
+authority-issuance = ["csca", "marty-crypto/sod-builder", "cms/builder", "x509-cert/builder"] # CSCA/DSC generation and passport personalization
 cross-validation = []  # OpenSSL cross-validation tests
 serde = []
 test-fixtures = []  # Enable NIST PKITS test fixtures (requires downloading fixtures)
@@ -70,9 +80,9 @@ pem-rfc7468 = { workspace = true }
 cms = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
-p256 = { workspace = true }
-p384 = { workspace = true }
-p521 = { workspace = true }
+p256 = { workspace = true, features = ["ecdsa-core"] }
+p384 = { workspace = true, features = ["ecdsa-core"] }
+p521 = { workspace = true, features = ["ecdsa-core"] }
 elliptic-curve = { workspace = true }
 rand = { workspace = true }
 rsa = { workspace = true }
@@ -124,13 +134,14 @@ quick-xml = { version = "0.41", features = ["serialize"], optional = true }
 pyo3 = { workspace = true, optional = true }
 
 # mDoc/mDL support
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "dfd0ca68405b43f5afed0ad218b3c282cc21be61", default-features = false, features = ["presentation-verifier"] }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "235ac776ce32d5ae9a1c0c458f6a22a395e9aed0", default-features = false, features = ["presentation-verifier"] }
 coset = "0.3.8"
 time = { version = "0.3", features = ["formatting"] }
 hex = "0.4"
-zeroize = { workspace = true }
+zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+cms = { workspace = true, features = ["builder"] }
 marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["crl-builder"] }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["local-key-operations"] }
 tempfile = { workspace = true }
@@ -148,7 +159,7 @@ required-features = ["authority-issuance"]
 
 [[test]]
 name = "eac_behavior"
-required-features = ["ephemeral-session-keys"]
+required-features = ["local-key-operations"]
 
 [[test]]
 name = "dtc_tests"
@@ -156,7 +167,7 @@ required-features = ["local-key-operations"]
 
 [[test]]
 name = "passport_chip_behavior"
-required-features = ["ephemeral-session-keys"]
+required-features = ["local-key-operations"]
 
 [[test]]
 name = "open_badges_conformance"

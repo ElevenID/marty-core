@@ -9,6 +9,36 @@ use std::collections::HashMap;
 
 use crate::{VerificationError, VerificationResult};
 
+const RESERVED_EXTENSION_MEMBERS: [&str; 23] = [
+    "kty", "use", "key_ops", "alg", "kid", "x5u", "x5c", "x5t", "x5t#S256", "crv", "x", "y", "n",
+    "e", "d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k",
+];
+
+fn validate_public_extensions(
+    extensions: &HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    if let Some(member) = RESERVED_EXTENSION_MEMBERS
+        .iter()
+        .find(|member| extensions.contains_key(**member))
+    {
+        return Err(format!(
+            "JWK member '{member}' must use its typed field and cannot be an extension"
+        ));
+    }
+    Ok(())
+}
+
+fn deserialize_public_extensions<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let extensions = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    validate_public_extensions(&extensions).map_err(serde::de::Error::custom)?;
+    Ok(extensions)
+}
+
 #[cfg(not(any(test, feature = "local-key-operations")))]
 fn reject_private_key_material<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
@@ -182,8 +212,8 @@ pub struct Jwk {
     pub(crate) k: Option<String>,
 
     /// Additional parameters
-    #[serde(flatten)]
-    pub extra: HashMap<String, serde_json::Value>,
+    #[serde(flatten, deserialize_with = "deserialize_public_extensions")]
+    pub(crate) extra: HashMap<String, serde_json::Value>,
 }
 
 impl Jwk {
@@ -195,9 +225,40 @@ impl Jwk {
         }
     }
 
+    /// Return validated extension members without permitting unchecked mutation.
+    pub fn extensions(&self) -> &HashMap<String, serde_json::Value> {
+        &self.extra
+    }
+
+    /// Replace extension members after rejecting private and modeled JWK names.
+    pub fn set_public_extensions(
+        &mut self,
+        extensions: HashMap<String, serde_json::Value>,
+    ) -> VerificationResult<()> {
+        validate_public_extensions(&extensions).map_err(VerificationError::key_error)?;
+        self.extra = extensions;
+        Ok(())
+    }
+
+    /// Add validated public extension members using a builder-style API.
+    pub fn with_extensions(
+        mut self,
+        extensions: HashMap<String, serde_json::Value>,
+    ) -> VerificationResult<Self> {
+        self.set_public_extensions(extensions)?;
+        Ok(self)
+    }
+
     /// Check if this is a private key.
     pub fn is_private(&self) -> bool {
-        self.d.is_some() || self.rsa_d.is_some() || self.k.is_some()
+        self.d.is_some()
+            || self.rsa_d.is_some()
+            || self.p.is_some()
+            || self.q.is_some()
+            || self.dp.is_some()
+            || self.dq.is_some()
+            || self.qi.is_some()
+            || self.k.is_some()
     }
 
     /// Check if this is a public key (asymmetric key without private component).
@@ -645,6 +706,16 @@ mod tests {
         assert!(public.d.is_none());
         assert_eq!(private.x, public.x);
         assert_eq!(private.y, public.y);
+    }
+
+    #[test]
+    fn every_modeled_private_member_is_classified_private() {
+        for member in ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "k"] {
+            let json = format!(r#"{{"kty":"RSA","{member}":"secret"}}"#);
+            let jwk = Jwk::from_json(&json).unwrap();
+            assert!(jwk.is_private(), "{member} was not classified private");
+            assert!(!jwk.is_public(), "{member} was classified public");
+        }
     }
 
     #[test]

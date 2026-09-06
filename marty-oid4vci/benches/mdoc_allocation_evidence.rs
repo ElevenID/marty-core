@@ -680,7 +680,7 @@ mod native {
     ) {
         use isomdl::definitions::IssuerSigned;
 
-        assert_eq!(prepared.credential_id, expected_credential_id);
+        assert_eq!(prepared.credential_id(), expected_credential_id);
         let credential = assemble_mdoc(prepared, &[0xa5; 64])
             .expect("allocation evidence fixture must assemble");
         let SignedCredential::MsoMdoc {

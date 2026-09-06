@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use ssi_jwk::JWK;
 
 const ISSUER_URL: &str = "https://issuer.example.test";
-const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 struct IssuerFixture {
     engine: IssuanceEngine,

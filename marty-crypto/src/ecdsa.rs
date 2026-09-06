@@ -1,19 +1,18 @@
 //! ECDSA signature signing and verification for P-256, P-384, and P-521 curves.
 
 #[cfg(feature = "ecdsa-local-signing")]
-use ecdsa::signature::Signer;
+use p256::ecdsa::signature::Signer;
+use p256::ecdsa::Signature as P256Signature;
 #[cfg(feature = "ecdsa-local-signing")]
 use p256::ecdsa::SigningKey as P256SigningKey;
-use p256::ecdsa::{
-    signature::Verifier as P256Verifier, Signature as P256Signature,
-    VerifyingKey as P256VerifyingKey,
-};
+use p384::ecdsa::Signature as P384Signature;
 #[cfg(feature = "ecdsa-local-signing")]
 use p384::ecdsa::SigningKey as P384SigningKey;
-use p384::ecdsa::{Signature as P384Signature, VerifyingKey as P384VerifyingKey};
+use p521::ecdsa::Signature as P521Signature;
 #[cfg(feature = "ecdsa-local-signing")]
 use p521::ecdsa::SigningKey as P521SigningKey;
-use p521::ecdsa::{Signature as P521Signature, VerifyingKey as P521VerifyingKey};
+#[cfg(feature = "ecdsa-local-signing")]
+use p521::ecdsa::VerifyingKey as P521VerifyingKey;
 #[cfg(feature = "ecdsa-local-signing")]
 use rand::rngs::OsRng;
 
@@ -192,11 +191,11 @@ pub fn verify_p256_sha256(
     signature: &[u8],
 ) -> CryptoResult<bool> {
     // Try to parse as SubjectPublicKeyInfo
-    let verifying_key = P256VerifyingKey::from_sec1_bytes(public_key_der)
+    let public_key = p256::PublicKey::from_sec1_bytes(public_key_der)
         .or_else(|_| {
             // Try parsing as full SPKI
             use elliptic_curve::pkcs8::DecodePublicKey;
-            P256VerifyingKey::from_public_key_der(public_key_der)
+            p256::PublicKey::from_public_key_der(public_key_der)
         })
         .map_err(|e| {
             CryptoError::invalid_signature_with_context(
@@ -215,7 +214,12 @@ pub fn verify_p256_sha256(
             )
         })?;
 
-    match verifying_key.verify(message, &sig) {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(message);
+    let z = ecdsa_core::hazmat::bits2field::<p256::NistP256>(&digest)
+        .map_err(|_| CryptoError::invalid_signature("ECDSA P-256 digest"))?;
+    let public_point = p256::ProjectivePoint::from(*public_key.as_affine());
+    match ecdsa_core::hazmat::verify_prehashed::<p256::NistP256>(&public_point, &z, &sig) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -238,11 +242,11 @@ pub fn verify_p384_sha384(
     signature: &[u8],
 ) -> CryptoResult<bool> {
     // Try to parse as SEC1 bytes first
-    let verifying_key = P384VerifyingKey::from_sec1_bytes(public_key_der)
+    let public_key = p384::PublicKey::from_sec1_bytes(public_key_der)
         .or_else(|_| {
             // Try parsing as full SPKI
             use elliptic_curve::pkcs8::DecodePublicKey;
-            P384VerifyingKey::from_public_key_der(public_key_der)
+            p384::PublicKey::from_public_key_der(public_key_der)
         })
         .map_err(|e| {
             CryptoError::invalid_signature_with_context(
@@ -261,7 +265,12 @@ pub fn verify_p384_sha384(
             )
         })?;
 
-    match verifying_key.verify(message, &sig) {
+    use sha2::Digest;
+    let digest = sha2::Sha384::digest(message);
+    let z = ecdsa_core::hazmat::bits2field::<p384::NistP384>(&digest)
+        .map_err(|_| CryptoError::invalid_signature("ECDSA P-384 digest"))?;
+    let public_point = p384::ProjectivePoint::from(*public_key.as_affine());
+    match ecdsa_core::hazmat::verify_prehashed::<p384::NistP384>(&public_point, &z, &sig) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -283,19 +292,17 @@ pub fn verify_p521_sha512(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    use p521::ecdsa::signature::Verifier as P521Verifier;
-
     // Try to parse as SEC1 bytes first
-    let verifying_key = P521VerifyingKey::from_sec1_bytes(public_key_der)
+    let public_key = p521::PublicKey::from_sec1_bytes(public_key_der)
         .or_else(|_| {
             // Try parsing as full SPKI - extract the raw public key bytes
             use der::Decode;
             use x509_cert::spki::SubjectPublicKeyInfoOwned;
 
             let spki = SubjectPublicKeyInfoOwned::from_der(public_key_der)
-                .map_err(|_e| p521::ecdsa::Error::new())?;
+                .map_err(|_| elliptic_curve::Error)?;
             let raw_bytes = spki.subject_public_key.raw_bytes();
-            P521VerifyingKey::from_sec1_bytes(raw_bytes)
+            p521::PublicKey::from_sec1_bytes(raw_bytes)
         })
         .map_err(|e| {
             CryptoError::invalid_signature_with_context(
@@ -314,7 +321,12 @@ pub fn verify_p521_sha512(
             )
         })?;
 
-    match verifying_key.verify(message, &sig) {
+    use sha2::Digest;
+    let digest = sha2::Sha512::digest(message);
+    let z = ecdsa_core::hazmat::bits2field::<p521::NistP521>(&digest)
+        .map_err(|_| CryptoError::invalid_signature("ECDSA P-521 digest"))?;
+    let public_point = p521::ProjectivePoint::from(*public_key.as_affine());
+    match ecdsa_core::hazmat::verify_prehashed::<p521::NistP521>(&public_point, &z, &sig) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }

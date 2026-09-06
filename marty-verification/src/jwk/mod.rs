@@ -35,6 +35,20 @@ pub use public_key::*;
 /// # use marty_verification::jwk::Jwk;
 /// let _ = Jwk { d: Some("secret".into()), ..Jwk::default() };
 /// ```
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let mut jwk = Jwk::default();
+/// jwk.extra.insert("d".into(), "secret".into());
+/// ```
+///
+/// Generic private-JWK decryption also requires the explicit local-key
+/// capability; HAIP production code uses the session-scoped helper instead:
+///
+/// ```compile_fail
+/// # use marty_verification::jwk::Jwk;
+/// let _ = marty_verification::jwk::jwe_decrypt("compact", &Jwk::default());
+/// ```
 pub struct VerificationOnly;
 
 #[cfg(not(feature = "ephemeral-session-keys"))]

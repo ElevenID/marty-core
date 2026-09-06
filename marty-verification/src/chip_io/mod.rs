@@ -39,6 +39,50 @@ use crate::verification::emrtd::{verify_emrtd, SecurityObject};
 /// ```
 pub struct NoEphemeralSessionKeys;
 
+#[cfg(all(
+    feature = "ephemeral-session-keys",
+    not(feature = "local-key-operations")
+))]
+/// Marker documenting raw BAC/PACE key APIs excluded from production session builds.
+///
+/// ```compile_fail
+/// use marty_verification::chip_io::{BacKeys, PaceKeys, PacePassword, PaceSession};
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::derive_bac_base_keys;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::derive_bac_session_keys;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::BacHandshake::begin_with_keys;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::BacHandshake::begin_with_random;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::BacSession::from_session_keys;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::BacSession::encryption_key;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::BacSession::mac_key;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::BacSession::send_sequence_counter;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::derive_compatibility_pace_password_key;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::PaceCompatibilityHandshake::begin_with_private_key;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::chip_io::PaceCompatibilityHandshake::decrypted_nonce;
+/// ```
+pub struct NoRawSessionKeyApis;
+
 // ─── APDU primitives ──────────────────────────────────────────────────────────
 
 /// ISO/IEC 7816-4 command APDU.
@@ -462,11 +506,11 @@ pub fn verify_from_reader<R: PassportReader>(
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct MrzKeyInfo {
     /// Document number (9 chars) + check digit (1 char) = 10 chars.
-    pub doc_number_with_check: String,
+    doc_number_with_check: String,
     /// Date of birth YYMMDD (6 chars) + check digit (1 char) = 7 chars.
-    pub dob_with_check: String,
+    dob_with_check: String,
     /// Date of expiry YYMMDD (6 chars) + check digit (1 char) = 7 chars.
-    pub expiry_with_check: String,
+    expiry_with_check: String,
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
@@ -489,7 +533,7 @@ impl MrzKeyInfo {
 
 /// Derived BAC session keys.
 #[derive(Clone)]
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub struct BacKeys {
     /// 16-byte 3DES encryption key (K1‖K2).
     pub k_enc: [u8; 16],
@@ -497,6 +541,17 @@ pub struct BacKeys {
     pub k_mac: [u8; 16],
     /// First 16 bytes of SHA-1(MRZ information).
     pub k_seed: [u8; 16],
+}
+
+#[derive(Clone)]
+#[cfg(all(
+    not(feature = "local-key-operations"),
+    not(test),
+    feature = "ephemeral-session-keys"
+))]
+pub(crate) struct BacKeys {
+    k_enc: [u8; 16],
+    k_mac: [u8; 16],
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
@@ -511,12 +566,14 @@ impl Drop for BacKeys {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
         zeroize::Zeroize::zeroize(&mut self.k_mac);
+        #[cfg(any(test, feature = "local-key-operations"))]
         zeroize::Zeroize::zeroize(&mut self.k_seed);
     }
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl BacKeys {
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn from_parts(k_enc: [u8; 16], k_mac: [u8; 16], k_seed: [u8; 16]) -> Self {
         Self {
             k_enc,
@@ -570,10 +627,11 @@ impl BacHandshake {
         let mut k_ifd = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut rnd_ifd);
         rand::rngs::OsRng.fill_bytes(&mut k_ifd);
-        Self::begin_with_random(mrz, rnd_ic, rnd_ifd, k_ifd)
+        Self::begin_with_random_inner(mrz, rnd_ic, rnd_ifd, k_ifd)
     }
 
     /// Start a BAC exchange from previously derived base keys.
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn begin_with_keys(base_keys: BacKeys, rnd_ic: &[u8]) -> VerificationResult<Self> {
         use rand::RngCore;
 
@@ -593,7 +651,17 @@ impl BacHandshake {
     }
 
     /// Start a deterministic BAC exchange for conformance-vector testing.
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn begin_with_random(
+        mrz: &MrzKeyInfo,
+        rnd_ic: &[u8],
+        rnd_ifd: [u8; 8],
+        k_ifd: [u8; 16],
+    ) -> VerificationResult<Self> {
+        Self::begin_with_random_inner(mrz, rnd_ic, rnd_ifd, k_ifd)
+    }
+
+    fn begin_with_random_inner(
         mrz: &MrzKeyInfo,
         rnd_ic: &[u8],
         rnd_ifd: [u8; 8],
@@ -603,7 +671,7 @@ impl BacHandshake {
             VerificationError::internal("BAC: chip challenge must be exactly 8 bytes".to_string())
         })?;
         Ok(Self {
-            base_keys: derive_bac_base_keys(mrz)?,
+            base_keys: derive_bac_base_keys_inner(mrz)?,
             rnd_ifd,
             k_ifd,
             rnd_ic,
@@ -612,7 +680,7 @@ impl BacHandshake {
 
     /// Build `E.IFD || M.IFD`, the 40-byte EXTERNAL AUTHENTICATE data field.
     pub fn command_data(&self) -> VerificationResult<Vec<u8>> {
-        let mut plaintext = Vec::with_capacity(32);
+        let mut plaintext = zeroize::Zeroizing::new(Vec::with_capacity(32));
         plaintext.extend_from_slice(&self.rnd_ifd);
         plaintext.extend_from_slice(&self.rnd_ic);
         plaintext.extend_from_slice(&self.k_ifd);
@@ -645,12 +713,14 @@ impl BacHandshake {
             ));
         }
         let iv = icao_3des_cbc_iv();
-        let plaintext = marty_crypto::des::tdes_cbc_decrypt(
-            &extend_to_24_bytes(&self.base_keys.k_enc),
-            &iv,
-            encrypted,
-        )
-        .map_err(|error| VerificationError::internal(format!("BAC decrypt failed: {error}")))?;
+        let plaintext = zeroize::Zeroizing::new(
+            marty_crypto::des::tdes_cbc_decrypt(
+                &extend_to_24_bytes(&self.base_keys.k_enc),
+                &iv,
+                encrypted,
+            )
+            .map_err(|error| VerificationError::internal(format!("BAC decrypt failed: {error}")))?,
+        );
         if plaintext[..8] != self.rnd_ic {
             return Err(VerificationError::internal(
                 "BAC: reflected Rnd.IC mismatch".to_string(),
@@ -661,25 +731,29 @@ impl BacHandshake {
                 "BAC: reflected Rnd.IFD mismatch".to_string(),
             ));
         }
-        derive_bac_session_keys(&self.k_ifd, &plaintext[16..32], &self.rnd_ic, &self.rnd_ifd)
+        derive_bac_session_keys_inner(&self.k_ifd, &plaintext[16..32], &self.rnd_ic, &self.rnd_ifd)
     }
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl BacSession {
     /// Restore a BAC secure-messaging session from established key material.
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn from_session_keys(k_enc: [u8; 16], k_mac: [u8; 16], ssc: [u8; 8]) -> Self {
         Self { k_enc, k_mac, ssc }
     }
 
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn encryption_key(&self) -> &[u8; 16] {
         &self.k_enc
     }
 
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn mac_key(&self) -> &[u8; 16] {
         &self.k_mac
     }
 
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn send_sequence_counter(&self) -> &[u8; 8] {
         &self.ssc
     }
@@ -784,16 +858,11 @@ impl BacSession {
             let iv = icao_3des_cbc_iv();
             let enc = marty_crypto::des::tdes_cbc_encrypt(&k24, &iv, &padded)
                 .map_err(|e| VerificationError::internal(format!("SM encrypt: {}", e)))?;
-            // DO'87 = tag 87, length, 01 (padding indicator), ciphertext
-            let do87_len = u8::try_from(enc.len() + 1).map_err(|_| {
-                VerificationError::internal(
-                    "DO87 data exceeds short-form TLV limit (254)".to_string(),
-                )
-            })?;
-            do87.push(0x87);
-            do87.push(do87_len);
-            do87.push(0x01); // padding indicator
-            do87.extend_from_slice(&enc);
+            // DO'87 = tag 87, BER length, 01 (padding indicator), ciphertext.
+            let mut value = Vec::with_capacity(enc.len() + 1);
+            value.push(0x01);
+            value.extend_from_slice(&enc);
+            push_ber_tlv(0x87, &value, &mut do87)?;
         }
 
         // Build expected length object (DO'97) when cmd has Le
@@ -844,72 +913,79 @@ impl BacSession {
     pub fn unprotect_response(&mut self, resp: &ApduResponse) -> VerificationResult<ApduResponse> {
         increment_ssc(&mut self.ssc);
 
-        // Parse TLV objects from response data
         let data = &resp.data;
-        let mut plain_data = Vec::new();
-        let mut received_mac = [0u8; 8];
-        let mut do87_bytes = Vec::<u8>::new();
-        let mut do99_bytes = Vec::<u8>::new();
+        let mut received_mac = None;
+        let mut do87_bytes = None;
+        let mut encrypted_data = None;
+        let mut do99_bytes = None;
         let mut status = None;
-        let mut has_mac = false;
 
-        let mut i = 0;
-        while i < data.len() {
-            let tag = data[i];
-            if i + 1 >= data.len() {
-                break;
-            }
-            let len = data[i + 1] as usize;
-            if i + 2 + len > data.len() {
-                break;
-            }
-            let value = &data[i + 2..i + 2 + len];
-            match tag {
+        let mut offset = 0;
+        while offset < data.len() {
+            let tlv = next_ber_tlv(data, &mut offset, "BAC SM")?;
+            match tlv.tag {
                 0x87 => {
-                    // Encrypted data (first byte is padding indicator)
-                    do87_bytes = data[i..i + 2 + len].to_vec();
-                    if !value.is_empty() && value[0] == 0x01 {
-                        let ciphertext = &value[1..];
-                        let k24 = extend_to_24_bytes(&self.k_enc);
-                        let iv = icao_3des_cbc_iv();
-                        let decrypted = marty_crypto::des::tdes_cbc_decrypt(&k24, &iv, ciphertext)
-                            .map_err(|e| {
-                                VerificationError::internal(format!("SM decrypt: {}", e))
-                            })?;
-                        plain_data = iso7816_unpad(&decrypted)?;
+                    if do87_bytes.is_some()
+                        || tlv.value.first() != Some(&0x01)
+                        || tlv.value.len() <= 1
+                        || !(tlv.value.len() - 1).is_multiple_of(8)
+                    {
+                        return Err(VerificationError::internal(
+                            "BAC SM: malformed protected response",
+                        ));
                     }
+                    do87_bytes = Some(tlv.encoded);
+                    encrypted_data = Some(&tlv.value[1..]);
                 }
-                0x99 if len == 2 => {
-                    do99_bytes = data[i..i + 2 + len].to_vec();
-                    status = Some((value[0], value[1]));
+                0x99 if tlv.value.len() == 2 && do99_bytes.is_none() => {
+                    do99_bytes = Some(tlv.encoded);
+                    status = Some((tlv.value[0], tlv.value[1]));
                 }
-                0x8E if len == 8 => {
-                    received_mac.copy_from_slice(value);
-                    has_mac = true;
+                0x8E if tlv.value.len() == 8 && received_mac.is_none() => {
+                    received_mac = Some(tlv.value);
                 }
-                _ => {}
+                _ => {
+                    return Err(VerificationError::internal(
+                        "BAC SM: malformed protected response",
+                    ))
+                }
             }
-            i += 2 + len;
         }
 
-        if !has_mac || do99_bytes.is_empty() {
+        let Some(do99_bytes) = do99_bytes else {
             return Err(VerificationError::internal(
                 "BAC SM: protected response missing DO99 or DO8E".to_string(),
             ));
-        }
+        };
+        let received_mac = received_mac.ok_or_else(|| {
+            VerificationError::internal("BAC SM: protected response missing DO99 or DO8E")
+        })?;
         // Verify MAC: SSC || DO'87 || DO'99
         let mut mac_input = Vec::new();
         mac_input.extend_from_slice(&self.ssc);
-        mac_input.extend_from_slice(&do87_bytes);
-        mac_input.extend_from_slice(&do99_bytes);
+        if let Some(do87_bytes) = do87_bytes {
+            mac_input.extend_from_slice(do87_bytes);
+        }
+        mac_input.extend_from_slice(do99_bytes);
 
         let expected = retail_mac_3des(&self.k_mac, &mac_input)?;
-        if !constant_time_eq(&expected, &received_mac) {
+        if !constant_time_eq(&expected, received_mac) {
             return Err(VerificationError::internal(
                 "BAC SM: response MAC verification failed".to_string(),
             ));
         }
 
+        let plain_data = if let Some(ciphertext) = encrypted_data {
+            let k24 = extend_to_24_bytes(&self.k_enc);
+            let iv = icao_3des_cbc_iv();
+            let decrypted = zeroize::Zeroizing::new(
+                marty_crypto::des::tdes_cbc_decrypt(&k24, &iv, ciphertext)
+                    .map_err(|e| VerificationError::internal(format!("SM decrypt: {e}")))?,
+            );
+            iso7816_unpad(&decrypted)?
+        } else {
+            Vec::new()
+        };
         let (sw1, sw2) = status.expect("status checked above");
         Ok(ApduResponse {
             data: plain_data,
@@ -946,7 +1022,7 @@ impl Drop for BacSession {
 
 /// Password type for PACE key derivation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub enum PacePassword {
     /// 6-digit Card Access Number (printed on the card).
     Can(String),
@@ -956,7 +1032,7 @@ pub enum PacePassword {
     Pin(String),
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 impl PacePassword {
     fn as_bytes(&self) -> &[u8] {
         match self {
@@ -992,10 +1068,19 @@ impl PaceCompatibilityHandshake {
     pub fn begin(password: &str, encrypted_nonce: &[u8]) -> VerificationResult<Self> {
         let (private_key, _) = marty_crypto::ecdh::p256_generate_keypair();
         let private_key = zeroize::Zeroizing::new(private_key);
-        Self::begin_with_private_key(password, encrypted_nonce, &private_key)
+        Self::begin_with_private_key_inner(password, encrypted_nonce, &private_key)
     }
 
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn begin_with_private_key(
+        password: &str,
+        encrypted_nonce: &[u8],
+        private_key: &[u8],
+    ) -> VerificationResult<Self> {
+        Self::begin_with_private_key_inner(password, encrypted_nonce, private_key)
+    }
+
+    fn begin_with_private_key_inner(
         password: &str,
         encrypted_nonce: &[u8],
         private_key: &[u8],
@@ -1008,7 +1093,7 @@ impl PaceCompatibilityHandshake {
         let private_key: &[u8; 32] = private_key
             .try_into()
             .map_err(|_| VerificationError::internal("PACE P-256 private key must be 32 bytes"))?;
-        let key = zeroize::Zeroizing::new(derive_compatibility_pace_password_key(password)?);
+        let key = zeroize::Zeroizing::new(derive_compatibility_pace_password_key_inner(password)?);
         let expanded_key = zeroize::Zeroizing::new(extend_to_24_bytes(&key));
         let iv = icao_3des_cbc_iv();
         let decrypted = zeroize::Zeroizing::new(
@@ -1035,6 +1120,7 @@ impl PaceCompatibilityHandshake {
         &self.public_key
     }
 
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn decrypted_nonce(&self) -> &[u8] {
         &self.nonce
     }
@@ -1061,8 +1147,13 @@ impl PaceCompatibilityHandshake {
 }
 
 /// Derive the 3DES password key used by the established compatibility API.
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationResult<[u8; 16]> {
+    derive_compatibility_pace_password_key_inner(password)
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn derive_compatibility_pace_password_key_inner(password: &str) -> VerificationResult<[u8; 16]> {
     use sha1::{Digest, Sha1};
 
     let seed = zeroize::Zeroizing::new(
@@ -1105,7 +1196,7 @@ pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationRes
 
 /// PACE-specific symmetric keys.
 #[derive(Clone)]
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub struct PaceKeys {
     /// Encryption key (KSenc) — 16 bytes for AES-128.
     pub k_enc: [u8; 16],
@@ -1113,14 +1204,14 @@ pub struct PaceKeys {
     pub k_mac: [u8; 16],
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 impl std::fmt::Debug for PaceKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PaceKeys { … }")
     }
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 impl Drop for PaceKeys {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -1129,7 +1220,7 @@ impl Drop for PaceKeys {
 }
 
 /// Established PACE secure-messaging session (AES-128-CBC + AES-CMAC).
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub struct PaceSession {
     k_enc: [u8; 16],
     k_mac: [u8; 16],
@@ -1137,7 +1228,7 @@ pub struct PaceSession {
     ssc: [u8; 16],
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 impl Drop for PaceSession {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -1146,7 +1237,7 @@ impl Drop for PaceSession {
     }
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 impl PaceSession {
     /// Derive the initial password-encryption key for decrypting the chip nonce.
     ///
@@ -1193,18 +1284,13 @@ impl PaceSession {
         let mut do87: Vec<u8> = Vec::new();
         if !cmd.data.is_empty() {
             let padded = iso7816_pad(&cmd.data);
-            let enc =
-                marty_crypto::symmetric::aes_128_cbc_encrypt_nopad(&self.k_enc, &self.ssc, &padded)
-                    .map_err(|e| VerificationError::internal(format!("PACE SM encrypt: {}", e)))?;
-            let do87_len = u8::try_from(enc.len() + 1).map_err(|_| {
-                VerificationError::internal(
-                    "PACE DO87 data exceeds short-form TLV limit (254)".to_string(),
-                )
-            })?;
-            do87.push(0x87);
-            do87.push(do87_len);
-            do87.push(0x01);
-            do87.extend_from_slice(&enc);
+            let iv = pace_encryption_iv(&self.k_enc, &self.ssc)?;
+            let enc = marty_crypto::symmetric::aes_128_cbc_encrypt_nopad(&self.k_enc, &iv, &padded)
+                .map_err(|e| VerificationError::internal(format!("PACE SM encrypt: {e}")))?;
+            let mut value = Vec::with_capacity(enc.len() + 1);
+            value.push(0x01);
+            value.extend_from_slice(&enc);
+            push_ber_tlv(0x87, &value, &mut do87)?;
         }
 
         let do97 = if let Some(le) = cmd.le {
@@ -1254,67 +1340,176 @@ impl PaceSession {
         increment_ssc_16(&mut self.ssc);
 
         let data = &resp.data;
-        let mut plain_data = Vec::new();
-        let mut received_mac = [0u8; 8];
-        let mut do87_bytes = Vec::<u8>::new();
+        let mut received_mac = None;
+        let mut do87_bytes = None;
+        let mut encrypted_data = None;
+        let mut do99_bytes = None;
+        let mut status = None;
 
-        let mut i = 0;
-        while i < data.len() {
-            let tag = data[i];
-            if i + 1 >= data.len() {
-                break;
-            }
-            let len = data[i + 1] as usize;
-            if i + 2 + len > data.len() {
-                break;
-            }
-            let value = &data[i + 2..i + 2 + len];
-            match tag {
+        let mut offset = 0;
+        while offset < data.len() {
+            let tlv = next_ber_tlv(data, &mut offset, "PACE SM")?;
+            match tlv.tag {
                 0x87 => {
-                    do87_bytes = data[i..i + 2 + len].to_vec();
-                    if !value.is_empty() && value[0] == 0x01 {
-                        let ciphertext = &value[1..];
-                        let decrypted = marty_crypto::symmetric::aes_128_cbc_decrypt_nopad(
-                            &self.k_enc,
-                            &self.ssc,
-                            ciphertext,
-                        )
-                        .map_err(|e| {
-                            VerificationError::internal(format!("PACE SM decrypt: {}", e))
-                        })?;
-                        plain_data = iso7816_unpad(&decrypted)?;
+                    if do87_bytes.is_some()
+                        || tlv.value.first() != Some(&0x01)
+                        || tlv.value.len() <= 1
+                        || !(tlv.value.len() - 1).is_multiple_of(16)
+                    {
+                        return Err(VerificationError::internal(
+                            "PACE SM: malformed protected response",
+                        ));
                     }
+                    do87_bytes = Some(tlv.encoded);
+                    encrypted_data = Some(&tlv.value[1..]);
                 }
-                0x8E if len >= 8 => received_mac.copy_from_slice(&value[..8]),
-                _ => {}
+                0x99 if tlv.value.len() == 2 && do99_bytes.is_none() => {
+                    do99_bytes = Some(tlv.encoded);
+                    status = Some((tlv.value[0], tlv.value[1]));
+                }
+                0x8E if tlv.value.len() == 8 && received_mac.is_none() => {
+                    received_mac = Some(tlv.value);
+                }
+                _ => {
+                    return Err(VerificationError::internal(
+                        "PACE SM: malformed protected response",
+                    ))
+                }
             }
-            i += 2 + len;
         }
 
-        let sw_bytes = [resp.sw1, resp.sw2];
+        let do99_bytes = do99_bytes.ok_or_else(|| {
+            VerificationError::internal("PACE SM: protected response missing DO99 or DO8E")
+        })?;
+        let received_mac = received_mac.ok_or_else(|| {
+            VerificationError::internal("PACE SM: protected response missing DO99 or DO8E")
+        })?;
         let mut mac_input = Vec::new();
         mac_input.extend_from_slice(&self.ssc);
-        mac_input.extend_from_slice(&do87_bytes);
-        mac_input.extend_from_slice(&sw_bytes);
+        if let Some(do87_bytes) = do87_bytes {
+            mac_input.extend_from_slice(do87_bytes);
+        }
+        mac_input.extend_from_slice(do99_bytes);
 
         let expected_full = marty_crypto::symmetric::aes_128_cmac(&self.k_mac, &mac_input)
             .map_err(|e| VerificationError::internal(format!("PACE CMAC: {}", e)))?;
 
-        if !constant_time_eq(&expected_full[..8], &received_mac) {
+        if !constant_time_eq(&expected_full[..8], received_mac) {
             return Err(VerificationError::internal(
                 "PACE SM: response MAC verification failed".to_string(),
             ));
         }
 
+        let plain_data = if let Some(ciphertext) = encrypted_data {
+            let iv = pace_encryption_iv(&self.k_enc, &self.ssc)?;
+            let decrypted = zeroize::Zeroizing::new(
+                marty_crypto::symmetric::aes_128_cbc_decrypt_nopad(&self.k_enc, &iv, ciphertext)
+                    .map_err(|e| VerificationError::internal(format!("PACE SM decrypt: {e}")))?,
+            );
+            iso7816_unpad(&decrypted)?
+        } else {
+            Vec::new()
+        };
+        let (sw1, sw2) = status.expect("status checked above");
         Ok(ApduResponse {
             data: plain_data,
-            sw1: resp.sw1,
-            sw2: resp.sw2,
+            sw1,
+            sw2,
         })
     }
 }
 
 // ─── Crypto helpers ───────────────────────────────────────────────────────────
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+struct BerTlv<'a> {
+    tag: u8,
+    encoded: &'a [u8],
+    value: &'a [u8],
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn next_ber_tlv<'a>(
+    data: &'a [u8],
+    offset: &mut usize,
+    context: &str,
+) -> VerificationResult<BerTlv<'a>> {
+    let malformed = || VerificationError::internal(format!("{context}: malformed BER-TLV"));
+    let start = *offset;
+    let tag = *data.get(start).ok_or_else(&malformed)?;
+    let first_length = *data.get(start + 1).ok_or_else(&malformed)?;
+    let (header_length, value_length) = match first_length {
+        0..=0x7f => (2, usize::from(first_length)),
+        0x81 => {
+            let value = usize::from(*data.get(start + 2).ok_or_else(&malformed)?);
+            if value < 0x80 {
+                return Err(VerificationError::internal(format!(
+                    "{context}: non-canonical BER-TLV length"
+                )));
+            }
+            (3, value)
+        }
+        0x82 => {
+            let bytes = data.get(start + 2..start + 4).ok_or_else(&malformed)?;
+            let value = usize::from(u16::from_be_bytes([bytes[0], bytes[1]]));
+            if value <= 0xff {
+                return Err(VerificationError::internal(format!(
+                    "{context}: non-canonical BER-TLV length"
+                )));
+            }
+            (4, value)
+        }
+        _ => {
+            return Err(VerificationError::internal(format!(
+                "{context}: unsupported BER-TLV length"
+            )))
+        }
+    };
+    let value_start = start.checked_add(header_length).ok_or_else(&malformed)?;
+    let end = value_start
+        .checked_add(value_length)
+        .ok_or_else(&malformed)?;
+    let encoded = data.get(start..end).ok_or_else(&malformed)?;
+    let value = data.get(value_start..end).ok_or_else(&malformed)?;
+    *offset = end;
+    Ok(BerTlv {
+        tag,
+        encoded,
+        value,
+    })
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn push_ber_tlv(tag: u8, value: &[u8], output: &mut Vec<u8>) -> VerificationResult<()> {
+    output.push(tag);
+    match value.len() {
+        0..=0x7f => output.push(value.len() as u8),
+        0x80..=0xff => {
+            output.push(0x81);
+            output.push(value.len() as u8);
+        }
+        0x100..=0xffff => {
+            output.push(0x82);
+            output.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        }
+        _ => {
+            return Err(VerificationError::internal(
+                "Secure-messaging TLV value is too large",
+            ))
+        }
+    }
+    output.extend_from_slice(value);
+    Ok(())
+}
+
+#[cfg(any(test, feature = "local-key-operations"))]
+fn pace_encryption_iv(k_enc: &[u8; 16], ssc: &[u8; 16]) -> VerificationResult<[u8; 16]> {
+    let encrypted = marty_crypto::symmetric::aes_128_cbc_encrypt_nopad(k_enc, &[0u8; 16], ssc)
+        .map_err(|error| VerificationError::internal(format!("PACE IV derivation: {error}")))?;
+    encrypted
+        .try_into()
+        .map_err(|_| VerificationError::internal("PACE IV derivation returned the wrong length"))
+}
 
 /// Derive BAC base keys from MRZ key information.
 ///
@@ -1323,14 +1518,19 @@ impl PaceSession {
 /// 2. `Kseed` = SHA-1(MRZ_info)[0..16]
 /// 3. `K_ENC` = adjust_parity(SHA-1(Kseed ‖ 0x00000001)[0..16])
 /// 4. `K_MAC` = adjust_parity(SHA-1(Kseed ‖ 0x00000002)[0..16])
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn derive_bac_base_keys(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
+    derive_bac_base_keys_inner(mrz)
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn derive_bac_base_keys_inner(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
     use sha1::{Digest, Sha1};
 
-    let mrz_info = format!(
+    let mrz_info = zeroize::Zeroizing::new(format!(
         "{}{}{}",
         mrz.doc_number_with_check, mrz.dob_with_check, mrz.expiry_with_check
-    );
+    ));
 
     if mrz_info.len() != 24 {
         return Err(VerificationError::internal(format!(
@@ -1339,7 +1539,7 @@ pub fn derive_bac_base_keys(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
         )));
     }
 
-    let hash = Sha1::digest(mrz_info.as_bytes());
+    let hash = zeroize::Zeroizing::new(Sha1::digest(mrz_info.as_bytes()));
     let kseed = &hash[..16];
 
     let k_enc = bac_kdf_16(kseed, 1)?;
@@ -1350,13 +1550,24 @@ pub fn derive_bac_base_keys(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
     Ok(BacKeys {
         k_enc,
         k_mac,
+        #[cfg(any(test, feature = "local-key-operations"))]
         k_seed,
     })
 }
 
 /// Derive BAC secure-messaging keys from authenticated reader/chip material.
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn derive_bac_session_keys(
+    k_ifd: &[u8],
+    k_ic: &[u8],
+    rnd_ic: &[u8],
+    rnd_ifd: &[u8],
+) -> VerificationResult<BacSession> {
+    derive_bac_session_keys_inner(k_ifd, k_ic, rnd_ic, rnd_ifd)
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn derive_bac_session_keys_inner(
     k_ifd: &[u8],
     k_ic: &[u8],
     rnd_ic: &[u8],
@@ -1374,12 +1585,12 @@ pub fn derive_bac_session_keys(
     let rnd_ifd: [u8; 8] = rnd_ifd.try_into().map_err(|_| {
         VerificationError::internal("BAC: Rnd.IFD must be exactly 8 bytes".to_string())
     })?;
-    let mut seed = [0u8; 16];
+    let mut seed = zeroize::Zeroizing::new([0u8; 16]);
     for index in 0..16 {
         seed[index] = k_ifd[index] ^ k_ic[index];
     }
-    let k_enc = bac_kdf_16(&seed, 1)?;
-    let k_mac = bac_kdf_16(&seed, 2)?;
+    let k_enc = bac_kdf_16(seed.as_slice(), 1)?;
+    let k_mac = bac_kdf_16(seed.as_slice(), 2)?;
     let mut ssc = [0u8; 8];
     ssc[..4].copy_from_slice(&rnd_ic[4..]);
     ssc[4..].copy_from_slice(&rnd_ifd[4..]);
@@ -1392,9 +1603,9 @@ pub fn derive_bac_session_keys(
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn bac_kdf_16(seed: &[u8], counter: u8) -> VerificationResult<[u8; 16]> {
     use sha1::{Digest, Sha1};
-    let mut input = seed.to_vec();
+    let mut input = zeroize::Zeroizing::new(seed.to_vec());
     input.extend_from_slice(&[0x00, 0x00, 0x00, counter]);
-    let hash = Sha1::digest(&input);
+    let hash = zeroize::Zeroizing::new(Sha1::digest(&input));
     let mut key = [0u8; 16];
     key.copy_from_slice(&hash[..16]);
     adjust_des_parity(&mut key);
@@ -1402,7 +1613,7 @@ fn bac_kdf_16(seed: &[u8], counter: u8) -> VerificationResult<[u8; 16]> {
 }
 
 /// PACE KDF — SHA-256 based, derives a 16-byte AES key.
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn pace_kdf_16(seed: &[u8], counter: u8) -> [u8; 16] {
     use sha2::{Digest, Sha256};
     let mut input = seed.to_vec();
@@ -1532,7 +1743,7 @@ fn increment_ssc(ssc: &mut [u8; 8]) {
 }
 
 /// Increment a 16-byte big-endian counter (PACE).
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 fn increment_ssc_16(ssc: &mut [u8; 16]) {
     for i in (0..16).rev() {
         ssc[i] = ssc[i].wrapping_add(1);
@@ -1699,5 +1910,73 @@ mod tests {
         assert!(constant_time_eq(b"abc", b"abc"));
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"ab"));
+    }
+
+    #[test]
+    fn secure_messaging_authenticates_before_cbc_decryption() {
+        let mut malformed_bac = vec![0x87, 0x09, 0x01];
+        malformed_bac.extend_from_slice(&[0u8; 8]);
+        malformed_bac.extend_from_slice(&[0x99, 0x02, 0x90, 0x00, 0x8e, 0x08]);
+        malformed_bac.extend_from_slice(&[0u8; 8]);
+        let mut bac = BacSession::from_session_keys([0x11; 16], [0x22; 16], [0x33; 8]);
+        let error = bac
+            .unprotect_response(&ApduResponse {
+                data: malformed_bac,
+                sw1: 0x90,
+                sw2: 0x00,
+            })
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("response MAC verification failed"));
+        assert!(!error.to_string().contains("padding"));
+
+        let mut malformed_pace = vec![0x87, 0x11, 0x01];
+        malformed_pace.extend_from_slice(&[0u8; 16]);
+        malformed_pace.extend_from_slice(&[0x99, 0x02, 0x90, 0x00, 0x8e, 0x08]);
+        malformed_pace.extend_from_slice(&[0u8; 8]);
+        let mut pace = PaceSession::from_shared_secret(b"shared secret");
+        let error = pace
+            .unprotect_response(&ApduResponse {
+                data: malformed_pace,
+                sw1: 0x90,
+                sw2: 0x00,
+            })
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("response MAC verification failed"));
+        assert!(!error.to_string().contains("padding"));
+    }
+
+    #[test]
+    fn pace_iv_and_response_status_encoding_match_normative_construction() {
+        let key: [u8; 16] = hex::decode("000102030405060708090A0B0C0D0E0F")
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let ssc: [u8; 16] = hex::decode("00112233445566778899AABBCCDDEEFF")
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(
+            hex::encode_upper(pace_encryption_iv(&key, &ssc).unwrap()),
+            "69C4E0D86A7B0430D8CDB78070B4C55A"
+        );
+
+        let mut encoded = Vec::new();
+        push_ber_tlv(0x99, &[0x90, 0x00], &mut encoded).unwrap();
+        assert_eq!(encoded, [0x99, 0x02, 0x90, 0x00]);
+    }
+
+    #[test]
+    fn secure_messaging_uses_canonical_ber_lengths() {
+        let mut encoded = Vec::new();
+        push_ber_tlv(0x87, &[0u8; 128], &mut encoded).unwrap();
+        assert_eq!(&encoded[..3], &[0x87, 0x81, 0x80]);
+        let mut offset = 0;
+        let parsed = next_ber_tlv(&encoded, &mut offset, "test").unwrap();
+        assert_eq!(parsed.value.len(), 128);
+        assert_eq!(offset, encoded.len());
     }
 }

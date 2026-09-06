@@ -9,6 +9,19 @@ use super::base64url_encode;
 use super::{base64url_decode, Jwk};
 use crate::{VerificationError, VerificationResult};
 
+/// Largest compact JWS accepted by public parsing and verification APIs.
+pub const MAX_COMPACT_JWS_BYTES: usize = 2 * 1024 * 1024;
+/// Largest decoded protected JOSE header accepted by JWS APIs.
+pub const MAX_JWS_PROTECTED_HEADER_BYTES: usize = 16 * 1024;
+/// Largest decoded JWS payload accepted by JWS APIs.
+pub const MAX_JWS_PAYLOAD_BYTES: usize = 1024 * 1024;
+/// Largest decoded JWS signature accepted (up to an 8192-bit RSA signature).
+pub const MAX_JWS_SIGNATURE_BYTES: usize = 1024;
+
+const fn max_encoded_len(decoded_len: usize) -> usize {
+    decoded_len.saturating_add(2) / 3 * 4
+}
+
 // ============================================================================
 // JWS Header
 // ============================================================================
@@ -87,7 +100,14 @@ impl JwsHeader {
 
     /// Parse from JSON bytes.
     pub fn from_json(json: &[u8]) -> VerificationResult<Self> {
-        serde_json::from_slice(json)
+        if json.len() > MAX_JWS_PROTECTED_HEADER_BYTES {
+            return Err(VerificationError::internal(
+                "JWS protected header exceeds the configured size limit".to_string(),
+            ));
+        }
+        let value = crate::key_attestation::parse_unique_json(json)
+            .map_err(|e| VerificationError::internal(format!("JWS header parsing failed: {e}")))?;
+        serde_json::from_value(value)
             .map_err(|e| VerificationError::internal(format!("JWS header parsing failed: {}", e)))
     }
 }
@@ -134,13 +154,7 @@ pub fn jws_sign(header: &JwsHeader, payload: &[u8], key: &Jwk) -> VerificationRe
 ///
 /// (header, payload) tuple on success.
 pub fn jws_verify(jws: &str, key: &Jwk) -> VerificationResult<(JwsHeader, Vec<u8>)> {
-    // Split into parts
-    let parts: Vec<&str> = jws.split('.').collect();
-    if parts.len() != 3 {
-        return Err(VerificationError::internal(
-            "Invalid JWS format: expected 3 parts".to_string(),
-        ));
-    }
+    let parts = split_compact_jws(jws)?;
 
     let header_b64 = parts[0];
     let payload_b64 = parts[1];
@@ -149,6 +163,7 @@ pub fn jws_verify(jws: &str, key: &Jwk) -> VerificationResult<(JwsHeader, Vec<u8
     // Decode header
     let header_bytes = base64url_decode(header_b64)?;
     let header = JwsHeader::from_json(&header_bytes)?;
+    validate_jws_header_policy(&header)?;
 
     // Verify signature
     let signing_input = format!("{}.{}", header_b64, payload_b64);
@@ -166,15 +181,11 @@ pub fn jws_verify(jws: &str, key: &Jwk) -> VerificationResult<(JwsHeader, Vec<u8
 ///
 /// **Warning**: Only use this for examining JWS content before verification.
 pub fn jws_decode_unverified(jws: &str) -> VerificationResult<(JwsHeader, Vec<u8>)> {
-    let parts: Vec<&str> = jws.split('.').collect();
-    if parts.len() != 3 {
-        return Err(VerificationError::internal(
-            "Invalid JWS format: expected 3 parts".to_string(),
-        ));
-    }
+    let parts = split_compact_jws(jws)?;
 
     let header_bytes = base64url_decode(parts[0])?;
     let header = JwsHeader::from_json(&header_bytes)?;
+    validate_jws_header_policy(&header)?;
     let payload = base64url_decode(parts[1])?;
 
     Ok((header, payload))
@@ -182,15 +193,60 @@ pub fn jws_decode_unverified(jws: &str) -> VerificationResult<(JwsHeader, Vec<u8
 
 /// Get the header from a JWS without verifying.
 pub fn jws_get_header(jws: &str) -> VerificationResult<JwsHeader> {
-    let parts: Vec<&str> = jws.split('.').collect();
-    if parts.is_empty() {
-        return Err(VerificationError::internal(
-            "Invalid JWS format".to_string(),
-        ));
-    }
+    let parts = split_compact_jws(jws)?;
 
     let header_bytes = base64url_decode(parts[0])?;
-    JwsHeader::from_json(&header_bytes)
+    let header = JwsHeader::from_json(&header_bytes)?;
+    validate_jws_header_policy(&header)?;
+    Ok(header)
+}
+
+fn split_compact_jws(jws: &str) -> VerificationResult<[&str; 3]> {
+    if jws.is_empty() || jws.len() > MAX_COMPACT_JWS_BYTES {
+        return Err(VerificationError::internal(
+            "JWS is empty or exceeds the configured size limit".to_string(),
+        ));
+    }
+    let mut segments = jws.splitn(4, '.');
+    let header = segments.next().unwrap_or_default();
+    let payload = segments.next().ok_or_else(|| {
+        VerificationError::internal("Invalid JWS format: expected 3 parts".to_string())
+    })?;
+    let signature = segments.next().ok_or_else(|| {
+        VerificationError::internal("Invalid JWS format: expected 3 parts".to_string())
+    })?;
+    if segments.next().is_some() || header.is_empty() || signature.is_empty() {
+        return Err(VerificationError::internal(
+            "Invalid JWS format: expected 3 parts".to_string(),
+        ));
+    }
+    if header.len() > max_encoded_len(MAX_JWS_PROTECTED_HEADER_BYTES)
+        || payload.len() > max_encoded_len(MAX_JWS_PAYLOAD_BYTES)
+        || signature.len() > max_encoded_len(MAX_JWS_SIGNATURE_BYTES)
+    {
+        return Err(VerificationError::internal(
+            "JWS segment exceeds the configured size limit".to_string(),
+        ));
+    }
+    Ok([header, payload, signature])
+}
+
+fn validate_jws_header_policy(header: &JwsHeader) -> VerificationResult<()> {
+    if header.jku.is_some() || header.x5u.is_some() {
+        return Err(VerificationError::internal(
+            "Remote JWS key references are not supported".to_string(),
+        ));
+    }
+    if header
+        .crit
+        .as_ref()
+        .is_some_and(|members| !members.is_empty())
+    {
+        return Err(VerificationError::internal(
+            "Critical JWS header parameters are not supported".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -658,5 +714,44 @@ mod tests {
 
         let parsed_header = jws_get_header(&jws).unwrap();
         assert_eq!(parsed_header.kid, Some("my-key-id".to_string()));
+    }
+
+    #[test]
+    fn public_jws_parsers_reject_many_segments_and_oversized_segments() {
+        let key = generate_ec_p256().unwrap().to_public();
+        for malformed in ["a.b.c.d", "a.b.c.d.e"] {
+            assert!(jws_get_header(malformed).is_err());
+            assert!(jws_decode_unverified(malformed).is_err());
+            assert!(jws_verify(malformed, &key).is_err());
+        }
+
+        let oversized_header = "a".repeat(max_encoded_len(MAX_JWS_PROTECTED_HEADER_BYTES) + 1);
+        let malformed = format!("{oversized_header}.e30.AA");
+        assert!(jws_get_header(&malformed).is_err());
+
+        let oversized_payload = "a".repeat(max_encoded_len(MAX_JWS_PAYLOAD_BYTES) + 1);
+        let malformed = format!("e30.{oversized_payload}.AA");
+        assert!(jws_decode_unverified(&malformed).is_err());
+
+        let oversized_signature = "a".repeat(max_encoded_len(MAX_JWS_SIGNATURE_BYTES) + 1);
+        let malformed = format!("e30.e30.{oversized_signature}");
+        assert!(jws_verify(&malformed, &key).is_err());
+    }
+
+    #[test]
+    fn public_jws_parsers_reject_duplicate_and_unsupported_headers() {
+        let duplicate = base64url_encode(br#"{"alg":"ES256","jwk":{"kty":"EC","kty":"OKP"}}"#);
+        let duplicate_jws = format!("{duplicate}.e30.AA");
+        assert!(jws_get_header(&duplicate_jws).is_err());
+
+        for header in [
+            br#"{"alg":"ES256","jku":"https://keys.invalid/jwks"}"#.as_slice(),
+            br#"{"alg":"ES256","x5u":"https://keys.invalid/cert"}"#.as_slice(),
+            br#"{"alg":"ES256","crit":["unknown"],"unknown":true}"#.as_slice(),
+        ] {
+            let compact = format!("{}.e30.AA", base64url_encode(header));
+            assert!(jws_get_header(&compact).is_err());
+            assert!(jws_decode_unverified(&compact).is_err());
+        }
     }
 }

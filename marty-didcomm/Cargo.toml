@@ -30,7 +30,7 @@ serde_json = { workspace = true }
 
 # Crypto — DID resolution and standards-conformant DIDComm envelopes
 ed25519-dalek = { workspace = true }
-p256 = { workspace = true }
+p256 = { workspace = true, features = ["arithmetic"] }
 base64 = { workspace = true }
 affinidi-messaging-didcomm = "=0.14.0"
 

@@ -66,6 +66,25 @@ jobs:
         run: cargo deny --locked --all-features check advisories --deny yanked
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Enforce exact KMS role and public-key graphs
+        shell: bash
+        run: |
+          cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
+          cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
+          cargo check --locked -p marty-verification --no-default-features --features kms-only,ephemeral-session-keys --lib
+          cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
+          kms_ecdsa_verification_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,ecdsa-verification -e features,no-dev)"
+          kms_issuer_tree="$(cargo tree --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc -e features,no-dev)"
+          kms_public_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,jwk -e features,no-dev)"
+          kms_didcomm_public_tree="$(cargo tree --locked -p marty-didcomm --no-default-features --features kms-only,did_jwk -e features,no-dev)"
+          if grep -Eq 'ecdsa feature "signing"|(p256|p384|p521) feature "ecdsa"|marty-crypto feature "ecdsa-local-signing"' <<<$kms_ecdsa_verification_tree || grep -Eq 'ecdsa feature "signing"|(p256|p384|p521|k256) feature "ecdsa"|marty-crypto feature "(ecdsa|eddsa)-local-signing"|ssi-(crypto|jwk) feature "(ed25519|secp256r1|secp256k1|secp384r1)"|jsonwebtoken feature "rust_crypto"|sd-jwt-rs feature "verifier"' <<<$kms_issuer_tree; then
+            printf '%s\n%s\n' "$kms_ecdsa_verification_tree" "$kms_issuer_tree"
+            exit 1
+          fi
+          if grep -Eq '(^| )pkcs5( |$)|pkcs5 feature "pbes2"|(p256|p384|p521) feature "(default|ecdsa|ecdh|pem|pkcs8)"|ed25519-dalek feature "(default|rand_core|pem|pkcs8)"|cms feature "builder"|x509-cert feature "builder"|pkcs8 feature "encryption"' <<<"$kms_public_tree$kms_didcomm_public_tree"; then
+            printf '%s\n%s\n' "$kms_public_tree" "$kms_didcomm_public_tree"
+            exit 1
+          fi
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
       - name: Check OID4VCI WASM serial fallback contract
@@ -171,6 +190,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes binutils libssl-dev libzstd-dev
       - name: Test the real verifier and registered circuit identity
         run: cargo test --locked -p marty-zkp --no-default-features --features verifier --test circuit_identity
+      - name: Document the verifier-only API without prover links
+        run: RUSTDOCFLAGS="-D warnings" USE_ZK_MOCK=1 cargo doc --locked -p marty-zkp --no-default-features --features verifier --no-deps
       - name: Prove verifier-only archives exclude prover machinery
         shell: bash
         run: |
@@ -336,6 +357,18 @@ jobs:
           if cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,holder-key-operations; then exit 1; fi
           if cargo check --locked -p marty-bindings --no-default-features --features kms-only,local-key-operations; then exit 1; fi
           if cargo check --locked -p marty-didcomm --no-default-features --features kms-only,local-key-operations; then exit 1; fi
+          kms_ecdsa_verification_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,ecdsa-verification -e features,no-dev)"
+          kms_issuer_tree="$(cargo tree --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc -e features,no-dev)"
+          kms_public_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,jwk -e features,no-dev)"
+          kms_didcomm_public_tree="$(cargo tree --locked -p marty-didcomm --no-default-features --features kms-only,did_jwk -e features,no-dev)"
+          if grep -Eq 'ecdsa feature "signing"|(p256|p384|p521) feature "ecdsa"|marty-crypto feature "ecdsa-local-signing"' <<<$kms_ecdsa_verification_tree || grep -Eq 'ecdsa feature "signing"|(p256|p384|p521|k256) feature "ecdsa"|marty-crypto feature "(ecdsa|eddsa)-local-signing"|ssi-(crypto|jwk) feature "(ed25519|secp256r1|secp256k1|secp384r1)"|jsonwebtoken feature "rust_crypto"|sd-jwt-rs feature "verifier"' <<<$kms_issuer_tree; then
+            printf '%s\n%s\n' "$kms_ecdsa_verification_tree" "$kms_issuer_tree"
+            exit 1
+          fi
+          if grep -Eq '(^| )pkcs5( |$)|pkcs5 feature "pbes2"|(p256|p384|p521) feature "(default|ecdsa|ecdh|pem|pkcs8)"|ed25519-dalek feature "(default|rand_core|pem|pkcs8)"|cms feature "builder"|x509-cert feature "builder"|pkcs8 feature "encryption"' <<<"$kms_public_tree$kms_didcomm_public_tree"; then
+            printf '%s\n%s\n' "$kms_public_tree" "$kms_didcomm_public_tree"
+            exit 1
+          fi
           for package in marty-verification marty-bindings; do
             default_crypto_tree="$(cargo tree --locked -p "$package" -e features,no-dev -i marty-crypto)"
             if grep -Eq 'marty-crypto feature "(default|full|cert-builder|crl-builder|keygen|sod-builder)"' <<<"$default_crypto_tree"; then

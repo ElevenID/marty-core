@@ -118,7 +118,7 @@ fn key_attestation_behavior_fixture() -> &'static str {
 /// Example:
 ///     >>> secret, public = generate_p256_key()
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
@@ -126,14 +126,14 @@ fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bou
 
 /// Generate a P-256 private JWK and its public-only JWK.
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn generate_p256_jwk() -> PyResult<(String, String)> {
     marty_oid4vci::issuer::generate_p256_jwk_pair().map_err(to_pyerr)
 }
 
 /// Generate a did:jwk identifier and P-256 private signing JWK.
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn generate_p256_did_jwk() -> PyResult<(String, String)> {
     marty_oid4vci::issuer::generate_p256_did_jwk().map_err(to_pyerr)
 }
@@ -150,7 +150,7 @@ fn derive_p256_did_identifier(public_jwk_json: &str, method: &str) -> PyResult<S
 ///     Tuple of (private_key, public_key) as bytes.
 ///     Private key is 48 bytes, public key is 97 bytes (uncompressed).
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn generate_p384_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
     let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
     Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
@@ -162,7 +162,7 @@ fn generate_p384_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bou
 ///     Tuple of (private_key, public_key) as bytes.
 ///     Both keys are 32 bytes.
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn generate_ed25519_key<'py>(
     py: Python<'py>,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
@@ -175,7 +175,7 @@ fn generate_ed25519_key<'py>(
 /// This preserves the established credential binding contract while keeping
 /// key generation and DID derivation in the canonical Rust extension.
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn generate_did_key() -> PyResult<(String, String)> {
     use base64::Engine;
 
@@ -211,7 +211,7 @@ fn generate_did_key() -> PyResult<(String, String)> {
 ///     >>> secret, _ = generate_p256_key()
 ///     >>> signature = sign_p256(secret, b"Hello, World!")
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn sign_p256<'py>(
     py: Python<'py>,
     secret_key: &[u8],
@@ -230,7 +230,7 @@ fn sign_p256<'py>(
 /// Returns:
 ///     DER-encoded signature
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn sign_p384<'py>(
     py: Python<'py>,
     secret_key: &[u8],
@@ -249,7 +249,7 @@ fn sign_p384<'py>(
 /// Returns:
 ///     64-byte signature
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn sign_ed25519<'py>(
     py: Python<'py>,
     secret_key: &[u8],
@@ -737,7 +737,7 @@ fn oid4vci_verify_pkce_s256(code_verifier: &str, code_challenge: &str) -> bool {
 /// Raises:
 ///     `RuntimeError` on key generation or signing failure
 #[pyfunction]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 fn oid4vci_create_proof_jwt(aud: &str, c_nonce: &str) -> PyResult<String> {
     marty_oid4vci::proof::create_proof_jwt(aud, c_nonce).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Proof JWT creation failed: {e}"))
@@ -1192,7 +1192,7 @@ fn sd_jwt_create_presentation(
 ///     (credential_string, credential_id)
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 #[pyo3(signature = (issuer_id, jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![], mdoc_namespace=None, mdoc_doctype=None))]
 fn oid4vci_sign_credential(
     issuer_id: &str,
@@ -1285,7 +1285,7 @@ fn oid4vci_sign_credential(
 /// passes through the same Rust credential engine.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(feature = "local-key-operations")]
 #[pyo3(signature = (issuer_did, issuer_jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], mdoc_namespace=None, mdoc_doctype=None, zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
 fn create_verifiable_credential(
     issuer_did: &str,
@@ -1436,8 +1436,12 @@ fn oid4vci_prepare_credential(
             let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc(&signer, &cred_claims)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
             // tbs_data is raw bytes — base64url encode for transport
-            let tbs_b64 = b64.encode(&prepared.tbs_data);
-            Ok((tbs_b64, prepared.credential_id, "mso_mdoc".to_string()))
+            let tbs_b64 = b64.encode(prepared.signing_payload());
+            Ok((
+                tbs_b64,
+                prepared.credential_id().to_owned(),
+                "mso_mdoc".to_string(),
+            ))
         }
         CredentialFormat::VdsNc => {
             let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc(&signer, &cred_claims)
@@ -1525,7 +1529,7 @@ fn oid4vci_assemble_credential(
                 credential_id.to_string(),
             )
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
-            let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc(&prepared, &signature)
+            let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc(prepared, &signature)
                 .map_err(to_pyerr)?;
             match signed {
                 SignedCredential::VdsNc {
@@ -1559,7 +1563,7 @@ impl PreparedMdocForRemoteSigning {
     fn tbs_data(&self) -> PyResult<Vec<u8>> {
         self.inner
             .as_ref()
-            .map(|prepared| prepared.tbs_data.clone())
+            .map(|prepared| prepared.signing_payload().to_vec())
             .ok_or_else(|| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                     "mDoc preparation has already been assembled",
@@ -1571,7 +1575,7 @@ impl PreparedMdocForRemoteSigning {
     fn credential_id(&self) -> PyResult<String> {
         self.inner
             .as_ref()
-            .map(|prepared| prepared.credential_id.clone())
+            .map(|prepared| prepared.credential_id().to_owned())
             .ok_or_else(|| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                     "mDoc preparation has already been assembled",
@@ -2427,7 +2431,7 @@ fn vds_nc_sign_profile(
         _ => unreachable!(),
     }
     .map_err(vds_nc_error)?;
-    let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc_raw(&prepared, &signature)
+    let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc_raw(prepared, &signature)
         .map_err(vds_nc_error)?;
     let (barcode_data, credential_id) = match signed {
         SignedCredential::VdsNc {

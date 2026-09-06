@@ -464,15 +464,15 @@ pub(super) fn bac_mrz(
 #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
 pub(super) fn bac_session_dict<'py>(
     py: Python<'py>,
-    session: &crate::chip_io::BacSession,
+    _session: &crate::chip_io::BacSession,
 ) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
     #[cfg(feature = "local-key-operations")]
     {
-        result.set_item("k_s_enc", PyBytes::new(py, session.encryption_key()))?;
-        result.set_item("k_s_mac", PyBytes::new(py, session.mac_key()))?;
+        result.set_item("k_s_enc", PyBytes::new(py, _session.encryption_key()))?;
+        result.set_item("k_s_mac", PyBytes::new(py, _session.mac_key()))?;
+        result.set_item("ssc", u64::from_be_bytes(*_session.send_sequence_counter()))?;
     }
-    result.set_item("ssc", u64::from_be_bytes(*session.send_sequence_counter()))?;
     result.set_item("session_established", true)?;
     Ok(result)
 }

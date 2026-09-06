@@ -37,6 +37,22 @@ const ANONCRYPT_ALGORITHM: &str = "ECDH-ES+A256KW";
 #[cfg(feature = "local-key-operations")]
 const AUTHCRYPT_ALGORITHM: &str = "ECDH-1PU+A256KW";
 
+/// Largest plaintext accepted for one DIDComm encrypted envelope.
+pub const MAX_DIDCOMM_PLAINTEXT_BYTES: usize = 1024 * 1024;
+/// Largest serialized DIDComm encrypted envelope accepted for decryption.
+pub const MAX_DIDCOMM_ENCRYPTED_ENVELOPE_BYTES: usize = 2 * 1024 * 1024;
+/// Largest decoded DIDComm protected header accepted for decryption.
+pub const MAX_DIDCOMM_PROTECTED_HEADER_BYTES: usize = 16 * 1024;
+/// Largest recipient set accepted in one DIDComm encrypted envelope.
+pub const MAX_DIDCOMM_RECIPIENTS: usize = 128;
+#[cfg(feature = "local-key-operations")]
+const MAX_DIDCOMM_RECIPIENT_KID_BYTES: usize = 2048;
+
+#[cfg(feature = "local-key-operations")]
+const fn max_encoded_len(decoded_len: usize) -> usize {
+    decoded_len.saturating_add(2) / 3 * 4
+}
+
 /// Strict sender-authenticated decryption result for the key that opened the envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg(feature = "local-key-operations")]
@@ -56,6 +72,11 @@ pub fn encrypt_for_recipient(
     plaintext: &str,
     recipient_did_doc: &DidDocument,
 ) -> DidcommResult<String> {
+    if plaintext.len() > MAX_DIDCOMM_PLAINTEXT_BYTES {
+        return Err(DidcommError::PackError(
+            "DIDComm plaintext exceeds the configured size limit".into(),
+        ));
+    }
     let recipient_keys = authorized_x25519_methods(recipient_did_doc)?;
     let recipients = public_keys(&recipient_keys, "recipient")?;
     let recipient_refs = recipients
@@ -80,6 +101,11 @@ pub fn encrypt_for_recipient_authenticated(
     sender_private_key: &[u8; 32],
     recipient_did_doc: &DidDocument,
 ) -> DidcommResult<String> {
+    if plaintext.len() > MAX_DIDCOMM_PLAINTEXT_BYTES {
+        return Err(DidcommError::PackError(
+            "DIDComm plaintext exceeds the configured size limit".into(),
+        ));
+    }
     validate_plaintext_parties(plaintext, sender_did_doc, recipient_did_doc)
         .map_err(DidcommError::PackError)?;
     let (sender_kid, sender_private) =
@@ -107,8 +133,7 @@ pub fn encrypt_for_recipient_authenticated(
 /// authentication validation to the maintained DIDComm implementation.
 #[cfg(feature = "local-key-operations")]
 pub fn decrypt_jwe(jwe_json: &str, recipient_private_key: &[u8; 32]) -> DidcommResult<String> {
-    let jwe: serde_json::Value = serde_json::from_str(jwe_json)
-        .map_err(|error| DidcommError::UnpackError(format!("invalid JWE JSON: {error}")))?;
+    let jwe = validate_encrypted_envelope_shape(jwe_json)?;
     let recipients = jwe
         .get("recipients")
         .and_then(serde_json::Value::as_array)
@@ -169,8 +194,7 @@ pub fn decrypt_authenticated_jwe(
     recipient_did_doc: &DidDocument,
     sender_did_doc: &DidDocument,
 ) -> DidcommResult<AuthenticatedDecryption> {
-    let envelope: serde_json::Value = serde_json::from_str(jwe_json)
-        .map_err(|error| DidcommError::UnpackError(format!("invalid JWE JSON: {error}")))?;
+    let envelope = validate_encrypted_envelope_shape(jwe_json)?;
     let sender_kid = protected_sender_kid(&envelope)?;
     let sender_key_bytes = authorized_x25519_methods(sender_did_doc)?
         .into_iter()
@@ -243,14 +267,77 @@ pub fn decrypt_authenticated_jwe(
 }
 
 fn authorized_x25519_methods(document: &DidDocument) -> DidcommResult<Vec<(String, [u8; 32])>> {
-    let methods = document.x25519_key_agreement_methods();
-    if methods.is_empty() {
+    let methods = document.x25519_key_agreement_methods().map_err(|reason| {
+        DidcommError::ResolutionFailed {
+            did: document.id.clone(),
+            reason,
+        }
+    })?;
+    if methods.len() > MAX_DIDCOMM_RECIPIENTS {
+        Err(DidcommError::ResolutionFailed {
+            did: document.id.clone(),
+            reason: "DID document authorizes too many X25519 recipient methods".into(),
+        })
+    } else if methods.is_empty() {
         Err(DidcommError::NoKeyAgreementKey {
             did: document.id.clone(),
         })
     } else {
         Ok(methods)
     }
+}
+
+#[cfg(feature = "local-key-operations")]
+fn validate_encrypted_envelope_shape(jwe_json: &str) -> DidcommResult<serde_json::Value> {
+    if jwe_json.is_empty() || jwe_json.len() > MAX_DIDCOMM_ENCRYPTED_ENVELOPE_BYTES {
+        return Err(DidcommError::UnpackError(
+            "encrypted envelope is empty or exceeds the configured size limit".into(),
+        ));
+    }
+    let envelope: serde_json::Value = serde_json::from_str(jwe_json)
+        .map_err(|error| DidcommError::UnpackError(format!("invalid JWE JSON: {error}")))?;
+    let protected = envelope
+        .get("protected")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| DidcommError::UnpackError("missing protected header".into()))?;
+    if protected.is_empty() || protected.len() > max_encoded_len(MAX_DIDCOMM_PROTECTED_HEADER_BYTES)
+    {
+        return Err(DidcommError::UnpackError(
+            "protected header exceeds the configured size limit".into(),
+        ));
+    }
+    let protected_bytes = URL_SAFE_NO_PAD
+        .decode(protected)
+        .map_err(|error| DidcommError::UnpackError(format!("invalid protected header: {error}")))?;
+    if protected_bytes.len() > MAX_DIDCOMM_PROTECTED_HEADER_BYTES {
+        return Err(DidcommError::UnpackError(
+            "protected header exceeds the configured size limit".into(),
+        ));
+    }
+    let _: serde_json::Value = serde_json::from_slice(&protected_bytes)
+        .map_err(|error| DidcommError::UnpackError(format!("invalid protected header: {error}")))?;
+
+    let recipients = envelope
+        .get("recipients")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| DidcommError::UnpackError("missing recipients".into()))?;
+    if recipients.is_empty() || recipients.len() > MAX_DIDCOMM_RECIPIENTS {
+        return Err(DidcommError::UnpackError(
+            "encrypted envelope has an invalid recipient count".into(),
+        ));
+    }
+    for recipient in recipients {
+        let kid = recipient
+            .pointer("/header/kid")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| DidcommError::UnpackError("missing recipient kid".into()))?;
+        if kid.is_empty() || kid.len() > MAX_DIDCOMM_RECIPIENT_KID_BYTES {
+            return Err(DidcommError::UnpackError(
+                "recipient kid exceeds the configured size limit".into(),
+            ));
+        }
+    }
+    Ok(envelope)
 }
 
 fn public_keys(
@@ -424,18 +511,16 @@ mod tests {
                 id: key_id,
                 r#type: "JsonWebKey2020".into(),
                 controller: did.into(),
-                public_key_jwk: Some(crate::types::Jwk {
-                    kty: "OKP".into(),
-                    crv: Some("X25519".into()),
-                    x: recipient_public_jwk
+                public_key_jwk: Some(crate::types::Jwk::new_public(
+                    "OKP",
+                    Some("X25519".into()),
+                    recipient_public_jwk
                         .get("x")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_owned),
-                    y: None,
-                    d: None,
-                    kid: None,
-                    additional_properties: serde_json::Map::new(),
-                }),
+                    None,
+                    None,
+                )),
                 public_key_multibase: None,
                 public_key_base58: None,
                 additional_properties: serde_json::Map::new(),
@@ -470,6 +555,28 @@ mod tests {
             .decode(protected)
             .expect("protected header must be base64url");
         serde_json::from_slice(&decoded).expect("protected header must be JSON")
+    }
+
+    #[test]
+    fn decrypt_rejects_oversized_envelopes_headers_and_recipient_sets() {
+        let oversized = "x".repeat(MAX_DIDCOMM_ENCRYPTED_ENVELOPE_BYTES + 1);
+        assert!(decrypt_jwe(&oversized, &[1_u8; 32]).is_err());
+
+        let protected = "A".repeat(max_encoded_len(MAX_DIDCOMM_PROTECTED_HEADER_BYTES) + 1);
+        let envelope = serde_json::json!({
+            "protected": protected,
+            "recipients": [{"header":{"kid":"did:example:bob#key-1"}}]
+        });
+        assert!(decrypt_jwe(&envelope.to_string(), &[1_u8; 32]).is_err());
+
+        let recipients = (0..=MAX_DIDCOMM_RECIPIENTS)
+            .map(|index| serde_json::json!({"header":{"kid":format!("did:example:bob#{index}")}}))
+            .collect::<Vec<_>>();
+        let envelope = serde_json::json!({
+            "protected": URL_SAFE_NO_PAD.encode(br#"{"alg":"ECDH-ES+A256KW"}"#),
+            "recipients": recipients
+        });
+        assert!(decrypt_jwe(&envelope.to_string(), &[1_u8; 32]).is_err());
     }
 
     #[test]

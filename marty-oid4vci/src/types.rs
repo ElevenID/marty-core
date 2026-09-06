@@ -295,7 +295,9 @@ pub struct AuthorizationSession {
 impl AuthorizationSession {
     /// Check whether this session has expired.
     pub fn is_expired(&self, now_unix: u64) -> bool {
-        now_unix > self.created_at + self.expires_in
+        self.created_at
+            .checked_add(self.expires_in)
+            .is_none_or(|deadline| now_unix > deadline)
     }
 }
 
@@ -540,11 +542,33 @@ impl IssuerKey {
 
 #[cfg(test)]
 mod issuer_key_diagnostic_tests {
-    use super::{IssuerKey, SigningAlgorithm, REDACTED_ISSUER_KEY_DIAGNOSTIC};
+    use super::{
+        AuthorizationSession, IssuerKey, SigningAlgorithm, REDACTED_ISSUER_KEY_DIAGNOSTIC,
+    };
     use crate::signer::CredentialSigner;
 
     struct TestSigningExecutor<'a> {
         _signer: &'a dyn CredentialSigner,
+    }
+
+    #[test]
+    fn authorization_session_expiry_overflow_fails_closed() {
+        let session = AuthorizationSession {
+            code: String::new(),
+            client_id: String::new(),
+            redirect_uri: None,
+            code_challenge: None,
+            code_challenge_method: None,
+            issuer_state: None,
+            credential_configuration_ids: Vec::new(),
+            created_at: u64::MAX,
+            expires_in: 1,
+        };
+        assert!(session.is_expired(0));
+
+        let mut boundary = session;
+        boundary.created_at = u64::MAX - 1;
+        assert!(!boundary.is_expired(u64::MAX));
     }
 
     impl std::fmt::Debug for TestSigningExecutor<'_> {
@@ -941,7 +965,7 @@ impl IssuerConfig {
     /// Construct a key-free configuration for stateless protocol helpers.
     ///
     /// The compatibility key field, when compiled, is initialized internally
-    /// so downstream KMS-only crates never need to name [`IssuerKey`].
+    /// so downstream KMS-only crates never need to name `IssuerKey`.
     pub fn stateless() -> Self {
         Self {
             credential_issuer_url: String::new(),

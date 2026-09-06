@@ -605,6 +605,7 @@ pub fn create_verifiable_credential(
 }
 
 /// Detect the signing algorithm from a JWK JSON string.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn detect_algorithm(jwk_json: &str) -> Oid4vciResult<SigningAlgorithm> {
     let jwk: serde_json::Value = serde_json::from_str(jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid JWK JSON: {}", e)))?;

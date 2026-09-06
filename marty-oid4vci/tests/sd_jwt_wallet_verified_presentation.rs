@@ -93,15 +93,11 @@ fn p256_jwk(key: &SigningKey, include_private: bool) -> serde_json::Value {
 }
 
 fn fixture() -> Fixture {
-    fixture_with_cnf(false)
-}
-
-fn fixture_with_cnf(include_private_cnf: bool) -> Fixture {
     let issuer_signing_key = SigningKey::random(&mut OsRng);
     let holder_signing_key = SigningKey::random(&mut OsRng);
     let issuer = "did:example:verified-wallet-issuer".to_string();
     let issuer_private_jwk = p256_jwk(&issuer_signing_key, true).to_string();
-    let holder_cnf_jwk = p256_jwk(&holder_signing_key, include_private_cnf);
+    let holder_cnf_jwk = p256_jwk(&holder_signing_key, false);
     let holder_private_jwk = p256_jwk(&holder_signing_key, true).to_string();
 
     let claims = CredentialClaims {
@@ -228,6 +224,33 @@ fn mutate_issuer_payload(credential: &str, mutate: impl FnOnce(&mut serde_json::
     segments[1] = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(&payload).unwrap());
     format!("{}~{suffix}", segments.join("."))
+}
+
+fn mutate_issuer_payload_and_resign(
+    fixture: &Fixture,
+    mutate: impl FnOnce(&mut serde_json::Value),
+) -> String {
+    let (issuer_jws, suffix) = fixture.credential.split_once('~').unwrap();
+    let segments = issuer_jws.split('.').collect::<Vec<_>>();
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(segments[1])
+        .unwrap();
+    let mut payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
+    mutate(&mut payload);
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&payload).unwrap());
+    let signing_input = format!("{}.{payload}", segments[0]);
+    let signature = IssuerKey {
+        issuer_id: fixture.issuer.clone(),
+        jwk_json: fixture.issuer_private_jwk.clone(),
+        algorithm: SigningAlgorithm::ES256,
+    }
+    .sign(signing_input.as_bytes())
+    .unwrap();
+    format!(
+        "{signing_input}.{}~{suffix}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
+    )
 }
 
 fn replace_issuer_algorithm(credential: &str, algorithm: &str) -> String {
@@ -646,10 +669,15 @@ fn verified_presentation_rejects_private_issuer_material_from_resolver() {
 
 #[test]
 fn verified_presentation_rejects_private_holder_material_in_signed_cnf() {
-    let fixture = fixture_with_cnf(true);
+    let fixture = fixture();
+    let private_holder: serde_json::Value =
+        serde_json::from_str(&fixture.holder_private_jwk).unwrap();
+    let credential = mutate_issuer_payload_and_resign(&fixture, |payload| {
+        payload["cnf"]["jwk"] = private_holder;
+    });
     let error = WalletEngine::new()
         .create_verified_sd_jwt_presentation(
-            &fixture.credential,
+            &credential,
             &["email".into()],
             &fresh_nonce(),
             "https://verifier.example",

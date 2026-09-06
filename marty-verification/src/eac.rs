@@ -28,6 +28,32 @@ use crate::error::{VerificationError, VerificationResult};
 /// ```
 pub struct NoEphemeralSessionKeys;
 
+#[cfg(all(
+    feature = "ephemeral-session-keys",
+    not(feature = "local-key-operations")
+))]
+/// Marker documenting raw EAC secret APIs excluded from production session builds.
+///
+/// ```compile_fail
+/// let _ = marty_verification::eac::generate_ephemeral_keypair;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::eac::agree;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::eac::calculate_mac;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::eac::EacSecureMessaging::new;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::eac::EacSecureMessaging::keys;
+/// ```
+/// ```compile_fail
+/// let _ = marty_verification::eac::EacSecureMessaging::encrypt_with_iv;
+/// ```
+pub struct NoRawEacSessionKeyApis;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EacAlgorithm {
     EcdhP256Sha256,
@@ -58,8 +84,15 @@ impl EacAlgorithm {
 }
 
 /// Generate an ephemeral key pair as `(private scalar, SEC1 public point)`.
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_ephemeral_keypair(
+    algorithm: EacAlgorithm,
+) -> VerificationResult<(Vec<u8>, Vec<u8>)> {
+    generate_ephemeral_keypair_inner(algorithm)
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn generate_ephemeral_keypair_inner(
     algorithm: EacAlgorithm,
 ) -> VerificationResult<(Vec<u8>, Vec<u8>)> {
     match algorithm {
@@ -77,8 +110,17 @@ pub fn generate_ephemeral_keypair(
 }
 
 /// Perform actual ECDH with a generated private scalar and chip public point.
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn agree(
+    algorithm: EacAlgorithm,
+    private_key: &[u8],
+    peer_public_key: &[u8],
+) -> VerificationResult<Vec<u8>> {
+    agree_inner(algorithm, private_key, peer_public_key)
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+fn agree_inner(
     algorithm: EacAlgorithm,
     private_key: &[u8],
     peer_public_key: &[u8],
@@ -99,6 +141,53 @@ pub fn agree(
                 "RSA key agreement is not defined for EAC Chip Authentication",
             ))
         }
+    }
+}
+
+/// Stateful EAC chip-authentication exchange that retains and zeroizes the
+/// reader's ephemeral private scalar internally.
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+pub struct EacHandshake {
+    algorithm: EacAlgorithm,
+    private_key: Vec<u8>,
+    public_key: Vec<u8>,
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+impl Drop for EacHandshake {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.private_key);
+    }
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+impl EacHandshake {
+    /// Begin an ECDH chip-authentication exchange with OS-generated randomness.
+    pub fn begin(algorithm: EacAlgorithm) -> VerificationResult<Self> {
+        let (private_key, public_key) = generate_ephemeral_keypair_inner(algorithm)?;
+        Ok(Self {
+            algorithm,
+            private_key,
+            public_key,
+        })
+    }
+
+    /// Public SEC1 point to send to the passport chip.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    /// Consume the handshake and retain only derived secure-messaging state.
+    pub fn complete(mut self, chip_public_key: &[u8]) -> VerificationResult<EacSecureMessaging> {
+        use zeroize::Zeroize;
+
+        let shared_secret = zeroize::Zeroizing::new(agree_inner(
+            self.algorithm,
+            &self.private_key,
+            chip_public_key,
+        )?);
+        self.private_key.zeroize();
+        EacSecureMessaging::from_shared_secret(&shared_secret, self.algorithm)
     }
 }
 
@@ -250,7 +339,7 @@ pub fn serialize_certificate_metadata(
     .map_err(|error| VerificationError::internal(format!("EAC metadata encoding failed: {error}")))
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn calculate_mac(key: &[u8], data: &[u8]) -> VerificationResult<Vec<u8>> {
     marty_crypto::symmetric::hmac_sha256(key, data).map_err(Into::into)
 }
@@ -274,7 +363,15 @@ impl Drop for EacSecureMessaging {
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl EacSecureMessaging {
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn new(shared_secret: &[u8], algorithm: EacAlgorithm) -> VerificationResult<Self> {
+        Self::from_shared_secret(shared_secret, algorithm)
+    }
+
+    fn from_shared_secret(
+        shared_secret: &[u8],
+        algorithm: EacAlgorithm,
+    ) -> VerificationResult<Self> {
         if shared_secret.is_empty() {
             return Err(VerificationError::internal(
                 "EAC shared secret must not be empty",
@@ -290,10 +387,14 @@ impl EacSecureMessaging {
                 marty_crypto::kdf::hkdf_sha256(shared_secret, domain_separator, info, 32)
             }
         };
-        let mac_key: [u8; 32] = derive(b"EAC_MAC_KEY", b"MAC_DERIVATION")?
+        let mac_key = zeroize::Zeroizing::new(derive(b"EAC_MAC_KEY", b"MAC_DERIVATION")?);
+        let mac_key: [u8; 32] = mac_key
+            .as_slice()
             .try_into()
             .expect("HKDF requested 32 bytes");
-        let encryption_key: [u8; 32] = derive(b"EAC_ENC_KEY", b"ENC_DERIVATION")?
+        let encryption_key = zeroize::Zeroizing::new(derive(b"EAC_ENC_KEY", b"ENC_DERIVATION")?);
+        let encryption_key: [u8; 32] = encryption_key
+            .as_slice()
             .try_into()
             .expect("HKDF requested 32 bytes");
         Ok(Self {
@@ -304,6 +405,7 @@ impl EacSecureMessaging {
         })
     }
 
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn keys(&self) -> (&[u8; 32], &[u8; 32]) {
         (&self.mac_key, &self.encryption_key)
     }
@@ -314,10 +416,19 @@ impl EacSecureMessaging {
 
     pub fn encrypt(&mut self, plaintext: &[u8]) -> VerificationResult<Vec<u8>> {
         let iv: [u8; 16] = rand::random();
-        self.encrypt_with_iv(plaintext, &iv)
+        self.encrypt_with_iv_inner(plaintext, &iv)
     }
 
+    #[cfg(any(test, feature = "local-key-operations"))]
     pub fn encrypt_with_iv(&mut self, plaintext: &[u8], iv: &[u8]) -> VerificationResult<Vec<u8>> {
+        self.encrypt_with_iv_inner(plaintext, iv)
+    }
+
+    fn encrypt_with_iv_inner(
+        &mut self,
+        plaintext: &[u8],
+        iv: &[u8],
+    ) -> VerificationResult<Vec<u8>> {
         let iv: [u8; 16] = iv
             .try_into()
             .map_err(|_| VerificationError::internal("EAC secure-messaging IV must be 16 bytes"))?;

@@ -42,6 +42,43 @@ compile_error!("kms-only DIDComm builds cannot accept caller-supplied private ke
 /// ```compile_fail
 /// use marty_didcomm::{decrypt_jwe, encrypt_for_recipient_authenticated};
 /// ```
+///
+/// ```compile_fail
+/// # use marty_didcomm::types::Jwk;
+/// let _ = Jwk {
+///     kty: "OKP".into(), crv: Some("X25519".into()), x: Some("public".into()),
+///     y: None, kid: None, additional_properties: Default::default(),
+/// };
+/// ```
+///
+/// ```compile_fail
+/// use marty_didcomm::types::VerificationMethod;
+/// let mut method: VerificationMethod = serde_json::from_str(
+///     r#"{"id":"did:example:1#key","type":"JsonWebKey2020","controller":"did:example:1"}"#
+/// ).unwrap();
+/// method.additional_properties.insert(
+///     "publicKeyJwk".into(),
+///     serde_json::json!({"kty":"EC","d":"secret"}),
+/// );
+/// ```
+///
+/// ```compile_fail
+/// use marty_didcomm::types::DidDocument;
+/// let mut document: DidDocument = serde_json::from_str(r#"{"id":"did:example:1"}"#).unwrap();
+/// document.additional_properties.insert(
+///     "verificationMethod".into(),
+///     serde_json::json!([{"publicKeyJwk":{"kty":"EC","d":"secret"}}]),
+/// );
+/// ```
+///
+/// ```compile_fail
+/// use marty_didcomm::types::DidDocument;
+/// let mut document = DidDocument::new("did:example:1");
+/// document.key_agreement.push(serde_json::json!({
+///     "id":"#key-1", "type":"JsonWebKey2020", "controller":"did:example:1",
+///     "publicKeyJwk":{"kty":"EC","d":"secret"}
+/// }));
+/// ```
 pub struct NoLocalKeyOperations;
 
 pub mod did_identifier;

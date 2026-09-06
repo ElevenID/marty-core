@@ -5,7 +5,7 @@
 //! the `CredentialSigner` trait.
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::{validate_remote_signature, CredentialSigner};
+use crate::signer::{validate_remote_signature, validate_rsa_signature_encoding, CredentialSigner};
 #[cfg(any(test, feature = "local-key-operations"))]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
@@ -13,7 +13,6 @@ use crate::types::{CredentialClaims, SignedCredential};
 use base64::Engine;
 
 /// Intermediate state between VDS-NC preparation and signature assembly.
-#[derive(Debug, Clone)]
 pub struct PreparedVdsNc {
     /// The exact bytes (as UTF-8 text) that must be signed.
     signing_input: String,
@@ -23,8 +22,15 @@ pub struct PreparedVdsNc {
     algorithm: String,
 }
 
+impl std::fmt::Debug for PreparedVdsNc {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PreparedVdsNc([redacted])")
+    }
+}
+
 impl PreparedVdsNc {
     /// Reconstruct a prepared envelope from a `header~payload_json` signing input.
+    #[cfg(feature = "local-key-operations")]
     pub fn from_signing_input(signing_input: String, credential_id: String) -> Oid4vciResult<Self> {
         let (_header, payload_json) =
             super::vds_nc_profile::validate_signing_input(&signing_input)?;
@@ -70,6 +76,14 @@ impl PreparedVdsNc {
     }
 }
 
+#[cfg(all(feature = "issuer", not(feature = "local-key-operations")))]
+/// Marker documenting that KMS issuer builds cannot reconstruct prepared VDS state.
+///
+/// ```compile_fail
+/// let _ = marty_oid4vci::formats::vds_nc::PreparedVdsNc::from_signing_input;
+/// ```
+pub struct NoPreparedVdsNcReconstruction;
+
 /// Sign a VDS-NC credential using a local issuer key.
 #[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_vds_nc(
@@ -89,7 +103,7 @@ pub fn sign_vds_nc_with_signer(
 ) -> Oid4vciResult<SignedCredential> {
     let prepared = prepare_vds_nc(signer, claims)?;
     let signature = signer.sign(prepared.signing_payload())?;
-    assemble_vds_nc(&prepared, &signature)
+    assemble_vds_nc(prepared, &signature)
 }
 
 /// Prepare a VDS-NC credential for external signing.
@@ -138,7 +152,7 @@ pub fn prepare_vds_nc_profile(
 /// Assemble a VDS-NC credential from a signature already encoded in the
 /// profile algorithm's canonical raw form.
 pub fn assemble_vds_nc_raw(
-    prepared: &PreparedVdsNc,
+    prepared: PreparedVdsNc,
     signature: &[u8],
 ) -> Oid4vciResult<SignedCredential> {
     let normalized = prepared.validate_signature(signature)?;
@@ -146,7 +160,7 @@ pub fn assemble_vds_nc_raw(
     let barcode_data = format!("{}~{}", prepared.signing_input, signature_b64);
     Ok(SignedCredential::VdsNc {
         barcode_data,
-        credential_id: prepared.credential_id.clone(),
+        credential_id: prepared.credential_id,
     })
 }
 
@@ -161,7 +175,7 @@ pub fn assemble_vds_nc_raw(
 /// Ed25519 signatures are 64 bytes and are never DER-encoded; they are
 /// passed through unchanged.
 pub fn assemble_vds_nc(
-    prepared: &PreparedVdsNc,
+    prepared: PreparedVdsNc,
     signature: &[u8],
 ) -> Oid4vciResult<SignedCredential> {
     let normalized = prepared.validate_signature(signature)?;
@@ -170,7 +184,7 @@ pub fn assemble_vds_nc(
 
     Ok(SignedCredential::VdsNc {
         barcode_data,
-        credential_id: prepared.credential_id.clone(),
+        credential_id: prepared.credential_id,
     })
 }
 
@@ -196,9 +210,7 @@ fn normalize_signature_bytes(algorithm: &str, signature: &[u8]) -> Oid4vciResult
             validate_remote_signature(crate::types::SigningAlgorithm::EdDSA, signature)?;
             Ok(signature.to_vec())
         }
-        "PS256" | "PS384" | "PS512"
-            if signature.len() >= 256 && signature.iter().any(|byte| *byte != 0) =>
-        {
+        "PS256" | "PS384" | "PS512" if validate_rsa_signature_encoding(signature) => {
             Ok(signature.to_vec())
         }
         "PS256" | "PS384" | "PS512" => Err(invalid()),
@@ -295,13 +307,21 @@ mod tests {
         let mut signature = [0u8; 64];
         signature[31] = 1;
         signature[63] = 1;
-        let assembled = assemble_vds_nc(&prepared, &signature).unwrap();
+        let assembled = assemble_vds_nc(prepared, &signature).unwrap();
         match assembled {
             SignedCredential::VdsNc { barcode_data, .. } => {
                 assert_eq!(barcode_data.split('~').count(), 3);
             }
             _ => panic!("Expected SignedCredential::VdsNc"),
         }
+    }
+
+    #[test]
+    fn prepared_vds_diagnostics_redact_signing_payload() {
+        let prepared = make_prepared("AUS", "ES256");
+        let diagnostic = format!("{prepared:?}");
+        assert_eq!(diagnostic, "PreparedVdsNc([redacted])");
+        assert!(!diagnostic.contains("CMC"));
     }
 
     #[test]
@@ -352,7 +372,7 @@ mod tests {
         let sig_der: p256::ecdsa::DerSignature =
             signing_key.sign(prepared.signing_input.as_bytes());
 
-        let assembled = assemble_vds_nc(&prepared, sig_der.as_bytes()).unwrap();
+        let assembled = assemble_vds_nc(prepared, sig_der.as_bytes()).unwrap();
         let sig_bytes = match assembled {
             SignedCredential::VdsNc {
                 ref barcode_data, ..
@@ -384,7 +404,7 @@ mod tests {
         let sig: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input.as_bytes());
         let raw_bytes = sig.to_bytes().to_vec();
 
-        let assembled = assemble_vds_nc(&prepared, &raw_bytes).unwrap();
+        let assembled = assemble_vds_nc(prepared, &raw_bytes).unwrap();
         let sig_bytes = match assembled {
             SignedCredential::VdsNc {
                 ref barcode_data, ..
@@ -406,7 +426,7 @@ mod tests {
         let sig_der: p384::ecdsa::DerSignature =
             signing_key.sign(prepared.signing_input.as_bytes());
 
-        let assembled = assemble_vds_nc(&prepared, sig_der.as_bytes()).unwrap();
+        let assembled = assemble_vds_nc(prepared, sig_der.as_bytes()).unwrap();
         let sig_bytes = match assembled {
             SignedCredential::VdsNc {
                 ref barcode_data, ..
@@ -435,7 +455,7 @@ mod tests {
         let raw_ed25519_sig = SigningKey::from_bytes(&[7u8; 32])
             .sign(prepared.signing_input.as_bytes())
             .to_bytes();
-        let assembled = assemble_vds_nc(&prepared, &raw_ed25519_sig).unwrap();
+        let assembled = assemble_vds_nc(prepared, &raw_ed25519_sig).unwrap();
         let sig_bytes = match assembled {
             SignedCredential::VdsNc {
                 ref barcode_data, ..
@@ -446,13 +466,29 @@ mod tests {
     }
 
     #[test]
-    fn malformed_signature_does_not_consume_prepared_state() {
+    fn malformed_signature_is_rejected_and_valid_signature_assembles() {
         let prepared = make_prepared("AUS", "ES256");
-        assert!(assemble_vds_nc(&prepared, &[0u8; 64]).is_err());
+        assert!(assemble_vds_nc(prepared, &[0u8; 64]).is_err());
 
         let mut valid = [0u8; 64];
         valid[31] = 1;
         valid[63] = 1;
-        assert!(assemble_vds_nc(&prepared, &valid).is_ok());
+        assert!(assemble_vds_nc(make_prepared("AUS", "ES256"), &valid).is_ok());
+    }
+
+    #[test]
+    fn rsa_signature_width_is_bounded_to_supported_moduli() {
+        assert!(normalize_signature_bytes("PS256", &[1; 255]).is_err());
+        assert_eq!(
+            normalize_signature_bytes("PS256", &[1; 256]).unwrap().len(),
+            256
+        );
+        assert_eq!(
+            normalize_signature_bytes("PS512", &[1; 1024])
+                .unwrap()
+                .len(),
+            1024
+        );
+        assert!(normalize_signature_bytes("PS384", &[1; 1025]).is_err());
     }
 }

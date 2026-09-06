@@ -18,26 +18,47 @@ crate-type = ["rlib"]
 [features]
 default = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
 kms-only = ["marty-crypto/kms-only"] # Reject in-process credential/holder private-key capabilities
-issuer = []         # OID4VCI credential issuer support
-verifier = []       # OID4VP verifiable presentation support
+issuer = [
+    "isomdl?/issuer-planning",
+    "sd-jwt-rs?/issuer-planning",
+    "p256/ecdsa-core",
+    "p384/ecdsa-core",
+] # OID4VCI issuer preparation and remote-signature assembly support
+verifier = ["jsonwebtoken/rust_crypto", "sd-jwt-rs?/verifier"] # OID4VP signature verification support
 wallet = ["dep:reqwest", "dep:tokio", "holder-key-operations", "sd_jwt", "sd-jwt-rs/holder", "verifier"]  # OID4VCI/OID4VP wallet/holder support
 lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
-holder-key-operations = [] # Wallet/authenticator-owned holder and device keys
+holder-key-operations = [
+    "ed25519-dalek/pkcs8",
+    "ed25519-dalek/rand_core",
+    "jsonwebtoken/rust_crypto",
+    "p256/ecdsa",
+    "p256/pkcs8",
+] # Wallet/authenticator-owned holder and device keys
 local-key-operations = [
+    "issuer",
     "holder-key-operations",
     "jwt_vc_json",
     "sd_jwt",
     "mso_mdoc",
     "isomdl/issuer-local-signing",
     "sd-jwt-rs/issuer-local",
+    "dep:ssi-crypto",
+    "ssi-crypto/ed25519",
+    "ssi-crypto/secp256r1",
+    "ssi-crypto/secp256k1",
+    "ssi-crypto/secp384r1",
+    "ssi-jwk/ed25519",
+    "ssi-jwk/secp256r1",
+    "ssi-jwk/secp256k1",
+    "ssi-jwk/secp384r1",
 ] # Development/migration-only issuer private keys
 jwt_vc_json = []    # W3C VC-JWT credential format
-sd_jwt = ["dep:sd-jwt-rs", "sd-jwt-rs/verifier"] # IETF SD-JWT credential format
-mso_mdoc = ["dep:isomdl", "isomdl/issuer-planning"] # ISO 18013-5 mDoc credential format
+sd_jwt = ["dep:sd-jwt-rs"] # IETF SD-JWT format; role features select implementation capabilities
+mso_mdoc = ["dep:isomdl"] # ISO 18013-5 mDoc format; issuer adds planning
 zk_mdoc = ["dep:marty-zkp", "dep:marty-iso18013"]  # ZK proof verification; issuance additionally selects issuer,mso_mdoc
 
 [dependencies]
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification"] }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification"] }
 marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013", default-features = false, features = ["verifier"], optional = true }
 
 # Serialization
@@ -45,13 +66,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Crypto and signing
-ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
-ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "18049cadba138d9b67a21f753f67c9238cdeae0a", default-features = false, optional = true }
-jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+ssi-crypto = { version = "0.2.1", default-features = false, optional = true }
+ssi-jwk = { version = "0.4.0", default-features = false }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "8be26b1d9419de4aeee886f810bde40bc69b3ef5", default-features = false, optional = true }
+jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "dfd0ca68405b43f5afed0ad218b3c282cc21be61", default-features = false, optional = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "235ac776ce32d5ae9a1c0c458f6a22a395e9aed0", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -59,9 +80,9 @@ ciborium = { workspace = true }
 base64 = { workspace = true }
 
 # Key management
-p256 = { workspace = true }
-p384 = { workspace = true }
-k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+p256 = { workspace = true, features = ["arithmetic"] }
+p384 = { workspace = true, features = ["arithmetic"] }
+k256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa-core", "sha256"] }
 curve25519-dalek = "4.1"
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
@@ -87,8 +108,10 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true }
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "dfd0ca68405b43f5afed0ad218b3c282cc21be61" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "18049cadba138d9b67a21f753f67c9238cdeae0a" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "235ac776ce32d5ae9a1c0c458f6a22a395e9aed0" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "8be26b1d9419de4aeee886f810bde40bc69b3ef5" }
+ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
+ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 
 [[bench]]
 name = "mdoc_issuance"

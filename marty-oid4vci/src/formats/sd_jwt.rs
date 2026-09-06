@@ -14,34 +14,51 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 #[cfg(any(test, feature = "local-key-operations"))]
 use p256::pkcs8::EncodePrivateKey;
+#[cfg(any(test, feature = "issuer"))]
 use rand::RngCore;
 #[cfg(any(test, feature = "local-key-operations"))]
 use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
 #[cfg(any(test, feature = "local-key-operations"))]
 use sd_jwt_rs::SDJWTIssuer;
+#[cfg(any(test, feature = "local-key-operations", feature = "verifier"))]
 use sd_jwt_rs::SDJWTSerializationFormat;
 use sha2::{Digest, Sha256};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
 use ssi_jwk::Params;
 #[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
 use ssi_jwk::JWK;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
+#[cfg(any(test, feature = "issuer"))]
 use crate::signer::{validate_remote_signature, CredentialSigner};
 #[cfg(any(test, feature = "local-key-operations"))]
 use crate::types::IssuerKey;
+#[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
 
+#[cfg(any(test, feature = "issuer"))]
 const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
+#[cfg(any(test, feature = "issuer"))]
 const SD_JWT_DISCLOSURE_STAGE_FAILURE: &str = "SD-JWT disclosure preparation failed";
+#[cfg(any(test, feature = "issuer"))]
 const SD_JWT_MANAGED_CLAIM_COLLISION: &str = "SD-JWT claims conflict with issuer-controlled claims";
+#[cfg(any(test, feature = "issuer"))]
 const SD_JWT_NON_DISCLOSABLE_SELECTOR: &str = "SD-JWT selector targets a non-disclosable claim";
+#[cfg(any(test, feature = "issuer"))]
 const SD_JWT_RESERVED_STRUCTURE: &str = "SD-JWT claims contain reserved structural markers";
+#[cfg(any(test, feature = "issuer", feature = "verifier"))]
+const SD_JWT_PRIVATE_CONFIRMATION_JWK: &str =
+    "SD-JWT confirmation must contain a public asymmetric JWK only";
+#[cfg(any(test, feature = "issuer", feature = "verifier"))]
+const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+#[cfg(any(test, feature = "issuer"))]
 const IETF_ALWAYS_MANAGED_CLAIMS: &[&str] = &["iss", "iat", "jti", "vct"];
+#[cfg(any(test, feature = "issuer"))]
 const SD_JWT_STRUCTURAL_MARKERS: &[&str] = &["_sd", "_sd_alg", "..."];
 // draft-ietf-oauth-sd-jwt-vc-18, Section 2.2.2.3. `sub` and `iat`
 // are intentionally absent because that profile permits disclosing them.
 // `jti` is also absent because the profile does not define a policy for it.
+#[cfg(any(test, feature = "issuer"))]
 const IETF_NON_DISCLOSABLE_CLAIMS: &[&str] = &[
     "iss",
     "nbf",
@@ -53,6 +70,7 @@ const IETF_NON_DISCLOSABLE_CLAIMS: &[&str] = &[
     "status",
 ];
 
+#[cfg(any(test, feature = "issuer"))]
 fn validate_sd_jwt_managed_claims(
     claims: &CredentialClaims,
     include_nbf: bool,
@@ -98,6 +116,7 @@ fn validate_sd_jwt_managed_claims(
     Ok(())
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn contains_sd_jwt_structural_marker(value: &serde_json::Value) -> bool {
     let mut pending = vec![value];
     while let Some(value) = pending.pop() {
@@ -118,7 +137,8 @@ fn contains_sd_jwt_structural_marker(value: &serde_json::Value) -> bool {
     false
 }
 
-fn validate_sd_jwt_structural_markers(
+#[cfg(any(test, feature = "issuer"))]
+pub(crate) fn validate_sd_jwt_structural_markers(
     claims: &CredentialClaims,
     confirmation: Option<&serde_json::Value>,
 ) -> Oid4vciResult<()> {
@@ -145,6 +165,50 @@ fn validate_sd_jwt_structural_markers(
     Ok(())
 }
 
+#[cfg(any(test, feature = "issuer", feature = "verifier"))]
+fn validate_sd_jwt_confirmation(confirmation: Option<&serde_json::Value>) -> Oid4vciResult<()> {
+    let Some(confirmation) = confirmation else {
+        return Ok(());
+    };
+    let confirmation = confirmation.as_object().ok_or_else(|| {
+        Oid4vciError::SdJwtError("SD-JWT confirmation must be a JSON object".into())
+    })?;
+    let Some(jwk) = confirmation.get("jwk") else {
+        return Ok(());
+    };
+    let jwk = jwk.as_object().ok_or_else(|| {
+        Oid4vciError::SdJwtError("SD-JWT confirmation jwk must be a JSON object".into())
+    })?;
+    if jwk.get("kty").and_then(serde_json::Value::as_str) == Some("oct")
+        || PRIVATE_JWK_MEMBERS
+            .iter()
+            .any(|member| jwk.contains_key(*member))
+    {
+        return Err(Oid4vciError::SdJwtError(
+            SD_JWT_PRIVATE_CONFIRMATION_JWK.into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "issuer"))]
+fn validate_sd_jwt_confirmation_inputs(
+    claims: &CredentialClaims,
+    explicit_confirmation: Option<&serde_json::Value>,
+) -> Oid4vciResult<()> {
+    validate_sd_jwt_confirmation(explicit_confirmation)?;
+    if explicit_confirmation.is_none()
+        && matches!(
+            claims.credential_payload_format,
+            CredentialPayloadFormat::IetfSdJwt
+        )
+    {
+        validate_sd_jwt_confirmation(claims.claims.get("cnf"))?;
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "issuer"))]
 fn checked_sd_jwt_expiration_timestamp(
     issued_at: chrono::DateTime<chrono::Utc>,
     expiration_seconds: Option<i64>,
@@ -159,6 +223,7 @@ fn checked_sd_jwt_expiration_timestamp(
         .transpose()
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn checked_sd_jwt_vcdm_expiration(
     issued_at: chrono::DateTime<chrono::Utc>,
     expiration_seconds: Option<i64>,
@@ -188,7 +253,7 @@ pub fn sign_sd_jwt(
 ///
 /// Scalar local issuance uses this boundary after proof verification. Direct
 /// format issuance remains unbound because it has no proof context.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(any(test, all(feature = "issuer", feature = "local-key-operations")))]
 pub(crate) fn sign_sd_jwt_with_holder_public_jwk(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -198,10 +263,29 @@ pub(crate) fn sign_sd_jwt_with_holder_public_jwk(
     sign_sd_jwt_with_optional_confirmation(issuer_key, claims, Some(&confirmation))
 }
 
-#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
+#[cfg(any(test, feature = "issuer"))]
 fn holder_public_jwk_confirmation(holder_jwk: &JWK) -> Oid4vciResult<serde_json::Value> {
+    let contains_private_material = match &holder_jwk.params {
+        Params::OKP(params) => params.private_key.is_some(),
+        Params::EC(params) => params.ecc_private_key.is_some(),
+        Params::RSA(params) => {
+            params.private_exponent.is_some()
+                || params.first_prime_factor.is_some()
+                || params.second_prime_factor.is_some()
+                || params.first_prime_factor_crt_exponent.is_some()
+                || params.second_prime_factor_crt_exponent.is_some()
+                || params.first_crt_coefficient.is_some()
+                || params.other_primes_info.is_some()
+        }
+        Params::Symmetric(_) => true,
+    };
+    if contains_private_material {
+        return Err(Oid4vciError::SdJwtError(
+            SD_JWT_PRIVATE_CONFIRMATION_JWK.into(),
+        ));
+    }
     Ok(serde_json::json!({
-        "jwk": serde_json::to_value(holder_jwk.to_public())?,
+        "jwk": serde_json::to_value(holder_jwk)?,
     }))
 }
 
@@ -213,6 +297,7 @@ fn sign_sd_jwt_with_optional_confirmation(
 ) -> Oid4vciResult<SignedCredential> {
     validate_sd_jwt_managed_claims(claims, false, confirmation.is_some())?;
     validate_sd_jwt_structural_markers(claims, confirmation)?;
+    validate_sd_jwt_confirmation_inputs(claims, confirmation)?;
 
     let jwk: JWK = serde_json::from_str(&issuer_key.jwk_json)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
@@ -370,6 +455,7 @@ fn sign_sd_jwt_with_optional_confirmation(
 ///
 /// Returned by [`prepare_sd_jwt()`] — the caller signs `signing_input`
 /// with an external signer and passes the result to [`assemble_sd_jwt()`].
+#[cfg(any(test, feature = "issuer"))]
 pub struct PreparedSdJwt {
     /// The base64url-encoded `header.payload` string to be signed.
     signing_input: String,
@@ -380,6 +466,7 @@ pub struct PreparedSdJwt {
     algorithm: crate::types::SigningAlgorithm,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 impl PreparedSdJwt {
     pub fn signing_input(&self) -> &str {
         &self.signing_input
@@ -411,6 +498,7 @@ impl PreparedSdJwt {
 /// Optional protocol fields used when an external issuer profile prepares an
 /// SD-JWT for remote signing.
 #[derive(Debug, Clone, Default)]
+#[cfg(any(test, feature = "issuer"))]
 pub struct SdJwtPreparationOptions {
     /// Preserve a service-assigned credential identifier when supplied.
     pub credential_id: Option<String>,
@@ -428,6 +516,7 @@ pub struct SdJwtPreparationOptions {
 ///
 /// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
 /// For remote/KMS signing, pass a custom `CredentialSigner` implementation.
+#[cfg(any(test, feature = "issuer"))]
 pub fn sign_sd_jwt_with_signer(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -444,6 +533,7 @@ pub fn sign_sd_jwt_with_signer(
 ///
 /// Returns a [`PreparedSdJwt`] whose `signing_input` field contains the
 /// base64url-encoded `header.payload` ready for an external signer.
+#[cfg(any(test, feature = "issuer"))]
 pub fn prepare_sd_jwt(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -454,8 +544,8 @@ pub fn prepare_sd_jwt(
 /// Prepare an SD-JWT bound to a holder key from a successfully verified proof.
 ///
 /// Proof verification, including nonce, audience, age, signature, and optional
-/// key-attestation policy, must complete before this boundary. Only the public
-/// projection of `holder_jwk` is retained in the issuer-signed `cnf.jwk` claim.
+/// key-attestation policy, must complete before this boundary. The input must
+/// already be public; private or symmetric keys are rejected rather than projected.
 #[cfg(feature = "issuer")]
 pub(crate) fn prepare_sd_jwt_with_holder_public_jwk(
     signer: &dyn CredentialSigner,
@@ -473,6 +563,7 @@ pub(crate) fn prepare_sd_jwt_with_holder_public_jwk(
 }
 
 /// Prepare an SD-JWT with explicit remote-issuer protocol fields.
+#[cfg(any(test, feature = "issuer"))]
 pub fn prepare_sd_jwt_with_options(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -515,11 +606,13 @@ pub(crate) fn prepare_sd_jwt_with_holder_public_jwk_and_sources(
     )
 }
 
+#[cfg(any(test, feature = "issuer"))]
 enum SdJwtDisclosureTarget {
     TopLevel,
     CredentialSubject,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 struct PlannedSdJwtPreparation {
     credential_id: String,
     issued_at: chrono::DateTime<chrono::Utc>,
@@ -528,6 +621,7 @@ struct PlannedSdJwtPreparation {
     options: SdJwtPreparationOptions,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 struct PlannedSdJwtDisclosure {
     source_ordinal: usize,
     claim_name: String,
@@ -535,26 +629,33 @@ struct PlannedSdJwtDisclosure {
     salt_bytes: [u8; 16],
 }
 
+#[cfg(any(test, feature = "issuer"))]
 struct EncodedSdJwtDisclosure {
     source_ordinal: usize,
     disclosure: String,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 struct DigestedSdJwtDisclosure {
     source_ordinal: usize,
     disclosure: String,
     digest_b64: String,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 struct SdJwtDisclosureStage<T> {
     expected_source_ordinals: Vec<usize>,
     items: Vec<T>,
 }
 
+#[cfg(any(test, feature = "issuer"))]
 type PlannedSdJwtDisclosureBatch = SdJwtDisclosureStage<PlannedSdJwtDisclosure>;
+#[cfg(any(test, feature = "issuer"))]
 type EncodedSdJwtDisclosureBatch = SdJwtDisclosureStage<EncodedSdJwtDisclosure>;
+#[cfg(any(test, feature = "issuer"))]
 type DigestedSdJwtDisclosureBatch = SdJwtDisclosureStage<DigestedSdJwtDisclosure>;
 
+#[cfg(any(test, feature = "issuer"))]
 impl<T> SdJwtDisclosureStage<T> {
     fn empty() -> Self {
         Self {
@@ -568,6 +669,7 @@ impl<T> SdJwtDisclosureStage<T> {
     }
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn plan_sd_jwt_preparation(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -577,6 +679,7 @@ fn plan_sd_jwt_preparation(
 ) -> Oid4vciResult<PlannedSdJwtPreparation> {
     validate_sd_jwt_managed_claims(claims, options.include_nbf, options.confirmation.is_some())?;
     validate_sd_jwt_structural_markers(claims, options.confirmation.as_ref())?;
+    validate_sd_jwt_confirmation_inputs(claims, options.confirmation.as_ref())?;
 
     let credential_id = options
         .credential_id
@@ -678,6 +781,7 @@ fn plan_sd_jwt_preparation(
     })
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn sd_jwt_disclosure_target_mut<'a>(
     payload: &'a mut serde_json::Value,
     disclosure_target: &SdJwtDisclosureTarget,
@@ -697,6 +801,7 @@ fn sd_jwt_disclosure_target_mut<'a>(
     }
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn prepare_sd_jwt_with_options_and_sources(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -719,6 +824,7 @@ fn prepare_sd_jwt_with_options_and_sources(
     assemble_sd_jwt_preparation(signer, planned, digested_disclosures)
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn assemble_sd_jwt_preparation(
     signer: &dyn CredentialSigner,
     planned: PlannedSdJwtPreparation,
@@ -791,6 +897,7 @@ fn assemble_sd_jwt_preparation(
 ///
 /// The `signature` must be the raw bytes produced by signing
 /// `prepared.signing_input` with the issuer's key.
+#[cfg(any(test, feature = "issuer"))]
 pub fn assemble_sd_jwt(
     prepared: PreparedSdJwt,
     signature: &[u8],
@@ -806,6 +913,7 @@ pub fn assemble_sd_jwt(
     })
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn plan_sd_jwt_disclosure(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
     source_ordinal: usize,
@@ -823,6 +931,7 @@ fn plan_sd_jwt_disclosure(
     })
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn encode_sd_jwt_disclosure(
     planned: PlannedSdJwtDisclosure,
 ) -> Oid4vciResult<EncodedSdJwtDisclosure> {
@@ -837,6 +946,7 @@ fn encode_sd_jwt_disclosure(
     })
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn digest_sd_jwt_disclosure(encoded: EncodedSdJwtDisclosure) -> DigestedSdJwtDisclosure {
     let digest_b64 = URL_SAFE_NO_PAD.encode(Sha256::digest(encoded.disclosure.as_bytes()));
 
@@ -847,6 +957,7 @@ fn digest_sd_jwt_disclosure(encoded: EncodedSdJwtDisclosure) -> DigestedSdJwtDis
     }
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn restore_sd_jwt_disclosures(
     digested: DigestedSdJwtDisclosureBatch,
 ) -> Oid4vciResult<Vec<DigestedSdJwtDisclosure>> {
@@ -885,6 +996,7 @@ fn restore_sd_jwt_disclosures(
     Ok(restored)
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn assemble_sd_jwt_disclosures(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
     digested_disclosures: DigestedSdJwtDisclosureBatch,
@@ -905,6 +1017,7 @@ fn assemble_sd_jwt_disclosures(
     Ok(disclosures)
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn plan_sd_jwt_disclosures(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
     sd_claims: &[String],
@@ -929,6 +1042,7 @@ fn plan_sd_jwt_disclosures(
     }
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn encode_sd_jwt_disclosures(
     planned: PlannedSdJwtDisclosureBatch,
 ) -> Oid4vciResult<EncodedSdJwtDisclosureBatch> {
@@ -947,6 +1061,7 @@ fn encode_sd_jwt_disclosures(
     })
 }
 
+#[cfg(any(test, feature = "issuer"))]
 fn digest_sd_jwt_disclosures(encoded: EncodedSdJwtDisclosureBatch) -> DigestedSdJwtDisclosureBatch {
     let SdJwtDisclosureStage {
         expected_source_ordinals,
@@ -965,6 +1080,7 @@ fn digest_sd_jwt_disclosures(encoded: EncodedSdJwtDisclosureBatch) -> DigestedSd
 /// Planning visits selectors and consumes salts in the reference order. All
 /// planned items are then encoded, all encoded items are digested, and results
 /// retain the independent planned identities needed for ordered assembly.
+#[cfg(any(test, feature = "issuer"))]
 fn prepare_sd_jwt_disclosures(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
     sd_claims: &[String],
@@ -998,6 +1114,7 @@ fn prepare_sd_jwt_disclosures(
 /// * `issuer_jwk_json`  — Issuer's **public** JWK as a JSON string
 /// * `expected_aud`     — Expected KB-JWT audience (optional)
 /// * `expected_nonce`   — Expected KB-JWT nonce (optional)
+#[cfg(any(test, feature = "verifier"))]
 pub fn verify_sd_jwt(
     sd_jwt_compact: &str,
     issuer_jwk_json: &str,
@@ -1047,6 +1164,7 @@ pub fn create_sd_jwt_presentation(
 ) -> Oid4vciResult<String> {
     use std::collections::{HashMap, HashSet};
 
+    validate_sd_jwt_presentation_input(sd_jwt_compact)?;
     let mut segments = sd_jwt_compact.split('~').collect::<Vec<_>>();
     while matches!(segments.last(), Some(segment) if segment.is_empty()) {
         segments.pop();
@@ -1155,12 +1273,48 @@ pub fn create_sd_jwt_presentation(
     }
 }
 
+fn validate_sd_jwt_presentation_input(sd_jwt_compact: &str) -> Oid4vciResult<()> {
+    if sd_jwt_compact.len() > sd_jwt_rs::MAX_SD_JWT_INPUT_BYTES {
+        return Err(Oid4vciError::SdJwtError(
+            "SD-JWT presentation input exceeds its size limit".into(),
+        ));
+    }
+    let mut disclosure_count = 0usize;
+    for segment in sd_jwt_compact.split('~').skip(1) {
+        if segment.is_empty() {
+            continue;
+        }
+        disclosure_count = disclosure_count.checked_add(1).ok_or_else(|| {
+            Oid4vciError::SdJwtError("SD-JWT presentation has too many disclosures".into())
+        })?;
+        if disclosure_count > sd_jwt_rs::MAX_SD_JWT_DISCLOSURES {
+            return Err(Oid4vciError::SdJwtError(
+                "SD-JWT presentation has too many disclosures".into(),
+            ));
+        }
+        if segment.len() > sd_jwt_rs::MAX_SD_JWT_DISCLOSURE_BYTES {
+            return Err(Oid4vciError::SdJwtError(
+                "SD-JWT presentation disclosure exceeds its size limit".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "verifier"))]
+fn key_binding_iat_is_fresh(now: i64, issued_at: i64) -> bool {
+    now.checked_sub(issued_at)
+        .and_then(i64::checked_abs)
+        .is_some_and(|difference| difference <= 300)
+}
+
 /// Validate the SD-JWT Key Binding JWT (RFC 9449 §8).
 ///
 /// The holder key is bound by the issuer-signed credential's `cnf.jwk`.  We
 /// deliberately validate the protected algorithm, signature, `sd_hash`,
 /// audience, nonce, and a short issue-time window here rather than trusting a
 /// transitive verifier implementation to apply verifier-specific context.
+#[cfg(any(test, feature = "verifier"))]
 fn validate_key_binding_jwt(
     sd_jwt_compact: &str,
     expected_aud: Option<&str>,
@@ -1192,14 +1346,14 @@ fn validate_key_binding_jwt(
         .split('.')
         .nth(1)
         .ok_or_else(|| Oid4vciError::SdJwtError("Issuer-signed JWT is not compact JWS".into()))?;
-    let issuer_payload: serde_json::Value = serde_json::from_slice(
-        &URL_SAFE_NO_PAD
-            .decode(issuer_payload_segment)
-            .map_err(|e| {
-                Oid4vciError::SdJwtError(format!("Issuer JWT payload decode failed: {e}"))
-            })?,
-    )
-    .map_err(|e| Oid4vciError::SdJwtError(format!("Issuer JWT payload is not JSON: {e}")))?;
+    let issuer_payload_bytes = URL_SAFE_NO_PAD
+        .decode(issuer_payload_segment)
+        .map_err(|e| Oid4vciError::SdJwtError(format!("Issuer JWT payload decode failed: {e}")))?;
+    let issuer_payload =
+        crate::jose::parse_unique_object(&issuer_payload_bytes, "issuer JWT payload").map_err(
+            |_| Oid4vciError::SdJwtError("Issuer JWT payload is not unique JSON".into()),
+        )?;
+    validate_sd_jwt_confirmation(issuer_payload.get("cnf"))?;
     let holder_jwk: jsonwebtoken::jwk::Jwk = issuer_payload
         .get("cnf")
         .and_then(|cnf| cnf.get("jwk"))
@@ -1262,7 +1416,7 @@ fn validate_key_binding_jwt(
         })?;
     // OID4VP requires a verifier to limit presentation freshness. Five minutes
     // is deliberately conservative while allowing normal device clock skew.
-    if (chrono::Utc::now().timestamp() - issued_at).abs() > 300 {
+    if !key_binding_iat_is_fresh(chrono::Utc::now().timestamp(), issued_at) {
         return Err(Oid4vciError::SdJwtError(
             "Key Binding JWT iat is outside the five-minute freshness window".into(),
         ));
@@ -1843,8 +1997,8 @@ mod tests {
             CredentialPayloadFormat::IetfSdJwt,
             vec!["name".into()],
         );
-        let holder_jwk = fixed_private_holder_jwk();
-        assert!(!holder_jwk.is_public());
+        let holder_jwk = fixed_private_holder_jwk().to_public();
+        assert!(holder_jwk.is_public());
         let events = RefCell::new(vec![]);
         let salts = RefCell::new(VecDeque::from([[0x22; 16]]));
 
@@ -1913,7 +2067,7 @@ mod tests {
         claims
             .claims
             .insert("cnf".into(), serde_json::json!({"jwk": {"kty": "EC"}}));
-        let holder_jwk = fixed_private_holder_jwk();
+        let holder_jwk = fixed_private_holder_jwk().to_public();
         let events = RefCell::new(vec![]);
 
         let error = preparation_error(prepare_sd_jwt_with_holder_public_jwk_and_sources(
@@ -1939,6 +2093,78 @@ mod tests {
             error,
             Oid4vciError::SdJwtError(message) if message == SD_JWT_MANAGED_CLAIM_COLLISION
         ));
+    }
+
+    #[test]
+    fn confirmation_rejects_every_private_member_and_symmetric_keys_before_sources() {
+        let claims = deterministic_preparation_claims(CredentialPayloadFormat::IetfSdJwt, vec![]);
+        let rejected = PRIVATE_JWK_MEMBERS
+            .iter()
+            .map(|member| {
+                let mut jwk = serde_json::json!({"kty":"EC","crv":"P-256","x":"x","y":"y"});
+                jwk.as_object_mut()
+                    .unwrap()
+                    .insert((*member).to_owned(), serde_json::json!("secret"));
+                jwk
+            })
+            .chain([serde_json::json!({"kty":"oct"})]);
+
+        for jwk in rejected {
+            let mut raw_claims = claims.clone();
+            raw_claims
+                .claims
+                .insert("cnf".into(), serde_json::json!({"jwk": jwk.clone()}));
+
+            let error = prepare_sd_jwt_with_options_and_sources(
+                &FixedPreparationSigner,
+                &claims,
+                SdJwtPreparationOptions {
+                    confirmation: Some(serde_json::json!({"jwk": jwk.clone()})),
+                    ..SdJwtPreparationOptions::default()
+                },
+                || panic!("invalid confirmation must precede UUID allocation"),
+                || panic!("invalid confirmation must precede clock access"),
+                || panic!("invalid confirmation must precede salt allocation"),
+            )
+            .err()
+            .expect("private or symmetric confirmation JWK must be rejected");
+            assert!(error.to_string().contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
+
+            let error = prepare_sd_jwt_with_options_and_sources(
+                &FixedPreparationSigner,
+                &raw_claims,
+                SdJwtPreparationOptions::default(),
+                || panic!("invalid raw confirmation must precede UUID allocation"),
+                || panic!("invalid raw confirmation must precede clock access"),
+                || panic!("invalid raw confirmation must precede salt allocation"),
+            )
+            .err()
+            .expect("raw private or symmetric confirmation JWK must be rejected");
+            assert!(error.to_string().contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
+
+            let error = sign_sd_jwt(&test_p256_key(), &raw_claims)
+                .expect_err("local issuance must reject a raw private confirmation JWK");
+            assert!(error.to_string().contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
+        }
+    }
+
+    #[test]
+    fn w3c_subject_cnf_remains_an_ordinary_credential_claim() {
+        let mut claims =
+            deterministic_preparation_claims(CredentialPayloadFormat::W3cVcdmV2SdJwt, vec![]);
+        claims.claims.insert(
+            "cnf".into(),
+            serde_json::json!({"jwk":{"kty":"EC","d":"ordinary-claim-value"}}),
+        );
+        let events = RefCell::new(vec![]);
+        let prepared =
+            deterministic_preparation(&claims, SdJwtPreparationOptions::default(), [], &events)
+                .unwrap();
+        let (_, payload) = prepared_json(&prepared);
+        assert_eq!(
+            payload["credentialSubject"]["cnf"]["jwk"]["d"],
+            "ordinary-claim-value"
+        );
     }
 
     #[test]
@@ -2361,6 +2587,51 @@ mod tests {
         assert!(error.to_string().contains("no disclosure named `missing`"));
     }
 
+    #[test]
+    fn presentation_preflight_enforces_fork_input_bounds_before_collection() {
+        let exact_total = "a".repeat(sd_jwt_rs::MAX_SD_JWT_INPUT_BYTES);
+        assert!(validate_sd_jwt_presentation_input(&exact_total).is_ok());
+        assert!(
+            validate_sd_jwt_presentation_input(&format!("{exact_total}a"))
+                .unwrap_err()
+                .to_string()
+                .contains("input exceeds")
+        );
+
+        let exact_disclosure = "a".repeat(sd_jwt_rs::MAX_SD_JWT_DISCLOSURE_BYTES);
+        assert!(validate_sd_jwt_presentation_input(&format!("issuer~{exact_disclosure}")).is_ok());
+        assert!(
+            validate_sd_jwt_presentation_input(&format!("issuer~{exact_disclosure}a"))
+                .unwrap_err()
+                .to_string()
+                .contains("disclosure exceeds")
+        );
+
+        let exact_count = format!(
+            "issuer~{}",
+            std::iter::repeat_n("a", sd_jwt_rs::MAX_SD_JWT_DISCLOSURES)
+                .collect::<Vec<_>>()
+                .join("~")
+        );
+        assert!(validate_sd_jwt_presentation_input(&exact_count).is_ok());
+        assert!(
+            validate_sd_jwt_presentation_input(&format!("{exact_count}~a"))
+                .unwrap_err()
+                .to_string()
+                .contains("too many disclosures")
+        );
+    }
+
+    #[test]
+    fn key_binding_freshness_rejects_extreme_signed_timestamps() {
+        let now = chrono::Utc::now().timestamp();
+        assert!(key_binding_iat_is_fresh(now, now));
+        assert!(key_binding_iat_is_fresh(now, now - 300));
+        assert!(key_binding_iat_is_fresh(now, now + 300));
+        assert!(!key_binding_iat_is_fresh(now, i64::MIN));
+        assert!(!key_binding_iat_is_fresh(now, i64::MAX));
+    }
+
     /// SD-JWT VC RFC 9596 §3.2.1 conformance: the JWT `typ` header MUST be "vc+sd-jwt".
     /// OID4VCI 1.0 Final §A.3 distinguishes "dc+sd-jwt" (format ID in metadata)
     /// from "vc+sd-jwt" (the JWT `typ` in the issued credential).
@@ -2632,7 +2903,7 @@ mod tests {
     }
 
     #[test]
-    fn proof_bound_sd_jwt_serializes_only_holder_public_jwk() {
+    fn proof_bound_sd_jwt_rejects_private_and_serializes_public_jwk() {
         let issuer_key = test_p256_key();
         let holder_jwk = JWK::generate_p256();
         assert!(
@@ -2653,6 +2924,13 @@ mod tests {
             w3c_types: vec![],
         };
 
+        let private_error = sign_sd_jwt_with_holder_public_jwk(&issuer_key, &claims, &holder_jwk)
+            .expect_err("private holder JWK must be rejected");
+        assert!(private_error
+            .to_string()
+            .contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
+
+        let holder_jwk = holder_jwk.to_public();
         let signed = sign_sd_jwt_with_holder_public_jwk(&issuer_key, &claims, &holder_jwk)
             .expect("proof-bound issuance must sign");
         let SignedCredential::SdJwt { compact, .. } = signed else {
@@ -2667,7 +2945,7 @@ mod tests {
             .unwrap();
         let payload: serde_json::Value =
             serde_json::from_slice(&B64.decode(payload).unwrap()).unwrap();
-        let expected_public_jwk = serde_json::to_value(holder_jwk.to_public()).unwrap();
+        let expected_public_jwk = serde_json::to_value(&holder_jwk).unwrap();
 
         assert_eq!(
             payload["cnf"],

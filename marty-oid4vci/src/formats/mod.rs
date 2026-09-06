@@ -8,10 +8,11 @@
 //! - `vds_nc` → ICAO 9303 VDS-NC barcode payload
 
 pub mod jwt_vc;
-#[cfg(feature = "mso_mdoc")]
+#[cfg(all(feature = "mso_mdoc", any(test, feature = "issuer")))]
 pub mod mdoc;
 #[cfg(feature = "sd_jwt")]
 pub mod sd_jwt;
+#[cfg(any(test, feature = "issuer"))]
 pub mod vds_nc;
 pub mod vds_nc_profile;
 #[cfg(all(feature = "zk_mdoc", feature = "issuer", feature = "mso_mdoc"))]
@@ -24,10 +25,13 @@ pub mod zk_mdoc;
 pub const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
 
 use crate::error::{Oid4vciError, Oid4vciResult};
+#[cfg(any(test, feature = "issuer"))]
 use crate::signer::CredentialSigner;
+use crate::types::CredentialFormat;
 #[cfg(any(test, feature = "local-key-operations"))]
 use crate::types::IssuerKey;
-use crate::types::{CredentialClaims, CredentialFormat, SignedCredential};
+#[cfg(any(test, feature = "issuer"))]
+use crate::types::{CredentialClaims, SignedCredential};
 
 /// Sign a credential in the requested format.
 ///
@@ -61,6 +65,7 @@ pub fn sign_credential(
 ///
 /// This is the BYOK-aware entry point. Pass an `&IssuerKey` for local JWK
 /// signing, or a custom [`CredentialSigner`] for HSM/KMS-backed signing.
+#[cfg(any(test, feature = "issuer"))]
 pub fn sign_credential_with_signer(
     format: &CredentialFormat,
     signer: &dyn CredentialSigner,
