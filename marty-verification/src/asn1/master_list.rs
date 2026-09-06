@@ -4,8 +4,7 @@
 //! that are trusted by ICAO PKD subscribers.
 
 use super::cms_structure::{
-    exactly_one_signer, find_signer_certificate, signer_id_matches, single_signed_attribute_value,
-    DocumentKind,
+    exactly_one_signer, find_signer_certificate, signer_id_matches, DocumentKind,
 };
 use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
@@ -247,49 +246,12 @@ pub fn verify_master_list_signature(
         .as_ref()
         .ok_or_else(|| VerificationError::der_error("No content to verify".to_string()))?
         .value();
-    if !signed_data
-        .digest_algorithms
-        .iter()
-        .any(|algorithm| algorithm.oid == signer_info.digest_alg.oid)
-    {
-        return Err(VerificationError::der_error(
-            "Signer digest algorithm is absent from SignedData digestAlgorithms".to_string(),
-        ));
-    }
-    let digest_algorithm =
-        marty_crypto::HashAlgorithm::from_oid(&signer_info.digest_alg.oid.to_string())?;
-    let data_to_verify = if let Some(signed_attrs) = &signer_info.signed_attrs {
-        let content_type =
-            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_CONTENT_TYPE)?
-                .decode_as::<der::asn1::ObjectIdentifier>()
-                .map_err(|e| {
-                    VerificationError::der_error(format!("Invalid contentType attribute: {e}"))
-                })?;
-        if content_type != signed_data.encap_content_info.econtent_type {
-            return Ok(false);
-        }
-        let message_digest =
-            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_MESSAGE_DIGEST)?
-                .decode_as::<der::asn1::OctetString>()
-                .map_err(|e| {
-                    VerificationError::der_error(format!("Invalid messageDigest attribute: {e}"))
-                })?;
-        if marty_crypto::hashing::hash(digest_algorithm, content) != message_digest.as_bytes() {
-            return Ok(false);
-        }
-        signed_attrs.to_der().map_err(|e| {
-            VerificationError::internal(format!("Failed to encode signed attributes: {e}"))
-        })?
-    } else {
-        content.to_vec()
-    };
-    marty_crypto::algorithm_identifier::verify_signature_with_algorithm_identifier(
-        &signer_info.signature_algorithm,
+    super::cms_structure::verify_bound_signature(
+        &signed_data,
+        signer_info,
+        content,
         &public_key_der,
-        &data_to_verify,
-        signer_info.signature.as_bytes(),
     )
-    .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -393,6 +355,123 @@ mod tests {
         let mut tampered = cms_der.clone();
         tampered[offset + content.len() - 1] ^= 0x01;
         assert!(!verify_master_list_signature(&tampered, &signer_der).unwrap());
+    }
+
+    #[test]
+    fn both_cms_verifiers_preserve_binding_error_categories() {
+        use base64::Engine;
+        use der::asn1::SetOfVec;
+        let (master_list, cert) = build_test_master_list();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/emrtd_verification_vectors.json"
+        ))
+        .unwrap();
+        let sod_bytes = base64::engine::general_purpose::STANDARD
+            .decode(fixture["sod_der_base64"].as_str().unwrap())
+            .unwrap();
+        for sod in [false, true] {
+            let info = ContentInfo::from_der(if sod { &sod_bytes } else { &master_list }).unwrap();
+            let original = info.content.decode_as::<SignedData>().unwrap();
+            let verify = |data: &SignedData| {
+                let mut info = info.clone();
+                info.content = der::Any::encode_from(data).unwrap();
+                let encoded = info.to_der().unwrap();
+                if sod {
+                    super::super::sod::verify_sod_signature(&encoded)
+                } else {
+                    verify_master_list_signature(&encoded, &cert)
+                }
+            };
+            assert!(verify(&original).unwrap());
+            let mut missing_digest = original.clone();
+            missing_digest.digest_algorithms = SetOfVec::new();
+            assert!(verify(&missing_digest)
+                .unwrap_err()
+                .to_string()
+                .contains("absent from SignedData"));
+            let mut changed_content = original.clone();
+            changed_content.encap_content_info.econtent =
+                Some(der::Any::new(der::Tag::OctetString, vec![0]).unwrap());
+            assert!(!verify(&changed_content).unwrap());
+            for change in [
+                "absent_attributes",
+                "empty_attributes",
+                "unlisted_digest",
+                "invalid_signature",
+                "malformed_content_type",
+                "wrong_content_type",
+                "wrong_digest",
+                "duplicate_content_type",
+                "unsupported_digest",
+            ] {
+                let mut data = original.clone();
+                let mut signer = data.signer_infos.0.iter().next().unwrap().clone();
+                match change {
+                    "absent_attributes" => signer.signed_attrs = None,
+                    "empty_attributes" => signer.signed_attrs = Some(SetOfVec::new()),
+                    "unlisted_digest" => {
+                        signer.digest_alg.oid = der::asn1::ObjectIdentifier::new_unwrap("1.2.3.4")
+                    }
+                    "invalid_signature" => {
+                        signer.signature = der::asn1::OctetString::new(vec![0]).unwrap()
+                    }
+                    "unsupported_digest" => {
+                        signer.digest_alg.oid = der::asn1::ObjectIdentifier::new_unwrap("1.2.3.4");
+                        data.digest_algorithms =
+                            SetOfVec::try_from(vec![signer.digest_alg.clone()]).unwrap();
+                    }
+                    _ => {
+                        let mut attrs = signer
+                            .signed_attrs
+                            .as_ref()
+                            .unwrap()
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let oid = if change == "wrong_digest" {
+                            const_oid::db::rfc5911::ID_MESSAGE_DIGEST
+                        } else {
+                            const_oid::db::rfc5911::ID_CONTENT_TYPE
+                        };
+                        let entry = attrs.iter_mut().find(|a| a.oid == oid).unwrap();
+                        let value = if change == "wrong_content_type"
+                            || change == "duplicate_content_type"
+                        {
+                            der::Any::encode_from(&der::asn1::ObjectIdentifier::new_unwrap(
+                                "1.2.3.4",
+                            ))
+                            .unwrap()
+                        } else {
+                            der::Any::new(der::Tag::OctetString, vec![0; 32]).unwrap()
+                        };
+                        if change == "duplicate_content_type" {
+                            let mut duplicate = entry.clone();
+                            duplicate.values = SetOfVec::try_from(vec![value]).unwrap();
+                            attrs.push(duplicate);
+                        } else {
+                            entry.values = SetOfVec::try_from(vec![value]).unwrap();
+                        }
+                        signer.signed_attrs = Some(SetOfVec::try_from(attrs).unwrap());
+                    }
+                }
+                data.signer_infos.0 = SetOfVec::try_from(vec![signer]).unwrap();
+                let result = verify(&data);
+                if matches!(
+                    change,
+                    "empty_attributes"
+                        | "unlisted_digest"
+                        | "malformed_content_type"
+                        | "duplicate_content_type"
+                        | "unsupported_digest"
+                ) {
+                    assert!(result.is_err(), "{change}");
+                } else if matches!(change, "wrong_content_type" | "wrong_digest") {
+                    assert!(!result.unwrap(), "{change}");
+                } else {
+                    assert!(!matches!(result, Ok(true)), "{change}");
+                }
+            }
+        }
     }
 
     #[test]

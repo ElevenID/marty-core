@@ -2,6 +2,7 @@
 
 use crate::{VerificationError, VerificationResult};
 use cms::signed_data::{CertificateSet, SignedData, SignerIdentifier, SignerInfo};
+use der::Encode;
 use x509_cert::Certificate;
 
 #[derive(Clone, Copy)]
@@ -117,6 +118,58 @@ pub(super) fn single_signed_attribute_value(
         )));
     }
     Ok(value)
+}
+
+/// Verify the common CMS content binding and signature after caller-specific admission.
+pub(super) fn verify_bound_signature(
+    signed_data: &SignedData,
+    signer_info: &SignerInfo,
+    content: &[u8],
+    public_key_der: &[u8],
+) -> VerificationResult<bool> {
+    if !signed_data
+        .digest_algorithms
+        .iter()
+        .any(|algorithm| algorithm.oid == signer_info.digest_alg.oid)
+    {
+        return Err(VerificationError::der_error(
+            "Signer digest algorithm is absent from SignedData digestAlgorithms".to_string(),
+        ));
+    }
+    let digest_algorithm =
+        marty_crypto::HashAlgorithm::from_oid(&signer_info.digest_alg.oid.to_string())?;
+    let data_to_verify = if let Some(signed_attrs) = &signer_info.signed_attrs {
+        let content_type =
+            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_CONTENT_TYPE)?
+                .decode_as::<der::asn1::ObjectIdentifier>()
+                .map_err(|e| {
+                    VerificationError::der_error(format!("Invalid contentType attribute: {e}"))
+                })?;
+        if content_type != signed_data.encap_content_info.econtent_type {
+            return Ok(false);
+        }
+        let message_digest =
+            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_MESSAGE_DIGEST)?
+                .decode_as::<der::asn1::OctetString>()
+                .map_err(|e| {
+                    VerificationError::der_error(format!("Invalid messageDigest attribute: {e}"))
+                })?;
+        if marty_crypto::hashing::hash(digest_algorithm, content) != message_digest.as_bytes() {
+            return Ok(false);
+        }
+        signed_attrs.to_der().map_err(|e| {
+            VerificationError::internal(format!("Failed to encode signed attributes: {e}"))
+        })?
+    } else {
+        content.to_vec()
+    };
+    marty_crypto::algorithm_identifier::verify_signature_with_algorithm_identifier(
+        &signer_info.signature_algorithm,
+        public_key_der,
+        &data_to_verify,
+        signer_info.signature.as_bytes(),
+    )
+    .map_err(Into::into)
 }
 
 #[cfg(test)]

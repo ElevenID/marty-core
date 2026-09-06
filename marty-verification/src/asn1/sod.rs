@@ -7,9 +7,7 @@
 //!
 //! Per ICAO 9303 Part 10.
 
-use super::cms_structure::{
-    exactly_one_signer, find_signer_certificate, single_signed_attribute_value, DocumentKind,
-};
+use super::cms_structure::{exactly_one_signer, find_signer_certificate, DocumentKind};
 use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
 use der::{Decode, Encode, Sequence};
@@ -293,49 +291,12 @@ pub fn verify_sod_signature(sod_der: &[u8]) -> VerificationResult<bool> {
         .ok_or_else(|| VerificationError::der_error("SOD has no content".to_string()))?
         .value();
 
-    if !signed_data
-        .digest_algorithms
-        .iter()
-        .any(|algorithm| algorithm.oid == signer_info.digest_alg.oid)
-    {
-        return Err(VerificationError::der_error(
-            "Signer digest algorithm is absent from SignedData digestAlgorithms".to_string(),
-        ));
-    }
-    let digest_algorithm = HashAlgorithm::from_oid(&signer_info.digest_alg.oid.to_string())?;
-    let data_to_verify = if let Some(signed_attrs) = &signer_info.signed_attrs {
-        let content_type_value =
-            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_CONTENT_TYPE)?
-                .decode_as::<der::asn1::ObjectIdentifier>()
-                .map_err(|e| {
-                    VerificationError::der_error(format!("Invalid contentType attribute: {e}"))
-                })?;
-        if content_type_value != signed_data.encap_content_info.econtent_type {
-            return Ok(false);
-        }
-        let message_digest =
-            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_MESSAGE_DIGEST)?
-                .decode_as::<der::asn1::OctetString>()
-                .map_err(|e| {
-                    VerificationError::der_error(format!("Invalid messageDigest attribute: {e}"))
-                })?;
-        if marty_crypto::hashing::hash(digest_algorithm, content) != message_digest.as_bytes() {
-            return Ok(false);
-        }
-        signed_attrs.to_der().map_err(|e| {
-            VerificationError::internal(format!("Failed to encode signed attributes: {e}"))
-        })?
-    } else {
-        content.to_vec()
-    };
-
-    marty_crypto::algorithm_identifier::verify_signature_with_algorithm_identifier(
-        &signer_info.signature_algorithm,
+    super::cms_structure::verify_bound_signature(
+        &signed_data,
+        signer_info,
+        content,
         &public_key_der,
-        &data_to_verify,
-        signer_info.signature.as_bytes(),
     )
-    .map_err(Into::into)
 }
 
 /// Verify data group hash matches the expected value.
