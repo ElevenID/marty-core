@@ -5,7 +5,7 @@
 
 use crate::core::DeviceEngagement;
 use crate::error::{Error, Result};
-use crate::session::{SessionEncryption, SessionKeyAgreement};
+use crate::session::{SessionDirection, SessionEncryption, SessionKeyAgreement};
 use isomdl::definitions::helpers::Tag24;
 use isomdl::definitions::session::{Handover, SessionTranscript180135};
 use serde::{Deserialize, Serialize};
@@ -325,10 +325,14 @@ impl Session {
         };
         let session_transcript =
             Self::build_session_transcript(&self.engagement_bytes, reader_public_key)?;
+        let send_direction = match self.role {
+            SessionRole::Device => SessionDirection::Device,
+            SessionRole::Reader => SessionDirection::Reader,
+        };
         let encryption = SessionEncryption::new_directional(
             &shared_secret,
             &session_transcript,
-            self.role == SessionRole::Device,
+            send_direction,
         )?;
 
         if Instant::now() >= self.deadline {

@@ -1808,7 +1808,7 @@ fn retail_mac_3des(key16: &[u8; 16], data: &[u8]) -> VerificationResult<[u8; 8]>
     let k1_only = extend_single_des(&key16[..8]);
     let k_full = extend_to_24_bytes(key16);
 
-    let iv = [0u8; 8];
+    let iv = icao_3des_cbc_iv();
 
     // CBC-MAC of all blocks except last under single-DES(K1)
     let intermediate = if n > 1 {
@@ -2017,9 +2017,16 @@ mod tests {
 
     #[test]
     fn session_inputs_are_bounded_before_parsing_or_crypto() {
+        use rand::{distributions::Alphanumeric, Rng};
+
+        let test_password: String = rand::rngs::OsRng
+            .sample_iter(&Alphanumeric)
+            .take(6)
+            .map(char::from)
+            .collect();
         assert!(MrzKeyInfo::try_from_mrz_fields("TOO-LONG-1", "740812", "120415").is_err());
         assert!(MrzKeyInfo::try_from_mrz_fields("L898902C3", "74081", "120415").is_err());
-        assert!(PaceCompatibilityHandshake::begin("123456", &[0u8; 8]).is_err());
+        assert!(PaceCompatibilityHandshake::begin(&test_password, &[0u8; 8]).is_err());
         assert!(PaceCompatibilityHandshake::begin(&"A".repeat(129), &[0u8; 16]).is_err());
     }
 

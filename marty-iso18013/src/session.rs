@@ -9,6 +9,28 @@ use marty_crypto::kdf::derive_mdl_session_keys;
 use marty_crypto::symmetric::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
 use zeroize::{Zeroize, Zeroizing};
 
+/// ISO 18013-5 message direction for session-key and IV selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionDirection {
+    /// Messages sent by the mobile document device.
+    Device,
+    /// Messages sent by the reader.
+    Reader,
+}
+
+impl SessionDirection {
+    fn peer(self) -> Self {
+        match self {
+            Self::Device => Self::Reader,
+            Self::Reader => Self::Device,
+        }
+    }
+
+    fn iv_marker(self) -> u8 {
+        u8::from(matches!(self, Self::Device))
+    }
+}
+
 /// Session encryption and decryption state
 pub struct SessionEncryption {
     /// Key used for messages sent by this party.
@@ -24,8 +46,8 @@ pub struct SessionEncryption {
     receive_counter: u32,
 
     /// Direction identifiers used in ISO 18013-5 initialization vectors.
-    send_is_device: bool,
-    receive_is_device: bool,
+    send_direction: SessionDirection,
+    receive_direction: SessionDirection,
 }
 
 impl Drop for SessionEncryption {
@@ -46,25 +68,24 @@ impl SessionEncryption {
             receive_key: device_key,
             send_counter: 0,
             receive_counter: 0,
-            send_is_device: true,
-            receive_is_device: true,
+            send_direction: SessionDirection::Device,
+            receive_direction: SessionDirection::Device,
         })
     }
 
     /// Create directional encryption state for one protocol peer.
     ///
-    /// `send_as_device` selects the ISO 18013-5 direction: a device sends
+    /// `send_direction` selects the ISO 18013-5 direction: a device sends
     /// with SKDevice and receives with SKReader; a reader does the reverse.
     pub fn new_directional(
         shared_secret: &[u8],
         session_transcript: &[u8],
-        send_as_device: bool,
+        send_direction: SessionDirection,
     ) -> Result<Self> {
         let (device_key, reader_key) = derive_mdl_session_keys(shared_secret, session_transcript)?;
-        let (send_key, receive_key) = if send_as_device {
-            (device_key, reader_key)
-        } else {
-            (reader_key, device_key)
+        let (send_key, receive_key) = match send_direction {
+            SessionDirection::Device => (device_key, reader_key),
+            SessionDirection::Reader => (reader_key, device_key),
         };
 
         Ok(Self {
@@ -72,8 +93,8 @@ impl SessionEncryption {
             receive_key,
             send_counter: 0,
             receive_counter: 0,
-            send_is_device: send_as_device,
-            receive_is_device: !send_as_device,
+            send_direction,
+            receive_direction: send_direction.peer(),
         })
     }
 
@@ -87,7 +108,7 @@ impl SessionEncryption {
         // ISO 18013-5 starts message counters at one. `new()` is the
         // symmetric compatibility constructor and uses the device direction.
         let mut iv = [0u8; 12];
-        iv[7] = u8::from(self.send_is_device);
+        iv[7] = self.send_direction.iv_marker();
         iv[8..].copy_from_slice(&next_counter.to_be_bytes());
 
         let ciphertext = aes_256_gcm_encrypt(&self.send_key, &iv, plaintext, &[])?;
@@ -104,7 +125,7 @@ impl SessionEncryption {
             .ok_or_else(|| Error::Decryption("message counter exhausted".to_string()))?;
 
         let mut iv = [0u8; 12];
-        iv[7] = u8::from(self.receive_is_device);
+        iv[7] = self.receive_direction.iv_marker();
         iv[8..].copy_from_slice(&next_counter.to_be_bytes());
 
         let plaintext = aes_256_gcm_decrypt(&self.receive_key, &iv, ciphertext, &[])?;
@@ -232,10 +253,18 @@ mod tests {
         let shared_secret = vec![0x42; 32];
         let session_transcript = b"test session";
 
-        let mut alice =
-            SessionEncryption::new_directional(&shared_secret, session_transcript, true).unwrap();
-        let mut bob =
-            SessionEncryption::new_directional(&shared_secret, session_transcript, false).unwrap();
+        let mut alice = SessionEncryption::new_directional(
+            &shared_secret,
+            session_transcript,
+            SessionDirection::Device,
+        )
+        .unwrap();
+        let mut bob = SessionEncryption::new_directional(
+            &shared_secret,
+            session_transcript,
+            SessionDirection::Reader,
+        )
+        .unwrap();
 
         // Encrypt with Alice, decrypt with Bob
         let plaintext = b"Hello, World!";
@@ -250,8 +279,12 @@ mod tests {
         let shared_secret = vec![0x42; 32];
         let session_transcript = b"test session";
 
-        let mut encryption =
-            SessionEncryption::new_directional(&shared_secret, session_transcript, true).unwrap();
+        let mut encryption = SessionEncryption::new_directional(
+            &shared_secret,
+            session_transcript,
+            SessionDirection::Device,
+        )
+        .unwrap();
 
         assert_eq!(encryption.send_counter(), 0);
 
@@ -266,8 +299,12 @@ mod tests {
     fn test_exhausted_counters_fail_before_crypto() {
         let shared_secret = vec![0x42; 32];
         let session_transcript = b"counter exhaustion";
-        let mut encryption =
-            SessionEncryption::new_directional(&shared_secret, session_transcript, true).unwrap();
+        let mut encryption = SessionEncryption::new_directional(
+            &shared_secret,
+            session_transcript,
+            SessionDirection::Device,
+        )
+        .unwrap();
 
         encryption.send_counter = u32::MAX;
         encryption.receive_counter = u32::MAX;
