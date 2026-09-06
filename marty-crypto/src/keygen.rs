@@ -57,6 +57,7 @@ pub enum KeyType {
     /// HMAC-SHA512 key (64 bytes)
     HmacSha512,
     /// BLS12-381 key pair for BBS+ signatures (32 bytes secret, 96 bytes public)
+    #[cfg(feature = "bbs-verification")]
     Bls12381,
 }
 
@@ -93,6 +94,7 @@ impl GeneratedKey {
             KeyType::Rsa2048 => 2048,
             KeyType::Rsa3072 => 3072,
             KeyType::Rsa4096 => 4096,
+            #[cfg(feature = "bbs-verification")]
             KeyType::Bls12381 => 256,
         }
     }
@@ -124,6 +126,7 @@ pub fn generate_keypair(key_type: KeyType) -> CryptoResult<GeneratedKey> {
         KeyType::HmacSha256 => generate_symmetric(32, KeyType::HmacSha256),
         KeyType::HmacSha384 => generate_symmetric(48, KeyType::HmacSha384),
         KeyType::HmacSha512 => generate_symmetric(64, KeyType::HmacSha512),
+        #[cfg(feature = "bbs-verification")]
         KeyType::Bls12381 => generate_bls12381(),
     }
 }
@@ -384,6 +387,7 @@ pub fn generate_rsa_pem(bits: usize) -> CryptoResult<(String, String)> {
 // BLS12-381 (BBS+ Signatures)
 // ============================================================================
 
+#[cfg(feature = "bbs-verification")]
 fn generate_bls12381() -> CryptoResult<GeneratedKey> {
     use crate::bbs::{BbsCiphersuite, BbsKeyPair};
 
