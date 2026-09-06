@@ -81,7 +81,7 @@ fn claims(format: CredentialPayloadFormat) -> CredentialClaims {
 }
 
 fn payload(prepared: &PreparedSdJwt) -> serde_json::Value {
-    let segment = prepared.signing_input.split('.').nth(1).unwrap();
+    let segment = prepared.signing_input().split('.').nth(1).unwrap();
     serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segment).unwrap()).unwrap()
 }
 
@@ -247,7 +247,7 @@ fn matching_is_exact_and_marker_strings_are_ordinary_values() {
             },
         )
         .unwrap();
-        assert_ne!(prepared.disclosures_suffix, "~");
+        assert_ne!(prepared.disclosures_suffix(), "~");
     }
 }
 

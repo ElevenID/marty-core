@@ -245,6 +245,7 @@ fn signing_inputs(
                     claims,
                     holder_jwk.as_ref().expect("SD-JWT composition holder key"),
                 )
+                .expect("benchmark holder JWK is public")
                 .into(),
                 BenchmarkFormat::Mdoc => MdocSigningBatchInput::new(route, claims).into(),
             }
@@ -270,6 +271,7 @@ fn matrix_signing_inputs(
                     claims,
                     holder_jwk.as_ref().expect("SD-JWT matrix holder key"),
                 )
+                .expect("benchmark holder JWK is public")
                 .into(),
                 MatrixFormat::Mdoc => MdocSigningBatchInput::new(route, claims).into(),
             }
@@ -287,15 +289,15 @@ impl BenchmarkPrepared {
     fn signing_payload(&self) -> &[u8] {
         match self {
             Self::JwtVc(prepared) => prepared.signing_payload(),
-            Self::SdJwt(prepared) => prepared.signing_input.as_bytes(),
+            Self::SdJwt(prepared) => prepared.signing_payload(),
             Self::Mdoc(prepared) => prepared.signing_payload(),
         }
     }
 
     fn assemble(self, signature: &[u8]) -> SignedCredential {
         match self {
-            Self::JwtVc(prepared) => assemble_jwt_vc(prepared, signature),
-            Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature),
+            Self::JwtVc(prepared) => assemble_jwt_vc(prepared, signature).unwrap(),
+            Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature).unwrap(),
             Self::Mdoc(prepared) => assemble_mdoc(*prepared, signature).unwrap(),
         }
     }

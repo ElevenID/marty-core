@@ -426,10 +426,11 @@ mod tests {
     #[test]
     fn rejects_tampering_unknown_keys_and_algorithm_confusion() {
         let (token, jwks, _) = signed_token(json!({}));
-        let mut tampered = token.into_bytes();
-        let index = tampered.len() - 1;
-        tampered[index] = if tampered[index] == b'A' { b'B' } else { b'A' };
-        let tampered = String::from_utf8(tampered).expect("ASCII JWT");
+        let mut parts = token.split('.').map(str::to_owned).collect::<Vec<_>>();
+        let mut tampered_signature = URL_SAFE_NO_PAD.decode(&parts[2]).unwrap();
+        tampered_signature[0] ^= 0x01;
+        parts[2] = URL_SAFE_NO_PAD.encode(tampered_signature);
+        let tampered = parts.join(".");
         assert!(matches!(
             validate_id_token_at(&tampered, &jwks, &policy(None), NOW),
             Err(OidcValidationError::InvalidSignature(_))

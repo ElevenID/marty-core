@@ -9,6 +9,47 @@ use std::collections::HashMap;
 
 use crate::{VerificationError, VerificationResult};
 
+const RESERVED_EXTENSION_MEMBERS: [&str; 23] = [
+    "kty", "use", "key_ops", "alg", "kid", "x5u", "x5c", "x5t", "x5t#S256", "crv", "x", "y", "n",
+    "e", "d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k",
+];
+
+fn validate_public_extensions(
+    extensions: &HashMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    if let Some(member) = RESERVED_EXTENSION_MEMBERS
+        .iter()
+        .find(|member| extensions.contains_key(**member))
+    {
+        return Err(format!(
+            "JWK member '{member}' must use its typed field and cannot be an extension"
+        ));
+    }
+    Ok(())
+}
+
+fn deserialize_public_extensions<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let extensions = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    validate_public_extensions(&extensions).map_err(serde::de::Error::custom)?;
+    Ok(extensions)
+}
+
+#[cfg(not(any(test, feature = "local-key-operations")))]
+fn reject_private_key_material<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde_json::Value::deserialize(deserializer)?;
+    Err(serde::de::Error::custom(
+        "private JWK material is disabled in this build",
+    ))
+}
+
 // ============================================================================
 // JWK Structure
 // ============================================================================
@@ -65,8 +106,16 @@ pub struct Jwk {
     pub y: Option<String>,
 
     /// D value (EC/OKP private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub d: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) d: Option<String>,
 
     // RSA parameters
     /// Modulus (RSA)
@@ -78,37 +127,93 @@ pub struct Jwk {
     pub e: Option<String>,
 
     /// Private exponent (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rsa_d: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) rsa_d: Option<String>,
 
     /// First prime factor (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub p: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) p: Option<String>,
 
     /// Second prime factor (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) q: Option<String>,
 
     /// First factor CRT exponent (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dp: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) dp: Option<String>,
 
     /// Second factor CRT exponent (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dq: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) dq: Option<String>,
 
     /// First CRT coefficient (RSA private key)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub qi: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) qi: Option<String>,
 
     // Symmetric key
     /// Key value (symmetric key, base64url-encoded)
+    #[cfg(any(test, feature = "local-key-operations"))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub k: Option<String>,
+    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[serde(
+        default,
+        deserialize_with = "reject_private_key_material",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) k: Option<String>,
 
     /// Additional parameters
-    #[serde(flatten)]
-    pub extra: HashMap<String, serde_json::Value>,
+    #[serde(flatten, deserialize_with = "deserialize_public_extensions")]
+    pub(crate) extra: HashMap<String, serde_json::Value>,
 }
 
 impl Jwk {
@@ -120,9 +225,40 @@ impl Jwk {
         }
     }
 
+    /// Return validated extension members without permitting unchecked mutation.
+    pub fn extensions(&self) -> &HashMap<String, serde_json::Value> {
+        &self.extra
+    }
+
+    /// Replace extension members after rejecting private and modeled JWK names.
+    pub fn set_public_extensions(
+        &mut self,
+        extensions: HashMap<String, serde_json::Value>,
+    ) -> VerificationResult<()> {
+        validate_public_extensions(&extensions).map_err(VerificationError::key_error)?;
+        self.extra = extensions;
+        Ok(())
+    }
+
+    /// Add validated public extension members using a builder-style API.
+    pub fn with_extensions(
+        mut self,
+        extensions: HashMap<String, serde_json::Value>,
+    ) -> VerificationResult<Self> {
+        self.set_public_extensions(extensions)?;
+        Ok(self)
+    }
+
     /// Check if this is a private key.
     pub fn is_private(&self) -> bool {
-        self.d.is_some() || self.rsa_d.is_some() || self.k.is_some()
+        self.d.is_some()
+            || self.rsa_d.is_some()
+            || self.p.is_some()
+            || self.q.is_some()
+            || self.dp.is_some()
+            || self.dq.is_some()
+            || self.qi.is_some()
+            || self.k.is_some()
     }
 
     /// Check if this is a public key (asymmetric key without private component).
@@ -331,6 +467,7 @@ impl Default for JwkSet {
 // ============================================================================
 
 /// Generate a new EC P-256 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_ec_p256() -> VerificationResult<Jwk> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p256::SecretKey;
@@ -358,6 +495,7 @@ pub fn generate_ec_p256() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new EC P-384 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_ec_p384() -> VerificationResult<Jwk> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p384::SecretKey;
@@ -385,6 +523,7 @@ pub fn generate_ec_p384() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new Ed25519 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_ed25519() -> VerificationResult<Jwk> {
     use marty_crypto::ed25519::Ed25519KeyPair;
 
@@ -400,6 +539,7 @@ pub fn generate_ed25519() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new X25519 JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_x25519() -> VerificationResult<Jwk> {
     use marty_crypto::ecdh::x25519_generate_keypair;
 
@@ -415,6 +555,7 @@ pub fn generate_x25519() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new symmetric key JWK.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn generate_symmetric(size: usize) -> VerificationResult<Jwk> {
     use rand::RngCore;
 
@@ -449,6 +590,7 @@ pub fn import_ed25519_public(bytes: &[u8]) -> VerificationResult<Jwk> {
 }
 
 /// Import an Ed25519 private key from raw bytes.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn import_ed25519_private(secret: &[u8], public: &[u8]) -> VerificationResult<Jwk> {
     if secret.len() != 32 || public.len() != 32 {
         return Err(VerificationError::internal(
@@ -484,6 +626,7 @@ pub fn export_ed25519_public(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
 }
 
 /// Export an Ed25519 private key to raw bytes.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn export_ed25519_private(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
     if jwk.kty != "OKP" || jwk.crv.as_deref() != Some("Ed25519") {
         return Err(VerificationError::internal(
@@ -563,6 +706,16 @@ mod tests {
         assert!(public.d.is_none());
         assert_eq!(private.x, public.x);
         assert_eq!(private.y, public.y);
+    }
+
+    #[test]
+    fn every_modeled_private_member_is_classified_private() {
+        for member in ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "k"] {
+            let json = format!(r#"{{"kty":"RSA","{member}":"secret"}}"#);
+            let jwk = Jwk::from_json(&json).unwrap();
+            assert!(jwk.is_private(), "{member} was not classified private");
+            assert!(!jwk.is_public(), "{member} was classified public");
+        }
     }
 
     #[test]

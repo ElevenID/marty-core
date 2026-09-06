@@ -1,6 +1,9 @@
 //! Python adapters for active authentication.
 
-use super::*;
+use super::{parse_iso9796_hash_algorithm, to_pyerr};
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+use pyo3::types::PyDict;
 
 /// Generate a native Active Authentication challenge.
 #[cfg(feature = "csca")]

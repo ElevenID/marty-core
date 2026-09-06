@@ -1,9 +1,10 @@
 //! Open Badges verification and issuance helpers.
 //!
 //! Open Badges 3 (OB3) is the current/default profile. Open Badges 2 (OB2)
-//! issuance and verification remain available only for a short migration
-//! window, reviewed on 2026-09-01 with target removal on 2026-10-01. New
-//! integrations must use OB3. The temporary exception is tracked in
+//! verification remains available for a short migration window, reviewed on
+//! 2026-09-01 with target removal on 2026-10-01. OB2 and OB3 issuance helpers
+//! are compiled only with `local-key-operations`; verification remains available
+//! without local key support. New integrations must use OB3. The exception is tracked in
 //! <https://github.com/ElevenID/marty-core/issues/96>.
 //!
 //! OB2 uses JWS signatures; OB3 uses Data Integrity proofs.
@@ -15,7 +16,7 @@
 //! which is incompatible with single-threaded WASM environments.
 //!
 //! For WASM targets, use the async versions:
-//! - [`issue_ob3_json_async`] - Async OB3 credential issuance
+//! - `issue_ob3_json_async` - Async OB3 credential issuance (local-key builds only)
 //! - [`verify_ob3_json_async`] - Async OB3 credential verification
 //! - [`verify_ob3_json_with_status_lists_async`] - Async OB3 verification with
 //!   separately authenticated status-list inputs
@@ -27,7 +28,7 @@
 //!
 //! | Feature | OB2 | OB3 |
 //! |---------|-----|-----|
-//! | JWS Signatures | ✓ (ES256, ES384, EdDSA) | — |
+//! | JWS Signatures | Issuance: `local-key-operations`; verification: ES256, ES384, EdDSA | — |
 //! | Data Integrity Proofs | — | ✓ (JsonWebSignature2020, Ed25519Signature2018/2020) |
 //! | Recipient Hashing | ✓ (SHA1, SHA256, SHA512) | — |
 //! | Credential Status / Revocation | — | ✓ (authenticated W3C Bitstring Status List v1.0) |
@@ -47,12 +48,32 @@ use serde_json::Value;
 
 pub use contexts::{ob2_context_uri, ob3_context_uri, open_badges_context_loader};
 pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
-pub use ob2::{issue_ob2_json, verify_ob2_json};
+
+/// Open Badge methods expose only validated construction; their backing
+/// representation cannot be constructed directly.
+///
+/// ```compile_fail
+/// use marty_verification::open_badges::OpenBadgeMethod;
+/// use ssi_verification_methods::AnyMethod;
+///
+/// fn bypass_validation(method: AnyMethod) -> OpenBadgeMethod {
+///     OpenBadgeMethod::Ssi(method)
+/// }
+/// ```
+const _: () = ();
+#[cfg(any(test, feature = "local-key-operations"))]
+pub use ob2::issue_ob2_json;
+pub use ob2::verify_ob2_json;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(test, feature = "local-key-operations")
+))]
+pub use ob3::issue_ob3_json;
+#[cfg(any(test, feature = "local-key-operations"))]
+pub use ob3::issue_ob3_json_async;
 #[cfg(not(target_arch = "wasm32"))]
-pub use ob3::{issue_ob3_json, verify_ob3_json, verify_ob3_json_with_status_lists};
-pub use ob3::{
-    issue_ob3_json_async, verify_ob3_json_async, verify_ob3_json_with_status_lists_async,
-};
+pub use ob3::{verify_ob3_json, verify_ob3_json_with_status_lists};
+pub use ob3::{verify_ob3_json_async, verify_ob3_json_with_status_lists_async};
 pub use suite_wrapper::OpenBadgeSuite;
 pub use types::{
     ArtifactProvenance, AuthenticatedStatusList, DocumentStore, OpenBadgeStatusCheck,
@@ -61,6 +82,18 @@ pub use types::{
 };
 pub use x509_suite::X509Signature2021;
 pub use x509_verification_method::X509VerificationKey2021;
+
+#[cfg(not(feature = "local-key-operations"))]
+/// Open Badges verification builds do not expose local private-JWK issuance.
+///
+/// ```compile_fail
+/// let _ = marty_verification::open_badges::issue_ob3_json("{}");
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_verification::open_badges::issue_ob3_json_async("{}");
+/// ```
+pub struct VerificationOnlyOpenBadges;
 
 pub fn detect_version(value: &Value) -> OpenBadgesVersion {
     if has_context(value, ob2_context_uri()) {

@@ -1,10 +1,11 @@
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::formats::mdoc;
 use crate::signer::CredentialSigner;
-use crate::types::{CredentialClaims, IssuerKey, SignedCredential, ZkPredicateBinding};
+#[cfg(any(test, feature = "local-key-operations"))]
+use crate::types::IssuerKey;
+use crate::types::{CredentialClaims, SignedCredential, ZkPredicateBinding};
 
-/// The ZK proof protocol identifier used by Longfellow/Ligero.
-pub const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
+use super::ZK_PROOF_TYPE_LIGERO;
 
 /// Sign a ZK-enabled mDoc credential.
 ///
@@ -17,40 +18,16 @@ pub const ZK_PROOF_TYPE_LIGERO: &str = "longfellow-zk-ligero";
 /// # ZK Predicate Bindings
 ///
 /// `CredentialClaims::zk_predicate_claims` is a `Vec<ZkPredicateBinding>`.
-/// Each binding names an mDoc claim (e.g. `"birth_date"`) and lists the
-/// predicates the wallet may prove from it (e.g. `["age_over_18", "age_over_21"]`).
-/// Adding new predicates requires only updating the binding at issuance time
-/// and ensuring `marty-zkp` implements the matching circuit.
+/// Each binding names an issuer-signed boolean predicate claim (for example,
+/// `"age_over_18": true`) and must list that exact claim identifier as its
+/// sole supported predicate. Longfellow proves inclusion of this signed value;
+/// it does not derive age from a hidden birth date.
+#[cfg(any(test, feature = "local-key-operations"))]
 pub fn sign_zk_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
-    // Validate: every bound claim must exist in the credential.
-    for binding in &claims.zk_predicate_claims {
-        if !claims.claims.contains_key(&binding.claim_name) {
-            return Err(Oid4vciError::ConfigError(format!(
-                "ZK predicate binding references claim '{}' which is not \
-                 present in credential claims. Available claims: {:?}",
-                binding.claim_name,
-                claims.claims.keys().collect::<Vec<_>>()
-            )));
-        }
-        if binding.supported_predicates.is_empty() {
-            return Err(Oid4vciError::ConfigError(format!(
-                "ZK predicate binding for claim '{}' must list at least \
-                 one supported predicate.",
-                binding.claim_name
-            )));
-        }
-    }
-
-    if claims.zk_predicate_claims.is_empty() {
-        return Err(Oid4vciError::ConfigError(
-            "ZK mDoc requires at least one ZkPredicateBinding in \
-             zk_predicate_claims."
-                .into(),
-        ));
-    }
+    validate_zk_predicate_claims(claims)?;
 
     let bindings: Vec<ZkPredicateBinding> = claims.zk_predicate_claims.clone();
 
@@ -86,32 +63,7 @@ pub fn sign_zk_mdoc_with_signer(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
-    // Apply the same predicate-binding validation as the local-key path.
-    for binding in &claims.zk_predicate_claims {
-        if !claims.claims.contains_key(&binding.claim_name) {
-            return Err(Oid4vciError::ConfigError(format!(
-                "ZK predicate binding references claim '{}' which is not \
-                 present in credential claims. Available claims: {:?}",
-                binding.claim_name,
-                claims.claims.keys().collect::<Vec<_>>()
-            )));
-        }
-        if binding.supported_predicates.is_empty() {
-            return Err(Oid4vciError::ConfigError(format!(
-                "ZK predicate binding for claim '{}' must list at least \
-                 one supported predicate.",
-                binding.claim_name
-            )));
-        }
-    }
-
-    if claims.zk_predicate_claims.is_empty() {
-        return Err(Oid4vciError::ConfigError(
-            "ZK mDoc requires at least one ZkPredicateBinding in \
-             zk_predicate_claims."
-                .into(),
-        ));
-    }
+    validate_zk_predicate_claims(claims)?;
 
     let bindings: Vec<ZkPredicateBinding> = claims.zk_predicate_claims.clone();
 
@@ -134,6 +86,43 @@ pub fn sign_zk_mdoc_with_signer(
     }
 }
 
+fn validate_zk_predicate_claims(claims: &CredentialClaims) -> Oid4vciResult<()> {
+    if claims.zk_predicate_claims.is_empty() {
+        return Err(Oid4vciError::ConfigError(
+            "ZK mDoc requires at least one ZkPredicateBinding in zk_predicate_claims.".into(),
+        ));
+    }
+
+    for binding in &claims.zk_predicate_claims {
+        let Some(value) = claims.claims.get(&binding.claim_name) else {
+            return Err(Oid4vciError::ConfigError(format!(
+                "ZK predicate binding references claim '{}' which is not \
+                 present in credential claims. Available claims: {:?}",
+                binding.claim_name,
+                claims.claims.keys().collect::<Vec<_>>()
+            )));
+        };
+        if !value.is_boolean() {
+            return Err(Oid4vciError::ConfigError(format!(
+                "ZK predicate claim '{}' must be an issuer-computed boolean",
+                binding.claim_name
+            )));
+        }
+        if binding.supported_predicates.as_slice() != [binding.claim_name.as_str()]
+            || !matches!(
+                marty_zkp::ZkPredicate::from_id(&binding.claim_name),
+                marty_zkp::ZkPredicate::AgeOver(18 | 21)
+            )
+        {
+            return Err(Oid4vciError::ConfigError(format!(
+                "ZK predicate binding '{}' must name one registered, identically named age_over_N boolean claim",
+                binding.claim_name
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,21 +139,19 @@ mod tests {
         }
     }
 
-    fn birth_date_binding() -> ZkPredicateBinding {
-        ZkPredicateBinding::multi(
-            "birth_date",
-            vec!["age_over_18".into(), "age_over_21".into()],
-        )
+    fn age_over_18_binding() -> ZkPredicateBinding {
+        ZkPredicateBinding::single("age_over_18", "age_over_18")
     }
 
     #[test]
-    fn test_sign_zk_mdoc_with_birth_date() {
+    fn test_sign_zk_mdoc_with_signed_age_predicate() {
         let key = test_p256_key();
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
             credential_type: "org.iso.18013.5.1.mDL".into(),
             claims: [
                 ("birth_date".into(), serde_json::json!("1990-01-15")),
+                ("age_over_18".into(), serde_json::json!(true)),
                 ("family_name".into(), serde_json::json!("Smith")),
                 ("given_name".into(), serde_json::json!("Alice")),
             ]
@@ -173,7 +160,7 @@ mod tests {
             selective_disclosure_claims: vec![],
             mdoc_namespace: Some("org.iso.18013.5.1".into()),
             mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
-            zk_predicate_claims: vec![birth_date_binding()],
+            zk_predicate_claims: vec![age_over_18_binding()],
             credential_payload_format: Default::default(),
             w3c_context: vec![],
             w3c_types: vec![],
@@ -189,13 +176,10 @@ mod tests {
             } => {
                 assert!(!issuer_signed_b64.is_empty());
                 assert_eq!(zk_predicate_bindings.len(), 1);
-                assert_eq!(zk_predicate_bindings[0].claim_name, "birth_date");
+                assert_eq!(zk_predicate_bindings[0].claim_name, "age_over_18");
                 assert!(zk_predicate_bindings[0]
                     .supported_predicates
                     .contains(&"age_over_18".to_string()));
-                assert!(zk_predicate_bindings[0]
-                    .supported_predicates
-                    .contains(&"age_over_21".to_string()));
                 assert_eq!(zk_proof_type, ZK_PROOF_TYPE_LIGERO);
                 assert!(credential_id.starts_with("urn:uuid:"));
             }
@@ -225,6 +209,36 @@ mod tests {
 
         let err = sign_zk_mdoc(&key, &claims).unwrap_err();
         assert!(err.to_string().contains("nonexistent_claim"));
+    }
+
+    #[test]
+    fn rejects_legacy_birth_date_derivation_and_unregistered_thresholds() {
+        let key = test_p256_key();
+        let base_claims = || CredentialClaims {
+            subject_id: None,
+            credential_type: "org.iso.18013.5.1.mDL".into(),
+            claims: [("birth_date".into(), serde_json::json!("1990-01-15"))].into(),
+            expiration_seconds: None,
+            selective_disclosure_claims: vec![],
+            mdoc_namespace: Some("org.iso.18013.5.1".into()),
+            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
+            zk_predicate_claims: vec![ZkPredicateBinding::single("birth_date", "age_over_18")],
+            credential_payload_format: Default::default(),
+            w3c_context: vec![],
+            w3c_types: vec![],
+        };
+
+        let error = sign_zk_mdoc(&key, &base_claims()).unwrap_err();
+        assert!(error.to_string().contains("issuer-computed boolean"));
+
+        let mut unsupported = base_claims();
+        unsupported
+            .claims
+            .insert("age_over_17".into(), serde_json::json!(true));
+        unsupported.zk_predicate_claims =
+            vec![ZkPredicateBinding::single("age_over_17", "age_over_17")];
+        let error = sign_zk_mdoc(&key, &unsupported).unwrap_err();
+        assert!(error.to_string().contains("registered"));
     }
 
     #[test]
@@ -312,6 +326,7 @@ mod tests {
             credential_type: "org.iso.18013.5.1.mDL".into(),
             claims: [
                 ("birth_date".into(), serde_json::json!("1985-07-04")),
+                ("age_over_18".into(), serde_json::json!(true)),
                 ("family_name".into(), serde_json::json!("KmsUser")),
             ]
             .into(),
@@ -319,7 +334,7 @@ mod tests {
             selective_disclosure_claims: vec![],
             mdoc_namespace: Some("org.iso.18013.5.1".into()),
             mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
-            zk_predicate_claims: vec![birth_date_binding()],
+            zk_predicate_claims: vec![age_over_18_binding()],
             credential_payload_format: Default::default(),
             w3c_context: vec![],
             w3c_types: vec![],
@@ -338,7 +353,7 @@ mod tests {
                     "issuer_signed_b64 should not be empty"
                 );
                 assert_eq!(zk_predicate_bindings.len(), 1);
-                assert_eq!(zk_predicate_bindings[0].claim_name, "birth_date");
+                assert_eq!(zk_predicate_bindings[0].claim_name, "age_over_18");
                 assert!(zk_predicate_bindings[0]
                     .supported_predicates
                     .contains(&"age_over_18".to_string()));
@@ -360,14 +375,14 @@ mod tests {
             selective_disclosure_claims: vec![],
             mdoc_namespace: None,
             mdoc_doctype: None,
-            zk_predicate_claims: vec![ZkPredicateBinding::single("birth_date", "age_over_18")],
+            zk_predicate_claims: vec![ZkPredicateBinding::single("age_over_18", "age_over_18")],
             credential_payload_format: Default::default(),
             w3c_context: vec![],
             w3c_types: vec![],
         };
 
         let err = sign_zk_mdoc_with_signer(&signer, &claims).unwrap_err();
-        assert!(err.to_string().contains("birth_date"));
+        assert!(err.to_string().contains("age_over_18"));
     }
 
     #[test]

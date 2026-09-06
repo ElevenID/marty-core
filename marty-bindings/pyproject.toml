@@ -37,7 +37,8 @@ dev = [
 python-source = "python"
 module-name = "marty_rs._marty_rs"
 python-packages = ["marty_rs", "_marty_rs"]
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "kms-only"]
+no-default-features = true
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

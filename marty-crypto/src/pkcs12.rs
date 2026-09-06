@@ -24,6 +24,7 @@
 use der::Decode;
 use serde::{Deserialize, Serialize};
 use x509_cert::Certificate;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{CryptoError, CryptoResult};
 
@@ -32,7 +33,6 @@ use crate::{CryptoError, CryptoResult};
 // ============================================================================
 
 /// Parsed PKCS#12 data.
-#[derive(Debug, Clone)]
 pub struct Pkcs12Data {
     /// DER-encoded private key (PKCS#8 format)
     pub private_key_der: Vec<u8>,
@@ -46,6 +46,26 @@ pub struct Pkcs12Data {
     pub certificate_chain: Vec<Vec<u8>>,
     /// Friendly name (if present in the PKCS#12)
     pub friendly_name: Option<String>,
+}
+
+impl std::fmt::Debug for Pkcs12Data {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Pkcs12Data")
+            .field("private_key_der", &"[REDACTED]")
+            .field("private_key_algorithm", &self.private_key_algorithm)
+            .field("certificate_der_len", &self.certificate_der.len())
+            .field("certificate_subject", &self.certificate_subject)
+            .field("certificate_chain_len", &self.certificate_chain.len())
+            .field("friendly_name", &self.friendly_name)
+            .finish()
+    }
+}
+
+impl Drop for Pkcs12Data {
+    fn drop(&mut self) {
+        self.private_key_der.zeroize();
+    }
 }
 
 /// Private key algorithm types.
@@ -99,13 +119,19 @@ pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
         .map_err(|e| CryptoError::crypto_error(format!("Failed to parse PKCS#12: {:?}", e)))?;
 
     // Get the key bags (private keys) - returns Vec<Vec<u8>>
-    let key_bags = p12.key_bags(password).map_err(|e| {
+    let mut key_bags = p12.key_bags(password).map_err(|e| {
         CryptoError::crypto_error(format!("Failed to decrypt PKCS#12 key: {:?}", e))
     })?;
 
     if key_bags.is_empty() {
         return Err(CryptoError::crypto_error("No private key found in PKCS#12"));
     }
+
+    // Move the selected key into an error-safe zeroizing guard and wipe any
+    // additional private-key bags immediately. The guard retains ownership
+    // until every fallible parse/validation step has completed.
+    let mut private_key_der = Zeroizing::new(key_bags.swap_remove(0));
+    key_bags.zeroize();
 
     // Get the certificate bags - returns Vec<Vec<u8>> (DER-encoded)
     let cert_bags = p12.cert_x509_bags(password).map_err(|e| {
@@ -117,9 +143,6 @@ pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
             "No certificates found in PKCS#12",
         ));
     }
-
-    // First key bag is the private key (already in DER format)
-    let private_key_der = key_bags[0].clone();
 
     // Detect private key algorithm
     let private_key_algorithm = detect_key_algorithm(&private_key_der)?;
@@ -140,7 +163,7 @@ pub fn parse_pkcs12(data: &[u8], password: &str) -> CryptoResult<Pkcs12Data> {
     let friendly_name = None;
 
     Ok(Pkcs12Data {
-        private_key_der,
+        private_key_der: std::mem::take(&mut *private_key_der),
         private_key_algorithm,
         certificate_der,
         certificate_subject,
@@ -306,6 +329,24 @@ mod tests {
         assert_eq!(PrivateKeyAlgorithm::Rsa.to_string(), "RSA");
         assert_eq!(PrivateKeyAlgorithm::EcdsaP256.to_string(), "ECDSA-P256");
         assert_eq!(PrivateKeyAlgorithm::Ed25519.to_string(), "Ed25519");
+    }
+
+    #[test]
+    fn debug_redacts_private_key_material() {
+        let key = b"private-key-sentinel".to_vec();
+        let parsed = Pkcs12Data {
+            private_key_der: key.clone(),
+            private_key_algorithm: PrivateKeyAlgorithm::Ed25519,
+            certificate_der: vec![1, 2, 3],
+            certificate_subject: Some("issuer".to_string()),
+            certificate_chain: Vec::new(),
+            friendly_name: None,
+        };
+
+        let diagnostic = format!("{parsed:?}");
+        assert!(diagnostic.contains("[REDACTED]"));
+        assert!(!diagnostic.contains("private-key-sentinel"));
+        assert!(!diagnostic.contains(&format!("{:?}", key)));
     }
 
     #[test]

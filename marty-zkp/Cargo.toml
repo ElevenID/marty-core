@@ -19,7 +19,9 @@ cmake = "0.1"
 bindgen = "0.72" # In a real scenario, we'd use this to generate bindings
 
 [features]
-default = []
+default = ["verifier"]
+verifier = []
+prover = ["verifier"]
 python = ["dep:pyo3"]
 # zk-mock: compile the C++ stub instead of the real Longfellow library.
 # ONLY for local development and CI unit tests. Never enable in production.
@@ -29,3 +31,11 @@ zk-mock = []
 [dependencies.pyo3]
 workspace = true
 optional = true
+
+[[test]]
+name = "conformance"
+required-features = ["prover"]
+
+[[test]]
+name = "circuit_identity"
+required-features = ["verifier"]

@@ -1,5 +1,19 @@
 mod ffi;
+#[cfg(feature = "prover")]
 pub mod mdoc_support;
+
+#[cfg(not(feature = "prover"))]
+/// Marker for verifier-only artifacts, where proof and circuit generation are
+/// not present in the Rust API or selected native source set.
+///
+/// ```compile_fail
+/// let _ = marty_zkp::Circuit::generate(1);
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_zkp::Prover;
+/// ```
+pub struct VerifierOnly;
 
 // Belt-and-suspenders: the build script already hard-errors, but this
 // compile_error! catches any path where cfg(zk_mock) leaks into a release build.
@@ -23,7 +37,8 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ZkPredicate {
-    /// Prove that the holder's age is ≥ `threshold` without revealing birth date.
+    /// Prove that an issuer-signed `age_over_N` boolean is true without
+    /// revealing other mDoc claims.
     AgeOver(u8),
     /// Prove that an integer claim lies within [min, max] (inclusive).
     ValueInRange { min: i64, max: i64 },
@@ -39,7 +54,8 @@ pub enum ZkPredicate {
     /// `pk_circuit` requires every bit of the raw private scalar `sk` for its
     /// double-and-add loop. No HSM exposes this. There is no compatible shim.
     /// This variant is recognised by [`ZkPredicate::from_id`] and causes
-    /// [`Prover::prove_key_ownership`] to return [`ZkError::HsmIncompatible`].
+    /// `Prover::prove_key_ownership` in prover-enabled builds to return
+    /// [`ZkError::HsmIncompatible`].
     KeyOwnership,
 }
 
@@ -80,10 +96,7 @@ impl ZkPredicate {
     /// Human-readable description of what this predicate proves.
     pub fn description(&self) -> String {
         match self {
-            Self::AgeOver(n) => format!(
-                "Proves age is at least {} without revealing exact birth date",
-                n
-            ),
+            Self::AgeOver(n) => format!("Proves the issuer-signed age_over_{} boolean is true", n),
             Self::ValueInRange { min, max } => {
                 format!("Proves value is between {} and {}", min, max)
             }
@@ -98,13 +111,13 @@ impl ZkPredicate {
 
     /// The name of the mDoc claim that this predicate operates on.
     /// Used to look up the claim value in the secrets map.
-    pub fn required_claim(&self) -> &'static str {
+    pub fn required_claim(&self) -> String {
         match self {
-            Self::AgeOver(_) => "birth_date",
-            Self::ValueInRange { .. } => "value",
-            Self::Membership => "value",
-            Self::Custom(_) => "value",
-            Self::KeyOwnership => "key_ownership",
+            Self::AgeOver(_) => self.id(),
+            Self::ValueInRange { .. } => "value".to_string(),
+            Self::Membership => "value".to_string(),
+            Self::Custom(_) => "value".to_string(),
+            Self::KeyOwnership => "key_ownership".to_string(),
         }
     }
 
@@ -164,6 +177,7 @@ pub enum ZkError {
     Unknown(u32),
 }
 
+#[cfg(feature = "prover")]
 impl From<ffi::MdocProverErrorCode> for ZkError {
     fn from(code: ffi::MdocProverErrorCode) -> Self {
         ZkError::ProverError(code as u32)
@@ -176,6 +190,7 @@ impl From<ffi::MdocVerifierErrorCode> for ZkError {
     }
 }
 
+#[cfg(feature = "prover")]
 impl From<ffi::CircuitGenerationErrorCode> for ZkError {
     fn from(code: ffi::CircuitGenerationErrorCode) -> Self {
         ZkError::CircuitError(code as u32)
@@ -272,14 +287,86 @@ pub struct MdocProveInput {
     pub doc_type: String,
 }
 
+const MAX_COMPRESSED_CIRCUIT_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(any(test, feature = "prover"))]
+const MAX_MDOC_BYTES: usize = 4 * 1024 * 1024;
+const MAX_TRANSCRIPT_BYTES: usize = 4096;
+const MAX_PROOF_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PUBLIC_KEY_TEXT_BYTES: usize = 140;
+const MAX_DOC_TYPE_BYTES: usize = 256;
+
+fn is_canonical_utc_time(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return false;
+    }
+    for index in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
+        if !bytes[index].is_ascii_digit() {
+            return false;
+        }
+    }
+    let pair =
+        |start: usize| u16::from(bytes[start] - b'0') * 10 + u16::from(bytes[start + 1] - b'0');
+    (1..=12).contains(&pair(5))
+        && (1..=31).contains(&pair(8))
+        && pair(11) <= 23
+        && pair(14) <= 59
+        && pair(17) <= 59
+}
+
+fn validate_common_input(input: &MdocProveInput) -> Result<(), ZkError> {
+    if input.transcript.is_empty()
+        || input.transcript.len() > MAX_TRANSCRIPT_BYTES
+        || input.issuer_pkx.is_empty()
+        || input.issuer_pkx.len() > MAX_PUBLIC_KEY_TEXT_BYTES
+        || input.issuer_pky.is_empty()
+        || input.issuer_pky.len() > MAX_PUBLIC_KEY_TEXT_BYTES
+        || !is_canonical_utc_time(&input.now)
+        || input.doc_type.is_empty()
+        || input.doc_type.len() > MAX_DOC_TYPE_BYTES
+    {
+        return Err(ZkError::InvalidInput);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "prover")]
+fn validate_prover_input(input: &MdocProveInput) -> Result<(), ZkError> {
+    validate_common_input(input)?;
+    if input.mdoc.is_empty() || input.mdoc.len() > MAX_MDOC_BYTES {
+        return Err(ZkError::InvalidInput);
+    }
+    Ok(())
+}
+
+fn validate_verifier_input(input: &MdocProveInput, proof: &[u8]) -> Result<(), ZkError> {
+    validate_common_input(input)?;
+    if proof.is_empty() || proof.len() > MAX_PROOF_BYTES {
+        return Err(ZkError::InvalidInput);
+    }
+    Ok(())
+}
+
+// Circuit decompression and parsing can approach the 130 MB native cap.
+// Serialize native verification so attacker-controlled concurrency cannot
+// multiply that allocation by the number of request threads.
+static NATIVE_VERIFICATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // ── Circuit ───────────────────────────────────────────────────────────
 
 /// Pre-generated compressed circuit for a given number of attributes.
 ///
-/// Generate once with [`Circuit::generate`] and pass to every
-/// [`Prover::prove`] / [`Verifier::verify`] call.  Circuits are
-/// large (~100 MB uncompressed) and expensive to generate, so callers
-/// should cache them.
+/// In prover-enabled builds, generate once with `Circuit::generate` and pass
+/// to every `Prover::prove` call. Verifier-only builds load an authenticated
+/// circuit with [`Circuit::from_bytes`] and pass it to [`Verifier::verify`].
+/// Circuits are large (~100 MB uncompressed), so callers should cache them.
 pub struct Circuit {
     bytes: Vec<u8>,
     spec_index: usize,
@@ -295,11 +382,33 @@ impl std::fmt::Debug for Circuit {
 }
 
 impl Circuit {
+    /// Load a pre-generated compressed circuit for verifier-only use.
+    pub fn from_bytes(bytes: Vec<u8>, num_attributes: usize) -> Result<Self, ZkError> {
+        if bytes.is_empty() || bytes.len() > MAX_COMPRESSED_CIRCUIT_BYTES {
+            return Err(ZkError::InvalidInput);
+        }
+        let spec_index = unsafe {
+            (0..ffi::NUM_ZK_SPECS)
+                .filter(|&i| ffi::kZkSpecs[i].num_attributes == num_attributes)
+                .max_by_key(|&i| ffi::kZkSpecs[i].version)
+                .ok_or(ZkError::InvalidInput)?
+        };
+        #[cfg(not(zk_mock))]
+        {
+            let _native_guard = NATIVE_VERIFICATION_LOCK
+                .lock()
+                .map_err(|_| ZkError::Generic)?;
+            validate_circuit_identity(&bytes, spec_index)?;
+        }
+        Ok(Self { bytes, spec_index })
+    }
+
     /// Generate a compressed circuit for the ZK spec that supports exactly
     /// `num_attributes` attributes.
     ///
     /// `kZkSpecs` is searched for the highest-version matching entry.
     /// Returns an error if no such spec exists or if the generator fails.
+    #[cfg(feature = "prover")]
     pub fn generate(num_attributes: usize) -> Result<Self, ZkError> {
         let spec_index = unsafe {
             (0..ffi::NUM_ZK_SPECS)
@@ -321,8 +430,7 @@ impl Circuit {
 
         // Safety: bound-check clen before constructing a slice from an FFI pointer
         // to prevent out-of-bounds reads from a misbehaving C library.
-        const MAX_CIRCUIT_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
-        if clen > MAX_CIRCUIT_SIZE {
+        if clen > MAX_COMPRESSED_CIRCUIT_BYTES {
             unsafe { libc::free(cb as *mut libc::c_void) };
             return Err(ZkError::CircuitError(0));
         }
@@ -344,16 +452,44 @@ impl Circuit {
     }
 }
 
+#[cfg(not(zk_mock))]
+fn validate_circuit_identity(bytes: &[u8], spec_index: usize) -> Result<(), ZkError> {
+    let spec = unsafe { &ffi::kZkSpecs[spec_index] };
+    let mut digest = [0u8; 32];
+    let valid = unsafe { ffi::circuit_id(digest.as_mut_ptr(), bytes.as_ptr(), bytes.len(), spec) };
+    if valid != 1 {
+        return Err(ZkError::InvalidInput);
+    }
+
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for (index, byte) in digest.iter().copied().enumerate() {
+        let high = HEX[(byte >> 4) as usize];
+        let low = HEX[(byte & 0x0f) as usize];
+        if spec.circuit_hash[index * 2] as u8 != high
+            || spec.circuit_hash[index * 2 + 1] as u8 != low
+        {
+            return Err(ZkError::InvalidInput);
+        }
+    }
+    if spec.circuit_hash[64] != 0 {
+        return Err(ZkError::InvalidInput);
+    }
+    Ok(())
+}
+
 // ── Prover ────────────────────────────────────────────────────────────
 
+#[cfg(feature = "prover")]
 pub struct Prover;
 
+#[cfg(feature = "prover")]
 impl Prover {
     /// Generate a ZK proof that the mDoc attributes in `input` satisfy
     /// the requested values without revealing the underlying document.
     ///
     /// The returned bytes must be passed to [`Verifier::verify`] unchanged.
     pub fn prove(circuit: &Circuit, input: &MdocProveInput) -> Result<Vec<u8>, ZkError> {
+        validate_prover_input(input)?;
         let expected_n = unsafe { (*circuit.spec()).num_attributes };
         if input.attributes.len() != expected_n {
             return Err(ZkError::InvalidInput);
@@ -397,6 +533,10 @@ impl Prover {
             return Err(ZkError::Generic);
         }
 
+        if proof_len == 0 || proof_len > MAX_PROOF_BYTES {
+            unsafe { libc::free(proof_ptr as *mut libc::c_void) };
+            return Err(ZkError::InvalidInput);
+        }
         let proof = unsafe { std::slice::from_raw_parts(proof_ptr, proof_len).to_vec() };
         unsafe { libc::free(proof_ptr as *mut libc::c_void) };
         Ok(proof)
@@ -441,6 +581,7 @@ impl Verifier {
         if proof.is_empty() {
             return Ok(false);
         }
+        validate_verifier_input(input, proof)?;
 
         let expected_n = unsafe { (*circuit.spec()).num_attributes };
         if input.attributes.len() != expected_n {
@@ -457,6 +598,10 @@ impl Verifier {
         let pky = CString::new(input.issuer_pky.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let now = CString::new(input.now.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let doc_type = CString::new(input.doc_type.as_str()).map_err(|_| ZkError::InvalidInput)?;
+
+        let _native_guard = NATIVE_VERIFICATION_LOCK
+            .lock()
+            .map_err(|_| ZkError::Generic)?;
 
         let rc = unsafe {
             ffi::run_mdoc_verifier(
@@ -492,6 +637,104 @@ impl Verifier {
 
 // ── Python bindings ───────────────────────────────────────────────────
 
+#[cfg(test)]
+mod resource_boundary_tests {
+    use super::*;
+
+    fn input() -> MdocProveInput {
+        MdocProveInput {
+            mdoc: Vec::new(),
+            issuer_pkx: "0x01".into(),
+            issuer_pky: "0x02".into(),
+            transcript: vec![0xf6],
+            attributes: vec![AttributeRequest::new(
+                "org.iso.18013.5.1",
+                "age_over_18",
+                vec![0xf5],
+            )],
+            now: "2026-09-05T00:00:00Z".into(),
+            doc_type: "org.iso.18013.5.1.mDL".into(),
+        }
+    }
+
+    #[test]
+    fn verifier_bounds_only_inputs_consumed_by_the_native_verifier() {
+        let mut value = input();
+        assert!(validate_verifier_input(&value, &[1]).is_ok());
+
+        value.mdoc = vec![0; MAX_MDOC_BYTES + 1];
+        assert!(validate_verifier_input(&value, &[1]).is_ok());
+
+        value.transcript = vec![0; MAX_TRANSCRIPT_BYTES + 1];
+        assert!(matches!(
+            validate_verifier_input(&value, &[1]),
+            Err(ZkError::InvalidInput)
+        ));
+
+        let value = input();
+        assert!(matches!(
+            validate_verifier_input(&value, &vec![1; MAX_PROOF_BYTES + 1]),
+            Err(ZkError::InvalidInput)
+        ));
+    }
+
+    #[test]
+    fn verifier_rejects_noncanonical_time_before_ffi() {
+        for invalid in [
+            "x",
+            "2026-09-05T00:00:0Z",
+            "2026-09-05T00:00:000Z",
+            "2026-13-05T00:00:00Z",
+            "2026-09-05T24:00:00Z",
+            "2026-09-05 00:00:00Z",
+        ] {
+            let mut value = input();
+            value.now = invalid.into();
+            assert!(matches!(
+                validate_verifier_input(&value, &[1]),
+                Err(ZkError::InvalidInput)
+            ));
+        }
+    }
+
+    #[cfg(feature = "prover")]
+    #[test]
+    fn prover_bounds_mdoc_before_native_code() {
+        let mut value = input();
+        assert!(matches!(
+            validate_prover_input(&value),
+            Err(ZkError::InvalidInput)
+        ));
+        value.mdoc = vec![1];
+        assert!(validate_prover_input(&value).is_ok());
+        value.mdoc = vec![0; MAX_MDOC_BYTES + 1];
+        assert!(matches!(
+            validate_prover_input(&value),
+            Err(ZkError::InvalidInput)
+        ));
+    }
+
+    #[test]
+    fn native_verification_concurrency_is_serialized() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let guard = NATIVE_VERIFICATION_LOCK.lock().unwrap();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let _guard = NATIVE_VERIFICATION_LOCK.lock().unwrap();
+            entered_tx.send(()).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(entered_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(guard);
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        worker.join().unwrap();
+    }
+}
+
 #[cfg(feature = "python")]
 pub mod python {
     use super::*;
@@ -512,6 +755,7 @@ pub mod python {
     #[allow(clippy::too_many_arguments)]
     #[pyfunction]
     pub fn verify_mdoc_zk(
+        circuits: &[u8],
         mdoc: &[u8],
         issuer_pkx: &str,
         issuer_pky: &str,
@@ -523,7 +767,7 @@ pub mod python {
         doc_type: &str,
         proof: &[u8],
     ) -> PyResult<bool> {
-        let circuit = Circuit::generate(1)
+        let circuit = Circuit::from_bytes(circuits.to_vec(), 1)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let input = MdocProveInput {

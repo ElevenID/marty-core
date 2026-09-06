@@ -86,9 +86,7 @@ impl OpenBadgeVerificationSuite for OpenBadgeSuite {
                 ))
             }
             OpenBadgeSuite::X509(x509_suite) => {
-                if let crate::open_badges::method_wrapper::OpenBadgeMethod::X509(x509_method) =
-                    method
-                {
+                if let Some(x509_method) = method.as_x509() {
                     x509_suite.verify_signature(message, signature, x509_method)
                 } else {
                     Err(crate::error::VerificationError::open_badges(

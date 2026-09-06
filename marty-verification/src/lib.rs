@@ -28,6 +28,16 @@
 //! assert!(result.is_valid());
 //! ```
 
+#[cfg(all(
+    feature = "kms-only",
+    any(
+        feature = "authority-issuance",
+        feature = "cert-builder",
+        feature = "local-key-operations"
+    )
+))]
+compile_error!("kms-only builds cannot include local key operations or authority builders");
+
 #[cfg(feature = "csca")]
 pub mod active_authentication;
 pub mod asn1;
@@ -36,6 +46,15 @@ pub mod chip_io;
 pub mod credential_format;
 pub mod device_auth;
 pub mod dtc;
+
+#[cfg(not(feature = "local-key-operations"))]
+/// KMS-only and verification builds do not expose in-process DTC signing.
+///
+/// ```compile_fail
+/// use marty_verification::dtc::sign_dtc_json;
+/// let _ = sign_dtc_json("{}");
+/// ```
+mod dtc_local_signing_compile_boundary {}
 #[cfg(feature = "csca")]
 pub mod eac;
 #[cfg(feature = "csca")]
@@ -108,11 +127,12 @@ pub use verification::mdl::{
 };
 
 // Re-export chip I/O types for government NFC integration
+#[cfg(all(feature = "csca", feature = "local-key-operations"))]
+pub use chip_io::{derive_bac_base_keys, BacKeys, PaceKeys, PacePassword, PaceSession};
 #[cfg(feature = "csca")]
-pub use chip_io::{
-    derive_bac_base_keys, mrz_check_digit, ApduCommand, ApduResponse, BacKeys, BacSession,
-    MockPassportChip, MrzKeyInfo, PaceKeys, PacePassword, PaceSession, PassportChip,
-};
+pub use chip_io::{mrz_check_digit, ApduCommand, ApduResponse, MockPassportChip, PassportChip};
+#[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
+pub use chip_io::{BacHandshake, BacSession, MrzKeyInfo, PaceCompatibilityHandshake};
 
 // Re-export crypto primitives from marty-crypto
 pub use marty_crypto::{verify_signature, HashAlgorithm, SignatureAlgorithm};

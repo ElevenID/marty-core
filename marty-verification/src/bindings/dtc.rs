@@ -1,7 +1,7 @@
 //! Python adapters for dtc.
 
-use super::*;
 use crate::dtc;
+use pyo3::prelude::*;
 
 #[pyfunction]
 pub(super) fn dtc_create(request_json: &str) -> PyResult<String> {
@@ -21,6 +21,7 @@ pub(super) fn dtc_assemble_signature(signature_envelope_json: &str) -> PyResult<
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 pub(super) fn dtc_sign(dtc_json: &str) -> PyResult<String> {
     dtc::sign_dtc_json(dtc_json).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))

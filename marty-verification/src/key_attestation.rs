@@ -7,7 +7,10 @@ use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
 use flate2::read::ZlibDecoder;
 use marty_crypto::SignatureAlgorithm;
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{self, MapAccess, SeqAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
 use serde_json::{Map, Value};
 use std::{collections::BTreeSet, io::Read};
 use url::{Host, Url};
@@ -15,6 +18,27 @@ use url::{Host, Url};
 use crate::verification::{ChainValidator, ChainValidatorConfig, KeyUsage};
 
 const MAX_STATUS_LIST_BYTES: usize = 1_048_576;
+/// Maximum compact proof JWT accepted by the public routing boundary.
+pub const MAX_PROOF_JWT_BYTES: usize = 262_144;
+/// Maximum compact key-attestation JWT accepted by the validation boundary.
+pub const MAX_KEY_ATTESTATION_JWT_BYTES: usize = 131_072;
+/// Maximum compact Token Status List JWT accepted by the validation boundary.
+pub const MAX_STATUS_LIST_TOKEN_JWT_BYTES: usize = 2_359_296;
+
+const MAX_PROOF_HEADER_BYTES: usize = 196_608;
+const MAX_KEY_ATTESTATION_HEADER_BYTES: usize = 65_536;
+const MAX_KEY_ATTESTATION_CLAIMS_BYTES: usize = 24_576;
+const MAX_STATUS_LIST_HEADER_BYTES: usize = 65_536;
+const MAX_STATUS_LIST_CLAIMS_BYTES: usize = 1_500_000;
+const MAX_JWT_SIGNATURE_BYTES: usize = 1_024;
+const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
+const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
+fn raw_jwk_has_private_material(key: &Map<String, Value>) -> bool {
+    PRIVATE_JWK_MEMBERS
+        .iter()
+        .any(|field| key.contains_key(*field))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -321,9 +345,9 @@ fn validate_attestation(
     if policy.mode == "disabled" {
         return Err("Issuer profile does not allow key-attestation-bound proofs".into());
     }
-    let parts = jwt_parts(&jwt, "Key attestation JWT")?;
-    let header = decode_json_object(parts[0], "header")?;
-    let claims = decode_json_object(parts[1], "claims")?;
+    let parts = jwt_parts(&jwt, JwtKind::KeyAttestation)?;
+    let header = decode_json_object(parts[0], "header", MAX_KEY_ATTESTATION_HEADER_BYTES)?;
+    let claims = decode_json_object(parts[1], "claims", MAX_KEY_ATTESTATION_CLAIMS_BYTES)?;
     if header.get("typ").and_then(Value::as_str) != Some("key-attestation+jwt") {
         return Err("Key attestation typ must be key-attestation+jwt".into());
     }
@@ -349,12 +373,13 @@ fn validate_attestation(
     let iat = required_timestamp(&claims, "iat", "Key attestation")?;
     let exp = required_timestamp(&claims, "exp", "Key attestation")?;
     let now_timestamp = now.timestamp();
-    if iat > now_timestamp + 30 {
-        return Err("Key attestation iat is in the future".into());
-    }
-    if now_timestamp - iat > policy.max_age_seconds {
-        return Err("Key attestation is older than issuer policy allows".into());
-    }
+    validate_issued_at(
+        iat,
+        now_timestamp,
+        policy.max_age_seconds,
+        "Key attestation iat is in the future",
+        "Key attestation is older than issuer policy allows",
+    )?;
     if exp <= now_timestamp {
         return Err("Key attestation has expired".into());
     }
@@ -373,13 +398,12 @@ fn validate_attestation(
         .and_then(Value::as_array)
         .filter(|keys| !keys.is_empty())
         .ok_or_else(|| "Key attestation requires a non-empty attested_keys array".to_string())?;
-    let private = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
     let mut attested_keys = Vec::with_capacity(keys.len());
     for key in keys {
         let key = key.as_object().ok_or_else(|| {
             "Key attestation requires a non-empty attested_keys array".to_string()
         })?;
-        if private.iter().any(|field| key.contains_key(*field)) {
+        if raw_jwk_has_private_material(key) {
             return Err("Key attestation contains private key material".into());
         }
         attested_keys.push(key.clone());
@@ -439,6 +463,88 @@ fn validate_attestation(
         claims,
         statuses,
     })
+}
+
+#[cfg(test)]
+mod private_jwk_tests {
+    use super::{
+        b64url_decode, decode_json_object, jwt_parts, max_encoded_len,
+        raw_jwk_has_private_material, validate_issued_at, JwtKind,
+        MAX_KEY_ATTESTATION_CLAIMS_BYTES, MAX_PROOF_JWT_BYTES, MAX_STATUS_LIST_BYTES,
+        PRIVATE_JWK_MEMBERS,
+    };
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use serde_json::json;
+
+    #[test]
+    fn attested_key_rejection_covers_every_private_jwk_member() {
+        for member in PRIVATE_JWK_MEMBERS {
+            let mut key = json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"});
+            key.as_object_mut()
+                .expect("test JWK is an object")
+                .insert(member.into(), json!("secret"));
+            assert!(raw_jwk_has_private_material(
+                key.as_object().expect("test JWK is an object")
+            ));
+        }
+    }
+
+    #[test]
+    fn compact_jwt_limits_run_before_split_or_decode() {
+        let oversized = format!("{}..", "A".repeat(MAX_PROOF_JWT_BYTES + 1));
+        assert_eq!(
+            jwt_parts(&oversized, JwtKind::Proof).unwrap_err(),
+            "Proof JWT exceeds the safe size limit"
+        );
+        assert_eq!(
+            jwt_parts("a.b.c.d.e", JwtKind::Proof).unwrap_err(),
+            "Proof JWT must have exactly three parts"
+        );
+
+        let oversized_segment = "A".repeat(max_encoded_len(MAX_STATUS_LIST_BYTES) + 1);
+        assert_eq!(
+            b64url_decode(&oversized_segment, MAX_STATUS_LIST_BYTES).unwrap_err(),
+            "JWT segment exceeds the safe size limit"
+        );
+    }
+
+    #[test]
+    fn jwt_json_rejects_duplicate_claims_and_nested_key_members() {
+        for json in [
+            r#"{"attested_keys":[],"attested_keys":[]}"#,
+            r#"{"attested_keys":[{"kty":"EC","kty":"RSA"}]}"#,
+        ] {
+            let encoded = URL_SAFE_NO_PAD.encode(json);
+            assert!(
+                decode_json_object(&encoded, "claims", MAX_KEY_ATTESTATION_CLAIMS_BYTES)
+                    .unwrap_err()
+                    .contains("invalid claims JSON")
+            );
+        }
+    }
+
+    #[test]
+    fn attestation_and_status_list_freshness_reject_extreme_timestamps() {
+        for (future_error, age_error) in [
+            (
+                "Key attestation iat is in the future",
+                "Key attestation is older than issuer policy allows",
+            ),
+            (
+                "Status List Token iat is in the future",
+                "Status List Token is older than issuer policy allows",
+            ),
+        ] {
+            assert_eq!(
+                validate_issued_at(i64::MIN, 0, 300, future_error, age_error).unwrap_err(),
+                age_error
+            );
+            assert_eq!(
+                validate_issued_at(i64::MAX, 0, 300, future_error, age_error).unwrap_err(),
+                future_error
+            );
+        }
+    }
 }
 
 fn validate_assurance_list(
@@ -534,9 +640,9 @@ fn status_list_value(
     policy: &KeyAttestationPolicy,
     now: DateTime<Utc>,
 ) -> Result<u8, String> {
-    let parts = jwt_parts(token, "Status List Token JWT")?;
-    let header = decode_json_object(parts[0], "status-list header")?;
-    let claims = decode_json_object(parts[1], "status-list claims")?;
+    let parts = jwt_parts(token, JwtKind::StatusList)?;
+    let header = decode_json_object(parts[0], "status-list header", MAX_STATUS_LIST_HEADER_BYTES)?;
+    let claims = decode_json_object(parts[1], "status-list claims", MAX_STATUS_LIST_CLAIMS_BYTES)?;
     if header.get("typ").and_then(Value::as_str) != Some("statuslist+jwt") {
         return Err("Status List Token typ must be statuslist+jwt".into());
     }
@@ -562,12 +668,13 @@ fn status_list_value(
     }
     let iat = required_timestamp(&claims, "iat", "Status List Token")?;
     let now_timestamp = now.timestamp();
-    if iat > now_timestamp + 30 {
-        return Err("Status List Token iat is in the future".into());
-    }
-    if now_timestamp - iat > policy.status_list_max_age_seconds {
-        return Err("Status List Token is older than issuer policy allows".into());
-    }
+    validate_issued_at(
+        iat,
+        now_timestamp,
+        policy.status_list_max_age_seconds,
+        "Status List Token iat is in the future",
+        "Status List Token is older than issuer policy allows",
+    )?;
     if let Some(exp) = claims.get("exp") {
         let exp =
             integer(exp).ok_or_else(|| "Status List Token exp must be an integer".to_string())?;
@@ -594,7 +701,7 @@ fn status_list_value(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Status List Token lst must be base64url data".to_string())?;
-    let compressed = b64url_decode(encoded)?;
+    let compressed = b64url_decode(encoded, MAX_STATUS_LIST_BYTES)?;
     let mut decoder = ZlibDecoder::new(compressed.as_slice());
     let mut bytes = Vec::new();
     decoder
@@ -686,7 +793,7 @@ fn verify_signature(
         .map_err(|_| "Key attestation algorithm does not match certificate key".to_string())?;
     let algorithm = signature_algorithm(algorithm, &public_key)
         .map_err(|_| "Key attestation algorithm does not match certificate key".to_string())?;
-    let signature = b64url_decode(encoded_signature)?;
+    let signature = b64url_decode(encoded_signature, MAX_JWT_SIGNATURE_BYTES)?;
     let valid =
         marty_crypto::verify_signature(algorithm, &public_key, message.as_bytes(), &signature)
             .map_err(|_| "Key attestation algorithm does not match certificate key".to_string())?;
@@ -719,35 +826,228 @@ fn signature_algorithm(value: &str, public_key: &[u8]) -> Result<SignatureAlgori
 }
 
 fn proof_header(jwt: &str) -> Result<Map<String, Value>, String> {
-    let parts = jwt_parts(jwt, "Proof JWT")?;
-    decode_json_object(parts[0], "proof header")
+    let parts = jwt_parts(jwt, JwtKind::Proof)?;
+    decode_json_object(parts[0], "proof header", MAX_PROOF_HEADER_BYTES)
         .map_err(|_| "Proof JWT has an invalid JOSE header".to_string())
 }
 
-fn jwt_parts<'a>(jwt: &'a str, name: &str) -> Result<[&'a str; 3], String> {
-    let parts: Vec<&str> = jwt.split('.').collect();
-    parts.try_into().map_err(|_| match name {
-        "Proof JWT" => "Proof JWT must have exactly three parts".into(),
-        "Status List Token JWT" => "Status List Token JWT must have exactly three parts".into(),
-        _ => "Key attestation JWT must have exactly three parts".into(),
-    })
+#[derive(Clone, Copy)]
+enum JwtKind {
+    Proof,
+    KeyAttestation,
+    StatusList,
 }
 
-fn decode_json_object(value: &str, name: &str) -> Result<Map<String, Value>, String> {
-    let bytes = b64url_decode(value)?;
-    serde_json::from_slice::<Value>(&bytes)
+impl JwtKind {
+    const fn total_limit(self) -> usize {
+        match self {
+            Self::Proof => MAX_PROOF_JWT_BYTES,
+            Self::KeyAttestation => MAX_KEY_ATTESTATION_JWT_BYTES,
+            Self::StatusList => MAX_STATUS_LIST_TOKEN_JWT_BYTES,
+        }
+    }
+
+    const fn segment_limits(self) -> [usize; 3] {
+        match self {
+            Self::Proof => [
+                max_encoded_len(MAX_PROOF_HEADER_BYTES),
+                max_encoded_len(32_768),
+                max_encoded_len(MAX_JWT_SIGNATURE_BYTES),
+            ],
+            Self::KeyAttestation => [
+                max_encoded_len(MAX_KEY_ATTESTATION_HEADER_BYTES),
+                max_encoded_len(MAX_KEY_ATTESTATION_CLAIMS_BYTES),
+                max_encoded_len(MAX_JWT_SIGNATURE_BYTES),
+            ],
+            Self::StatusList => [
+                max_encoded_len(MAX_STATUS_LIST_HEADER_BYTES),
+                max_encoded_len(MAX_STATUS_LIST_CLAIMS_BYTES),
+                max_encoded_len(MAX_JWT_SIGNATURE_BYTES),
+            ],
+        }
+    }
+
+    const fn parts_error(self) -> &'static str {
+        match self {
+            Self::Proof => "Proof JWT must have exactly three parts",
+            Self::StatusList => "Status List Token JWT must have exactly three parts",
+            Self::KeyAttestation => "Key attestation JWT must have exactly three parts",
+        }
+    }
+
+    const fn size_error(self) -> &'static str {
+        match self {
+            Self::Proof => "Proof JWT exceeds the safe size limit",
+            Self::StatusList => "Status List Token JWT exceeds the safe size limit",
+            Self::KeyAttestation => "Key attestation JWT exceeds the safe size limit",
+        }
+    }
+}
+
+const fn max_encoded_len(decoded_len: usize) -> usize {
+    decoded_len.div_ceil(3) * 4
+}
+
+fn jwt_parts(jwt: &str, kind: JwtKind) -> Result<[&str; 3], String> {
+    if jwt.len() > kind.total_limit() {
+        return Err(kind.size_error().into());
+    }
+    let mut parts = jwt.splitn(4, '.');
+    let first = parts.next().unwrap_or_default();
+    let Some(second) = parts.next() else {
+        return Err(kind.parts_error().into());
+    };
+    let Some(third) = parts.next() else {
+        return Err(kind.parts_error().into());
+    };
+    if parts.next().is_some() {
+        return Err(kind.parts_error().into());
+    }
+    let result = [first, second, third];
+    if result
+        .iter()
+        .zip(kind.segment_limits())
+        .any(|(part, limit)| part.len() > limit)
+    {
+        return Err(kind.size_error().into());
+    }
+    Ok(result)
+}
+
+fn decode_json_object(
+    value: &str,
+    name: &str,
+    max_decoded_bytes: usize,
+) -> Result<Map<String, Value>, String> {
+    let bytes = b64url_decode(value, max_decoded_bytes)?;
+    parse_unique_json(&bytes)
         .map_err(|_| format!("Key attestation has invalid {name} JSON"))?
         .as_object()
         .cloned()
         .ok_or_else(|| format!("Key attestation {name} must be a JSON object"))
 }
 
-fn b64url_decode(value: &str) -> Result<Vec<u8>, String> {
+fn b64url_decode(value: &str, max_decoded_bytes: usize) -> Result<Vec<u8>, String> {
+    if value.len() > max_encoded_len(max_decoded_bytes) {
+        return Err("JWT segment exceeds the safe size limit".into());
+    }
     let mut padded = value.to_string();
     padded.extend(std::iter::repeat_n('=', (4 - value.len() % 4) % 4));
-    general_purpose::URL_SAFE
+    let decoded = general_purpose::URL_SAFE
         .decode(padded)
-        .map_err(|_| "JWT contains invalid base64url".to_string())
+        .map_err(|_| "JWT contains invalid base64url".to_string())?;
+    if decoded.len() > max_decoded_bytes {
+        return Err("JWT segment exceeds the safe size limit".into());
+    }
+    Ok(decoded)
+}
+
+struct UniqueValue(Value);
+
+/// Parse JSON while rejecting duplicate members at every object depth.
+pub(crate) fn parse_unique_json(bytes: &[u8]) -> serde_json::Result<Value> {
+    serde_json::from_slice::<UniqueValue>(bytes).map(|value| value.0)
+}
+
+impl<'de> Deserialize<'de> for UniqueValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UniqueValueVisitor)
+    }
+}
+
+struct UniqueValueVisitor;
+
+impl<'de> Visitor<'de> for UniqueValueVisitor {
+    type Value = UniqueValue;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("JSON without duplicate object members")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Number(value.into())))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Number(value.into())))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .map(UniqueValue)
+            .ok_or_else(|| E::custom("non-finite JSON number"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value.into())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element::<UniqueValue>()? {
+            values.push(value.0);
+        }
+        Ok(UniqueValue(Value::Array(values)))
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = Map::new();
+        while let Some((key, value)) = object.next_entry::<String, UniqueValue>()? {
+            if values.insert(key, value.0).is_some() {
+                return Err(de::Error::custom("duplicate JSON object member"));
+            }
+        }
+        Ok(UniqueValue(Value::Object(values)))
+    }
+}
+
+fn validate_issued_at(
+    iat: i64,
+    now: i64,
+    max_age: i64,
+    future_error: &'static str,
+    age_error: &'static str,
+) -> Result<(), String> {
+    let future_limit = now
+        .checked_add(MAX_CLOCK_SKEW_SECONDS)
+        .ok_or(future_error)?;
+    if iat > future_limit {
+        return Err(future_error.into());
+    }
+    let age = now.checked_sub(iat).ok_or(age_error)?;
+    if age > max_age {
+        return Err(age_error.into());
+    }
+    Ok(())
 }
 
 fn required_timestamp(

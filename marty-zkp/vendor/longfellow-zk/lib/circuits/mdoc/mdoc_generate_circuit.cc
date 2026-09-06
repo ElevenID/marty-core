@@ -18,7 +18,9 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <memory>
+#include <new>
 #include <vector>
 
 #include "circuits/compiler/circuit_dump.h"
@@ -50,10 +52,12 @@ API version that uses 2 circuits over different fields.
 using MdocSWw = MdocSignatureWitness<P256, Fp256Scalar>;
 
 CircuitGenerationErrorCode generate_circuit(const ZkSpecStruct* zk_spec,
-                                            uint8_t** cb, size_t* clen) {
-  if (zk_spec == nullptr) {
+                                            uint8_t** cb, size_t* clen) try {
+  if (zk_spec == nullptr || cb == nullptr || clen == nullptr) {
     return CIRCUIT_GENERATION_NULL_INPUT;
   }
+  *cb = nullptr;
+  *clen = 0;
 
   // Generator only supports the latest version of the ZKSpec for a number of
   // attributes. Return an error if the requested version is not the latest.
@@ -186,13 +190,49 @@ CircuitGenerationErrorCode generate_circuit(const ZkSpecStruct* zk_spec,
   // Use an aggressive, apriori estimate on the compressed size to avoid
   // wasting memory.
   uint8_t* buf = (uint8_t*)malloc(buf_size);
+  if (buf == nullptr) {
+    log(ERROR, "circuit generation output allocation failed");
+    return CIRCUIT_GENERATION_GENERAL_FAILURE;
+  }
 
   size_t zl = ZSTD_compress(buf, buf_size, src, sz, 16);
+  if (ZSTD_isError(zl)) {
+    log(ERROR, "ZSTD_compress failed: %s", ZSTD_getErrorName(zl));
+    free(buf);
+    return CIRCUIT_GENERATION_ZLIB_FAILURE;
+  }
   log(INFO, "zstd from %zu --> %zu", sz, zl);
   *clen = zl;
   *cb = buf;
 
   return CIRCUIT_GENERATION_SUCCESS;
+} catch (const std::bad_alloc&) {
+  if (cb != nullptr) {
+    *cb = nullptr;
+  }
+  if (clen != nullptr) {
+    *clen = 0;
+  }
+  log(ERROR, "circuit generation allocation failed");
+  return CIRCUIT_GENERATION_GENERAL_FAILURE;
+} catch (const std::exception& error) {
+  if (cb != nullptr) {
+    *cb = nullptr;
+  }
+  if (clen != nullptr) {
+    *clen = 0;
+  }
+  log(ERROR, "circuit generation failed: %s", error.what());
+  return CIRCUIT_GENERATION_GENERAL_FAILURE;
+} catch (...) {
+  if (cb != nullptr) {
+    *cb = nullptr;
+  }
+  if (clen != nullptr) {
+    *clen = 0;
+  }
+  log(ERROR, "circuit generation failed with an unknown exception");
+  return CIRCUIT_GENERATION_GENERAL_FAILURE;
 }
 
 } /* extern "C" */

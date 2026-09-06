@@ -1,6 +1,13 @@
 //! Python adapters for ocsp.
 
-use super::*;
+use super::to_pyerr;
+use pyo3::prelude::*;
+use pyo3::types::PyBytes;
+use pyo3::types::PyDict;
+
+// ============================================================================
+// OCSP Client Bindings
+// ============================================================================
 
 /// Build an OCSP request for a certificate.
 ///

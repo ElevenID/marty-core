@@ -8,14 +8,38 @@
 //! proof-of-possession JWTs (e.g. for integration tests and wallet clients).
 
 use base64::Engine;
+#[cfg(any(test, feature = "holder-key-operations"))]
 use ed25519_dalek::{Signer, SigningKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
+#[cfg(any(test, feature = "holder-key-operations"))]
 use rand::rngs::OsRng;
 use serde::Deserialize;
-use ssi_crypto::AlgorithmInstance;
 use ssi_jwk::{Params, JWK};
 
+use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
 use crate::error::{Oid4vciError, Oid4vciResult};
+
+/// Maximum compact OID4VCI proof JWT accepted before parsing or key resolution.
+pub const MAX_COMPACT_PROOF_JWT_BYTES: usize = 256 * 1024;
+/// Maximum already-validated key-attestation JWT accepted at the proof boundary.
+pub const MAX_COMPACT_KEY_ATTESTATION_JWT_BYTES: usize = 128 * 1024;
+const MAX_PROOF_HEADER_BYTES: usize = 144 * 1024;
+const MAX_PROOF_PAYLOAD_BYTES: usize = 64 * 1024;
+const MAX_ATTESTATION_HEADER_BYTES: usize = 16 * 1024;
+const MAX_ATTESTATION_PAYLOAD_BYTES: usize = 96 * 1024;
+const MAX_JWT_SIGNATURE_BYTES: usize = crate::bounded_jwt::MAX_RSA_SIGNATURE_BYTES;
+const PROOF_JWT_LIMITS: CompactJwtLimits = CompactJwtLimits {
+    total: MAX_COMPACT_PROOF_JWT_BYTES,
+    header: MAX_PROOF_HEADER_BYTES,
+    claims: MAX_PROOF_PAYLOAD_BYTES,
+    signature: MAX_JWT_SIGNATURE_BYTES,
+};
+const ATTESTATION_JWT_LIMITS: CompactJwtLimits = CompactJwtLimits {
+    total: MAX_COMPACT_KEY_ATTESTATION_JWT_BYTES,
+    header: MAX_ATTESTATION_HEADER_BYTES,
+    claims: MAX_ATTESTATION_PAYLOAD_BYTES,
+    signature: MAX_JWT_SIGNATURE_BYTES,
+};
 
 /// Parsed and verified JWT proof from a credential request.
 #[derive(Debug, Clone)]
@@ -150,23 +174,44 @@ fn verify_jwt_proof_with_key_source(
     max_age_seconds: i64,
     key_source: ProofKeySource<'_>,
 ) -> Oid4vciResult<VerifiedProof> {
-    // Step 1: Split and decode
-    let parts: Vec<&str> = proof_jwt.split('.').collect();
-    if parts.len() != 3 {
+    if max_age_seconds < 0 {
         return Err(Oid4vciError::ProofVerificationFailed(
-            "JWT must have exactly 3 parts (header.payload.signature)".into(),
+            "Proof JWT max age must be nonnegative".into(),
         ));
     }
+    if let ProofKeySource::ValidatedKeyAttestation { jwt } = &key_source {
+        if jwt.len() > MAX_COMPACT_KEY_ATTESTATION_JWT_BYTES {
+            return Err(Oid4vciError::ProofVerificationFailed(
+                "Validated key attestation exceeds its size limit".into(),
+            ));
+        }
+    }
 
-    let header_bytes = B64.decode(parts[0]).map_err(|e| {
-        Oid4vciError::ProofVerificationFailed(format!("Invalid header base64: {}", e))
-    })?;
-    let payload_bytes = B64.decode(parts[1]).map_err(|e| {
-        Oid4vciError::ProofVerificationFailed(format!("Invalid payload base64: {}", e))
-    })?;
-    let signature_bytes = B64.decode(parts[2]).map_err(|e| {
-        Oid4vciError::ProofVerificationFailed(format!("Invalid signature base64: {}", e))
-    })?;
+    // Step 1: Split and decode within fixed allocation bounds.
+    let parts = split_compact_jwt(proof_jwt, PROOF_JWT_LIMITS)
+        .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+
+    let header_bytes = decode_segment(
+        parts.header,
+        MAX_PROOF_HEADER_BYTES,
+        "Proof JWT header is not base64url",
+        "Proof JWT header exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+    let payload_bytes = decode_segment(
+        parts.claims,
+        MAX_PROOF_PAYLOAD_BYTES,
+        "Proof JWT payload is not base64url",
+        "Proof JWT payload exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+    let signature_bytes = decode_segment(
+        parts.signature,
+        MAX_JWT_SIGNATURE_BYTES,
+        "Proof JWT signature is not base64url",
+        "Proof JWT signature exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
 
     let header: ProofHeader = serde_json::from_slice(&header_bytes).map_err(|e| {
         Oid4vciError::ProofVerificationFailed(format!("Invalid header JSON: {}", e))
@@ -220,8 +265,8 @@ fn verify_jwt_proof_with_key_source(
     verify_signature(
         verification_jwk,
         &header.alg,
-        parts[0],
-        parts[1],
+        parts.header,
+        parts.claims,
         &signature_bytes,
     )?;
 
@@ -248,18 +293,26 @@ fn verify_jwt_proof_with_key_source(
         Oid4vciError::ProofVerificationFailed("Missing required iat claim".into())
     })?;
     let now = chrono::Utc::now().timestamp();
-    if now - issued_at > max_age_seconds {
-        return Err(Oid4vciError::ProofVerificationFailed(format!(
-            "Proof JWT too old: iat={}, now={}, max_age={}s",
-            issued_at, now, max_age_seconds
-        )));
+    let age = now.checked_sub(issued_at).ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Proof JWT iat is outside the supported timestamp range".into(),
+        )
+    })?;
+    if age > max_age_seconds {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Proof JWT is older than the allowed freshness window".into(),
+        ));
     }
     // Allow small clock skew (30 seconds into the future)
-    if issued_at > now + 30 {
-        return Err(Oid4vciError::ProofVerificationFailed(format!(
-            "Proof JWT iat is in the future: iat={}, now={}",
-            issued_at, now
-        )));
+    let future_limit = now.checked_add(30).ok_or_else(|| {
+        Oid4vciError::ProofVerificationFailed(
+            "Proof JWT clock is outside the supported timestamp range".into(),
+        )
+    })?;
+    if issued_at > future_limit {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "Proof JWT iat is in the future".into(),
+        ));
     }
 
     // Step 8: Validate exp
@@ -325,6 +378,15 @@ fn jwk_has_private_material(jwk: &JWK) -> bool {
     }
 }
 
+fn raw_jwk_has_private_material(jwk: &serde_json::Value) -> bool {
+    const PRIVATE_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+    jwk.as_object().is_some_and(|object| {
+        PRIVATE_MEMBERS
+            .iter()
+            .any(|member| object.contains_key(*member))
+    })
+}
+
 fn extract_key_attestation_holder_key(
     header: &ProofHeader,
     validated_key_attestation_jwt: &str,
@@ -344,19 +406,47 @@ fn extract_key_attestation_holder_key(
             "Proof key_attestation does not match the issuer-validated attestation".into(),
         ));
     }
-    let attestation_parts: Vec<&str> = validated_key_attestation_jwt.split('.').collect();
-    if attestation_parts.len() != 3 {
+    let attestation_parts =
+        split_compact_jwt(validated_key_attestation_jwt, ATTESTATION_JWT_LIMITS)
+            .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+    decode_segment(
+        attestation_parts.header,
+        MAX_ATTESTATION_HEADER_BYTES,
+        "Validated key attestation header is not base64url",
+        "Validated key attestation header exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+    let attestation_payload = decode_segment(
+        attestation_parts.claims,
+        MAX_ATTESTATION_PAYLOAD_BYTES,
+        "Validated key attestation payload is not base64url",
+        "Validated key attestation payload exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+    decode_segment(
+        attestation_parts.signature,
+        MAX_JWT_SIGNATURE_BYTES,
+        "Validated key attestation signature is not base64url",
+        "Validated key attestation signature exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+    let raw_attestation: serde_json::Value =
+        serde_json::from_slice(&attestation_payload).map_err(|error| {
+            Oid4vciError::ProofVerificationFailed(format!(
+                "Validated key attestation payload is invalid: {error}"
+            ))
+        })?;
+    if raw_attestation
+        .get("attested_keys")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|keys| keys.iter().any(raw_jwk_has_private_material))
+    {
         return Err(Oid4vciError::ProofVerificationFailed(
-            "Validated key attestation JWT must have exactly 3 parts".into(),
+            "Validated key attestation must contain public keys only".into(),
         ));
     }
-    let attestation_payload = B64.decode(attestation_parts[1]).map_err(|error| {
-        Oid4vciError::ProofVerificationFailed(format!(
-            "Validated key attestation payload is not base64url: {error}"
-        ))
-    })?;
     let attestation: KeyAttestationPayload =
-        serde_json::from_slice(&attestation_payload).map_err(|error| {
+        serde_json::from_value(raw_attestation).map_err(|error| {
             Oid4vciError::ProofVerificationFailed(format!(
                 "Validated key attestation payload is invalid: {error}"
             ))
@@ -378,6 +468,11 @@ fn extract_key_attestation_holder_key(
 
     let jwk = match (&header.kid, &header.jwk) {
         (None, Some(jwk_value)) => {
+            if raw_jwk_has_private_material(jwk_value) {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Key-attestation-bound proof header must contain a public JWK only".into(),
+                ));
+            }
             let proof_jwk: JWK = serde_json::from_value(jwk_value.clone()).map_err(|error| {
                 Oid4vciError::ProofVerificationFailed(format!(
                     "Invalid JWK in key-attestation-bound proof header: {error}"
@@ -543,18 +638,21 @@ fn extract_holder_key(header: &ProofHeader) -> Oid4vciResult<(String, Option<JWK
         )),
         // JWK embedded in header — we can verify the signature
         (None, Some(jwk_value)) => {
+            if raw_jwk_has_private_material(jwk_value) {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Proof header must contain a public JWK only".into(),
+                ));
+            }
             let jwk: JWK = serde_json::from_value(jwk_value.clone()).map_err(|e| {
                 Oid4vciError::ProofVerificationFailed(format!("Invalid JWK in proof header: {}", e))
             })?;
+            if jwk_has_private_material(&jwk) {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "Proof header must contain a public JWK only".into(),
+                ));
+            }
 
-            // Derive a holder ID from the JWK (thumbprint or did:jwk)
-            let jwk_json = serde_json::to_string(&jwk).map_err(|e| {
-                Oid4vciError::ProofVerificationFailed(format!("Failed to serialize JWK: {}", e))
-            })?;
-            let encoded = B64.encode(jwk_json.as_bytes());
-            let holder_id = format!("did:jwk:{}", encoded);
-
-            Ok((holder_id, Some(jwk)))
+            Ok((public_jwk_holder_id(&jwk)?, Some(jwk)))
         }
         // kid only — resolve did:key locally.  Other DID methods require a
         // trusted resolver and verification-method authorization supplied by
@@ -622,38 +720,50 @@ fn verify_signature(
 ) -> Oid4vciResult<()> {
     let message = format!("{}.{}", header_b64, payload_b64);
 
-    // Map algorithm string to SSI AlgorithmInstance
-    let alg_instance = match alg {
-        "ES256" => AlgorithmInstance::ES256,
-        "EdDSA" => AlgorithmInstance::EdDSA,
-        "ES256K" => AlgorithmInstance::ES256K,
-        "ES384" => AlgorithmInstance::ES384,
-        "RS256" => {
-            // RSA verification requires different handling
-            return verify_rsa_signature(jwk, alg, &message, signature);
+    if alg == "RS256" {
+        return verify_rsa_signature(jwk, alg, &message, signature);
+    }
+
+    let verified = match (alg, &jwk.params) {
+        ("EdDSA", Params::OKP(params)) if params.curve == "Ed25519" => {
+            marty_crypto::ed25519::verify(&params.public_key.0, message.as_bytes(), signature)
+                .is_ok()
+        }
+        ("ES256", Params::EC(params)) if params.curve.as_deref() == Some("P-256") => {
+            require_jose_signature_len("ES256", signature, 64)?;
+            let public_key = ec_sec1_public_key(params, 32)?;
+            marty_crypto::ecdsa::verify_p256_sha256(&public_key, message.as_bytes(), signature)
+                .map_err(|error| {
+                    Oid4vciError::ProofVerificationFailed(format!(
+                        "Signature verification failed: {error}"
+                    ))
+                })?
+        }
+        ("ES384", Params::EC(params)) if params.curve.as_deref() == Some("P-384") => {
+            require_jose_signature_len("ES384", signature, 96)?;
+            let public_key = ec_sec1_public_key(params, 48)?;
+            marty_crypto::ecdsa::verify_p384_sha384(&public_key, message.as_bytes(), signature)
+                .map_err(|error| {
+                    Oid4vciError::ProofVerificationFailed(format!(
+                        "Signature verification failed: {error}"
+                    ))
+                })?
+        }
+        ("ES256K", Params::EC(params)) if params.curve.as_deref() == Some("secp256k1") => {
+            verify_secp256k1_signature(params, message.as_bytes(), signature)?
+        }
+        ("ES256" | "ES384" | "ES256K" | "EdDSA", _) => {
+            return Err(Oid4vciError::ProofVerificationFailed(format!(
+                "Proof algorithm {alg} does not match the supplied public JWK"
+            )));
         }
         _ => {
             return Err(Oid4vciError::ProofVerificationFailed(format!(
-                "Unsupported proof signing algorithm: {}",
-                alg
+                "Unsupported proof signing algorithm: {alg}"
             )));
         }
     };
 
-    // Extract public key from JWK
-    let public_key = extract_public_key(jwk)?;
-
-    // Verify using SSI's crypto
-    let verified = public_key
-        .verify(alg_instance, message.as_bytes(), signature)
-        .map_err(|e| {
-            Oid4vciError::ProofVerificationFailed(format!("Signature verification failed: {:?}", e))
-        })?;
-
-    // `ssi_crypto::AlgorithmInstance::verify` communicates an invalid
-    // cryptographic signature as `Ok(false)`, not an error.  Treat both forms
-    // of failure identically: accepting `false` would issue a credential for
-    // a tampered proof.
     if !verified {
         return Err(Oid4vciError::ProofVerificationFailed(
             "Signature verification failed: invalid signature".into(),
@@ -663,42 +773,66 @@ fn verify_signature(
     Ok(())
 }
 
-/// Extract a public key from a JWK for verification.
-fn extract_public_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::PublicKey> {
-    match &jwk.params {
-        Params::OKP(params) => ssi_crypto::PublicKey::new_ed25519(&params.public_key.0)
-            .map_err(|e| Oid4vciError::KeyError(format!("Invalid Ed25519 public key: {:?}", e))),
-        Params::EC(params) => {
-            // For EC keys, we need both x and y coordinates
-            let x = params
-                .x_coordinate
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing EC x coordinate".into()))?;
-            let y = params
-                .y_coordinate
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing EC y coordinate".into()))?;
-
-            match params.curve.as_deref() {
-                Some("P-256") => ssi_crypto::PublicKey::new_p256(&x.0, &y.0).map_err(|e| {
-                    Oid4vciError::KeyError(format!("Invalid P-256 public key: {:?}", e))
-                }),
-                Some("secp256k1") => {
-                    ssi_crypto::PublicKey::new_secp256k1(&x.0, &y.0).map_err(|e| {
-                        Oid4vciError::KeyError(format!("Invalid secp256k1 public key: {:?}", e))
-                    })
-                }
-                Some(curve) => Err(Oid4vciError::KeyError(format!(
-                    "Unsupported EC curve for proof verification: {}",
-                    curve
-                ))),
-                None => Err(Oid4vciError::KeyError("Missing curve in EC JWK".into())),
-            }
-        }
-        _ => Err(Oid4vciError::KeyError(
-            "Unsupported key type for proof verification (expected OKP or EC)".into(),
-        )),
+fn require_jose_signature_len(
+    algorithm: &str,
+    signature: &[u8],
+    expected: usize,
+) -> Oid4vciResult<()> {
+    if signature.len() != expected {
+        return Err(Oid4vciError::ProofVerificationFailed(format!(
+            "{algorithm} proof signature must contain exactly {expected} bytes"
+        )));
     }
+    Ok(())
+}
+
+fn ec_sec1_public_key(params: &ssi_jwk::ECParams, coordinate_len: usize) -> Oid4vciResult<Vec<u8>> {
+    let x = params
+        .x_coordinate
+        .as_ref()
+        .ok_or_else(|| Oid4vciError::KeyError("Missing EC x coordinate".into()))?;
+    let y = params
+        .y_coordinate
+        .as_ref()
+        .ok_or_else(|| Oid4vciError::KeyError("Missing EC y coordinate".into()))?;
+    if x.0.len() != coordinate_len || y.0.len() != coordinate_len {
+        return Err(Oid4vciError::KeyError(format!(
+            "EC public key coordinates must each contain {coordinate_len} bytes"
+        )));
+    }
+
+    let mut public_key = Vec::with_capacity(1 + 2 * coordinate_len);
+    public_key.push(0x04);
+    public_key.extend_from_slice(&x.0);
+    public_key.extend_from_slice(&y.0);
+    Ok(public_key)
+}
+
+fn verify_secp256k1_signature(
+    params: &ssi_jwk::ECParams,
+    message: &[u8],
+    signature: &[u8],
+) -> Oid4vciResult<bool> {
+    use sha2::Digest as _;
+
+    let public_key = ec_sec1_public_key(params, 32)?;
+    let public_key = k256::PublicKey::from_sec1_bytes(&public_key).map_err(|error| {
+        Oid4vciError::KeyError(format!("Invalid secp256k1 public key: {error}"))
+    })?;
+    let signature = k256::ecdsa::Signature::from_slice(signature).map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!("Invalid ES256K signature encoding: {error}"))
+    })?;
+    let digest = sha2::Sha256::digest(message);
+    let z = k256::ecdsa::hazmat::bits2field::<k256::Secp256k1>(&digest).map_err(|error| {
+        Oid4vciError::ProofVerificationFailed(format!(
+            "Could not prepare ES256K signature digest: {error}"
+        ))
+    })?;
+    let public_point = k256::ProjectivePoint::from(*public_key.as_affine());
+    Ok(
+        k256::ecdsa::hazmat::verify_prehashed::<k256::Secp256k1>(&public_point, &z, &signature)
+            .is_ok(),
+    )
 }
 
 /// Verify an RSA signature (RS256).
@@ -738,6 +872,7 @@ pub fn extract_proof_jwts(request: &crate::types::CredentialRequest) -> Oid4vciR
 // ---------------------------------------------------------------------------
 
 /// Base58btc encoder using the Bitcoin alphabet (no multibase prefix).
+#[cfg(any(test, feature = "holder-key-operations"))]
 fn base58btc_encode(data: &[u8]) -> String {
     const ALPHA: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let n_leading = data.iter().take_while(|&&b| b == 0).count();
@@ -769,6 +904,7 @@ fn base58btc_encode(data: &[u8]) -> String {
 /// The returned JWT passes `verify_jwt_proof` because the `kid` is a `did:key`
 /// whose public key is resolved inline (no network I/O) and the signature is
 /// verified cryptographically.
+#[cfg(any(test, feature = "holder-key-operations"))]
 pub fn create_proof_jwt(aud: &str, c_nonce: &str) -> Oid4vciResult<String> {
     // Generate ephemeral Ed25519 key pair
     let signing_key = SigningKey::generate(&mut OsRng);
@@ -806,7 +942,9 @@ pub fn create_proof_jwt(aud: &str, c_nonce: &str) -> Oid4vciResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k256::ecdsa::{Signature as K256Signature, SigningKey as K256SigningKey};
     use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
+    use p384::ecdsa::{Signature as P384Signature, SigningKey as P384SigningKey};
 
     fn embedded_ed25519_jwk(signing_key: &SigningKey) -> serde_json::Value {
         serde_json::json!({
@@ -872,6 +1010,65 @@ mod tests {
     }
 
     #[test]
+    fn verifier_only_backends_cover_es384_and_es256k() {
+        let header = "header";
+        let payload = "payload";
+        let signing_input = format!("{header}.{payload}");
+
+        let p384_key = P384SigningKey::random(&mut OsRng);
+        let p384_point = p384_key.verifying_key().to_encoded_point(false);
+        let p384_jwk: JWK = serde_json::from_value(serde_json::json!({
+            "kty": "EC",
+            "crv": "P-384",
+            "x": B64.encode(p384_point.x().unwrap()),
+            "y": B64.encode(p384_point.y().unwrap()),
+        }))
+        .unwrap();
+        let p384_signature: P384Signature = p384_key.sign(signing_input.as_bytes());
+        assert!(verify_signature(
+            &p384_jwk,
+            "ES384",
+            header,
+            payload,
+            &p384_signature.to_bytes(),
+        )
+        .is_ok());
+
+        let k256_key = K256SigningKey::random(&mut OsRng);
+        let k256_point = k256_key.verifying_key().to_encoded_point(false);
+        let k256_jwk: JWK = serde_json::from_value(serde_json::json!({
+            "kty": "EC",
+            "crv": "secp256k1",
+            "x": B64.encode(k256_point.x().unwrap()),
+            "y": B64.encode(k256_point.y().unwrap()),
+        }))
+        .unwrap();
+        let k256_signature: K256Signature = k256_key.sign(signing_input.as_bytes());
+        assert!(verify_signature(
+            &k256_jwk,
+            "ES256K",
+            header,
+            payload,
+            &k256_signature.to_bytes(),
+        )
+        .is_ok());
+
+        let mut tampered = k256_signature.to_bytes();
+        tampered[0] ^= 0x01;
+        assert!(verify_signature(&k256_jwk, "ES256K", header, payload, &tampered).is_err());
+        assert!(verify_signature(
+            &k256_jwk,
+            "ES256",
+            header,
+            payload,
+            &k256_signature.to_bytes(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("does not match"));
+    }
+
+    #[test]
     fn test_extract_proof_jwts_v1_format() {
         let request = crate::types::CredentialRequest {
             format: Some("jwt_vc_json".into()),
@@ -907,6 +1104,54 @@ mod tests {
     }
 
     #[test]
+    fn proof_and_attestation_inputs_are_bounded_before_decode_or_key_selection() {
+        let oversized =
+            "secret-sentinel".repeat(MAX_COMPACT_PROOF_JWT_BYTES / "secret-sentinel".len() + 1);
+        let error = verify_jwt_proof(&oversized, "", None, 300).unwrap_err();
+        assert!(error.to_string().contains("size limit"));
+        assert!(!error.to_string().contains("secret-sentinel"));
+
+        let many_parts = std::iter::repeat_n("secret-sentinel", 10_000)
+            .collect::<Vec<_>>()
+            .join(".");
+        let error = verify_jwt_proof(&many_parts, "", None, 300).unwrap_err();
+        assert!(error.to_string().contains("exactly three"));
+        assert!(!error.to_string().contains("secret-sentinel"));
+
+        let attestation = "secret-sentinel"
+            .repeat(MAX_COMPACT_KEY_ATTESTATION_JWT_BYTES / "secret-sentinel".len() + 1);
+        let error =
+            verify_key_attestation_bound_jwt_proof("invalid-proof", "", None, 300, &attestation)
+                .unwrap_err();
+        assert!(error.to_string().contains("attestation exceeds"));
+        assert!(!error.to_string().contains("secret-sentinel"));
+    }
+
+    #[test]
+    fn proof_freshness_rejects_extreme_iat_and_negative_policy() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let header = serde_json::json!({
+            "alg": "EdDSA",
+            "typ": "openid4vci-proof+jwt",
+            "jwk": embedded_ed25519_jwk(&signing_key),
+        });
+        for issued_at in [i64::MIN, i64::MAX] {
+            let proof = sign_test_proof(
+                &signing_key,
+                header.clone(),
+                serde_json::json!({
+                    "aud": "https://issuer.example",
+                    "iat": issued_at,
+                }),
+            );
+            assert!(verify_jwt_proof(&proof, "https://issuer.example", None, 300).is_err());
+        }
+
+        let error = verify_jwt_proof("invalid-proof", "", None, -1).unwrap_err();
+        assert!(error.to_string().contains("must be nonnegative"));
+    }
+
+    #[test]
     fn test_extract_holder_key_from_kid() {
         let header = ProofHeader {
             alg: "ES256".into(),
@@ -937,6 +1182,31 @@ mod tests {
         };
 
         assert!(extract_holder_key(&header).is_err());
+    }
+
+    #[test]
+    fn ordinary_proof_header_rejects_all_private_jwk_key_types() {
+        let private_jwks = [
+            serde_json::json!({"kty":"EC","crv":"P-256","x":"x","y":"y","d":"secret"}),
+            serde_json::json!({"kty":"EC","crv":"P-256","x":"x","y":"y","rsa_d":"secret"}),
+            serde_json::json!({"kty":"OKP","crv":"Ed25519","x":"x","d":"secret"}),
+            serde_json::json!({"kty":"RSA","n":"n","e":"AQAB","d":"secret"}),
+            serde_json::json!({"kty":"RSA","n":"n","e":"AQAB","p":"secret"}),
+            serde_json::json!({"kty":"RSA","n":"n","e":"AQAB","oth":[{"r":"secret","d":"secret","t":"secret"}]}),
+            serde_json::json!({"kty":"oct","k":"secret"}),
+        ];
+
+        for jwk in private_jwks {
+            let header = ProofHeader {
+                alg: "ES256".into(),
+                kid: None,
+                jwk: Some(jwk),
+                typ: Some("openid4vci-proof+jwt".into()),
+                key_attestation: None,
+            };
+            let error = extract_holder_key(&header).unwrap_err();
+            assert!(error.to_string().contains("public JWK only"));
+        }
     }
 
     #[test]
@@ -1495,5 +1765,70 @@ mod tests {
         )
         .unwrap_err();
         assert!(empty_error.to_string().contains("no attested public keys"));
+    }
+
+    #[test]
+    fn key_attestation_binding_rejects_every_raw_private_jwk_member() {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let public_jwk = embedded_ed25519_jwk(&signing_key);
+        let payload = serde_json::json!({
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+
+        for member in ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            let mut private_attested_jwk = public_jwk.clone();
+            private_attested_jwk
+                .as_object_mut()
+                .expect("test JWK is an object")
+                .insert(member.into(), serde_json::json!("secret"));
+            let private_attestation = validated_key_attestation_jwt(vec![private_attested_jwk]);
+            let proof = sign_test_proof(
+                &signing_key,
+                serde_json::json!({
+                    "alg": "EdDSA",
+                    "typ": "openid4vci-proof+jwt",
+                    "jwk": public_jwk.clone(),
+                    "key_attestation": &private_attestation,
+                }),
+                payload.clone(),
+            );
+            let error = verify_key_attestation_bound_jwt_proof(
+                &proof,
+                "https://issuer.example",
+                Some("nonce-1"),
+                300,
+                &private_attestation,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("public keys only"));
+
+            let attestation = validated_key_attestation_jwt(vec![public_jwk.clone()]);
+            let mut private_header_jwk = public_jwk.clone();
+            private_header_jwk
+                .as_object_mut()
+                .expect("test JWK is an object")
+                .insert(member.into(), serde_json::json!("secret"));
+            let proof = sign_test_proof(
+                &signing_key,
+                serde_json::json!({
+                    "alg": "EdDSA",
+                    "typ": "openid4vci-proof+jwt",
+                    "jwk": private_header_jwk,
+                    "key_attestation": &attestation,
+                }),
+                payload.clone(),
+            );
+            let error = verify_key_attestation_bound_jwt_proof(
+                &proof,
+                "https://issuer.example",
+                Some("nonce-1"),
+                300,
+                &attestation,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("public JWK only"));
+        }
     }
 }

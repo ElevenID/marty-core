@@ -46,25 +46,37 @@
 //! }).unwrap();
 //! ```
 
-pub mod offer_uri;
+#[cfg(all(
+    feature = "kms-only",
+    any(feature = "holder-key-operations", feature = "local-key-operations")
+))]
+compile_error!("kms-only builds cannot include local issuer or holder key operations");
 
+mod bounded_jwt;
 pub mod discovery;
 pub mod error;
 pub mod formats;
+#[cfg(any(test, feature = "holder-key-operations"))]
 pub mod holder_key;
+#[cfg(feature = "issuer")]
 pub mod issuer;
 pub mod jose;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
+pub mod offer_uri;
 pub mod oidc;
 pub mod presentation_request;
 pub mod proof;
+#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 pub mod remote_credential;
+#[cfg(any(test, feature = "issuer"))]
 pub mod signer;
+#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 pub mod signing_batch;
 pub mod siop;
 pub mod types;
+#[cfg(feature = "verifier")]
 pub mod verifier;
 pub mod wallet_input;
 
@@ -74,17 +86,76 @@ pub mod wallet;
 mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
+#[cfg(feature = "holder-key-operations")]
 pub use holder_key::{
     generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
     DidJwkHolderKeyMaterial,
 };
+
+#[cfg(not(feature = "local-key-operations"))]
+/// The default issuer surface cannot construct or use an in-process issuer key.
+///
+/// ```compile_fail
+/// use marty_oid4vci::types::{IssuerKey, SigningAlgorithm};
+/// let _ = IssuerKey {
+///     issuer_id: "did:example:issuer".into(),
+///     jwk_json: "{\"d\":\"private\"}".into(),
+///     algorithm: SigningAlgorithm::ES256,
+/// };
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::issuer::generate_p256_jwk_pair;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::issuer::detect_algorithm;
+/// ```
+mod local_issuer_key_compile_boundary {}
+
+#[cfg(not(feature = "holder-key-operations"))]
+/// Issuer and verifier artifacts cannot create holder proof keys.
+///
+/// ```compile_fail
+/// use marty_oid4vci::proof::create_proof_jwt;
+/// let _ = create_proof_jwt("https://issuer.example", "nonce");
+/// ```
+mod holder_key_compile_boundary {}
+
+#[cfg(not(feature = "issuer"))]
+/// Verifier-only artifacts do not expose credential preparation or signer callbacks.
+///
+/// ```compile_fail
+/// use marty_oid4vci::CredentialSigner;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::sd_jwt::prepare_sd_jwt;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::jwt_vc::prepare_jwt_vc;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::mdoc::prepare_mdoc;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::formats::vds_nc::sign_vds_nc_with_signer;
+/// ```
+mod verifier_role_compile_boundary {}
+
+#[cfg(feature = "issuer")]
 pub use issuer::{generate_pkce_challenge_s256, verify_pkce_s256, IssuanceEngine};
+#[cfg(feature = "issuer")]
 pub use signer::CredentialSigner;
 pub use types::{
     AuthorizationCodeGrant, AuthorizationCodeTokenRequest, AuthorizationDetail,
     AuthorizationRequest, AuthorizationResponse, AuthorizationSession, CodeChallengeMethod,
     CredentialFormat, GrantType, ZkPredicateBinding,
 };
+#[cfg(feature = "verifier")]
 pub use verifier::VerificationEngine;
 pub use wallet_input::{
     classify_wallet_input, normalize_credential_offer_uri, ClassifiedWalletInput, WalletInputKind,

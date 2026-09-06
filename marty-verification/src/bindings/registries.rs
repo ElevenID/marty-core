@@ -1,6 +1,23 @@
 //! Python adapters for registries.
 
-use super::*;
+use super::to_pyerr;
+#[cfg(feature = "csca")]
+use crate::trust_anchor::csca::CscaRegistry;
+use crate::trust_anchor::eudi::EuMemberState;
+use crate::trust_anchor::eudi::EudiRegistry;
+use crate::trust_anchor::eudi::TrustServiceProvider;
+use crate::trust_anchor::eudi::TspStatus;
+use crate::trust_anchor::BasicTrustRegistry;
+use crate::trust_anchor::IacaRegistry;
+use crate::trust_anchor::PemTrustAnchor;
+use crate::trust_anchor::TrustPurpose;
+use crate::trust_anchor::TrustRegistry;
+use crate::verification::mdl::AuthStatus;
+use crate::verification::mdl::MdlVerificationResult;
+use crate::verification::mdl::ValidationRuleset;
+use crate::VerificationError;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 /// Python wrapper for MdlVerificationResult.
 #[pyclass(name = "MdlVerificationResult", from_py_object)]
@@ -245,6 +262,10 @@ pub(super) fn verify_mdl_x5chain_cbor(
     Ok(result.into())
 }
 
+// ============================================================================
+// EUDI Registry Bindings
+// ============================================================================
+
 /// Python wrapper for EU Member State.
 #[pyclass(name = "EuMemberState", from_py_object)]
 #[derive(Clone)]
@@ -447,6 +468,10 @@ impl PyEudiRegistry {
         Ok(pems)
     }
 }
+
+// ============================================================================
+// CSCA Registry Bindings (feature-gated)
+// ============================================================================
 
 /// Python wrapper for CscaRegistry.
 #[cfg(feature = "csca")]

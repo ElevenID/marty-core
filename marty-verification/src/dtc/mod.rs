@@ -13,16 +13,24 @@ use chrono::{DateTime, Utc};
 use const_oid::{db::rfc5280::ID_CE_EXT_KEY_USAGE, ObjectIdentifier};
 use der::Decode;
 use iref::IriBuf;
+#[cfg(feature = "local-key-operations")]
+use p256::ecdsa::{signature::Signer, SigningKey as P256SigningKey};
 use p256::ecdsa::{
-    signature::Signer, signature::Verifier, Signature as P256Signature,
-    SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey,
+    signature::Verifier, Signature as P256Signature, VerifyingKey as P256VerifyingKey,
 };
-use p256::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
-use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
-use p384::ecdsa::{
-    Signature as P384Signature, SigningKey as P384SigningKey, VerifyingKey as P384VerifyingKey,
-};
-use p384::{PublicKey as P384PublicKey, SecretKey as P384SecretKey};
+#[cfg(feature = "local-key-operations")]
+use p256::pkcs8::DecodePrivateKey as _;
+use p256::pkcs8::DecodePublicKey as _;
+use p256::PublicKey as P256PublicKey;
+#[cfg(feature = "local-key-operations")]
+use p256::SecretKey as P256SecretKey;
+#[cfg(feature = "local-key-operations")]
+use p384::ecdsa::SigningKey as P384SigningKey;
+use p384::ecdsa::{Signature as P384Signature, VerifyingKey as P384VerifyingKey};
+use p384::PublicKey as P384PublicKey;
+#[cfg(feature = "local-key-operations")]
+use p384::SecretKey as P384SecretKey;
+#[cfg(feature = "local-key-operations")]
 use pkcs8::PrivateKeyInfo;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use serde_json::{json, Value};
@@ -546,6 +554,7 @@ fn curve_from_oid(oid: ObjectIdentifier) -> Option<EcCurve> {
     }
 }
 
+#[cfg(feature = "local-key-operations")]
 fn detect_curve_from_private_key_pem(pem: &str) -> VerificationResult<EcCurve> {
     let der = decode_pem_body(pem)?;
     if let Ok(pkcs8) = PrivateKeyInfo::try_from(der.as_slice()) {
@@ -593,6 +602,7 @@ fn detect_curve_from_public_key_pem(pem: &str) -> VerificationResult<EcCurve> {
     }
 }
 
+#[cfg(feature = "local-key-operations")]
 fn parse_p256_signing_key(pem: &str) -> VerificationResult<P256SigningKey> {
     let pkcs8 = P256SigningKey::from_pkcs8_pem(pem).map_err(|e| e.to_string());
     if let Ok(key) = pkcs8 {
@@ -616,6 +626,7 @@ fn parse_p256_signing_key(pem: &str) -> VerificationResult<P256SigningKey> {
     Ok(P256SigningKey::from(secret))
 }
 
+#[cfg(feature = "local-key-operations")]
 fn parse_p384_signing_key(pem: &str) -> VerificationResult<P384SigningKey> {
     let pkcs8 = P384SigningKey::from_pkcs8_pem(pem).map_err(|e| e.to_string());
     if let Ok(key) = pkcs8 {
@@ -639,6 +650,7 @@ fn parse_p384_signing_key(pem: &str) -> VerificationResult<P384SigningKey> {
     Ok(P384SigningKey::from(secret))
 }
 
+#[cfg(feature = "local-key-operations")]
 fn sign_ecdsa(payload: &[u8], signing_key_pem: &str) -> VerificationResult<String> {
     match detect_curve_from_private_key_pem(signing_key_pem)? {
         EcCurve::P256 => {
@@ -1001,6 +1013,7 @@ fn validate_bounded_text(
     Ok(text.to_string())
 }
 
+#[cfg(feature = "local-key-operations")]
 pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
     // Accept optional signing_key_pem and signer_public_key_pem in the JSON envelope
     let value: Value = serde_json::from_str(input)

@@ -1,4 +1,5 @@
 use base64::Engine;
+use marty_oid4vci::signer::MAX_REMOTE_RSA_SIGNATURE_BYTES;
 use marty_oid4vci::{
     remote_credential::{
         prepare_remote_jwt_vc, prepare_remote_sd_jwt, RemoteJwtVcRequest, RemoteSdJwtRequest,
@@ -31,8 +32,8 @@ impl PreparedRemoteCredential {
     #[getter]
     fn signing_input(&self) -> PyResult<String> {
         match self.inner.as_ref() {
-            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.signing_input.clone()),
-            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.signing_input.clone()),
+            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.signing_input().to_owned()),
+            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.signing_input().to_owned()),
             None => Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "credential preparation has already been assembled",
             )),
@@ -42,8 +43,8 @@ impl PreparedRemoteCredential {
     #[getter]
     fn credential_id(&self) -> PyResult<String> {
         match self.inner.as_ref() {
-            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.credential_id.clone()),
-            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.credential_id.clone()),
+            Some(PreparedCredential::SdJwt(prepared)) => Ok(prepared.credential_id().to_owned()),
+            Some(PreparedCredential::JwtVc(prepared)) => Ok(prepared.credential_id().to_owned()),
             None => Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "credential preparation has already been assembled",
             )),
@@ -60,11 +61,39 @@ fn parse_claims(
 }
 
 fn decode_signature(signature_b64: &str) -> PyResult<Vec<u8>> {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
+    const MAX_ENCODED_SIGNATURE_BYTES: usize = (MAX_REMOTE_RSA_SIGNATURE_BYTES * 4).div_ceil(3);
+    if signature_b64.len() > MAX_ENCODED_SIGNATURE_BYTES {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Remote signature exceeds the supported 8192-bit RSA limit",
+        ));
+    }
+    let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(signature_b64)
         .map_err(|error| {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid signature base64: {error}"))
-        })
+        })?;
+    if signature.len() > MAX_REMOTE_RSA_SIGNATURE_BYTES {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Remote signature exceeds the supported 8192-bit RSA limit",
+        ));
+    }
+    Ok(signature)
+}
+
+#[cfg(test)]
+mod signature_decode_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_encoded_remote_signature_before_unbounded_decode() {
+        let at_limit = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode([1; MAX_REMOTE_RSA_SIGNATURE_BYTES]);
+        assert_eq!(decode_signature(&at_limit).unwrap().len(), 1024);
+
+        let over_limit = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode([1; MAX_REMOTE_RSA_SIGNATURE_BYTES + 1]);
+        assert!(decode_signature(&over_limit).is_err());
+    }
 }
 
 /// Prepare a complete SD-JWT issuer payload while retaining disclosure state
@@ -130,7 +159,25 @@ fn oid4vci_assemble_sd_jwt(
     mut prepared: PyRefMut<'_, PreparedRemoteCredential>,
     signature_b64: &str,
 ) -> PyResult<(String, String)> {
+    assemble_sd_jwt_impl(&mut prepared, signature_b64)
+}
+
+fn assemble_sd_jwt_impl(
+    prepared: &mut PreparedRemoteCredential,
+    signature_b64: &str,
+) -> PyResult<(String, String)> {
     let signature = decode_signature(signature_b64)?;
+    let state = prepared.inner.as_ref().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "credential preparation has already been assembled",
+        )
+    })?;
+    let PreparedCredential::SdJwt(state) = state else {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "prepared credential is not an SD-JWT",
+        ));
+    };
+    state.validate_signature(&signature).map_err(remote_pyerr)?;
     let state = prepared.inner.take().ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
             "credential preparation has already been assembled",
@@ -141,7 +188,9 @@ fn oid4vci_assemble_sd_jwt(
             "prepared credential is not an SD-JWT",
         ));
     };
-    match marty_oid4vci::formats::sd_jwt::assemble_sd_jwt(state, &signature) {
+    match marty_oid4vci::formats::sd_jwt::assemble_sd_jwt(state, &signature)
+        .map_err(remote_pyerr)?
+    {
         SignedCredential::SdJwt {
             compact,
             credential_id,
@@ -260,7 +309,25 @@ fn oid4vci_assemble_jwt_vc(
     mut prepared: PyRefMut<'_, PreparedRemoteCredential>,
     signature_b64: &str,
 ) -> PyResult<(String, String)> {
+    assemble_jwt_vc_impl(&mut prepared, signature_b64)
+}
+
+fn assemble_jwt_vc_impl(
+    prepared: &mut PreparedRemoteCredential,
+    signature_b64: &str,
+) -> PyResult<(String, String)> {
     let signature = decode_signature(signature_b64)?;
+    let state = prepared.inner.as_ref().ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "credential preparation has already been assembled",
+        )
+    })?;
+    let PreparedCredential::JwtVc(state) = state else {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "prepared credential is not a JWT-VC",
+        ));
+    };
+    state.validate_signature(&signature).map_err(remote_pyerr)?;
     let state = prepared.inner.take().ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
             "credential preparation has already been assembled",
@@ -271,7 +338,9 @@ fn oid4vci_assemble_jwt_vc(
             "prepared credential is not a JWT-VC",
         ));
     };
-    match marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(state, &signature) {
+    match marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(state, &signature)
+        .map_err(remote_pyerr)?
+    {
         SignedCredential::JwtVcJson { jwt, credential_id } => Ok((jwt, credential_id)),
         _ => Err(pyo3::exceptions::PyRuntimeError::new_err(
             "JWT-VC assembler returned an unexpected credential format",
@@ -313,25 +382,43 @@ mod tests {
             vec!["name".to_string()],
             Some("dc+sd-jwt"),
             Some("urn:uuid:00000000-0000-0000-0000-000000000123"),
-            Some(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y","d":"secret"}"#),
+            Some(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y"}"#),
             vec!["leaf".to_string(), "issuer".to_string()],
         )
         .expect("native SD-JWT preparation");
         let PreparedCredential::SdJwt(state) = prepared.inner.expect("prepared state") else {
             panic!("expected SD-JWT state")
         };
-        let mut segments = state.signing_input.split('.');
+        let mut segments = state.signing_input().split('.');
         let header = decode_segment(segments.next().expect("header"));
         let payload = decode_segment(segments.next().expect("payload"));
         assert_eq!(header["kid"], "did:web:issuer.example#key-1");
         assert_eq!(header["typ"], "dc+sd-jwt");
         assert_eq!(header["x5c"], serde_json::json!(["leaf", "issuer"]));
-        assert_eq!(payload["jti"], state.credential_id);
+        assert_eq!(payload["jti"], state.credential_id());
         assert_eq!(payload["cnf"]["jwk"]["x"], "x");
         assert!(payload["cnf"]["jwk"].get("d").is_none());
         assert!(payload.get("nbf").is_some());
         assert!(payload.get("name").is_none());
         assert!(payload.get("_sd").is_some());
+
+        let private_error = oid4vci_prepare_sd_jwt(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key-1",
+            "ES256",
+            Some("did:key:holder"),
+            "AccessBadge",
+            r#"{"name":"Alice"}"#,
+            Some(3600),
+            vec!["name".to_string()],
+            Some("dc+sd-jwt"),
+            None,
+            Some(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y","d":"secret"}"#),
+            vec![],
+        )
+        .err()
+        .expect("private holder JWK must be rejected by the binding");
+        assert!(private_error.to_string().contains("private member"));
     }
 
     #[test]
@@ -353,11 +440,11 @@ mod tests {
         let PreparedCredential::JwtVc(state) = prepared.inner.expect("prepared state") else {
             panic!("expected JWT-VC state")
         };
-        let mut segments = state.signing_input.split('.');
+        let mut segments = state.signing_input().split('.');
         let header = decode_segment(segments.next().expect("header"));
         let payload = decode_segment(segments.next().expect("payload"));
         assert_eq!(header["kid"], "did:web:issuer.example#key-1");
-        assert_eq!(payload["jti"], state.credential_id);
+        assert_eq!(payload["jti"], state.credential_id());
         assert!(payload.get("sub").is_none());
         assert!(payload.get("nbf").is_some());
         assert_eq!(
@@ -389,7 +476,7 @@ mod tests {
         let PreparedCredential::JwtVc(state) = prepared.inner.expect("prepared state") else {
             panic!("expected JWT-VC state")
         };
-        let payload = decode_segment(state.signing_input.split('.').nth(1).expect("payload"));
+        let payload = decode_segment(state.signing_input().split('.').nth(1).expect("payload"));
         assert_eq!(
             payload["vc"]["type"],
             serde_json::json!(["VerifiableCredential", "OpenBadgeCredential"])
@@ -417,5 +504,64 @@ mod tests {
             Some("https://issuer.example/credentials/member-badge"),
         )
         .is_err());
+    }
+
+    #[test]
+    fn malformed_remote_signature_does_not_consume_sd_jwt_state() {
+        let mut prepared = oid4vci_prepare_sd_jwt(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key-1",
+            "ES256",
+            None,
+            "AccessBadge",
+            r#"{"name":"Alice"}"#,
+            None,
+            vec![],
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+        let malformed = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 63]);
+
+        assert!(assemble_sd_jwt_impl(&mut prepared, &malformed).is_err());
+        assert!(prepared.inner.is_some());
+
+        let mut valid_signature = [0u8; 64];
+        valid_signature[31] = 1;
+        valid_signature[63] = 1;
+        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
+        assert!(assemble_sd_jwt_impl(&mut prepared, &valid_width).is_ok());
+        assert!(prepared.inner.is_none());
+    }
+
+    #[test]
+    fn malformed_remote_signature_does_not_consume_jwt_vc_state() {
+        let mut prepared = oid4vci_prepare_jwt_vc(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key-1",
+            "ES256",
+            None,
+            "AccessBadge",
+            r#"{"name":"Alice"}"#,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let malformed = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 63]);
+
+        assert!(assemble_jwt_vc_impl(&mut prepared, &malformed).is_err());
+        assert!(prepared.inner.is_some());
+
+        let mut valid_signature = [0u8; 64];
+        valid_signature[31] = 1;
+        valid_signature[63] = 1;
+        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
+        assert!(assemble_jwt_vc_impl(&mut prepared, &valid_width).is_ok());
+        assert!(prepared.inner.is_none());
     }
 }

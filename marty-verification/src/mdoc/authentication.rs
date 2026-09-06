@@ -963,7 +963,7 @@ mod tests {
             Some(&holder_jwk),
         )
         .unwrap();
-        let issuer_signature = issuer_key.sign(&prepared.tbs_data).unwrap();
+        let issuer_signature = issuer_key.sign(prepared.signing_payload()).unwrap();
         let credential = assemble_mdoc(prepared, &issuer_signature).unwrap();
         let SignedCredential::MsoMdoc {
             issuer_signed_b64, ..
