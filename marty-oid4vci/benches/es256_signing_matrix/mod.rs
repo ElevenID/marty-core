@@ -1,3 +1,6 @@
+#[path = "../../src/benchmark_support/selectors.rs"]
+mod selectors;
+use selectors::selector_values;
 use std::collections::HashMap;
 
 use marty_oid4vci::types::{CredentialClaims, CredentialPayloadFormat};
@@ -117,31 +120,6 @@ impl MatrixSelection {
 
 pub fn matrix_enabled() -> bool {
     std::env::var(MATRIX_ENABLE_ENV).is_ok_and(|value| value == "1")
-}
-
-fn selector_values(name: &str) -> Option<Vec<String>> {
-    let value = match std::env::var(name) {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return None,
-        Err(std::env::VarError::NotUnicode(_)) => panic!("{name} must contain Unicode text"),
-    };
-    let values = value
-        .split(',')
-        .map(|value| {
-            assert!(!value.is_empty(), "{name} contains an empty value");
-            let value = value.trim();
-            assert!(!value.is_empty(), "{name} contains an empty value");
-            value
-        })
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    assert!(!values.is_empty(), "{name} must select at least one value");
-    if values.iter().any(|value| value == "all") {
-        assert_eq!(values, ["all"], "{name}=all cannot be combined with values");
-        None
-    } else {
-        Some(values)
-    }
 }
 
 fn parse_named_selector<T: Copy + Eq>(
