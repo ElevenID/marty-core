@@ -7,9 +7,6 @@
 // Rust 1.97 flags even though they are outside the handwritten function bodies.
 #![allow(clippy::useless_conversion)]
 
-#[cfg(all(feature = "kms-only", feature = "local-key-operations"))]
-compile_error!("kms-only bindings cannot include local credential key operations");
-
 mod device_auth;
 mod flow;
 mod haip;
@@ -19,7 +16,7 @@ mod remote_credential;
 mod siop;
 mod status_list;
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use marty_oid4vci::issuance_input::normalize_zk_predicate_claims;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -108,157 +105,13 @@ fn key_attestation_behavior_fixture() -> &'static str {
 }
 
 // ============================================================================
-// Key Generation
+// Public Key Identifiers
 // ============================================================================
-
-/// Generate a P-256 ECDSA key pair for signing credentials.
-///
-/// Returns:
-///     Tuple of (private_key, public_key) as bytes.
-///     Private key is 32 bytes, public key is 65 bytes (uncompressed).
-///
-/// Example:
-///     >>> secret, public = generate_p256_key()
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn generate_p256_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Generate a P-256 private JWK and its public-only JWK.
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn generate_p256_jwk() -> PyResult<(String, String)> {
-    marty_oid4vci::issuer::generate_p256_jwk_pair().map_err(to_pyerr)
-}
-
-/// Generate a did:jwk identifier and P-256 private signing JWK.
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn generate_p256_did_jwk() -> PyResult<(String, String)> {
-    marty_oid4vci::issuer::generate_p256_did_jwk().map_err(to_pyerr)
-}
 
 /// Derive a self-describing `did:jwk` or `did:key` from a P-256 public JWK.
 #[pyfunction]
 fn derive_p256_did_identifier(public_jwk_json: &str, method: &str) -> PyResult<String> {
     marty_didcomm::derive_p256_did_identifier(public_jwk_json, method).map_err(to_pyerr)
-}
-
-/// Generate a P-384 ECDSA key pair for signing credentials.
-///
-/// Returns:
-///     Tuple of (private_key, public_key) as bytes.
-///     Private key is 48 bytes, public key is 97 bytes (uncompressed).
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn generate_p384_key<'py>(py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Generate an Ed25519 key pair for signing credentials.
-///
-/// Returns:
-///     Tuple of (private_key, public_key) as bytes.
-///     Both keys are 32 bytes.
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn generate_ed25519_key<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ed25519::generate_keypair();
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Generate an Ed25519 `did:key` and its private JWK.
-///
-/// This preserves the established credential binding contract while keeping
-/// key generation and DID derivation in the canonical Rust extension.
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn generate_did_key() -> PyResult<(String, String)> {
-    use base64::Engine;
-
-    let (secret, public) = marty_crypto::ed25519::generate_keypair();
-    let mut multicodec = Vec::with_capacity(34);
-    multicodec.extend_from_slice(&[0xed, 0x01]);
-    multicodec.extend_from_slice(&public);
-    let did = format!("did:key:z{}", bs58::encode(multicodec).into_string());
-    let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let jwk = serde_json::json!({
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "x": encoder.encode(public),
-        "d": encoder.encode(secret),
-    });
-    Ok((did, serde_json::to_string(&jwk).map_err(to_pyerr)?))
-}
-
-// ============================================================================
-// Signing
-// ============================================================================
-
-/// Sign a message with ECDSA P-256 SHA-256 (ES256).
-///
-/// Args:
-///     secret_key: 32-byte private key
-///     message: Message to sign
-///
-/// Returns:
-///     DER-encoded signature
-///
-/// Example:
-///     >>> secret, _ = generate_p256_key()
-///     >>> signature = sign_p256(secret, b"Hello, World!")
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn sign_p256<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ecdsa::sign_p256_sha256(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with ECDSA P-384 SHA-384 (ES384).
-///
-/// Args:
-///     secret_key: 48-byte private key
-///     message: Message to sign
-///
-/// Returns:
-///     DER-encoded signature
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn sign_p384<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ecdsa::sign_p384_sha384(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with Ed25519.
-///
-/// Args:
-///     secret_key: 32-byte private key
-///     message: Message to sign
-///
-/// Returns:
-///     64-byte signature
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn sign_ed25519<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ed25519::sign(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
 }
 
 // ============================================================================
@@ -723,29 +576,6 @@ fn oid4vci_verify_pkce_s256(code_verifier: &str, code_challenge: &str) -> bool {
     marty_oid4vci::verify_pkce_s256(code_verifier, code_challenge)
 }
 
-/// Create a spec-correct OID4VCI proof-of-possession JWT (OID4VCI §8.2).
-///
-/// Generates an ephemeral Ed25519 key pair, derives a `did:key` from it, and
-/// returns a compact JWT signed with that key.  Suitable for wallet clients
-/// and integration tests that need a real, verifiable proof of possession.
-///
-/// Args:
-///     aud: Credential issuer URL (audience), e.g. "http://localhost:8005/org/<org_id>"
-///     c_nonce: The c_nonce value from the token response
-///
-/// Returns:
-///     Compact JWT string (`header.payload.signature`)
-///
-/// Raises:
-///     `RuntimeError` on key generation or signing failure
-#[pyfunction]
-#[cfg(feature = "local-key-operations")]
-fn oid4vci_create_proof_jwt(aud: &str, c_nonce: &str) -> PyResult<String> {
-    marty_oid4vci::proof::create_proof_jwt(aud, c_nonce).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Proof JWT creation failed: {e}"))
-    })
-}
-
 /// Verify an OID4VCI proof-of-possession JWT.
 ///
 /// Performs full OID4VCI §8.2 verification:
@@ -1169,375 +999,6 @@ fn sd_jwt_create_presentation(
     }
     marty_oid4vci::formats::sd_jwt::create_sd_jwt_presentation(sd_jwt_compact, &disclosed_fields)
         .map_err(to_pyerr)
-}
-
-/// Create an OID4VCI format-aware verifiable credential via the Rust signing engine.
-///
-/// Supports all credential formats: jwt_vc_json, vc+sd-jwt, mso_mdoc, zk_mdoc, vds_nc.
-/// Delegates entirely to marty-oid4vci — no protocol logic lives in Python.
-///
-/// Args:
-///     issuer_id: Issuer DID (e.g. "did:key:z6Mk...")
-///     jwk_json: Issuer signing key as a JWK JSON string (OKP/Ed25519 or EC/P-256)
-///     subject_id: Optional holder DID
-///     credential_type: Credential type string
-///     claims_json: JSON object of credential subject claims
-///     expiration_seconds: Optional validity in seconds
-///     format: Credential wire format ("jwt_vc_json", "vc+sd-jwt", "mso_mdoc", "zk_mdoc", "vds_nc")
-///     selective_disclosure_claims: Claims to make selectively disclosable (SD-JWT only)
-///     zk_predicate_claims: Claims eligible for ZK predicate proofs (zk_mdoc only)
-///     credential_payload_format: SD-JWT payload structure ("ietf_sd_jwt" or "w3c_vcdm_v2_sd_jwt")
-///     w3c_context: Additional @context URIs for W3C VCDM v2 payloads
-///     w3c_types: Additional type values for W3C VCDM v2 payloads
-///
-/// Returns:
-///     (credential_string, credential_id)
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-#[cfg(feature = "local-key-operations")]
-#[pyo3(signature = (issuer_id, jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![], mdoc_namespace=None, mdoc_doctype=None))]
-fn oid4vci_sign_credential(
-    issuer_id: &str,
-    jwk_json: &str,
-    subject_id: Option<&str>,
-    credential_type: &str,
-    claims_json: &str,
-    expiration_seconds: Option<i64>,
-    format: &str,
-    selective_disclosure_claims: Vec<String>,
-    zk_predicate_claims: Vec<String>,
-    credential_payload_format: &str,
-    w3c_context: Vec<String>,
-    w3c_types: Vec<String>,
-    mdoc_namespace: Option<String>,
-    mdoc_doctype: Option<String>,
-) -> PyResult<(String, String)> {
-    use marty_oid4vci::formats;
-    use marty_oid4vci::types::{
-        CredentialClaims, CredentialFormat, CredentialPayloadFormat, IssuerKey,
-    };
-
-    let claims: std::collections::HashMap<String, serde_json::Value> =
-        serde_json::from_str(claims_json).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid claims JSON: {e}"))
-        })?;
-
-    let algorithm = marty_oid4vci::issuer::detect_algorithm(jwk_json).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Key error: {e}"))
-    })?;
-    let issuer_key = IssuerKey {
-        issuer_id: issuer_id.to_string(),
-        jwk_json: jwk_json.to_string(),
-        algorithm,
-    };
-
-    let zk_predicate_bindings = normalize_zk_predicate_claims(&claims, zk_predicate_claims);
-
-    let payload_format = match credential_payload_format {
-        "ietf_sd_jwt" | "ietf" | "flat" => CredentialPayloadFormat::IetfSdJwt,
-        "w3c_vcdm_v2_sd_jwt" => CredentialPayloadFormat::W3cVcdmV2SdJwt,
-        "w3c_vcdm_v2_jwt_vc" => CredentialPayloadFormat::W3cVcdmV2JwtVc,
-        unsupported => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unsupported credential payload format: {unsupported}"
-            )))
-        }
-    };
-
-    let cred_claims = CredentialClaims {
-        subject_id: subject_id.map(String::from),
-        credential_type: credential_type.to_string(),
-        claims,
-        expiration_seconds,
-        selective_disclosure_claims,
-        mdoc_namespace,
-        mdoc_doctype,
-        zk_predicate_claims: zk_predicate_bindings,
-        credential_payload_format: payload_format,
-        w3c_context,
-        w3c_types,
-    };
-
-    let cred_format = CredentialFormat::from_str_loose(format).ok_or_else(|| {
-        pyo3::exceptions::PyValueError::new_err(format!("Unsupported credential format: {format}"))
-    })?;
-
-    let signed =
-        formats::sign_credential(&cred_format, &issuer_key, &cred_claims).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Signing error: {e}"))
-        })?;
-    let credential_str = signed.encoded_credential().to_owned();
-
-    Ok((credential_str, signed.credential_id().to_string()))
-}
-
-/// Backward-compatible name for the standards-aware OID4VCI issuance kernel.
-///
-/// The former ad-hoc JSON proof helper was removed; every supported format now
-/// passes through the same Rust credential engine.
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-#[cfg(feature = "local-key-operations")]
-#[pyo3(signature = (issuer_did, issuer_jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], mdoc_namespace=None, mdoc_doctype=None, zk_predicate_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
-fn create_verifiable_credential(
-    issuer_did: &str,
-    issuer_jwk_json: &str,
-    subject_id: Option<&str>,
-    credential_type: &str,
-    claims_json: &str,
-    expiration_seconds: Option<i64>,
-    format: &str,
-    selective_disclosure_claims: Vec<String>,
-    mdoc_namespace: Option<String>,
-    mdoc_doctype: Option<String>,
-    zk_predicate_claims: Vec<String>,
-    credential_payload_format: &str,
-    w3c_context: Vec<String>,
-    w3c_types: Vec<String>,
-) -> PyResult<(String, String)> {
-    oid4vci_sign_credential(
-        issuer_did,
-        issuer_jwk_json,
-        subject_id,
-        credential_type,
-        claims_json,
-        expiration_seconds,
-        format,
-        selective_disclosure_claims,
-        zk_predicate_claims,
-        credential_payload_format,
-        w3c_context,
-        w3c_types,
-        mdoc_namespace,
-        mdoc_doctype,
-    )
-}
-
-/// Prepare a credential for external signing (BYOK).
-///
-/// Returns a tuple of (signing_input_base64, credential_id, format_hint).
-/// The caller signs `signing_input` externally and passes the result to
-/// `oid4vci_assemble_credential()`.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-#[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (issuer_id, algorithm, subject_id, credential_type, claims_json, expiration_seconds=None, format="jwt_vc_json", selective_disclosure_claims=vec![], credential_payload_format="w3c_vcdm_v2_sd_jwt", w3c_context=vec![], w3c_types=vec![]))]
-fn oid4vci_prepare_credential(
-    issuer_id: &str,
-    algorithm: &str,
-    subject_id: Option<&str>,
-    credential_type: &str,
-    claims_json: &str,
-    expiration_seconds: Option<i64>,
-    format: &str,
-    selective_disclosure_claims: Vec<String>,
-    credential_payload_format: &str,
-    w3c_context: Vec<String>,
-    w3c_types: Vec<String>,
-) -> PyResult<(String, String, String)> {
-    use marty_oid4vci::signer::CredentialSigner;
-    use marty_oid4vci::types::{
-        CredentialClaims, CredentialFormat, CredentialPayloadFormat, SigningAlgorithm,
-    };
-
-    let claims: std::collections::HashMap<String, serde_json::Value> =
-        serde_json::from_str(claims_json).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid claims JSON: {e}"))
-        })?;
-
-    let signing_algorithm = match algorithm {
-        "ES256" => SigningAlgorithm::ES256,
-        "EdDSA" => SigningAlgorithm::EdDSA,
-        "ES256K" => SigningAlgorithm::ES256K,
-        "ES384" => SigningAlgorithm::ES384,
-        "RS256" => SigningAlgorithm::RS256,
-        _ => {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Unknown algorithm: {algorithm}"
-            )))
-        }
-    };
-
-    // Create a stub signer that provides metadata but cannot sign
-    // (signing will happen externally)
-    #[derive(Debug)]
-    struct MetadataSigner {
-        issuer_id: String,
-        algorithm: SigningAlgorithm,
-    }
-    impl CredentialSigner for MetadataSigner {
-        fn sign(&self, _message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-            Err(marty_oid4vci::Oid4vciError::SigningError(
-                "metadata-only credential signer cannot sign".to_string(),
-            ))
-        }
-        fn algorithm(&self) -> SigningAlgorithm {
-            self.algorithm
-        }
-        fn issuer_id(&self) -> &str {
-            &self.issuer_id
-        }
-        fn kid_url(&self) -> String {
-            if let Some(key_part) = self.issuer_id.strip_prefix("did:key:") {
-                format!("{}#{}", self.issuer_id, key_part)
-            } else {
-                self.issuer_id.clone()
-            }
-        }
-    }
-
-    let signer = MetadataSigner {
-        issuer_id: issuer_id.to_string(),
-        algorithm: signing_algorithm,
-    };
-
-    let cred_claims = CredentialClaims {
-        subject_id: subject_id.map(String::from),
-        credential_type: credential_type.to_string(),
-        claims,
-        expiration_seconds,
-        selective_disclosure_claims,
-        mdoc_namespace: None,
-        mdoc_doctype: None,
-        zk_predicate_claims: vec![],
-        credential_payload_format: CredentialPayloadFormat::from_str_loose(
-            credential_payload_format,
-        ),
-        w3c_context,
-        w3c_types,
-    };
-
-    let cred_format =
-        CredentialFormat::from_str_loose(format).unwrap_or(CredentialFormat::JwtVcJson);
-
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-
-    match cred_format {
-        CredentialFormat::JwtVcJson => {
-            let prepared = marty_oid4vci::formats::jwt_vc::prepare_jwt_vc(&signer, &cred_claims)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
-            // signing_input is already a string (header_b64.payload_b64)
-            Ok((
-                prepared.signing_input().to_owned(),
-                prepared.credential_id().to_owned(),
-                "jwt_vc_json".to_string(),
-            ))
-        }
-        CredentialFormat::MsoMdoc => {
-            let prepared = marty_oid4vci::formats::mdoc::prepare_mdoc(&signer, &cred_claims)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
-            // tbs_data is raw bytes — base64url encode for transport
-            let tbs_b64 = b64.encode(prepared.signing_payload());
-            Ok((
-                tbs_b64,
-                prepared.credential_id().to_owned(),
-                "mso_mdoc".to_string(),
-            ))
-        }
-        CredentialFormat::VdsNc => {
-            let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc(&signer, &cred_claims)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
-            Ok((
-                prepared.signing_input().to_owned(),
-                prepared.credential_id().to_owned(),
-                "vds_nc".to_string(),
-            ))
-        }
-        _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-            "Format '{}' does not support prepare/assemble yet",
-            format
-        ))),
-    }
-}
-
-/// Assemble a signed credential from prepared data and an external signature.
-///
-/// Takes the signing_input (from prepare), signature bytes (base64url), and
-/// format/credential_id. Returns (credential_str, credential_id).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-#[pyo3(signature = (signing_input, signature_b64, credential_id, format))]
-fn oid4vci_assemble_credential(
-    signing_input: &str,
-    signature_b64: &str,
-    credential_id: &str,
-    format: &str,
-) -> PyResult<(String, String)> {
-    use base64::Engine;
-    use marty_oid4vci::types::SignedCredential;
-    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-
-    let signature = b64.decode(signature_b64).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid signature base64: {e}"))
-    })?;
-
-    match format {
-        "jwt_vc_json" => {
-            let header_segment = signing_input.split('.').next().ok_or_else(|| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid JWT signing input")
-            })?;
-            let header: serde_json::Value =
-                serde_json::from_slice(&b64.decode(header_segment).map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "Invalid JWT header: {e}"
-                    ))
-                })?)
-                .map_err(|e| {
-                    PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                        "Invalid JWT header: {e}"
-                    ))
-                })?;
-            let algorithm = match header.get("alg").and_then(serde_json::Value::as_str) {
-                Some("ES256") => marty_oid4vci::types::SigningAlgorithm::ES256,
-                Some("ES384") => marty_oid4vci::types::SigningAlgorithm::ES384,
-                Some("ES256K") => marty_oid4vci::types::SigningAlgorithm::ES256K,
-                Some("EdDSA") => marty_oid4vci::types::SigningAlgorithm::EdDSA,
-                Some("RS256") => marty_oid4vci::types::SigningAlgorithm::RS256,
-                _ => {
-                    return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                        "Unsupported or missing JWT signing algorithm",
-                    ))
-                }
-            };
-            let prepared = marty_oid4vci::formats::jwt_vc::PreparedJwtVc::from_signing_input(
-                signing_input.to_string(),
-                credential_id.to_string(),
-                algorithm,
-            )
-            .map_err(to_pyerr)?;
-            let signed = marty_oid4vci::formats::jwt_vc::assemble_jwt_vc(prepared, &signature)
-                .map_err(to_pyerr)?;
-            match signed {
-                SignedCredential::JwtVcJson { jwt, credential_id } => Ok((jwt, credential_id)),
-                _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "JWT-VC assembler returned an unexpected credential format",
-                )),
-            }
-        }
-        "vds_nc" => {
-            let prepared = marty_oid4vci::formats::vds_nc::PreparedVdsNc::from_signing_input(
-                signing_input.to_string(),
-                credential_id.to_string(),
-            )
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
-            let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc(prepared, &signature)
-                .map_err(to_pyerr)?;
-            match signed {
-                SignedCredential::VdsNc {
-                    barcode_data,
-                    credential_id,
-                } => Ok((barcode_data, credential_id)),
-                _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "VDS-NC assembler returned an unexpected credential format",
-                )),
-            }
-        }
-        _ => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-            "Format '{}' assemble not yet supported via FFI",
-            format
-        ))),
-    }
 }
 
 /// Opaque mDoc preparation state retained inside the native extension between
@@ -1999,94 +1460,6 @@ fn didcomm_encrypt(plaintext_json: &str, recipient_did_document_json: &str) -> P
     marty_didcomm::encrypt_for_recipient(plaintext_json, &did_doc).map_err(to_pyerr)
 }
 
-/// Encrypt a DIDComm Messaging 2.1 plaintext message with sender authentication.
-///
-/// The sender private key must match an X25519 method authorized by the sender
-/// DID document's `keyAgreement` relationship. The plaintext `from` and `to`
-/// values must identify the supplied sender and recipient documents.
-#[pyfunction]
-#[cfg(feature = "didcomm-local-keys")]
-fn didcomm_encrypt_authcrypt(
-    plaintext_json: &str,
-    sender_did_document_json: &str,
-    sender_x25519_private_key: &[u8],
-    recipient_did_document_json: &str,
-) -> PyResult<String> {
-    if sender_x25519_private_key.len() != 32 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "X25519 private key must be exactly 32 bytes",
-        ));
-    }
-    let sender_doc: marty_didcomm::DidDocument =
-        serde_json::from_str(sender_did_document_json).map_err(to_pyerr)?;
-    let recipient_doc: marty_didcomm::DidDocument =
-        serde_json::from_str(recipient_did_document_json).map_err(to_pyerr)?;
-    let mut sender_key = [0u8; 32];
-    sender_key.copy_from_slice(sender_x25519_private_key);
-    marty_didcomm::encrypt_for_recipient_authenticated(
-        plaintext_json,
-        &sender_doc,
-        &sender_key,
-        &recipient_doc,
-    )
-    .map_err(to_pyerr)
-}
-
-/// Decrypt a DIDComm v2 JWE (anoncrypt) message using the recipient's X25519 private key.
-///
-/// Args:
-///     jwe_json: JWE JSON Serialization string
-///     recipient_x25519_private_key: 32-byte X25519 private key
-///
-/// Returns:
-///     Decrypted plaintext (JSON string)
-#[pyfunction]
-#[cfg(feature = "didcomm-local-keys")]
-fn didcomm_decrypt(jwe_json: &str, recipient_x25519_private_key: &[u8]) -> PyResult<String> {
-    if recipient_x25519_private_key.len() != 32 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "X25519 private key must be exactly 32 bytes",
-        ));
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(recipient_x25519_private_key);
-    marty_didcomm::decrypt_jwe(jwe_json, &key).map_err(to_pyerr)
-}
-
-/// Decrypt a one-recipient DIDComm authcrypt envelope and authenticate its sender.
-///
-/// Returns JSON containing `plaintext`, `sender_kid`, and `recipient_kid`.
-/// Anoncrypt, legacy ECDH-1PU derivation, unauthorized methods, key/document
-/// mismatch, and plaintext party substitution are rejected.
-#[pyfunction]
-#[cfg(feature = "didcomm-local-keys")]
-fn didcomm_decrypt_authcrypt(
-    jwe_json: &str,
-    recipient_x25519_private_key: &[u8],
-    recipient_did_document_json: &str,
-    sender_did_document_json: &str,
-) -> PyResult<String> {
-    if recipient_x25519_private_key.len() != 32 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "X25519 private key must be exactly 32 bytes",
-        ));
-    }
-    let recipient_doc: marty_didcomm::DidDocument =
-        serde_json::from_str(recipient_did_document_json).map_err(to_pyerr)?;
-    let sender_doc: marty_didcomm::DidDocument =
-        serde_json::from_str(sender_did_document_json).map_err(to_pyerr)?;
-    let mut recipient_key = [0u8; 32];
-    recipient_key.copy_from_slice(recipient_x25519_private_key);
-    let result = marty_didcomm::decrypt_authenticated_jwe(
-        jwe_json,
-        &recipient_key,
-        &recipient_doc,
-        &sender_doc,
-    )
-    .map_err(to_pyerr)?;
-    serde_json::to_string(&result).map_err(to_pyerr)
-}
-
 // ============================================================================
 // VDS-NC Verification
 // ============================================================================
@@ -2254,7 +1627,7 @@ fn vds_nc_validate_profile(
 /// Create and sign a canonical VDS-NC profile with a PEM private key.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn vds_nc_sign_profile(
     private_key_pem: &str,
     signer_id: &str,
@@ -2507,26 +1880,12 @@ fn build_oid4vp_presentation_request(request_json: &str) -> PyResult<String> {
         .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
 }
 
-/// Python module for Marty cryptographic operations.
-///
-/// This module provides essential cryptographic functions for credential
-/// issuance and verification:
-///
-/// - Key generation: generate_p256_key, generate_p384_key, generate_ed25519_key
-/// - Signing: sign_p256, sign_p384, sign_ed25519
-/// - Verification: verify_p256, verify_p384, verify_ed25519
-/// - Credentials: create_verifiable_credential
-///
-/// Example:
-///     >>> import _marty_rs
-///     >>> secret, public = _marty_rs.generate_p256_key()
-///     >>> signature = _marty_rs.sign_p256(secret, b"Hello!")
-///     >>> _marty_rs.verify_p256(public, b"Hello!", signature)
-///     True
 /// Register the canonical Marty credential/protocol Python surface.
 ///
-/// Downstream extension crates use this entry point to extend ``_marty_rs``
-/// without copying bindings or publishing a second, incompatible module.
+/// The surface verifies credentials and prepares or assembles externally
+/// signed credentials. It deliberately has no long-term issuer/holder key
+/// import, generation, signing, or DIDComm private-key decryption API. Explicit
+/// protocol-session features remain separate and short-lived.
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     flow::register_flow_bindings(m)?;
     oid4vp_identity::register(m)?;
@@ -2547,27 +1906,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     status_list::register_status_list_bindings(m)?;
     haip::register(m)?;
 
-    // Key Generation
-    #[cfg(feature = "local-key-operations")]
-    {
-        m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_p256_did_jwk, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_ed25519_key, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
-        m.add_function(wrap_pyfunction!(vds_nc_sign_profile, m)?)?;
-    }
     m.add_function(wrap_pyfunction!(derive_p256_did_identifier, m)?)?;
-
-    // Verification remains available in production. Private-key signing is
-    // registered only in explicitly opted-in development/migration builds.
-    #[cfg(feature = "local-key-operations")]
-    {
-        m.add_function(wrap_pyfunction!(sign_p256, m)?)?;
-        m.add_function(wrap_pyfunction!(sign_p384, m)?)?;
-        m.add_function(wrap_pyfunction!(sign_ed25519, m)?)?;
-    }
 
     // Verification
     m.add_function(wrap_pyfunction!(detect_credential_format, m)?)?;
@@ -2635,11 +1974,6 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(mdoc::openid4vp_mdoc_binding_digests, m)?)?;
 
-    // In-process issuer signing is available only to explicitly opted-in
-    // offline tooling. Production bindings expose the remote-signing split.
-    #[cfg(feature = "local-key-operations")]
-    m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
-
     // Canvas LTI / Sandbox Hardening
     m.add_function(wrap_pyfunction!(canvas_normalize_base_url, m)?)?;
     m.add_function(wrap_pyfunction!(canvas_probe_lti_platform, m)?)?;
@@ -2654,8 +1988,6 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vci_create_authorization_response, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_exchange_auth_code_for_token, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_pkce_s256, m)?)?;
-    #[cfg(feature = "local-key-operations")]
-    m.add_function(wrap_pyfunction!(oid4vci_create_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_proof_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_compact_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oidc_validate_id_token, m)?)?;
@@ -2698,12 +2030,6 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(verify_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(sd_jwt_create_presentation, m)?)?;
-    #[cfg(feature = "local-key-operations")]
-    m.add_function(wrap_pyfunction!(oid4vci_sign_credential, m)?)?;
-    #[cfg(feature = "local-key-operations")]
-    m.add_function(wrap_pyfunction!(oid4vci_prepare_credential, m)?)?;
-    #[cfg(feature = "local-key-operations")]
-    m.add_function(wrap_pyfunction!(oid4vci_assemble_credential, m)?)?;
     m.add_class::<PreparedMdocForRemoteSigning>()?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_mdoc, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_mdoc_batch, m)?)?;
@@ -2730,12 +2056,6 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(didcomm_unpack_message, m)?)?;
     #[cfg(feature = "didcomm-encrypted-envelope")]
     m.add_function(wrap_pyfunction!(didcomm_encrypt, m)?)?;
-    #[cfg(feature = "didcomm-local-keys")]
-    {
-        m.add_function(wrap_pyfunction!(didcomm_encrypt_authcrypt, m)?)?;
-        m.add_function(wrap_pyfunction!(didcomm_decrypt, m)?)?;
-        m.add_function(wrap_pyfunction!(didcomm_decrypt_authcrypt, m)?)?;
-    }
     Ok(())
 }
 
@@ -2750,7 +2070,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(not(feature = "local-key-operations"))]
     fn production_module_excludes_private_key_operations() {
         Python::initialize();
         Python::attach(|py| {
@@ -2770,8 +2089,6 @@ mod tests {
                 "vds_nc_sign_profile",
                 "oid4vci_sign_credential",
                 "create_verifiable_credential",
-                "haip_generate_response_encryption_key",
-                "haip_decrypt_response",
                 "oid4vci_create_proof_jwt",
                 "oid4vci_prepare_credential",
                 "oid4vci_assemble_credential",
@@ -2786,7 +2103,13 @@ mod tests {
             }
 
             #[cfg(not(feature = "ephemeral-session-keys"))]
-            for session_operation in ["aes_256_cbc_encrypt", "aes_256_cbc_decrypt", "hmac_sha256"] {
+            for session_operation in [
+                "aes_256_cbc_encrypt",
+                "aes_256_cbc_decrypt",
+                "hmac_sha256",
+                "haip_generate_response_encryption_key",
+                "haip_decrypt_response",
+            ] {
                 assert!(
                     !module.hasattr(session_operation).unwrap(),
                     "{session_operation}"
@@ -2810,6 +2133,81 @@ mod tests {
     }
 
     #[test]
+    fn production_verification_bindings_accept_fixed_public_vectors() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_bindings(&module).unwrap();
+
+            let vectors = [
+                (
+                    "verify_p256",
+                    concat!(
+                        "0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6",
+                        "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299"
+                    ),
+                    "sample".as_bytes(),
+                    concat!(
+                        "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716",
+                        "f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8"
+                    ),
+                ),
+                (
+                    "verify_p384",
+                    concat!(
+                        "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385",
+                        "502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8",
+                        "f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f"
+                    ),
+                    "sample".as_bytes(),
+                    concat!(
+                        "306502301f30a1b9119f64fcf6d04fbd2892e71926675a40e8ceaee3ff3ebba581",
+                        "58db477f6a7e7d79b4b692bbe815a168cb0701023100e1669b9c87c57e033d22cb",
+                        "8b2628dc15dcb9762b48269b9bfb5d000af1d01db1f7916b539abceea6880b74c",
+                        "058610b25"
+                    ),
+                ),
+                (
+                    "verify_ed25519",
+                    "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+                    "".as_bytes(),
+                    concat!(
+                        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155",
+                        "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+                    ),
+                ),
+            ];
+
+            for (operation, public_key_hex, message, signature_hex) in vectors {
+                let public_key = hex::decode(public_key_hex).unwrap();
+                let signature = hex::decode(signature_hex).unwrap();
+                let verify = module.getattr(operation).unwrap();
+                let valid: bool = verify
+                    .call1((
+                        PyBytes::new(py, &public_key),
+                        PyBytes::new(py, message),
+                        PyBytes::new(py, &signature),
+                    ))
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                assert!(valid, "{operation}");
+
+                let invalid: bool = verify
+                    .call1((
+                        PyBytes::new(py, &public_key),
+                        PyBytes::new(py, b"tampered"),
+                        PyBytes::new(py, &signature),
+                    ))
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                assert!(!invalid, "{operation} accepted a different message");
+            }
+        });
+    }
+
+    #[test]
     #[cfg(not(feature = "didcomm-encrypted-envelope"))]
     fn resolver_only_module_excludes_software_didcomm_encryption() {
         Python::initialize();
@@ -2817,6 +2215,51 @@ mod tests {
             let module = PyModule::new(py, "_marty_rs").unwrap();
             register_marty_bindings(&module).unwrap();
             assert!(!module.hasattr("didcomm_encrypt").unwrap());
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "didcomm-encrypted-envelope")]
+    fn encrypted_envelope_module_exposes_anoncrypt_only() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_bindings(&module).unwrap();
+            assert!(module.hasattr("didcomm_encrypt").unwrap());
+            for private_operation in [
+                "didcomm_encrypt_authcrypt",
+                "didcomm_decrypt",
+                "didcomm_decrypt_authcrypt",
+            ] {
+                assert!(!module.hasattr(private_operation).unwrap());
+            }
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "ephemeral-session-keys")]
+    fn ephemeral_session_module_does_not_restore_credential_keys() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_bindings(&module).unwrap();
+            for session_operation in [
+                "aes_256_cbc_encrypt",
+                "aes_256_cbc_decrypt",
+                "hmac_sha256",
+                "haip_generate_response_encryption_key",
+                "haip_decrypt_response",
+            ] {
+                assert!(module.hasattr(session_operation).unwrap());
+            }
+            for private_operation in [
+                "generate_p256_key",
+                "sign_p256",
+                "create_verifiable_credential",
+                "didcomm_decrypt",
+            ] {
+                assert!(!module.hasattr(private_operation).unwrap());
+            }
         });
     }
 

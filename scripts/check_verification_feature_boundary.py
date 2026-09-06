@@ -98,6 +98,10 @@ def check_repository(root: Path = ROOT) -> None:
 
     crypto_features = crypto["features"]
     require(
+        crypto_features["default"] == [],
+        "marty-crypto defaults must not select local private-key capabilities",
+    )
+    require(
         set(crypto_features["crl"]) == {"x509", "dep:pem-rfc7468"},
         "CRL parsing must not enable builders",
     )
@@ -139,6 +143,10 @@ def check_repository(root: Path = ROOT) -> None:
     require(
         "authority-issuance" not in verification_features["default"],
         "default verification must exclude authority issuance",
+    )
+    require(
+        "ephemeral-session-keys" not in verification_features["default"],
+        "default verification must not create protocol session keys",
     )
     require(
         set(verification_features["authority-issuance"])
@@ -277,12 +285,8 @@ def check_repository(root: Path = ROOT) -> None:
             "local-key-operations",
         }
         & set(bindings["dependencies"]["marty-didcomm"].get("features", []))
-        and bindings["features"]["didcomm-local-keys"]
-        == [
-            "didcomm-encrypted-envelope",
-            "marty-didcomm/local-key-operations",
-        ],
-        "DIDComm software envelopes and caller-private-key APIs must require their own capabilities",
+        and "didcomm-local-keys" not in bindings["features"],
+        "released bindings must not expose caller-private-key DIDComm APIs",
     )
     require(
         didcomm["features"]["kms-only"] == []
@@ -296,14 +300,19 @@ def check_repository(root: Path = ROOT) -> None:
             "default-features"
         )
         is False
-        and "local-key-operations" in didcomm["features"]["default"],
+        and "local-key-operations" not in didcomm["features"]["default"]
+        and "encrypted-envelope" not in didcomm["features"]["default"],
         "DIDComm software envelopes must be explicit and absent from the KMS marker",
     )
     require(
         bindings["features"]["didcomm-encrypted-envelope"]
         == ["marty-didcomm/encrypted-envelope"]
-        and "didcomm-encrypted-envelope" in bindings["features"]["default"],
-        "bindings must preserve default DIDComm envelopes behind an explicit capability",
+        and "didcomm-encrypted-envelope" not in bindings["features"]["default"],
+        "bindings must keep DIDComm envelopes out of the default artifact",
+    )
+    require(
+        "local-key-operations" not in bindings["features"],
+        "released bindings must not offer a feature that restores private-key APIs",
     )
     require(
         didcomm["dependencies"]["p256"].get("features") == ["arithmetic"],
@@ -355,6 +364,15 @@ def check_repository(root: Path = ROOT) -> None:
         bindings_wheel_config.get("no-default-features") is True
         and "kms-only" in bindings_wheel_config["features"],
         "the released aggregate wheel must use an explicit KMS-only feature set",
+    )
+
+    bindings_source = (root / "marty-bindings" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    require(
+        'feature = "local-key-operations"' not in bindings_source
+        and 'feature = "didcomm-local-keys"' not in bindings_source,
+        "binding source must not contain production-selectable private-key API gates",
     )
 
     lib_source = (root / "marty-verification" / "src" / "lib.rs").read_text(

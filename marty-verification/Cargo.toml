@@ -13,7 +13,9 @@ name = "marty_verification"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["iaca", "csca", "icao-client", "ephemeral-session-keys"]
+# Verification and trust-list clients are safe defaults. Protocol session-key
+# agreement is a separate product decision and must be selected explicitly.
+default = ["iaca", "csca", "icao-client"]
 kms-only = ["marty-crypto/kms-only", "marty-oid4vci/kms-only"]
 iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
