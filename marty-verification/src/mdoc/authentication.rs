@@ -571,7 +571,7 @@ mod tests {
     use marty_oid4vci::{
         formats::mdoc::{assemble_mdoc, prepare_mdoc_with_credential_id_and_device_key},
         signer::CredentialSigner,
-        types::{CredentialClaims, IssuerKey, SignedCredential, SigningAlgorithm},
+        types::{CredentialClaims, SignedCredential, SigningAlgorithm},
     };
     use p256::{
         ecdsa::{Signature, SigningKey},
@@ -586,6 +586,33 @@ mod tests {
     struct FixtureTranscript(ciborium::Value);
 
     impl SessionTranscript for FixtureTranscript {}
+
+    struct TestMdocSigner(SigningKey);
+
+    impl std::fmt::Debug for TestMdocSigner {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("TestMdocSigner([redacted])")
+        }
+    }
+
+    impl CredentialSigner for TestMdocSigner {
+        fn sign(&self, message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
+            let signature: Signature = self.0.sign(message);
+            Ok(signature.to_vec())
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::ES256
+        }
+
+        fn issuer_id(&self) -> &str {
+            "did:example:mdoc-issuer"
+        }
+
+        fn kid_url(&self) -> String {
+            "did:example:mdoc-issuer#signing-key".to_string()
+        }
+    }
 
     #[test]
     fn certificate_chain_accepts_single_or_multiple_der_certificates() {
@@ -914,11 +941,7 @@ mod tests {
         let certificate = certificate_params.self_signed(&certificate_key).unwrap();
         let certificate_der = certificate.der().to_vec();
         let certificate_pem = certificate.pem();
-        let issuer_key = IssuerKey {
-            issuer_id: "did:example:mdoc-issuer".into(),
-            jwk_json: serde_json::to_string(&issuer_jwk).unwrap(),
-            algorithm: SigningAlgorithm::ES256,
-        };
+        let issuer_signer = TestMdocSigner(issuer_signing_key);
 
         let holder_signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
         let holder_point = holder_signing_key.verifying_key().to_encoded_point(false);
@@ -957,13 +980,13 @@ mod tests {
             w3c_types: Vec::new(),
         };
         let prepared = prepare_mdoc_with_credential_id_and_device_key(
-            &issuer_key,
+            &issuer_signer,
             &claims,
             None,
             Some(&holder_jwk),
         )
         .unwrap();
-        let issuer_signature = issuer_key.sign(prepared.signing_payload()).unwrap();
+        let issuer_signature = issuer_signer.sign(prepared.signing_payload()).unwrap();
         let credential = assemble_mdoc(prepared, &issuer_signature).unwrap();
         let SignedCredential::MsoMdoc {
             issuer_signed_b64, ..

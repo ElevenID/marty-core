@@ -32,7 +32,7 @@
 //!
 //! ```rust,ignore
 //! use marty_oid4vci::issuer::IssuanceEngine;
-//! use marty_oid4vci::types::{IssuerConfig, IssuerKey, OfferConfig, SigningAlgorithm};
+//! use marty_oid4vci::types::{IssuerConfig, OfferConfig};
 //!
 //! let config = IssuerConfig { /* ... */ };
 //! let engine = IssuanceEngine::new(config);
@@ -46,11 +46,11 @@
 //! }).unwrap();
 //! ```
 
-#[cfg(all(
-    feature = "kms-only",
-    any(feature = "holder-key-operations", feature = "local-key-operations")
-))]
-compile_error!("kms-only builds cannot include local issuer or holder key operations");
+#[cfg(all(feature = "kms-only", feature = "holder-key-operations"))]
+compile_error!("kms-only builds cannot include holder key operations");
+
+#[cfg(test)]
+extern crate self as marty_oid4vci;
 
 mod bounded_jwt;
 pub mod discovery;
@@ -87,13 +87,12 @@ pub mod wallet;
 mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
-#[cfg(feature = "holder-key-operations")]
+#[cfg(any(test, feature = "holder-key-operations"))]
 pub use holder_key::{
     generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
     DidJwkHolderKeyMaterial,
 };
 
-#[cfg(not(feature = "local-key-operations"))]
 /// The default issuer surface cannot construct or use an in-process issuer key.
 ///
 /// ```compile_fail
@@ -121,6 +120,37 @@ pub use holder_key::{
 /// use marty_oid4vci::signer::derive_typed_jwk_algorithm;
 /// ```
 mod local_issuer_key_compile_boundary {}
+
+// Legacy local-signing behavior remains testable without a downstream-selectable
+// Cargo capability. These sources are compiled unchanged as crate-internal tests,
+// where `cfg(test)` exposes the fixture-only key implementation.
+#[cfg(test)]
+#[path = "../tests/byok_prepare_assemble.rs"]
+mod byok_prepare_assemble;
+#[cfg(test)]
+#[path = "../tests/issuance_input.rs"]
+mod issuance_input_tests;
+#[cfg(test)]
+#[path = "../tests/issuer_key_algorithm_binding.rs"]
+mod issuer_key_algorithm_binding;
+#[cfg(test)]
+#[path = "../tests/mdoc_x5chain_conformance.rs"]
+mod mdoc_x5chain_conformance;
+#[cfg(test)]
+#[path = "../tests/scalar_sd_jwt_holder_binding.rs"]
+mod scalar_sd_jwt_holder_binding;
+#[cfg(test)]
+#[path = "../tests/sd_jwt_managed_claim_boundaries.rs"]
+mod sd_jwt_managed_claim_boundaries;
+#[cfg(test)]
+#[path = "../tests/sd_jwt_structural_boundaries.rs"]
+mod sd_jwt_structural_boundaries;
+#[cfg(test)]
+#[path = "../tests/sd_jwt_vc_conformance.rs"]
+mod sd_jwt_vc_conformance;
+#[cfg(all(test, feature = "wallet"))]
+#[path = "../tests/sd_jwt_wallet_verified_presentation.rs"]
+mod sd_jwt_wallet_verified_presentation;
 
 #[cfg(not(feature = "holder-key-operations"))]
 /// Issuer and verifier artifacts cannot create holder proof keys.

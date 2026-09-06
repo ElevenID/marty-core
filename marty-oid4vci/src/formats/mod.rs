@@ -28,7 +28,7 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 #[cfg(any(test, feature = "issuer"))]
 use crate::signer::CredentialSigner;
 use crate::types::CredentialFormat;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, SignedCredential};
@@ -38,7 +38,7 @@ use crate::types::{CredentialClaims, SignedCredential};
 /// This is the central dispatch function that routes to the correct signing
 /// pipeline based on the `format` parameter. All format-specific complexity
 /// is handled internally.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn sign_credential(
     format: &CredentialFormat,
     issuer_key: &IssuerKey,
@@ -63,8 +63,8 @@ pub fn sign_credential(
 
 /// Sign a credential using any [`CredentialSigner`] implementation.
 ///
-/// This is the BYOK-aware entry point. Pass an `&IssuerKey` for local JWK
-/// signing, or a custom [`CredentialSigner`] for HSM/KMS-backed signing.
+/// Production callers provide a [`CredentialSigner`] that delegates to their
+/// HSM/KMS-backed signing service.
 #[cfg(any(test, feature = "issuer"))]
 pub fn sign_credential_with_signer(
     format: &CredentialFormat,
