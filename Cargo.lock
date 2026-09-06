@@ -4070,6 +4070,7 @@ dependencies = [
  "marty-didcomm",
  "marty-iso18013",
  "marty-oid4vci",
+ "marty-python-adapters",
  "marty-status",
  "marty-types",
  "marty-verification",
@@ -4244,6 +4245,15 @@ name = "marty-oid4vci-wasm-serial-probe"
 version = "0.0.0"
 dependencies = [
  "marty-oid4vci",
+]
+
+[[package]]
+name = "marty-python-adapters"
+version = "0.1.61"
+dependencies = [
+ "marty-status",
+ "pyo3",
+ "serde_json",
 ]
 
 [[package]]

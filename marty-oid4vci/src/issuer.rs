@@ -125,17 +125,11 @@ impl IssuanceEngine {
         offer_id: &str,
         scheme: Option<&str>,
     ) -> Oid4vciResult<String> {
-        let issuer = &self.config.credential_issuer_url;
-        match scheme.unwrap_or("oid4vci") {
-            "microsoft" => Ok(format!(
-                "openid-vc://?request_uri={}/issuance-requests/{}",
-                issuer, offer_id
-            )),
-            _ => Ok(format!(
-                "openid-credential-offer://?credential_offer_uri={}/offers/{}",
-                issuer, offer_id
-            )),
-        }
+        Ok(generate_offer_uri(
+            &self.config.credential_issuer_url,
+            offer_id,
+            scheme.unwrap_or("oid4vci"),
+        ))
     }
 
     // ── Authorization Endpoint (§5) ─────────────────────────────────
@@ -528,18 +522,7 @@ pub fn create_credential_offer(
 /// Generate a credential offer URI (standalone function).
 ///
 /// This is the direct replacement for `generate_offer_uri` in marty-rs.
-pub fn generate_offer_uri(issuer_url: &str, offer_id: &str, format: &str) -> String {
-    match format {
-        "microsoft" => format!(
-            "openid-vc://?request_uri={}/issuance-requests/{}",
-            issuer_url, offer_id
-        ),
-        _ => format!(
-            "openid-credential-offer://?credential_offer_uri={}/offers/{}",
-            issuer_url, offer_id
-        ),
-    }
-}
+pub use crate::offer_uri::generate_offer_uri;
 
 /// Sign a verifiable credential (standalone function).
 ///

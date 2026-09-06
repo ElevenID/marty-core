@@ -11,6 +11,8 @@
 //! - Part 11: Security mechanisms
 //! - Part 12: Public key infrastructure
 
+mod cms_structure;
+
 pub mod crl;
 pub mod master_list;
 pub mod sod;

@@ -7,6 +7,7 @@
 //!
 //! Per ICAO 9303 Part 10.
 
+use super::cms_structure::{exactly_one_signer, find_signer_certificate, DocumentKind};
 use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
 use der::{Decode, Encode, Sequence};
@@ -245,96 +246,14 @@ fn extract_document_signer_cert(signed_data: &SignedData) -> VerificationResult<
         Some(c) => c,
         None => return Ok(None),
     };
-    let signer_info = exactly_one_signer(signed_data)?;
-    let cert = find_signer_certificate(certs, &signer_info.sid)?;
+    let signer_info = exactly_one_signer(signed_data, DocumentKind::Sod)?;
+    let cert = find_signer_certificate(certs, &signer_info.sid, DocumentKind::Sod)?;
     let der = cert.to_der().map_err(|e| {
         VerificationError::internal(format!("Failed to encode signer certificate: {e}"))
     })?;
     let pem = pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &der)
         .map_err(|e| VerificationError::internal(format!("Failed to PEM encode: {e}")))?;
     Ok(Some(pem))
-}
-
-fn exactly_one_signer(
-    signed_data: &SignedData,
-) -> VerificationResult<&cms::signed_data::SignerInfo> {
-    let mut signers = signed_data.signer_infos.0.iter();
-    let signer = signers
-        .next()
-        .ok_or_else(|| VerificationError::der_error("SOD has no signer information".to_string()))?;
-    if signers.next().is_some() {
-        return Err(VerificationError::der_error(
-            "SOD must contain exactly one signer".to_string(),
-        ));
-    }
-    Ok(signer)
-}
-
-fn find_signer_certificate<'a>(
-    certs: &'a cms::signed_data::CertificateSet,
-    signer_id: &cms::signed_data::SignerIdentifier,
-) -> VerificationResult<&'a x509_cert::Certificate> {
-    use cms::cert::CertificateChoices;
-    use cms::signed_data::SignerIdentifier;
-    use x509_cert::ext::pkix::SubjectKeyIdentifier;
-
-    let mut matched = None;
-    for choice in certs.0.iter() {
-        let CertificateChoices::Certificate(cert) = choice else {
-            continue;
-        };
-        let is_match = match signer_id {
-            SignerIdentifier::IssuerAndSerialNumber(id) => {
-                cert.tbs_certificate.issuer == id.issuer
-                    && cert.tbs_certificate.serial_number == id.serial_number
-            }
-            SignerIdentifier::SubjectKeyIdentifier(expected) => cert
-                .tbs_certificate
-                .get::<SubjectKeyIdentifier>()
-                .map_err(|e| {
-                    VerificationError::der_error(format!(
-                        "Invalid signer SubjectKeyIdentifier extension: {e}"
-                    ))
-                })?
-                .is_some_and(|(_, actual)| actual == *expected),
-        };
-        if is_match {
-            if matched.is_some() {
-                return Err(VerificationError::der_error(
-                    "Multiple certificates match the SOD signer identifier".to_string(),
-                ));
-            }
-            matched = Some(cert);
-        }
-    }
-    matched.ok_or_else(|| {
-        VerificationError::der_error("No certificate matches the SOD signer identifier".to_string())
-    })
-}
-
-fn single_signed_attribute_value(
-    attributes: &x509_cert::attr::Attributes,
-    oid: der::asn1::ObjectIdentifier,
-) -> VerificationResult<&der::Any> {
-    let mut matching = attributes.iter().filter(|attribute| attribute.oid == oid);
-    let attribute = matching.next().ok_or_else(|| {
-        VerificationError::der_error(format!("Missing required CMS signed attribute {oid}"))
-    })?;
-    if matching.next().is_some() {
-        return Err(VerificationError::der_error(format!(
-            "Duplicate CMS signed attribute {oid}"
-        )));
-    }
-    let mut values = attribute.values.iter();
-    let value = values.next().ok_or_else(|| {
-        VerificationError::der_error(format!("CMS signed attribute {oid} has no value"))
-    })?;
-    if values.next().is_some() {
-        return Err(VerificationError::der_error(format!(
-            "CMS signed attribute {oid} has multiple values"
-        )));
-    }
-    Ok(value)
 }
 
 /// Verify SOD signature against Document Signer Certificate.
@@ -354,8 +273,8 @@ pub fn verify_sod_signature(sod_der: &[u8]) -> VerificationResult<bool> {
         .certificates
         .as_ref()
         .ok_or_else(|| VerificationError::der_error("SOD has no certificates".to_string()))?;
-    let signer_info = exactly_one_signer(&signed_data)?;
-    let dsc = find_signer_certificate(certs, &signer_info.sid)?;
+    let signer_info = exactly_one_signer(&signed_data, DocumentKind::Sod)?;
+    let dsc = find_signer_certificate(certs, &signer_info.sid, DocumentKind::Sod)?;
 
     // Get DSC public key
     let public_key_der = dsc
@@ -372,49 +291,12 @@ pub fn verify_sod_signature(sod_der: &[u8]) -> VerificationResult<bool> {
         .ok_or_else(|| VerificationError::der_error("SOD has no content".to_string()))?
         .value();
 
-    if !signed_data
-        .digest_algorithms
-        .iter()
-        .any(|algorithm| algorithm.oid == signer_info.digest_alg.oid)
-    {
-        return Err(VerificationError::der_error(
-            "Signer digest algorithm is absent from SignedData digestAlgorithms".to_string(),
-        ));
-    }
-    let digest_algorithm = HashAlgorithm::from_oid(&signer_info.digest_alg.oid.to_string())?;
-    let data_to_verify = if let Some(signed_attrs) = &signer_info.signed_attrs {
-        let content_type_value =
-            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_CONTENT_TYPE)?
-                .decode_as::<der::asn1::ObjectIdentifier>()
-                .map_err(|e| {
-                    VerificationError::der_error(format!("Invalid contentType attribute: {e}"))
-                })?;
-        if content_type_value != signed_data.encap_content_info.econtent_type {
-            return Ok(false);
-        }
-        let message_digest =
-            single_signed_attribute_value(signed_attrs, const_oid::db::rfc5911::ID_MESSAGE_DIGEST)?
-                .decode_as::<der::asn1::OctetString>()
-                .map_err(|e| {
-                    VerificationError::der_error(format!("Invalid messageDigest attribute: {e}"))
-                })?;
-        if marty_crypto::hashing::hash(digest_algorithm, content) != message_digest.as_bytes() {
-            return Ok(false);
-        }
-        signed_attrs.to_der().map_err(|e| {
-            VerificationError::internal(format!("Failed to encode signed attributes: {e}"))
-        })?
-    } else {
-        content.to_vec()
-    };
-
-    marty_crypto::algorithm_identifier::verify_signature_with_algorithm_identifier(
-        &signer_info.signature_algorithm,
+    super::cms_structure::verify_bound_signature(
+        &signed_data,
+        signer_info,
+        content,
         &public_key_der,
-        &data_to_verify,
-        signer_info.signature.as_bytes(),
     )
-    .map_err(Into::into)
 }
 
 /// Verify data group hash matches the expected value.

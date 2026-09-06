@@ -4,9 +4,8 @@
 //! These verifier bindings consume only public COSE and certificate material;
 //! they neither accept nor select a KMS service or key reference.
 
+use marty_python_adapters::json_to_python;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use pyo3::IntoPyObjectExt;
 
 /// Build verifier-bound ISO 18013-7 OpenID4VP `SessionTranscript` bytes.
 #[pyfunction]
@@ -286,41 +285,6 @@ pub(crate) fn verify_mdoc_presentation(
         pinned_issuer_certs_pem.as_deref().unwrap_or_default(),
     )
     .into())
-}
-
-fn json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
-    use serde_json::Value;
-
-    match value {
-        Value::Null => Ok(py.None()),
-        Value::Bool(value) => Ok(value.into_py_any(py)?),
-        Value::Number(value) => {
-            if let Some(integer) = value.as_i64() {
-                Ok(integer.into_py_any(py)?)
-            } else if let Some(unsigned) = value.as_u64() {
-                Ok(unsigned.into_py_any(py)?)
-            } else if let Some(float) = value.as_f64() {
-                Ok(float.into_py_any(py)?)
-            } else {
-                Err(value_error("Invalid JSON number"))
-            }
-        }
-        Value::String(value) => Ok(value.into_py_any(py)?),
-        Value::Array(values) => {
-            let result = pyo3::types::PyList::empty(py);
-            for value in values {
-                result.append(json_to_python(py, value)?)?;
-            }
-            Ok(result.into())
-        }
-        Value::Object(values) => {
-            let result = PyDict::new(py);
-            for (key, value) in values {
-                result.set_item(key, json_to_python(py, value)?)?;
-            }
-            Ok(result.into())
-        }
-    }
 }
 
 fn value_error(error: impl Into<String>) -> PyErr {

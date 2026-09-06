@@ -2,9 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 
 use chrono::Utc;
+use marty_types::open_badges::contains_private_key_material;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use serde_json::Value;
@@ -12,6 +12,9 @@ use tokio::sync::Mutex;
 
 use crate::error::StorageError;
 use crate::keychain::KeychainManager;
+#[cfg(test)]
+use crate::migrations::{column_exists, table_exists};
+use crate::migrations::{get_schema_version, migrate_schema};
 use crate::models::*;
 use crate::schema::{SCHEMA, SCHEMA_VERSION};
 
@@ -43,10 +46,30 @@ pub struct VerificationHistoryEntry {
 
 /// Secure storage manager
 pub struct SecureStorage {
-    conn: Arc<Mutex<Connection>>,
+    conn: Mutex<Connection>,
 }
 
 impl SecureStorage {
+    /// Initialize app-owned repositories before sharing this storage instance.
+    ///
+    /// Core has already opened the database and applied shared migrations. The
+    /// exclusive borrow lets extensions initialize synchronously without taking
+    /// a blocking async lock. Extensions must own only their application tables
+    /// and use a separate migration marker from the shared schema.
+    pub fn initialize_extension<T>(&mut self, operation: impl FnOnce(&mut Connection) -> T) -> T {
+        operation(self.conn.get_mut())
+    }
+
+    /// Run an application repository operation on the shared database connection.
+    ///
+    /// The synchronous closure holds the same lock as core repositories and may
+    /// start a transaction. Connection borrows cannot escape the closure. Do not
+    /// block on another storage method inside it: that would reacquire this lock.
+    pub async fn with_connection<T>(&self, operation: impl FnOnce(&mut Connection) -> T) -> T {
+        let mut conn = self.conn.lock().await;
+        operation(&mut conn)
+    }
+
     /// Create new secure storage at the given path
     pub fn new(data_dir: &Path) -> Result<Self, StorageError> {
         Self::new_with_keychain(data_dir, KeychainManager::new())
@@ -57,17 +80,7 @@ impl SecureStorage {
     /// This is an explicit test and startup-self-check boundary. Normal application
     /// startup must use [`SecureStorage::new`] and the native platform keychain.
     pub fn new_with_process_local_keyring(data_dir: &Path) -> Result<Self, StorageError> {
-        let store = keyring_core::get_default_store()
-            .ok_or_else(|| StorageError::Keychain("no default store is installed".to_string()))?;
-        if !matches!(
-            store.persistence(),
-            keyring_core::CredentialPersistence::ProcessOnly
-        ) {
-            return Err(StorageError::Keychain(
-                "installed keyring is not process-local".to_string(),
-            ));
-        }
-        Self::new_with_keychain(data_dir, KeychainManager::with_installed_default_store())
+        Self::new_with_keychain(data_dir, KeychainManager::with_process_local_store()?)
     }
 
     fn new_with_keychain(data_dir: &Path, keychain: KeychainManager) -> Result<Self, StorageError> {
@@ -110,7 +123,7 @@ impl SecureStorage {
         tracing::info!(?db_path, "Secure storage initialized");
 
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Mutex::new(conn),
         })
     }
 
@@ -1850,27 +1863,6 @@ fn validate_open_badge_package(
     Ok(sequence)
 }
 
-fn contains_private_key_material(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => object.iter().any(|(key, nested)| {
-            if key.starts_with("privateKey") || key.starts_with("secretKey") {
-                return true;
-            }
-            if key == "publicKeyJwk" {
-                return nested.as_object().is_none_or(|jwk| {
-                    matches!(jwk.get("kty").and_then(Value::as_str), Some("oct") | None)
-                        || ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
-                            .iter()
-                            .any(|private| jwk.contains_key(*private))
-                });
-            }
-            contains_private_key_material(nested)
-        }),
-        Value::Array(items) => items.iter().any(contains_private_key_material),
-        _ => false,
-    }
-}
-
 fn required_stored_value(
     value: Option<String>,
     record_id: &str,
@@ -2001,17 +1993,6 @@ fn load_open_badge_package_provenance(
     Ok(Some(provenance))
 }
 
-fn get_schema_version(conn: &Connection) -> Result<i32, StorageError> {
-    let version: Option<String> = conn
-        .query_row(
-            "SELECT value FROM config WHERE key = 'schema_version'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    Ok(version.and_then(|v| v.parse::<i32>().ok()).unwrap_or(0))
-}
-
 fn validate_queue_batch(ids: &[String]) -> Result<(), StorageError> {
     if ids.is_empty() {
         return Err(StorageError::InvalidQueueBatch(
@@ -2041,215 +2022,6 @@ fn bounded_queue_error(error: &str) -> String {
     error.chars().take(MAX_QUEUE_ERROR_CHARS).collect()
 }
 
-fn migrate_schema(conn: &Connection, current_version: i32) -> Result<(), StorageError> {
-    if current_version < 2 && !column_exists(conn, "license_state", "verifications_total")? {
-        conn.execute(
-            "ALTER TABLE license_state ADD COLUMN verifications_total INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
-    }
-
-    // The core and application storage adapters share this database but have
-    // independent schema-version histories. Check physical columns rather
-    // than trusting a numerically larger version written by the other crate.
-    if !column_exists(conn, "open_badge_keys", "trust_domain")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN trust_domain TEXT",
-            [],
-        )?;
-    }
-    if !column_exists(conn, "open_badge_keys", "package_sequence")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN package_sequence INTEGER",
-            [],
-        )?;
-    }
-    if !column_exists(conn, "open_badge_keys", "package_version")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN package_version TEXT",
-            [],
-        )?;
-    }
-    if !column_exists(conn, "open_badge_keys", "package_created_at")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN package_created_at TEXT",
-            [],
-        )?;
-    }
-    if !column_exists(conn, "open_badge_keys", "package_expires_at")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN package_expires_at TEXT",
-            [],
-        )?;
-    }
-    if !column_exists(conn, "open_badge_keys", "package_signer_key_id")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN package_signer_key_id TEXT",
-            [],
-        )?;
-    }
-    if !column_exists(conn, "open_badge_keys", "package_digest")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN package_digest TEXT",
-            [],
-        )?;
-    }
-    if !column_exists(conn, "open_badge_keys", "package_imported_at")? {
-        conn.execute(
-            "ALTER TABLE open_badge_keys ADD COLUMN package_imported_at TEXT",
-            [],
-        )?;
-    }
-    for (column, definition) in [
-        ("trust_domain", "TEXT"),
-        ("package_sequence", "INTEGER"),
-        ("package_version", "TEXT"),
-        ("package_created_at", "TEXT"),
-        ("package_expires_at", "TEXT"),
-        ("package_signer_key_id", "TEXT"),
-        ("package_digest", "TEXT"),
-        ("package_imported_at", "TEXT"),
-    ] {
-        if !column_exists(conn, "trust_anchors", column)? {
-            conn.execute(
-                &format!("ALTER TABLE trust_anchors ADD COLUMN {column} {definition}"),
-                [],
-            )?;
-        }
-    }
-    conn.execute_batch(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_open_badge_keys_trust_domain
-            ON open_badge_keys(trust_domain);
-        CREATE INDEX IF NOT EXISTS idx_trust_anchors_trust_domain
-            ON trust_anchors(trust_domain);
-        CREATE TABLE IF NOT EXISTS trust_packages (
-            trust_domain TEXT PRIMARY KEY,
-            sequence INTEGER NOT NULL,
-            package_version TEXT NOT NULL,
-            package_created_at TEXT NOT NULL,
-            package_expires_at TEXT,
-            signer_key_id TEXT NOT NULL,
-            next_signer_key_id TEXT,
-            recovery_signer_key_id TEXT,
-            package_digest TEXT NOT NULL,
-            imported_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE TRIGGER IF NOT EXISTS prevent_legacy_open_badge_overwrite
-        BEFORE INSERT ON open_badge_keys
-        WHEN NEW.trust_domain IS NULL
-         AND EXISTS (
-             SELECT 1 FROM open_badge_keys
-             WHERE id = NEW.id AND trust_domain IS NOT NULL
-         )
-        BEGIN
-            SELECT RAISE(ABORT, 'legacy write cannot replace governed Open Badge method');
-        END;
-        CREATE TRIGGER IF NOT EXISTS prevent_open_badge_provenance_removal
-        BEFORE UPDATE ON open_badge_keys
-        WHEN OLD.trust_domain IS NOT NULL
-         AND (
-             NEW.trust_domain IS NULL
-             OR NEW.package_sequence IS NULL
-             OR NEW.package_version IS NULL
-             OR NEW.package_created_at IS NULL
-             OR NEW.package_expires_at IS NULL
-             OR NEW.package_signer_key_id IS NULL
-             OR NEW.package_digest IS NULL
-             OR NEW.package_imported_at IS NULL
-         )
-        BEGIN
-            SELECT RAISE(ABORT, 'governed Open Badge provenance cannot be removed');
-        END;
-        CREATE TRIGGER IF NOT EXISTS prevent_legacy_anchor_overwrite
-        BEFORE INSERT ON trust_anchors
-        WHEN NEW.trust_domain IS NULL
-         AND EXISTS (
-             SELECT 1 FROM trust_anchors
-             WHERE id = NEW.id AND trust_domain IS NOT NULL
-         )
-        BEGIN
-            SELECT RAISE(ABORT, 'legacy write cannot replace governed trust anchor');
-        END;
-        CREATE TRIGGER IF NOT EXISTS prevent_anchor_provenance_removal
-        BEFORE UPDATE ON trust_anchors
-        WHEN OLD.trust_domain IS NOT NULL
-         AND (
-             NEW.trust_domain IS NULL
-             OR NEW.package_sequence IS NULL
-             OR NEW.package_version IS NULL
-             OR NEW.package_created_at IS NULL
-             OR NEW.package_expires_at IS NULL
-             OR NEW.package_signer_key_id IS NULL
-             OR NEW.package_digest IS NULL
-             OR NEW.package_imported_at IS NULL
-         )
-        BEGIN
-            SELECT RAISE(ABORT, 'governed trust-anchor provenance cannot be removed');
-        END;
-        "#,
-    )?;
-    if !column_exists(conn, "trust_packages", "package_expires_at")? {
-        // Pre-release package state did not persist a signed expiry. Leave the
-        // migrated value null so governed reads fail closed instead of
-        // synthesizing security metadata that was never authenticated.
-        conn.execute(
-            "ALTER TABLE trust_packages ADD COLUMN package_expires_at TEXT",
-            [],
-        )?;
-    }
-    for (column, definition) in [
-        ("next_signer_key_id", "TEXT"),
-        ("recovery_signer_key_id", "TEXT"),
-    ] {
-        if !column_exists(conn, "trust_packages", column)? {
-            conn.execute(
-                &format!("ALTER TABLE trust_packages ADD COLUMN {column} {definition}"),
-                [],
-            )?;
-        }
-    }
-    if table_exists(conn, "open_badge_trust_packages")? {
-        conn.execute_batch(
-            r#"
-            INSERT OR IGNORE INTO trust_packages
-                (trust_domain, sequence, package_version, package_created_at,
-                 package_expires_at, signer_key_id, package_digest, imported_at,
-                 created_at, updated_at)
-            SELECT trust_domain, sequence, package_version, package_created_at,
-                   NULL, signer_key_id, package_digest, imported_at, created_at, updated_at
-            FROM open_badge_trust_packages;
-            DROP TABLE open_badge_trust_packages;
-            "#,
-        )?;
-    }
-
-    Ok(())
-}
-
-fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool, StorageError> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
-    let mut rows = stmt.query([])?;
-    while let Some(row) = rows.next()? {
-        let name: String = row.get(1)?;
-        if name == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn table_exists(conn: &Connection, table: &str) -> Result<bool, StorageError> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
-        [table],
-        |row| row.get(0),
-    )
-    .map_err(Into::into)
-}
-
 #[cfg(test)]
 impl SecureStorage {
     /// Create in-memory storage for tests (no keychain, no encryption).
@@ -2263,7 +2035,7 @@ impl SecureStorage {
             [SCHEMA_VERSION.to_string()],
         )?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Mutex::new(conn),
         })
     }
 
@@ -3430,7 +3202,7 @@ mod tests {
                     .apply_open_badge_trust_package(&private_package, &[private_key])
                     .await
                     .unwrap_err(),
-                StorageError::InvalidTrustPackage(_)
+                StorageError::InvalidTrustPackage(message) if message.contains("method did:example:private#key-1 contains private or symmetric key material")
             ));
 
             let mut invalid_interval =
@@ -3963,12 +3735,94 @@ mod tests {
             assert_eq!(trust_domain_index, 1);
 
             let storage = SecureStorage {
-                conn: Arc::new(Mutex::new(conn)),
+                conn: Mutex::new(conn),
             };
             let records = storage.get_open_badge_trust_records().await.unwrap();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].method.id, "legacy-key");
             assert!(records[0].provenance.is_none());
         });
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn extension_operations_share_core_records_and_rollback_transactions() {
+        let mut storage = SecureStorage::new_in_memory().unwrap();
+        storage
+            .initialize_extension(|conn| {
+                conn.execute_batch(
+                    "CREATE TABLE app_notes (event_id TEXT PRIMARY KEY, note TEXT NOT NULL);",
+                )
+            })
+            .unwrap();
+        storage
+            .store_verification_event("event-1", "emrtd", &"valid")
+            .await
+            .unwrap();
+        let outcome: Result<(), rusqlite::Error> = storage
+            .with_connection(|conn| {
+                let transaction = conn.transaction()?;
+                transaction.execute("INSERT INTO app_notes VALUES ('event-1', 'draft')", [])?;
+                transaction.execute(
+                    "UPDATE verification_events SET status = 'failed' WHERE id = 'event-1'",
+                    [],
+                )?;
+                // A failed operation must leave both app and core records unchanged.
+                transaction.execute("INSERT INTO app_notes VALUES ('event-1', 'duplicate')", [])?;
+                transaction.commit()
+            })
+            .await;
+        assert!(outcome.is_err());
+        let count: i64 = storage
+            .with_connection(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM app_notes", [], |row| row.get(0))
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let history = storage.get_verification_history(10).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].status, serde_json::to_string("valid").unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_extension_operations_use_one_connection() {
+        let mut storage = SecureStorage::new_in_memory().unwrap();
+        storage.initialize_extension(|conn| conn.execute_batch("CREATE TABLE app_counter (value INTEGER NOT NULL); INSERT INTO app_counter VALUES (0);")).unwrap();
+        let storage = Arc::new(storage);
+        let mut tasks = Vec::new();
+        let barrier = Arc::new(tokio::sync::Barrier::new(33));
+        for _ in 0..32 {
+            let storage = Arc::clone(&storage);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                storage
+                    .with_connection(|conn| {
+                        let tx = conn.transaction()?;
+                        let value: i64 =
+                            tx.query_row("SELECT value FROM app_counter", [], |row| row.get(0))?;
+                        tx.execute("UPDATE app_counter SET value = ?", [value + 1])?;
+                        tx.commit()
+                    })
+                    .await
+            }));
+        }
+        barrier.wait().await;
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+        let value: i64 = storage
+            .with_connection(|conn| {
+                conn.query_row("SELECT value FROM app_counter", [], |row| row.get(0))
+            })
+            .await
+            .unwrap();
+        assert_eq!(value, 32);
     }
 }

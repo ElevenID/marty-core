@@ -14,7 +14,7 @@ use crate::{VerificationError, VerificationResult};
 // ============================================================================
 
 /// JSON Web Key (RFC 7517).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Jwk {
     /// Key type (kty): EC, RSA, OKP, oct
     pub kty: String,
@@ -109,41 +109,6 @@ pub struct Jwk {
     /// Additional parameters
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
-}
-
-// Manual Default implementation is preferred here because:
-// 1. The derive would produce identical code, but having it explicit makes
-//    the semantics clear (empty kty, all optional fields None)
-// 2. Future changes may need custom default values
-#[allow(clippy::derivable_impls)]
-impl Default for Jwk {
-    fn default() -> Self {
-        Self {
-            kty: String::new(),
-            use_: None,
-            key_ops: None,
-            alg: None,
-            kid: None,
-            x5u: None,
-            x5c: None,
-            x5t: None,
-            x5t_s256: None,
-            crv: None,
-            x: None,
-            y: None,
-            d: None,
-            n: None,
-            e: None,
-            rsa_d: None,
-            p: None,
-            q: None,
-            dp: None,
-            dq: None,
-            qi: None,
-            k: None,
-            extra: HashMap::new(),
-        }
-    }
 }
 
 impl Jwk {

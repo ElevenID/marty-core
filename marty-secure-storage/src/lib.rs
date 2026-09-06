@@ -7,10 +7,12 @@ mod database;
 mod encryption;
 mod error;
 mod keychain;
+mod migrations;
 mod models;
 mod schema;
 
 pub use database::SecureStorage;
+pub use encryption::PiiEncryptor;
 pub use error::StorageError;
 pub use models::*;
 
