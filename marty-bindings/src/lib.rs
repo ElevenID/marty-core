@@ -2077,6 +2077,7 @@ fn didcomm_unpack_message(message_json: &str) -> PyResult<String> {
 /// Returns:
 ///     JWE JSON Serialization (General) string
 #[pyfunction]
+#[cfg(feature = "didcomm-encrypted-envelope")]
 fn didcomm_encrypt(plaintext_json: &str, recipient_did_document_json: &str) -> PyResult<String> {
     let did_doc: marty_didcomm::DidDocument =
         serde_json::from_str(recipient_did_document_json).map_err(to_pyerr)?;
@@ -2812,6 +2813,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(didcomm_extract_endpoint, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_pack_credential, m)?)?;
     m.add_function(wrap_pyfunction!(didcomm_unpack_message, m)?)?;
+    #[cfg(feature = "didcomm-encrypted-envelope")]
     m.add_function(wrap_pyfunction!(didcomm_encrypt, m)?)?;
     #[cfg(feature = "didcomm-local-keys")]
     {
@@ -2889,6 +2891,17 @@ mod tests {
                     "{remote_signing_operation}"
                 );
             }
+        });
+    }
+
+    #[test]
+    #[cfg(not(feature = "didcomm-encrypted-envelope"))]
+    fn resolver_only_module_excludes_software_didcomm_encryption() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_bindings(&module).unwrap();
+            assert!(!module.hasattr("didcomm_encrypt").unwrap());
         });
     }
 

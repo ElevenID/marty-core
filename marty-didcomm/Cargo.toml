@@ -15,9 +15,13 @@ name = "marty_didcomm"
 crate-type = ["rlib"]
 
 [features]
-default = ["did_key", "did_web", "did_peer", "did_jwk", "local-key-operations"]
+default = ["did_key", "did_web", "did_peer", "did_jwk", "encrypted-envelope", "local-key-operations"]
 kms-only = []
-local-key-operations = [] # Caller-supplied long-lived DIDComm sender/recipient private keys
+# Software anoncrypt creates a short-lived X25519 key and currently delegates
+# to a dependency that also compiles unrelated signing backends. Keep that
+# dependency out of resolver-only and KMS-only base artifacts.
+encrypted-envelope = ["dep:affinidi-messaging-didcomm"]
+local-key-operations = ["encrypted-envelope"] # Caller-supplied long-lived DIDComm sender/recipient private keys
 did_key = []
 did_web = ["dep:reqwest", "dep:tokio"]
 did_peer = []
@@ -32,7 +36,7 @@ serde_json = { workspace = true }
 ed25519-dalek = { workspace = true }
 p256 = { workspace = true, features = ["arithmetic"] }
 base64 = { workspace = true }
-affinidi-messaging-didcomm = "=0.14.0"
+affinidi-messaging-didcomm = { version = "=0.14.0", default-features = false, optional = true }
 
 # DID document parsing + resolution
 uuid = { workspace = true }

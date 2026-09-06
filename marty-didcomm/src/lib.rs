@@ -81,8 +81,18 @@ compile_error!("kms-only DIDComm builds cannot accept caller-supplied private ke
 /// ```
 pub struct NoLocalKeyOperations;
 
+#[cfg(not(feature = "encrypted-envelope"))]
+/// Marker for resolver/plaintext-message builds that omit software envelope
+/// cryptography and its broader transitive signing backends.
+///
+/// ```compile_fail
+/// use marty_didcomm::encrypt_for_recipient;
+/// ```
+pub struct NoEncryptedEnvelope;
+
 pub mod did_identifier;
 pub mod did_resolver;
+#[cfg(feature = "encrypted-envelope")]
 pub mod encrypted_envelope;
 pub mod envelope;
 pub mod error;
@@ -90,6 +100,7 @@ pub mod types;
 
 pub use did_identifier::{derive_p256_did_identifier, derive_p256_did_jwk, derive_p256_did_key};
 pub use did_resolver::{DidResolutionResult, DidResolver};
+#[cfg(feature = "encrypted-envelope")]
 pub use encrypted_envelope::encrypt_for_recipient;
 #[cfg(feature = "local-key-operations")]
 pub use encrypted_envelope::{

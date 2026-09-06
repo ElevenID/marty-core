@@ -377,8 +377,9 @@ jobs:
             fi
           done
           kms_didcomm_tree="$(cargo tree --locked -p marty-bindings --no-default-features --features kms-only,extension-module -e features,no-dev -i marty-didcomm)"
-          if grep -Eq 'marty-didcomm feature "(default|local-key-operations)"' <<<"$kms_didcomm_tree"; then
-            printf '%s\n' "$kms_didcomm_tree"
+          kms_bindings_tree="$(cargo tree --locked -p marty-bindings --no-default-features --features kms-only,extension-module -e features,no-dev)"
+          if grep -Eq 'marty-didcomm feature "(default|encrypted-envelope|local-key-operations)"' <<<"$kms_didcomm_tree" || grep -Eq '(^| )affinidi-messaging-didcomm( |$)' <<<"$kms_bindings_tree"; then
+            printf '%s\n%s\n' "$kms_didcomm_tree" "$kms_bindings_tree"
             exit 1
           fi
           for package_and_features in \

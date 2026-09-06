@@ -55,14 +55,18 @@ serde_json = "1.0"
 hex = "0.4"
 
 [features]
-default = ["extension-module"]
+default = ["extension-module", "didcomm-encrypted-envelope"]
 extension-module = ["pyo3/extension-module"]
 kms-only = ["marty-crypto/kms-only", "marty-didcomm/kms-only", "marty-oid4vci/kms-only", "marty-verification/kms-only"]
 # Short-lived HAIP/OID4VP response-encryption keys. This is intentionally
 # independent from development-only credential issuer keys.
 ephemeral-session-keys = ["marty-crypto/symmetric", "marty-verification/ephemeral-session-keys"]
+# DIDComm anoncrypt creates only a short-lived X25519 envelope key, but its
+# maintained implementation compiles a broader crypto backend. Keep it out of
+# KMS-only base wheels unless the product explicitly needs encrypted envelopes.
+didcomm-encrypted-envelope = ["marty-didcomm/encrypted-envelope"]
 # Messaging-agent builds that deliberately own DIDComm sender/recipient keys.
-didcomm-local-keys = ["marty-didcomm/local-key-operations"]
+didcomm-local-keys = ["didcomm-encrypted-envelope", "marty-didcomm/local-key-operations"]
 # Development and offline migration utilities that place private key material
 # in this process. Production issuer builds must leave this disabled and use
 # the prepare -> remote sign -> assemble APIs.

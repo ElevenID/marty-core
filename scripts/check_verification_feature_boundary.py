@@ -268,16 +268,38 @@ def check_repository(root: Path = ROOT) -> None:
     )
     require(
         bindings["dependencies"]["marty-didcomm"].get("default-features") is False
-        and "local-key-operations"
-        not in bindings["dependencies"]["marty-didcomm"].get("features", [])
+        and not {
+            "encrypted-envelope",
+            "local-key-operations",
+        }
+        & set(bindings["dependencies"]["marty-didcomm"].get("features", []))
         and bindings["features"]["didcomm-local-keys"]
-        == ["marty-didcomm/local-key-operations"],
-        "DIDComm caller-private-key APIs must require their own capability",
+        == [
+            "didcomm-encrypted-envelope",
+            "marty-didcomm/local-key-operations",
+        ],
+        "DIDComm software envelopes and caller-private-key APIs must require their own capabilities",
     )
     require(
         didcomm["features"]["kms-only"] == []
+        and didcomm["features"]["encrypted-envelope"]
+        == ["dep:affinidi-messaging-didcomm"]
+        and didcomm["features"]["local-key-operations"]
+        == ["encrypted-envelope"]
+        and didcomm["dependencies"]["affinidi-messaging-didcomm"].get("optional")
+        is True
+        and didcomm["dependencies"]["affinidi-messaging-didcomm"].get(
+            "default-features"
+        )
+        is False
         and "local-key-operations" in didcomm["features"]["default"],
-        "DIDComm must preserve full defaults and provide a non-enabling KMS marker",
+        "DIDComm software envelopes must be explicit and absent from the KMS marker",
+    )
+    require(
+        bindings["features"]["didcomm-encrypted-envelope"]
+        == ["marty-didcomm/encrypted-envelope"]
+        and "didcomm-encrypted-envelope" in bindings["features"]["default"],
+        "bindings must preserve default DIDComm envelopes behind an explicit capability",
     )
     require(
         didcomm["dependencies"]["p256"].get("features") == ["arithmetic"],

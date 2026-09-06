@@ -16,12 +16,12 @@ the branch, exact commits, test evidence, and unresolved gates below supersede
 chat context.
 
 The last published DCO-clean Marty base checkpoint is
-`be45f53dee8be1c37d0c6ed27b28deecbf9e65e4`. Corrective work after that
+`e05bde3d5ca5428a87c9ab8b5802c0874e4cdd36`. Corrective work after that
 checkpoint must be committed, pushed, and independently re-reviewed before
 merge. Published ElevenID fork heads are isomdl
 `2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9` on
 `codex/kms-only-build-surface`, sd-jwt
-`acdcc18edaae6630673d8182f4e1dc9881b4a404` on
+`302984b4431c331408c58c62f23a07339394c986` on
 `codex/digest-lane-acceleration`, and Longfellow
 `1c9506823064b5b8e719d67698985a3015bef6f4`. The public-fork corrections are
 split into small DCO-signed commits. Marty now pins the exact isomdl and sd-jwt
@@ -52,6 +52,16 @@ secp256k1 paths rather than SSI signing backends. Isomdl presentation
 verification likewise uses public points and prehashed verification without its
 curve signing features. Static boundary tests and Cargo-tree negative checks
 enforce this split.
+
+Final Linux CI also exposed that `affinidi-messaging-didcomm` unconditionally
+compiles Ed25519, P-256, and secp256k1 signing/private-key machinery even for
+Marty's public DID resolver and anoncrypt-only use. Marty now makes that
+dependency and the Rust/Python encrypted-envelope API an explicit
+`encrypted-envelope` / `didcomm-encrypted-envelope` capability. Historical
+default builds retain the API, while KMS-only base and resolver-only builds omit
+the dependency and API entirely. SD-JWT's WebAssembly-only `getrandom` adapter
+is now unconditional on that target because `jsonwebtoken` reaches entropy even
+without issuer planning; native dependency graphs are unchanged.
 
 The final local matrix is green: formatting, strict workspace and role-specific
 clippy, five negative KMS/local-capability compile probes, default verification
