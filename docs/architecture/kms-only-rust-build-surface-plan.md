@@ -1,6 +1,6 @@
 # KMS-only Rust build surface plan
 
-Status: implementation and local validation complete; independent review and CI pending
+Status: implementation and local validation complete; final review and CI are tracked in the ElevenID pull requests
 
 Recorded: 2026-09-05
 
@@ -10,21 +10,20 @@ Scope owner: ElevenID
 
 The positive-capability/KMS-only implementation is finalized on the local
 ElevenID-only branch `codex/kms-only-build-surface-clean`. Marty-core PR 308
-currently tracks the earlier published branch `codex/kms-only-build-surface`
-and must be updated from this clean branch after independent review. No upstream
-pull request or push has been made. This document is the durable recovery
-record; the branch, exact commits, test evidence, and unresolved gates below
-supersede chat context.
+tracks its published branch `codex/kms-only-build-surface`. No upstream pull
+request or push has been made. This document is the durable recovery record;
+the branch, exact commits, test evidence, and unresolved gates below supersede
+chat context.
 
 The last published DCO-clean Marty base checkpoint is
 `be45f53dee8be1c37d0c6ed27b28deecbf9e65e4`. Corrective work after that
 checkpoint must be committed, pushed, and independently re-reviewed before
 merge. Published ElevenID fork heads are isomdl
-`235ac776ce32d5ae9a1c0c458f6a22a395e9aed0` on
+`2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9` on
 `codex/kms-only-build-surface`, sd-jwt
 `8be26b1d9419de4aeee886f810bde40bc69b3ef5` on
 `codex/digest-lane-acceleration`, and Longfellow
-`2b55340a2e9930e6699a647501225bae3e5468b0`. The public-fork corrections are
+`c5a0484ec6f821c80d1527ad3be955fea4155143`. The public-fork corrections are
 split into small DCO-signed commits. Marty now pins the exact isomdl and sd-jwt
 heads; no upstream branch was pushed and no upstream pull request was opened.
 
