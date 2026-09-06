@@ -247,9 +247,9 @@ Clean release builds from the DCO-clean Marty worktree produced:
 
 | `marty-oid4vci` release role | Time | Isolated target directory | Crate `.rlib` | Unique `cargo tree` lines |
 | --- | ---: | ---: | ---: | ---: |
-| current default | 75.79 s | 816,789,363 bytes | 10,641,010 bytes | 365 |
-| KMS issuer (`kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc`) | 76.93 s | 789,219,322 bytes | 9,722,842 bytes | 350 |
-| KMS verifier (`kms-only,verifier,jwt_vc_json,sd_jwt`) | 74.00 s | 778,966,769 bytes | 8,773,604 bytes | 348 |
+| current default | 86.69 s | 816,938,789 bytes | 10,701,104 bytes | 365 |
+| KMS issuer (`kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc`) | 65.10 s | 789,364,340 bytes | 9,783,004 bytes | 350 |
+| KMS verifier (`kms-only,verifier,jwt_vc_json,sd_jwt`) | 71.57 s | 779,021,250 bytes | 8,806,392 bytes | 348 |
 | ZK verifier (`verifier,zk_mdoc`) | not re-timed | not re-measured | not re-measured | 338 |
 | ZK verifier plus mdoc issuer planning | not re-timed | not re-measured | not re-measured | 360 |
 
@@ -258,9 +258,10 @@ a shipped artifact. The `.rlib` is the protocol crate artifact, not a complete
 service binary or container. Against the current default, the KMS issuer removes
 15 unique dependency-tree lines, 3.4 percent of isolated build bytes, and 8.6
 percent of the protocol `.rlib`. The KMS verifier removes 17 lines, 4.6 percent
-of isolated build bytes, and 17.5 percent of the `.rlib`; its clean build was
-2.4 percent faster on this sample. Timing differences this small are noisy, but
-the graph and object reductions are deterministic. Final service/container
+of isolated build bytes, and 17.7 percent of the `.rlib`; its clean build was
+17.4 percent faster on this sample. Build timing is sensitive to machine load
+and should be treated as noisy; the graph and object reductions are
+deterministic. Final service/container
 measurements remain a deployment-repository task because this workspace does
 not contain the ElevenID production service roots.
 
