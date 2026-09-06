@@ -4,6 +4,12 @@
 //! benchmark. It counts successful sizes requested from Rust's `System` global
 //! allocator only while a selected public preparation boundary is executing.
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "../src/benchmark_support/mdoc_payload.rs"]
+mod mdoc_payload;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "../src/benchmark_support/selectors.rs"]
+mod selectors;
 #[cfg(not(target_family = "wasm"))]
 #[global_allocator]
 static ALLOCATOR: native::CountingAllocator = native::CountingAllocator;
@@ -20,6 +26,11 @@ fn main() {
 
 #[cfg(not(target_family = "wasm"))]
 mod native {
+    use crate::mdoc_payload::{
+        expected_cbor_value as matrix_expected_cbor_value, json_value as matrix_json_value,
+        PayloadClass, LARGE_PORTRAIT_BYTES,
+    };
+    use crate::selectors::selector_values;
     use std::{
         alloc::{GlobalAlloc, Layout, System},
         collections::{HashMap, HashSet},
@@ -50,9 +61,6 @@ mod native {
     const NAMESPACE: &str = "org.iso.18013.5.1";
     const ITEM_COUNTS: [usize; 5] = [1, 8, 32, 128, 512];
     const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
-    const LARGE_PORTRAIT_BYTES: usize = 256 * 1024;
-    const MIXED_MEDIUM_BYTES: usize = 1024;
-    const MIXED_LARGE_BYTES: usize = 64 * 1024;
 
     static MEASUREMENT_ACTIVE: AtomicBool = AtomicBool::new(false);
     static ALLOC_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -111,51 +119,6 @@ mod native {
             .is_err()
         {
             COUNTER_OVERFLOWED.store(true, Ordering::Relaxed);
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum PayloadClass {
-        SmallPrimitive,
-        MediumNested,
-        LargePortrait,
-        MixedSize,
-    }
-
-    impl PayloadClass {
-        const ALL: [Self; 4] = [
-            Self::SmallPrimitive,
-            Self::MediumNested,
-            Self::LargePortrait,
-            Self::MixedSize,
-        ];
-
-        const fn label(self) -> &'static str {
-            match self {
-                Self::SmallPrimitive => "small_primitive",
-                Self::MediumNested => "medium_nested",
-                Self::LargePortrait => "large_portrait",
-                Self::MixedSize => "mixed_size",
-            }
-        }
-
-        const fn code(self) -> u64 {
-            match self {
-                Self::SmallPrimitive => 1,
-                Self::MediumNested => 2,
-                Self::LargePortrait => 3,
-                Self::MixedSize => 4,
-            }
-        }
-
-        fn parse(value: &str) -> Option<Self> {
-            match value {
-                "small_primitive" => Some(Self::SmallPrimitive),
-                "medium_nested" => Some(Self::MediumNested),
-                "large_portrait" => Some(Self::LargePortrait),
-                "mixed_size" => Some(Self::MixedSize),
-                _ => None,
-            }
         }
     }
 
@@ -281,30 +244,6 @@ mod native {
             "{RUN_LABEL_ENV} may contain only ASCII letters, digits, '.', '_', and '-'"
         );
         value
-    }
-
-    fn selector_values(name: &str) -> Option<Vec<String>> {
-        let value = match std::env::var(name) {
-            Ok(value) => value,
-            Err(std::env::VarError::NotPresent) => return None,
-            Err(std::env::VarError::NotUnicode(_)) => panic!("{name} must contain Unicode text"),
-        };
-        let values = value
-            .split(',')
-            .map(|value| {
-                assert!(!value.is_empty(), "{name} contains an empty value");
-                let value = value.trim();
-                assert!(!value.is_empty(), "{name} contains an empty value");
-                value.to_owned()
-            })
-            .collect::<Vec<_>>();
-        assert!(!values.is_empty(), "{name} must select at least one value");
-        if values.iter().any(|value| value == "all") {
-            assert_eq!(values, ["all"], "{name}=all cannot be combined with values");
-            None
-        } else {
-            Some(values)
-        }
     }
 
     fn parse_named_selector<T: Copy + Eq>(
@@ -438,108 +377,6 @@ mod native {
 
     fn matrix_claim_name(index: usize) -> String {
         format!("benchmark_claim_{index:04}")
-    }
-
-    fn repeated_ascii(length: usize, index: usize) -> String {
-        let byte = b'A' + u8::try_from(index % 26).expect("fixture alphabet index must fit u8");
-        String::from_utf8(vec![byte; length]).expect("fixture bytes must be ASCII")
-    }
-
-    fn matrix_json_value(class: PayloadClass, index: usize) -> serde_json::Value {
-        match class {
-            PayloadClass::SmallPrimitive => match index % 4 {
-                0 => serde_json::json!(index),
-                1 => serde_json::json!(index.is_multiple_of(2)),
-                2 => serde_json::json!(format!("value-{index:04}")),
-                _ => serde_json::Value::Null,
-            },
-            PayloadClass::MediumNested => serde_json::json!({
-                "group": index % 8,
-                "metadata": {
-                    "enabled": index.is_multiple_of(2),
-                    "label": format!("nested-{index:04}"),
-                    "sequence": index
-                },
-                "values": [index, index + 1, index + 2, index + 3]
-            }),
-            PayloadClass::LargePortrait if index == 0 => {
-                serde_json::Value::String(repeated_ascii(LARGE_PORTRAIT_BYTES, index))
-            }
-            PayloadClass::LargePortrait => serde_json::Value::String(format!("value-{index:04}")),
-            PayloadClass::MixedSize => match index % 4 {
-                0 if index == 0 => {
-                    serde_json::Value::String(repeated_ascii(MIXED_LARGE_BYTES, index))
-                }
-                0 => serde_json::Value::String(repeated_ascii(MIXED_MEDIUM_BYTES, index)),
-                1 => serde_json::json!({
-                    "flags": [true, false, index.is_multiple_of(2)],
-                    "sequence": index
-                }),
-                2 => serde_json::json!(index),
-                _ => serde_json::Value::String(format!("mixed-{index:04}")),
-            },
-        }
-    }
-
-    fn cbor_integer(value: usize) -> CborValue {
-        CborValue::Integer(
-            u64::try_from(value)
-                .expect("fixture integer must fit u64")
-                .into(),
-        )
-    }
-
-    fn matrix_expected_cbor_value(class: PayloadClass, index: usize) -> CborValue {
-        match class {
-            PayloadClass::SmallPrimitive => match index % 4 {
-                0 => cbor_integer(index),
-                1 => CborValue::Bool(index.is_multiple_of(2)),
-                2 => CborValue::Text(format!("value-{index:04}")),
-                _ => CborValue::Null,
-            },
-            PayloadClass::MediumNested => CborValue::Map(vec![
-                (CborValue::Text("group".into()), cbor_integer(index % 8)),
-                (
-                    CborValue::Text("metadata".into()),
-                    CborValue::Map(vec![
-                        (
-                            CborValue::Text("enabled".into()),
-                            CborValue::Bool(index.is_multiple_of(2)),
-                        ),
-                        (
-                            CborValue::Text("label".into()),
-                            CborValue::Text(format!("nested-{index:04}")),
-                        ),
-                        (CborValue::Text("sequence".into()), cbor_integer(index)),
-                    ]),
-                ),
-                (
-                    CborValue::Text("values".into()),
-                    CborValue::Array((index..index + 4).map(cbor_integer).collect()),
-                ),
-            ]),
-            PayloadClass::LargePortrait if index == 0 => {
-                CborValue::Text(repeated_ascii(LARGE_PORTRAIT_BYTES, index))
-            }
-            PayloadClass::LargePortrait => CborValue::Text(format!("value-{index:04}")),
-            PayloadClass::MixedSize => match index % 4 {
-                0 if index == 0 => CborValue::Text(repeated_ascii(MIXED_LARGE_BYTES, index)),
-                0 => CborValue::Text(repeated_ascii(MIXED_MEDIUM_BYTES, index)),
-                1 => CborValue::Map(vec![
-                    (
-                        CborValue::Text("flags".into()),
-                        CborValue::Array(vec![
-                            CborValue::Bool(true),
-                            CborValue::Bool(false),
-                            CborValue::Bool(index.is_multiple_of(2)),
-                        ]),
-                    ),
-                    (CborValue::Text("sequence".into()), cbor_integer(index)),
-                ]),
-                2 => cbor_integer(index),
-                _ => CborValue::Text(format!("mixed-{index:04}")),
-            },
-        }
     }
 
     fn matrix_credential_id(

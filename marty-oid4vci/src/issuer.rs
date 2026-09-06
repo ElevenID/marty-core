@@ -574,17 +574,7 @@ pub fn create_verifiable_credential(
 
     let signed = formats::sign_credential(&cred_format, &issuer_key, &cred_claims)?;
 
-    let credential_str = match &signed {
-        SignedCredential::JwtVcJson { jwt, .. } => jwt.clone(),
-        SignedCredential::SdJwt { compact, .. } => compact.clone(),
-        SignedCredential::MsoMdoc {
-            issuer_signed_b64, ..
-        } => issuer_signed_b64.clone(),
-        SignedCredential::ZkMdoc {
-            issuer_signed_b64, ..
-        } => issuer_signed_b64.clone(),
-        SignedCredential::VdsNc { barcode_data, .. } => barcode_data.clone(),
-    };
+    let credential_str = signed.encoded_credential().to_owned();
 
     Ok((credential_str, signed.credential_id().to_string()))
 }

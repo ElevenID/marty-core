@@ -189,3 +189,12 @@ required-features = ["local-key-operations", "wallet"]
 [[test]]
 name = "signing_payload_semantics"
 path = "tests/signing_payload_semantics.rs"
+
+[[test]]
+name = "issuance_input"
+path = "tests/issuance_input.rs"
+required-features = ["local-key-operations"]
+
+[[test]]
+name = "benchmark_support"
+path = "tests/benchmark_support.rs"

@@ -24,12 +24,12 @@ struct IssueOb2Request {
 }
 
 #[derive(Debug, Deserialize)]
-struct VerifyOb2Request {
-    assertion: Value,
+pub struct VerifyOb2Request {
+    pub assertion: Value,
     #[serde(default)]
-    document_store: Option<DocumentStore>,
+    pub document_store: Option<DocumentStore>,
     #[serde(default)]
-    recipient_identity: Option<String>,
+    pub recipient_identity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +100,13 @@ pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
         VerificationError::open_badges(format!("Invalid OB2 verify request: {}", e))
     })?;
 
+    serde_json::to_string(&verify_ob2(req)?).map_err(|e| {
+        VerificationError::open_badges(format!("Failed to serialize OB2 verify result: {}", e))
+    })
+}
+
+/// Verify an OB2 assertion without an intermediate JSON request or response.
+pub fn verify_ob2(req: VerifyOb2Request) -> VerificationResult<OpenBadgesVerificationResult> {
     let assertion = req.assertion;
     let store = req.document_store.unwrap_or_default();
 
@@ -181,9 +188,7 @@ pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
         normalized: Some(normalized),
     };
 
-    serde_json::to_string(&result).map_err(|e| {
-        VerificationError::open_badges(format!("Failed to serialize OB2 verify result: {}", e))
-    })
+    Ok(result)
 }
 
 #[cfg(any(test, feature = "local-key-operations"))]

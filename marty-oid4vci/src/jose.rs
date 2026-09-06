@@ -1,7 +1,7 @@
-//! Fail-closed verification helpers for compact JWT/JWS inputs.
+//! Signing and fail-closed verification helpers for compact JWT/JWS inputs.
 //!
 //! Product services retain claim and tenant policy composition, while this
-//! module owns JOSE parsing, public-key validation, and signature verification.
+//! module owns JOSE encoding, parsing, key validation, signing, and verification.
 
 use base64::Engine;
 use jsonwebtoken::{
@@ -15,6 +15,37 @@ use std::fmt;
 
 use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
 use crate::error::{Oid4vciError, Oid4vciResult};
+
+#[cfg(any(test, feature = "local-key-operations"))]
+use ssi_jwk::JWK;
+
+/// Encode header and payload as base64url, sign, and produce a compact JWT.
+#[cfg(any(test, feature = "local-key-operations"))]
+pub fn sign_compact_jwt(
+    jwk: &JWK,
+    header: &serde_json::Value,
+    payload: &serde_json::Value,
+) -> Oid4vciResult<String> {
+    let algorithm = crate::signer::derive_typed_jwk_algorithm(jwk)?;
+    let declared = header
+        .get("alg")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| Oid4vciError::KeyError("JWT header must contain a string alg".into()))?;
+    crate::signer::validate_declared_jwk_algorithm(algorithm, Some(declared))?;
+    let header_str = serde_json::to_string(header)
+        .map_err(|e| Oid4vciError::SigningError(format!("Header serialization failed: {}", e)))?;
+    let payload_str = serde_json::to_string(payload)
+        .map_err(|e| Oid4vciError::SigningError(format!("Payload serialization failed: {}", e)))?;
+
+    let header_b64 = B64.encode(header_str.as_bytes());
+    let payload_b64 = B64.encode(payload_str.as_bytes());
+
+    let message = format!("{}.{}", header_b64, payload_b64);
+    let signature = crate::signer::sign_with_jwk(jwk, message.as_bytes())?;
+    let signature_b64 = B64.encode(&signature);
+
+    Ok(format!("{}.{}", message, signature_b64))
+}
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 const PRIVATE_JWK_FIELDS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];

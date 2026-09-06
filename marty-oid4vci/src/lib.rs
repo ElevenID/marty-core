@@ -58,6 +58,7 @@ pub mod error;
 pub mod formats;
 #[cfg(any(test, feature = "holder-key-operations"))]
 pub mod holder_key;
+pub mod issuance_input;
 #[cfg(feature = "issuer")]
 pub mod issuer;
 pub mod jose;
@@ -110,6 +111,14 @@ pub use holder_key::{
 ///
 /// ```compile_fail
 /// use marty_oid4vci::issuer::detect_algorithm;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::jose::sign_compact_jwt;
+/// ```
+///
+/// ```compile_fail
+/// use marty_oid4vci::signer::derive_typed_jwk_algorithm;
 /// ```
 mod local_issuer_key_compile_boundary {}
 

@@ -884,6 +884,21 @@ pub enum SignedCredential {
 }
 
 impl SignedCredential {
+    /// Borrow the encoded credential, excluding any separate ZK response metadata.
+    pub fn encoded_credential(&self) -> &str {
+        match self {
+            Self::JwtVcJson { jwt, .. } => jwt,
+            Self::SdJwt { compact, .. } => compact,
+            Self::MsoMdoc {
+                issuer_signed_b64, ..
+            }
+            | Self::ZkMdoc {
+                issuer_signed_b64, ..
+            } => issuer_signed_b64,
+            Self::VdsNc { barcode_data, .. } => barcode_data,
+        }
+    }
+
     /// Get the format of this signed credential.
     pub fn format(&self) -> CredentialFormat {
         match self {

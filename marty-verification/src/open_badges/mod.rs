@@ -63,7 +63,7 @@ pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
 const _: () = ();
 #[cfg(any(test, feature = "local-key-operations"))]
 pub use ob2::issue_ob2_json;
-pub use ob2::verify_ob2_json;
+pub use ob2::{verify_ob2, verify_ob2_json, VerifyOb2Request};
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(test, feature = "local-key-operations")
@@ -71,9 +71,12 @@ pub use ob2::verify_ob2_json;
 pub use ob3::issue_ob3_json;
 #[cfg(any(test, feature = "local-key-operations"))]
 pub use ob3::issue_ob3_json_async;
+pub use ob3::{
+    verify_ob3_async, verify_ob3_json_async, verify_ob3_json_with_status_lists_async,
+    verify_ob3_with_status_lists_async, VerifyOb3Request,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ob3::{verify_ob3_json, verify_ob3_json_with_status_lists};
-pub use ob3::{verify_ob3_json_async, verify_ob3_json_with_status_lists_async};
 pub use suite_wrapper::OpenBadgeSuite;
 pub use types::{
     ArtifactProvenance, AuthenticatedStatusList, DocumentStore, OpenBadgeStatusCheck,

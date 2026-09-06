@@ -50,10 +50,10 @@ struct IssueOb3Request {
 }
 
 #[derive(Debug, Deserialize)]
-struct VerifyOb3Request {
-    credential: Value,
+pub struct VerifyOb3Request {
+    pub credential: Value,
     #[serde(default)]
-    document_store: Option<DocumentStore>,
+    pub document_store: Option<DocumentStore>,
 }
 
 #[cfg(any(test, feature = "local-key-operations"))]
@@ -181,6 +181,25 @@ pub async fn verify_ob3_json_with_status_lists_async(
         VerificationError::open_badges(format!("Invalid OB3 verify request: {}", e))
     })?;
 
+    let result = verify_ob3_with_status_lists_async(req, authenticated_status_lists).await?;
+    serde_json::to_string(&result).map_err(|e| {
+        VerificationError::open_badges(format!("Failed to serialize OB3 verify result: {}", e))
+    })
+}
+
+/// Verify an OB3 credential without an intermediate JSON request or response.
+pub async fn verify_ob3_async(
+    req: VerifyOb3Request,
+) -> VerificationResult<OpenBadgesVerificationResult> {
+    verify_ob3_with_status_lists_async(req, &[]).await
+}
+
+/// Verify an OB3 credential with separately authenticated status-list inputs.
+/// Documents in the request's store never establish status authority themselves.
+pub async fn verify_ob3_with_status_lists_async(
+    req: VerifyOb3Request,
+    authenticated_status_lists: &[AuthenticatedStatusList],
+) -> VerificationResult<OpenBadgesVerificationResult> {
     let credential: AnyCredential = serde_json::from_value(req.credential.clone())
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 credential: {}", e)))?;
 
@@ -253,9 +272,7 @@ pub async fn verify_ob3_json_with_status_lists_async(
         normalized: Some(normalized),
     };
 
-    serde_json::to_string(&result).map_err(|e| {
-        VerificationError::open_badges(format!("Failed to serialize OB3 verify result: {}", e))
-    })
+    Ok(result)
 }
 
 #[cfg(all(

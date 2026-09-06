@@ -19,6 +19,8 @@ mod remote_credential;
 mod siop;
 mod status_list;
 
+#[cfg(any(test, feature = "local-key-operations"))]
+use marty_oid4vci::issuance_input::normalize_zk_predicate_claims;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -1212,7 +1214,7 @@ fn oid4vci_sign_credential(
 ) -> PyResult<(String, String)> {
     use marty_oid4vci::formats;
     use marty_oid4vci::types::{
-        CredentialClaims, CredentialFormat, CredentialPayloadFormat, IssuerKey, SignedCredential,
+        CredentialClaims, CredentialFormat, CredentialPayloadFormat, IssuerKey,
     };
 
     let claims: std::collections::HashMap<String, serde_json::Value> =
@@ -1264,17 +1266,7 @@ fn oid4vci_sign_credential(
         formats::sign_credential(&cred_format, &issuer_key, &cred_claims).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Signing error: {e}"))
         })?;
-    let credential_str = match &signed {
-        SignedCredential::JwtVcJson { jwt, .. } => jwt.clone(),
-        SignedCredential::SdJwt { compact, .. } => compact.clone(),
-        SignedCredential::MsoMdoc {
-            issuer_signed_b64, ..
-        } => issuer_signed_b64.clone(),
-        SignedCredential::ZkMdoc {
-            issuer_signed_b64, ..
-        } => issuer_signed_b64.clone(),
-        SignedCredential::VdsNc { barcode_data, .. } => barcode_data.clone(),
-    };
+    let credential_str = signed.encoded_credential().to_owned();
 
     Ok((credential_str, signed.credential_id().to_string()))
 }
@@ -1736,83 +1728,6 @@ fn oid4vci_assemble_mdoc(
             "mDoc assembler returned an unexpected credential format",
         )),
     }
-}
-
-/// Normalize legacy Python input (`List[str]`) into typed ZK predicate bindings.
-#[cfg(any(test, feature = "local-key-operations"))]
-fn normalize_zk_predicate_claims(
-    claims: &std::collections::HashMap<String, serde_json::Value>,
-    raw: Vec<String>,
-) -> Vec<marty_oid4vci::types::ZkPredicateBinding> {
-    if raw.is_empty() {
-        return vec![];
-    }
-
-    let mut json_bindings: Vec<marty_oid4vci::types::ZkPredicateBinding> = Vec::new();
-    let mut all_json_bindings = true;
-    for item in &raw {
-        match serde_json::from_str::<marty_oid4vci::types::ZkPredicateBinding>(item) {
-            Ok(binding)
-                if !binding.claim_name.is_empty() && !binding.supported_predicates.is_empty() =>
-            {
-                json_bindings.push(binding);
-            }
-            _ => {
-                all_json_bindings = false;
-                break;
-            }
-        }
-    }
-    if all_json_bindings {
-        return json_bindings;
-    }
-
-    let mut claim_names: Vec<String> = Vec::new();
-    let mut predicates: Vec<String> = Vec::new();
-    for item in &raw {
-        if claims.contains_key(item) {
-            claim_names.push(item.clone());
-        } else {
-            predicates.push(item.clone());
-        }
-    }
-
-    if !claim_names.is_empty() {
-        let fallback_predicates = if predicates.is_empty() {
-            claim_names.clone()
-        } else {
-            predicates.clone()
-        };
-
-        return claim_names
-            .into_iter()
-            .map(|claim_name| {
-                marty_oid4vci::types::ZkPredicateBinding::multi(
-                    claim_name,
-                    fallback_predicates.clone(),
-                )
-            })
-            .collect();
-    }
-
-    if !predicates.is_empty() {
-        if claims.contains_key("birth_date") {
-            return vec![marty_oid4vci::types::ZkPredicateBinding::multi(
-                "birth_date",
-                predicates,
-            )];
-        }
-        if let Some(first_claim_name) = claims.keys().next() {
-            return vec![marty_oid4vci::types::ZkPredicateBinding::multi(
-                first_claim_name.clone(),
-                predicates,
-            )];
-        }
-    }
-
-    raw.into_iter()
-        .map(|name| marty_oid4vci::types::ZkPredicateBinding::single(name.clone(), name))
-        .collect()
 }
 
 // ============================================================================

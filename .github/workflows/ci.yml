@@ -530,7 +530,7 @@ jobs:
             python/tests/test_production_kms_surface.py \
             python/tests/test_mrz_golden_vectors.py \
             python/tests/test_emrtd_golden_vectors.py
-          .venv/bin/maturin develop --features local-key-operations,iaca,csca,eudi
+          .venv/bin/maturin develop --features python,local-key-operations,iaca,csca,eudi
           .venv/bin/python -m pytest python/tests/ \
             --ignore=python/tests/test_production_kms_surface.py
       - name: Install native transport build dependencies

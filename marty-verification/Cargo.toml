@@ -21,8 +21,9 @@ eudi = []           # EU Digital Identity verification
 python = ["pyo3"]   # Verification-only Python bindings
 # Explicit opt-in for offline development and migration tools. Production
 # Python wheels omit every raw secret/private-key operation from the module.
+# Binding selection is independent: Python tools also enable `python`, while
+# native Rust and browser callers can use local keys without linking Python.
 local-key-operations = [
-    "python",
     "ephemeral-session-keys",
     "marty-crypto/ecdsa-local-signing",
     "marty-crypto/eddsa-local-signing",

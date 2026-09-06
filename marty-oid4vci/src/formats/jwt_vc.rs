@@ -35,7 +35,8 @@ pub const OPEN_BADGES_V3_CONTEXT: &str = "https://purl.imsglobal.org/spec/ob/v3p
 pub const OPEN_BADGES_V3_CREDENTIAL_TYPE: &str = "OpenBadgeCredential";
 
 #[cfg(any(test, feature = "issuer"))]
-fn checked_jwt_vc_expiration(
+/// Compute an optional JWT VC expiration without overflowing the time range.
+pub fn checked_jwt_vc_expiration(
     issued_at: chrono::DateTime<chrono::Utc>,
     expiration_seconds: Option<i64>,
 ) -> Oid4vciResult<Option<chrono::DateTime<chrono::Utc>>> {
@@ -727,27 +728,8 @@ pub fn assemble_jwt_vc(
     })
 }
 
-/// Encode header and payload as base64url, sign, and produce a compact JWT.
 #[cfg(any(test, feature = "local-key-operations"))]
-pub(crate) fn encode_and_sign_jwt(
-    jwk: &JWK,
-    header: &serde_json::Value,
-    payload: &serde_json::Value,
-) -> Oid4vciResult<String> {
-    let header_str = serde_json::to_string(header)
-        .map_err(|e| Oid4vciError::SigningError(format!("Header serialization failed: {}", e)))?;
-    let payload_str = serde_json::to_string(payload)
-        .map_err(|e| Oid4vciError::SigningError(format!("Payload serialization failed: {}", e)))?;
-
-    let header_b64 = B64.encode(header_str.as_bytes());
-    let payload_b64 = B64.encode(payload_str.as_bytes());
-
-    let message = format!("{}.{}", header_b64, payload_b64);
-    let signature = crate::signer::sign_with_jwk(jwk, message.as_bytes())?;
-    let signature_b64 = B64.encode(&signature);
-
-    Ok(format!("{}.{}", message, signature_b64))
-}
+pub(crate) use crate::jose::sign_compact_jwt as encode_and_sign_jwt;
 
 #[cfg(test)]
 mod tests {
