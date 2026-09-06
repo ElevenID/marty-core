@@ -546,7 +546,7 @@ pub fn prepare_sd_jwt(
 /// Proof verification, including nonce, audience, age, signature, and optional
 /// key-attestation policy, must complete before this boundary. The input must
 /// already be public; private or symmetric keys are rejected rather than projected.
-#[cfg(feature = "issuer")]
+#[cfg(any(test, feature = "issuer"))]
 pub(crate) fn prepare_sd_jwt_with_holder_public_jwk(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,

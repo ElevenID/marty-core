@@ -8,14 +8,18 @@
 //! - `vds_nc` → ICAO 9303 VDS-NC barcode payload
 
 pub mod jwt_vc;
-#[cfg(all(feature = "mso_mdoc", any(test, feature = "issuer")))]
+#[cfg(all(feature = "issuer", any(test, feature = "mso_mdoc")))]
 pub mod mdoc;
-#[cfg(feature = "sd_jwt")]
+#[cfg(any(feature = "sd_jwt", all(test, feature = "issuer")))]
 pub mod sd_jwt;
 #[cfg(any(test, feature = "issuer"))]
 pub mod vds_nc;
 pub mod vds_nc_profile;
-#[cfg(all(feature = "zk_mdoc", feature = "issuer", feature = "mso_mdoc"))]
+#[cfg(all(
+    feature = "zk_mdoc",
+    feature = "issuer",
+    any(test, feature = "mso_mdoc")
+))]
 pub mod zk_mdoc;
 
 /// The ZK proof protocol identifier used by Longfellow/Ligero.
@@ -46,11 +50,15 @@ pub fn sign_credential(
 ) -> Oid4vciResult<SignedCredential> {
     match format {
         CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc(issuer_key, claims),
-        #[cfg(feature = "sd_jwt")]
+        #[cfg(any(feature = "sd_jwt", all(test, feature = "issuer")))]
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt(issuer_key, claims),
-        #[cfg(feature = "mso_mdoc")]
+        #[cfg(all(feature = "issuer", any(test, feature = "mso_mdoc")))]
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc(issuer_key, claims),
-        #[cfg(all(feature = "zk_mdoc", feature = "issuer", feature = "mso_mdoc"))]
+        #[cfg(all(
+            feature = "zk_mdoc",
+            feature = "issuer",
+            any(test, feature = "mso_mdoc")
+        ))]
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc(issuer_key, claims),
         CredentialFormat::VdsNc => vds_nc::sign_vds_nc(issuer_key, claims),
         #[allow(unreachable_patterns)]
@@ -73,11 +81,15 @@ pub fn sign_credential_with_signer(
 ) -> Oid4vciResult<SignedCredential> {
     match format {
         CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc_with_signer(signer, claims),
-        #[cfg(feature = "sd_jwt")]
+        #[cfg(any(feature = "sd_jwt", all(test, feature = "issuer")))]
         CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt_with_signer(signer, claims),
-        #[cfg(feature = "mso_mdoc")]
+        #[cfg(all(feature = "issuer", any(test, feature = "mso_mdoc")))]
         CredentialFormat::MsoMdoc => mdoc::sign_mdoc_with_signer(signer, claims),
-        #[cfg(all(feature = "zk_mdoc", feature = "issuer", feature = "mso_mdoc"))]
+        #[cfg(all(
+            feature = "zk_mdoc",
+            feature = "issuer",
+            any(test, feature = "mso_mdoc")
+        ))]
         CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc_with_signer(signer, claims),
         CredentialFormat::VdsNc => vds_nc::sign_vds_nc_with_signer(signer, claims),
         #[allow(unreachable_patterns)]

@@ -69,11 +69,20 @@ pub mod offer_uri;
 pub mod oidc;
 pub mod presentation_request;
 pub mod proof;
-#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
+#[cfg(all(
+    feature = "issuer",
+    any(
+        all(feature = "mso_mdoc", feature = "sd_jwt"),
+        all(test, feature = "sd_jwt")
+    )
+))]
 pub mod remote_credential;
 #[cfg(any(test, feature = "issuer"))]
 pub mod signer;
-#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
+#[cfg(all(
+    feature = "issuer",
+    any(test, all(feature = "mso_mdoc", feature = "sd_jwt"))
+))]
 pub mod signing_batch;
 pub mod siop;
 pub mod types;
@@ -122,30 +131,34 @@ pub use holder_key::{
 mod local_issuer_key_compile_boundary {}
 
 // Legacy local-signing behavior remains testable without a downstream-selectable
-// Cargo capability. These sources are compiled unchanged as crate-internal tests,
-// where `cfg(test)` exposes the fixture-only key implementation.
-#[cfg(test)]
+// Cargo capability. These sources compile as crate-internal tests, where `cfg(test)`
+// exposes the fixture-only key implementation.
+#[cfg(all(test, feature = "issuer", feature = "jwt_vc_json"))]
 #[path = "../tests/byok_prepare_assemble.rs"]
 mod byok_prepare_assemble;
 #[cfg(test)]
 #[path = "../tests/issuance_input.rs"]
 mod issuance_input_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "issuer"))]
 #[path = "../tests/issuer_key_algorithm_binding.rs"]
 mod issuer_key_algorithm_binding;
-#[cfg(test)]
+#[cfg(all(test, feature = "issuer", feature = "mso_mdoc"))]
 #[path = "../tests/mdoc_x5chain_conformance.rs"]
 mod mdoc_x5chain_conformance;
-#[cfg(test)]
+#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
 #[path = "../tests/scalar_sd_jwt_holder_binding.rs"]
 mod scalar_sd_jwt_holder_binding;
-#[cfg(test)]
+#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
 #[path = "../tests/sd_jwt_managed_claim_boundaries.rs"]
 mod sd_jwt_managed_claim_boundaries;
-#[cfg(test)]
+#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
 #[path = "../tests/sd_jwt_structural_boundaries.rs"]
 mod sd_jwt_structural_boundaries;
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "sd_jwt",
+    any(feature = "issuer", feature = "verifier")
+))]
 #[path = "../tests/sd_jwt_vc_conformance.rs"]
 mod sd_jwt_vc_conformance;
 #[cfg(all(test, feature = "wallet"))]
