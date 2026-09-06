@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "Pure cryptographic primitives for X.509 certificates, signatures, and encryption"
 keywords = ["crypto", "x509", "ecdsa", "eddsa", "rsa"]
 categories = ["cryptography", "authentication"]
+autotests = false
 
 [lib]
 name = "marty_crypto"
@@ -19,13 +20,9 @@ crate-type = ["rlib"]
 # explicitly. Local signing and private-key tooling are never implicit.
 default = []
 # Enforcement marker for processes whose long-term credential keys live in a
-# remote KMS. It enables no primitives by itself; lib.rs rejects combinations
-# that would restore an in-process credential private-key capability.
+# remote KMS. It enables no primitives by itself. Private-key capabilities are
+# absent from the production feature graph rather than rejected after selection.
 kms-only = []
-# Compatibility aliases retain the historical signing + verification surface.
-ecdsa = ["ecdsa-local-signing"]
-eddsa = ["eddsa-local-signing"]
-rsa = ["rsa-local-signing"]
 # Positive capabilities let verifier/KMS builds exclude private-key APIs.
 ecdsa-verification = [
     "dep:ecdsa-core",
@@ -50,24 +47,12 @@ ecdsa-verification = [
     "p521/sha512",
     "p521/std",
 ]
-ecdsa-local-signing = [
-    "ecdsa-verification",
-    "ecdsa-core/signing",
-    "dep:rand",
-    "p256/ecdsa",
-    "p384/ecdsa",
-    "p521/ecdsa",
-    "p521/getrandom",
-]
 eddsa-verification = [
     "dep:ed25519-dalek",
     "dep:ed448-goldilocks-plus",
     "ed25519-dalek/pkcs8",
 ]
-eddsa-local-signing = ["eddsa-verification", "dep:rand", "ed25519-dalek/rand_core"]
 rsa-verification = ["dep:rsa", "dep:sha1", "dep:sha2"]
-rsa-local-signing = ["rsa-verification", "dep:rand"]
-bbs = ["dep:zkryptium"] # BBS+ with BLS12-381 (SHA-256/SHAKE-256)
 jwk = [
     "dep:elliptic-curve",
     "dep:p256",
@@ -83,6 +68,7 @@ ecdh = [
     "dep:p384",
     "dep:rand",
     "dep:x25519-dalek",
+    "dep:zeroize",
     "p256/ecdh",
     "p384/ecdh",
     "kdf",
@@ -90,15 +76,13 @@ ecdh = [
 ]
 hashing = ["dep:sha1", "dep:sha2"]
 signature-verification = ["ecdsa-verification", "eddsa-verification", "rsa-verification"]
+bbs-verification = ["dep:zkryptium"]
 x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
 crl = ["x509", "dep:pem-rfc7468"]
-crl-builder = ["crl", "cert-builder"]
 ocsp = ["x509", "dep:x509-ocsp"]
 symmetric = ["dep:aes", "dep:aes-gcm", "dep:cbc", "dep:cipher", "dep:cmac", "dep:des", "dep:hmac", "dep:sha2"]
 kdf = ["hashing", "dep:hkdf", "dep:pbkdf2"]
-pkcs12 = ["dep:p12", "dep:pem-rfc7468", "dep:pkcs8", "dep:zeroize"]
-serialization = ["private-key-codec"]
 public-key-codec = [
     "dep:ed25519-dalek",
     "dep:elliptic-curve",
@@ -108,49 +92,9 @@ public-key-codec = [
     "p256/pkcs8",
     "p384/pkcs8",
 ]
-private-key-codec = [
-    "public-key-codec",
-    "rsa-verification",
-    "dep:pem-rfc7468",
-    "ed25519-dalek/pem",
-    "p256/pem",
-    "p384/pem",
-    "p521/pem",
-]
-keygen = ["bbs", "ecdh", "ecdsa", "eddsa", "rsa", "dep:zeroize"]
-cert-builder = [
-    "keygen",
-    "x509",
-    "dep:signature",
-    "ed25519-dalek/pem",
-    "p256/pem",
-    "p384/pem",
-    "p521/pem",
-    "x509-cert/builder",
-]
-sod-builder = ["dep:cms", "cms/builder", "cert-builder"]
 # These features are defined for cfg guards but require external crates when used
 aamva-client = []    # AAMVA OCSP client (needs reqwest externally)
 ocsp-client = []     # OCSP client functionality (needs reqwest externally)
-full = [
-    "bbs",
-    "cert-builder",
-    "crl",
-    "crl-builder",
-    "ecdh",
-    "ecdsa",
-    "eddsa",
-    "hashing",
-    "jwk",
-    "kdf",
-    "ocsp",
-    "pkcs12",
-    "rsa",
-    "serialization",
-    "sod-builder",
-    "symmetric",
-    "x509",
-]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("reqwest"))'] }
@@ -168,7 +112,6 @@ p521 = { workspace = true, optional = true }
 ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, optional = true }
 elliptic-curve = { workspace = true, optional = true }
 pem-rfc7468 = { workspace = true, optional = true }
-signature = { workspace = true, optional = true }
 
 # RSA support
 rsa = { workspace = true, optional = true }
@@ -178,7 +121,6 @@ pkcs8 = { workspace = true, optional = true }
 spki = { workspace = true }
 
 # CMS/CRL/OCSP
-cms = { workspace = true, optional = true }
 x509-ocsp = { workspace = true, optional = true }
 
 # Symmetric encryption
@@ -201,17 +143,11 @@ x25519-dalek = { workspace = true, optional = true }
 # Ed448
 ed448-goldilocks-plus = { workspace = true, optional = true }
 
-# BBS+ signatures
-zkryptium = { workspace = true, optional = true }
-
 # Time
 chrono = { workspace = true }
 
 # Encoding
 base64 = { workspace = true }
-
-# PKCS#12
-p12 = { workspace = true, optional = true }
 
 # Random
 rand = { workspace = true, optional = true }
@@ -226,27 +162,29 @@ zeroize = { workspace = true, optional = true }
 
 # Hex encoding (for fingerprints)
 hex = "0.4"
+zkryptium = { workspace = true, optional = true }
 
 [dev-dependencies]
+cms = { workspace = true, features = ["builder"] }
+ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, features = ["signing"] }
+ed25519-dalek = { workspace = true, features = ["pem", "pkcs8", "rand_core"] }
 hmac = { workspace = true }
+p12 = { workspace = true }
+p256 = { workspace = true, features = ["arithmetic", "ecdh", "ecdsa", "pem", "pkcs8", "sha256", "std"] }
+p384 = { workspace = true, features = ["arithmetic", "ecdh", "ecdsa", "pem", "pkcs8", "sha384", "std"] }
+p521 = { workspace = true, features = ["arithmetic", "ecdsa", "getrandom", "pem", "pkcs8", "sha512", "std"] }
+pem-rfc7468 = { workspace = true }
+pkcs8 = { workspace = true }
+rand = { workspace = true }
+rsa = { workspace = true, features = ["pem"] }
+signature = { workspace = true }
 tempfile = { workspace = true }
 rcgen = { workspace = true }
+x509-cert = { workspace = true, features = ["builder"] }
 
 [[test]]
 name = "cavp_aes_gcm"
 required-features = ["symmetric"]
-
-[[test]]
-name = "cavp_ecdh"
-required-features = ["ecdh", "kdf"]
-
-[[test]]
-name = "cavp_ecdsa"
-required-features = ["ecdh", "ecdsa"]
-
-[[test]]
-name = "cavp_rsa"
-required-features = ["rsa"]
 
 [[test]]
 name = "cavp_sha_hmac"

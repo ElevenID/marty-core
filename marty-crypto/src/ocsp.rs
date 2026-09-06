@@ -679,6 +679,7 @@ pub fn is_revoked_via_ocsp(
 // ============================================================================
 
 /// Builder for OCSP responses (primarily for testing).
+#[cfg(test)]
 pub struct OcspResponseBuilder {
     responder_cn: Option<String>,
     cert_status: OcspCertStatus,
@@ -686,6 +687,7 @@ pub struct OcspResponseBuilder {
     issuer_der: Option<Vec<u8>>,
 }
 
+#[cfg(test)]
 impl Default for OcspResponseBuilder {
     fn default() -> Self {
         Self {
@@ -697,6 +699,7 @@ impl Default for OcspResponseBuilder {
     }
 }
 
+#[cfg(test)]
 impl OcspResponseBuilder {
     /// Create a new OCSP response builder.
     pub fn new() -> Self {
@@ -1429,7 +1432,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "cert-builder"))]
+#[cfg(test)]
 mod tests_with_cert_builder {
     use super::*;
     use crate::cert_builder::{create_ca_certificate, create_signed_certificate};

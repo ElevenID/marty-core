@@ -1272,43 +1272,6 @@ fn verify_presentation_structure(
 // Symmetric Crypto (AES-CBC, HMAC, SHA-256) — EAC secure messaging support
 // ============================================================================
 
-/// AES-256-CBC encrypt with PKCS7 padding.
-#[cfg(feature = "ephemeral-session-keys")]
-#[pyfunction]
-fn aes_256_cbc_encrypt<'py>(
-    py: Python<'py>,
-    key: &[u8],
-    iv: &[u8],
-    plaintext: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let ct = marty_crypto::symmetric::aes_256_cbc_encrypt(key, iv, plaintext)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-    Ok(PyBytes::new(py, &ct))
-}
-
-/// AES-256-CBC decrypt with PKCS7 padding.
-#[cfg(feature = "ephemeral-session-keys")]
-#[pyfunction]
-fn aes_256_cbc_decrypt<'py>(
-    py: Python<'py>,
-    key: &[u8],
-    iv: &[u8],
-    ciphertext: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let pt = marty_crypto::symmetric::aes_256_cbc_decrypt(key, iv, ciphertext)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-    Ok(PyBytes::new(py, &pt))
-}
-
-/// HMAC-SHA256.
-#[cfg(feature = "ephemeral-session-keys")]
-#[pyfunction]
-fn hmac_sha256<'py>(py: Python<'py>, key: &[u8], data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-    let mac = marty_crypto::symmetric::hmac_sha256(key, data)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-    Ok(PyBytes::new(py, &mac))
-}
-
 /// SHA-256 hash.
 #[pyfunction]
 fn sha256<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
@@ -1640,9 +1603,11 @@ fn vds_nc_sign_profile(
     use marty_oid4vci::types::{CredentialClaims, SignedCredential};
 
     let private_key_der =
-        marty_crypto::serialization::load_private_key_pem(private_key_pem).map_err(vds_nc_error)?;
-    let key_type = marty_crypto::serialization::detect_private_key_type(&private_key_der)
-        .map_err(vds_nc_error)?;
+        marty_crypto_test_support::serialization::load_private_key_pem(private_key_pem)
+            .map_err(vds_nc_error)?;
+    let key_type =
+        marty_crypto_test_support::serialization::detect_private_key_type(&private_key_der)
+            .map_err(vds_nc_error)?;
     let expected_key_type = match algorithm {
         "ES256" => "EC_P256",
         "ES384" => "EC_P384",
@@ -1705,18 +1670,24 @@ fn vds_nc_sign_profile(
     let signature = match algorithm {
         "ES256" | "ES384" | "EdDSA" => {
             let (raw_private_key, _) =
-                marty_crypto::serialization::pkcs8_to_raw_private_key(&private_key_der)
-                    .map_err(vds_nc_error)?;
+                marty_crypto_test_support::serialization::pkcs8_to_raw_private_key(
+                    &private_key_der,
+                )
+                .map_err(vds_nc_error)?;
             match algorithm {
-                "ES256" => marty_crypto::ecdsa::sign_p256_sha256(&raw_private_key, message),
-                "ES384" => marty_crypto::ecdsa::sign_p384_sha384(&raw_private_key, message),
-                "EdDSA" => marty_crypto::ed25519::sign(&raw_private_key, message),
+                "ES256" => {
+                    marty_crypto_test_support::ecdsa::sign_p256_sha256(&raw_private_key, message)
+                }
+                "ES384" => {
+                    marty_crypto_test_support::ecdsa::sign_p384_sha384(&raw_private_key, message)
+                }
+                "EdDSA" => marty_crypto_test_support::ed25519::sign(&raw_private_key, message),
                 _ => unreachable!(),
             }
         }
-        "PS256" => marty_crypto::rsa::sign_pss_sha256(&private_key_der, message),
-        "PS384" => marty_crypto::rsa::sign_pss_sha384(&private_key_der, message),
-        "PS512" => marty_crypto::rsa::sign_pss_sha512(&private_key_der, message),
+        "PS256" => marty_crypto_test_support::rsa::sign_pss_sha256(&private_key_der, message),
+        "PS384" => marty_crypto_test_support::rsa::sign_pss_sha384(&private_key_der, message),
+        "PS512" => marty_crypto_test_support::rsa::sign_pss_sha512(&private_key_der, message),
         _ => unreachable!(),
     }
     .map_err(vds_nc_error)?;
@@ -2039,13 +2010,8 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(oid4vp_verify_vp_token, m)?)?;
     m.add_function(wrap_pyfunction!(verify_presentation_structure, m)?)?;
 
-    // Symmetric Crypto (EAC secure messaging)
-    #[cfg(feature = "ephemeral-session-keys")]
-    m.add_function(wrap_pyfunction!(aes_256_cbc_encrypt, m)?)?;
-    #[cfg(feature = "ephemeral-session-keys")]
-    m.add_function(wrap_pyfunction!(aes_256_cbc_decrypt, m)?)?;
-    #[cfg(feature = "ephemeral-session-keys")]
-    m.add_function(wrap_pyfunction!(hmac_sha256, m)?)?;
+    // Public digest utility. Session encryption/MAC operations are available
+    // only through protocol-specific opaque handles.
     m.add_function(wrap_pyfunction!(sha256, m)?)?;
 
     // DIDComm v2
@@ -2095,6 +2061,9 @@ mod tests {
                 "didcomm_encrypt_authcrypt",
                 "didcomm_decrypt",
                 "didcomm_decrypt_authcrypt",
+                "aes_256_cbc_encrypt",
+                "aes_256_cbc_decrypt",
+                "hmac_sha256",
             ] {
                 assert!(
                     !module.hasattr(private_operation).unwrap(),
@@ -2103,13 +2072,7 @@ mod tests {
             }
 
             #[cfg(not(feature = "ephemeral-session-keys"))]
-            for session_operation in [
-                "aes_256_cbc_encrypt",
-                "aes_256_cbc_decrypt",
-                "hmac_sha256",
-                "haip_generate_response_encryption_key",
-                "haip_decrypt_response",
-            ] {
+            for session_operation in ["HaipResponseDecryptionSession"] {
                 assert!(
                     !module.hasattr(session_operation).unwrap(),
                     "{session_operation}"
@@ -2238,19 +2201,20 @@ mod tests {
 
     #[test]
     #[cfg(feature = "ephemeral-session-keys")]
-    fn ephemeral_session_module_does_not_restore_credential_keys() {
+    fn ephemeral_session_module_exports_only_opaque_session_crypto() {
         Python::initialize();
         Python::attach(|py| {
             let module = PyModule::new(py, "_marty_rs").unwrap();
             register_marty_bindings(&module).unwrap();
-            for session_operation in [
+            assert!(module.hasattr("HaipResponseDecryptionSession").unwrap());
+            for removed_private_key_operation in [
+                "haip_generate_response_encryption_key",
+                "haip_decrypt_response",
                 "aes_256_cbc_encrypt",
                 "aes_256_cbc_decrypt",
                 "hmac_sha256",
-                "haip_generate_response_encryption_key",
-                "haip_decrypt_response",
             ] {
-                assert!(module.hasattr(session_operation).unwrap());
+                assert!(!module.hasattr(removed_private_key_operation).unwrap());
             }
             for private_operation in [
                 "generate_p256_key",
@@ -2452,10 +2416,11 @@ mod tests {
         assert!(oid4vci_assemble_mdoc(&mut prepared, vec![0; 63]).is_err());
         assert!(prepared.tbs_data().is_ok());
         assert!(prepared.credential_id().is_ok());
-        let (secret_key, _) =
-            marty_crypto::ecdsa::generate_p256_keypair().expect("P-256 key generation");
+        let (secret_key, _) = marty_crypto_test_support::ecdsa::generate_p256_keypair()
+            .expect("P-256 key generation");
         let der_signature =
-            marty_crypto::ecdsa::sign_p256_sha256(&secret_key, &tbs_data).expect("remote signing");
+            marty_crypto_test_support::ecdsa::sign_p256_sha256(&secret_key, &tbs_data)
+                .expect("remote signing");
         let signature = marty_oid4vci::jose::normalize_ecdsa_signature(&der_signature, "ES256")
             .expect("COSE signature normalization");
 
@@ -2685,7 +2650,7 @@ mod tests {
 
         impl CredentialSigner for TestEd25519Signer {
             fn sign(&self, message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-                marty_crypto::ed25519::sign(&self.0, message)
+                marty_crypto_test_support::ed25519::sign(&self.0, message)
                     .map_err(|error| marty_oid4vci::Oid4vciError::SigningError(error.to_string()))
             }
 
@@ -3001,12 +2966,17 @@ mod tests {
 
     #[test]
     fn vds_nc_profile_binding_signs_and_verifies_in_rust() {
-        let (private_key, public_key) = marty_crypto::ecdsa::generate_p256_keypair().unwrap();
-        let private_der =
-            marty_crypto::serialization::raw_private_key_to_pkcs8(&private_key, "EC_P256").unwrap();
+        let (private_key, public_key) =
+            marty_crypto_test_support::ecdsa::generate_p256_keypair().unwrap();
+        let private_der = marty_crypto_test_support::serialization::raw_private_key_to_pkcs8(
+            &private_key,
+            "EC_P256",
+        )
+        .unwrap();
         let public_der =
             marty_crypto::serialization::raw_public_key_to_spki(&public_key, "EC_P256").unwrap();
-        let private_pem = marty_crypto::serialization::save_private_key_pem(&private_der).unwrap();
+        let private_pem =
+            marty_crypto_test_support::serialization::save_private_key_pem(&private_der).unwrap();
         let public_pem = marty_crypto::serialization::save_public_key_pem(&public_der).unwrap();
         let document = serde_json::json!({
             "documentNumber": "X123456",
@@ -3064,9 +3034,10 @@ mod tests {
             .contains("FIELD_MISMATCH"));
 
         let (rsa_private_der, rsa_public_der) =
-            marty_crypto::rsa::generate_rsa_keypair(2048).unwrap();
+            marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
         let rsa_private_pem =
-            marty_crypto::serialization::save_private_key_pem(&rsa_private_der).unwrap();
+            marty_crypto_test_support::serialization::save_private_key_pem(&rsa_private_der)
+                .unwrap();
         let rsa_public_pem =
             marty_crypto::serialization::save_public_key_pem(&rsa_public_der).unwrap();
         let rsa_signed: serde_json::Value = serde_json::from_str(

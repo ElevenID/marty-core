@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use super::base64url_encode;
 use super::{base64url_decode, Jwk};
 use crate::{VerificationError, VerificationResult};
@@ -127,7 +127,7 @@ impl JwsHeader {
 /// # Returns
 ///
 /// JWS in compact serialization: BASE64URL(header).BASE64URL(payload).BASE64URL(signature)
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn jws_sign(header: &JwsHeader, payload: &[u8], key: &Jwk) -> VerificationResult<String> {
     // Encode header and payload
     let header_b64 = base64url_encode(&header.to_json()?);
@@ -254,7 +254,7 @@ fn validate_jws_header_policy(header: &JwsHeader) -> VerificationResult<()> {
 // ============================================================================
 
 /// Sign a message using the specified algorithm and key.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_message(alg: &str, message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
     match alg {
         "ES256" => sign_es256(message, key),
@@ -303,7 +303,7 @@ fn verify_message(
 // ECDSA Signatures
 // ============================================================================
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_es256(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
     use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 
@@ -355,7 +355,7 @@ fn verify_es256(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
         .map_err(|e| VerificationError::internal(format!("ES256 verification failed: {}", e)))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_es384(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
     use p384::ecdsa::{signature::Signer, Signature, SigningKey};
 
@@ -410,9 +410,9 @@ fn verify_es384(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
 // EdDSA Signatures
 // ============================================================================
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_eddsa(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    use marty_crypto::ed25519::Ed25519KeyPair;
+    use ed25519_dalek::{Signer, SigningKey};
 
     if key.crv.as_deref() != Some("Ed25519") {
         return Err(VerificationError::internal(
@@ -426,8 +426,13 @@ fn sign_eddsa(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
         .ok_or_else(|| VerificationError::internal("EdDSA requires private key (d)".to_string()))?;
     let d_bytes = base64url_decode(d)?;
 
-    let keypair = Ed25519KeyPair::from_secret_key(&d_bytes)?;
-    Ok(keypair.sign_vec(message))
+    let secret: [u8; 32] = d_bytes.try_into().map_err(|_| {
+        VerificationError::internal("Ed25519 private key must be 32 bytes".to_string())
+    })?;
+    Ok(SigningKey::from_bytes(&secret)
+        .sign(message)
+        .to_bytes()
+        .to_vec())
 }
 
 fn verify_eddsa(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
@@ -520,7 +525,7 @@ fn verify_hmac(
     Ok(())
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_hs256(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
     sign_hmac(message, key, 256)
 }
@@ -529,7 +534,7 @@ fn verify_hs256(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
     verify_hmac(message, signature, key, 256)
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_hs384(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
     sign_hmac(message, key, 384)
 }
@@ -538,7 +543,7 @@ fn verify_hs384(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
     verify_hmac(message, signature, key, 384)
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_hs512(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
     sign_hmac(message, key, 512)
 }
@@ -551,7 +556,7 @@ fn verify_hs512(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
 // RSA Signatures (placeholder - needs RSA key import)
 // ============================================================================
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_rs256(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
     Err(VerificationError::internal(
         "RS256 signing not yet implemented".to_string(),
@@ -564,7 +569,7 @@ fn verify_rs256(_message: &[u8], _signature: &[u8], _key: &Jwk) -> VerificationR
     ))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_rs384(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
     Err(VerificationError::internal(
         "RS384 signing not yet implemented".to_string(),
@@ -577,7 +582,7 @@ fn verify_rs384(_message: &[u8], _signature: &[u8], _key: &Jwk) -> VerificationR
     ))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_rs512(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
     Err(VerificationError::internal(
         "RS512 signing not yet implemented".to_string(),
@@ -590,7 +595,7 @@ fn verify_rs512(_message: &[u8], _signature: &[u8], _key: &Jwk) -> VerificationR
     ))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_ps256(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
     Err(VerificationError::internal(
         "PS256 signing not yet implemented".to_string(),

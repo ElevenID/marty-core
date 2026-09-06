@@ -833,6 +833,163 @@ fn verify_certificate_signature(
 mod tests {
     use super::*;
 
+    fn revocation_certificate_fixture(ca_name: &str) -> (Vec<u8>, String, Vec<u8>) {
+        use rcgen::{
+            BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose,
+            SerialNumber,
+        };
+
+        let ca_key = KeyPair::generate().unwrap();
+        let mut ca_params = CertificateParams::default();
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, ca_name);
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let issuer = Issuer::from_params(&ca_params, &ca_key);
+
+        let leaf_key = KeyPair::generate().unwrap();
+        let mut leaf_params = CertificateParams::default();
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "Revocation Test Leaf");
+        leaf_params.serial_number = Some(SerialNumber::from(2u64));
+        let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
+
+        (
+            ca_cert.der().to_vec(),
+            ca_key.serialize_pem(),
+            leaf_cert.der().to_vec(),
+        )
+    }
+
+    fn revoked_crl(ca_name: &str, ca_key_pem: &str) -> Vec<u8> {
+        use rcgen::{
+            date_time_ymd, BasicConstraints, CertificateParams, CertificateRevocationListParams,
+            DnType, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose, RevocationReason,
+            RevokedCertParams, SerialNumber,
+        };
+
+        let ca_key = KeyPair::from_pem(ca_key_pem).unwrap();
+        let mut ca_params = CertificateParams::default();
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, ca_name);
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+        ];
+        let issuer = Issuer::from_params(&ca_params, &ca_key);
+        CertificateRevocationListParams {
+            this_update: date_time_ymd(2026, 1, 1),
+            next_update: date_time_ymd(2030, 1, 1),
+            crl_number: SerialNumber::from(1u64),
+            issuing_distribution_point: None,
+            revoked_certs: vec![RevokedCertParams {
+                serial_number: SerialNumber::from(2u64),
+                revocation_time: date_time_ymd(2026, 1, 1),
+                reason_code: Some(RevocationReason::KeyCompromise),
+                invalidity_date: None,
+            }],
+            key_identifier_method: KeyIdMethod::Sha256,
+        }
+        .signed_by(&issuer)
+        .unwrap()
+        .der()
+        .to_vec()
+    }
+
+    fn ocsp_response(
+        cert_der: &[u8],
+        issuer_der: &[u8],
+        issuer_key_pem: &str,
+        revoked: bool,
+    ) -> Vec<u8> {
+        use der::asn1::{BitString, GeneralizedTime, Null, OctetString};
+        use der::Encode;
+        use p256::ecdsa::{signature::Signer, SigningKey};
+        use p256::pkcs8::DecodePrivateKey;
+        use sha2::{Digest, Sha256};
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+        use x509_ocsp::{
+            BasicOcspResponse, CertId, CertStatus, OcspGeneralizedTime, OcspResponse,
+            OcspResponseStatus, ResponseData, RevokedInfo, SingleResponse,
+        };
+
+        let cert = Certificate::from_der(cert_der).unwrap();
+        let issuer = Certificate::from_der(issuer_der).unwrap();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let produced_at = GeneralizedTime::from_unix_duration(now).unwrap();
+        let next_update =
+            GeneralizedTime::from_unix_duration(now + Duration::from_secs(604800)).unwrap();
+        let issuer_name_hash = Sha256::digest(issuer.tbs_certificate.subject.to_der().unwrap());
+        let issuer_key_hash = Sha256::digest(
+            issuer
+                .tbs_certificate
+                .subject_public_key_info
+                .subject_public_key
+                .raw_bytes(),
+        );
+        let cert_id = CertId {
+            hash_algorithm: spki::AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5912::ID_SHA_256,
+                parameters: None,
+            },
+            issuer_name_hash: OctetString::new(issuer_name_hash.to_vec()).unwrap(),
+            issuer_key_hash: OctetString::new(issuer_key_hash.to_vec()).unwrap(),
+            serial_number: cert.tbs_certificate.serial_number.clone(),
+        };
+        let cert_status = if revoked {
+            CertStatus::Revoked(RevokedInfo {
+                revocation_time: OcspGeneralizedTime(produced_at),
+                revocation_reason: None,
+            })
+        } else {
+            CertStatus::Good(Null)
+        };
+        let response_data = ResponseData {
+            version: Default::default(),
+            responder_id: x509_ocsp::ResponderId::ByName(issuer.tbs_certificate.subject.clone()),
+            produced_at: OcspGeneralizedTime(produced_at),
+            responses: vec![SingleResponse {
+                cert_id,
+                cert_status,
+                this_update: OcspGeneralizedTime(produced_at),
+                next_update: Some(OcspGeneralizedTime(next_update)),
+                single_extensions: None,
+            }],
+            response_extensions: None,
+        };
+        let signing_key = SigningKey::from_pkcs8_pem(issuer_key_pem).unwrap();
+        let signature: p256::ecdsa::DerSignature =
+            signing_key.sign(&response_data.to_der().unwrap());
+        let basic = BasicOcspResponse {
+            tbs_response_data: response_data,
+            signature_algorithm: spki::AlgorithmIdentifierOwned {
+                oid: const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2"),
+                parameters: None,
+            },
+            signature: BitString::from_bytes(signature.as_bytes()).unwrap(),
+            certs: None,
+        };
+        OcspResponse {
+            response_status: OcspResponseStatus::Successful,
+            response_bytes: Some(x509_ocsp::ResponseBytes {
+                response_type: const_oid::db::rfc6960::ID_PKIX_OCSP_BASIC,
+                response: OctetString::new(basic.to_der().unwrap()).unwrap(),
+            }),
+        }
+        .to_der()
+        .unwrap()
+    }
+
     #[test]
     fn test_chain_validation_result_default() {
         let result = ChainValidationResult::default();
@@ -1411,28 +1568,8 @@ mod tests {
 
     #[test]
     fn hard_fail_revocation_uses_authenticated_fresh_crl_evidence() {
-        use marty_crypto::cert_builder::{create_ca_certificate, create_signed_certificate};
-        use marty_crypto::crl::{CrlBuilder, RevocationReason};
-        use marty_crypto::keygen::KeyType;
-
-        let (ca_der, ca_key) =
-            create_ca_certificate("Chain CRL CA", None, 365, KeyType::EcdsaP256).unwrap();
-        let (leaf_der, _) = create_signed_certificate(
-            "Revoked Chain Leaf",
-            &ca_der,
-            &ca_key,
-            365,
-            false,
-            KeyType::EcdsaP256,
-        )
-        .unwrap();
-        let leaf = Certificate::from_der(&leaf_der).unwrap();
-        let serial = hex::encode(leaf.tbs_certificate.serial_number.as_bytes());
-        let crl_der = CrlBuilder::new()
-            .issuer_cn("Chain CRL CA")
-            .add_revoked(&serial, Some(RevocationReason::KeyCompromise))
-            .build(&ca_key)
-            .unwrap();
+        let (ca_der, ca_key, leaf_der) = revocation_certificate_fixture("Chain CRL CA");
+        let crl_der = revoked_crl("Chain CRL CA", &ca_key);
         let leaf_pem =
             pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &leaf_der)
                 .unwrap();
@@ -1455,32 +1592,14 @@ mod tests {
 
     #[test]
     fn authenticated_ocsp_evidence_controls_hard_fail_validation() {
-        use marty_crypto::cert_builder::{create_ca_certificate, create_signed_certificate};
-        use marty_crypto::keygen::KeyType;
-        use marty_crypto::ocsp::OcspResponseBuilder;
-
-        let (ca_der, ca_key) =
-            create_ca_certificate("OCSP Chain CA", None, 365, KeyType::EcdsaP256).unwrap();
-        let (leaf_der, _) = create_signed_certificate(
-            "OCSP Chain Leaf",
-            &ca_der,
-            &ca_key,
-            365,
-            false,
-            KeyType::EcdsaP256,
-        )
-        .unwrap();
+        let (ca_der, ca_key, leaf_der) = revocation_certificate_fixture("OCSP Chain CA");
         let config = ChainValidatorConfig {
             check_ocsp: true,
             revocation_mode: "hard_fail".to_string(),
             ..Default::default()
         };
 
-        let good_response = OcspResponseBuilder::new()
-            .certificate(&leaf_der, &ca_der)
-            .status_good()
-            .build(&ca_key)
-            .unwrap();
+        let good_response = ocsp_response(&leaf_der, &ca_der, &ca_key, false);
         let mut good_validator = ChainValidator::with_config(config.clone());
         good_validator.add_trust_anchor_der(&ca_der).unwrap();
         good_validator
@@ -1495,11 +1614,7 @@ mod tests {
             good.errors
         );
 
-        let revoked_response = OcspResponseBuilder::new()
-            .certificate(&leaf_der, &ca_der)
-            .status_revoked(Some("keyCompromise"))
-            .build(&ca_key)
-            .unwrap();
+        let revoked_response = ocsp_response(&leaf_der, &ca_der, &ca_key, true);
         let mut revoked_validator = ChainValidator::with_config(config);
         revoked_validator.add_trust_anchor_der(&ca_der).unwrap();
         revoked_validator

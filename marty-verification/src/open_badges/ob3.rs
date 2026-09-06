@@ -4,26 +4,26 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use iref::IriBuf;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use iref::UriBuf;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_claims::data_integrity::CryptographicSuite;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_claims::data_integrity::ProofOptions;
 use ssi_claims::data_integrity::{AnySuite, DataIntegrity};
 use ssi_claims::vc::syntax::AnyJsonCredential;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_claims::SignatureEnvironment;
 use ssi_claims::VerificationParameters;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_json_ld::syntax::{Context, ContextEntry};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_jwk::Params as JwkParams;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_jwk::JWK;
 use ssi_verification_methods::VerificationMethod;
 use ssi_verification_methods::{AnyMethod, GenericVerificationMethod};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_verification_methods::{
     Ed25519VerificationKey2018, Ed25519VerificationKey2020, JsonWebKey2020, ProofPurpose,
     ReferenceOrOwned, SingleSecretSigner,
@@ -31,18 +31,18 @@ use ssi_verification_methods::{
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use super::contexts::security_v2_context_uri;
 use super::contexts::{ob3_context_uri, open_badges_context_loader};
 use super::method_wrapper::ensure_public_verification_method;
 use super::status::check_credential_status;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use super::types::OpenBadgesIssueResult;
 use super::types::{AuthenticatedStatusList, DocumentStore, OpenBadgesVerificationResult};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use super::x509_verification_method::X509VerificationKey2021;
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct IssueOb3Request {
     credential: Value,
@@ -56,7 +56,7 @@ pub struct VerifyOb3Request {
     pub document_store: Option<DocumentStore>,
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 #[derive(Debug, Deserialize)]
 struct Ob3SigningOptions {
     jwk: Value,
@@ -71,7 +71,7 @@ struct Ob3SigningOptions {
 
 pub(super) type AnyCredential = DataIntegrity<AnyJsonCredential, AnySuite>;
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub async fn issue_ob3_json_async(request_json: &str) -> VerificationResult<String> {
     let req: IssueOb3Request = serde_json::from_str(request_json)
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 issue request: {}", e)))?;
@@ -275,10 +275,7 @@ pub async fn verify_ob3_with_status_lists_async(
     Ok(result)
 }
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(test, feature = "local-key-operations")
-))]
+#[cfg(all(not(target_arch = "wasm32"), test))]
 pub fn issue_ob3_json(request_json: &str) -> VerificationResult<String> {
     futures::executor::block_on(issue_ob3_json_async(request_json))
 }
@@ -299,7 +296,7 @@ pub fn verify_ob3_json_with_status_lists(
     ))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn build_verification_method(
     jwk: &JWK,
     verification_method: &IriBuf,
@@ -360,7 +357,7 @@ fn build_verification_method(
 }
 
 // For X509 verification methods, this function extracts PEM from the credential's verificationMethod
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 #[allow(dead_code)]
 fn build_x509_verification_method(
     pem: &str,
@@ -374,7 +371,7 @@ fn build_x509_verification_method(
     ))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn ed25519_public_key_bytes(jwk: &JWK) -> VerificationResult<Vec<u8>> {
     match &jwk.params {
         JwkParams::OKP(params) if params.curve == "Ed25519" => Ok(params.public_key.0.clone()),
@@ -384,7 +381,7 @@ fn ed25519_public_key_bytes(jwk: &JWK) -> VerificationResult<Vec<u8>> {
     }
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn ed25519_verifying_key(jwk: &JWK) -> VerificationResult<ed25519_dalek::VerifyingKey> {
     let public_key = ed25519_public_key_bytes(jwk)?;
     ed25519_dalek::VerifyingKey::try_from(public_key.as_slice())

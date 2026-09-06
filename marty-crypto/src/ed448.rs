@@ -1,37 +1,23 @@
-//! Ed448 (Edwards curve over 448-bit field) signing operations.
+//! Ed448 (Edwards curve over 448-bit field) verification operations.
 //!
-//! This module provides Ed448 key generation, signing, and verification
-//! for eMRTD Active Authentication and other protocols requiring Ed448.
+//! Production builds expose Ed448 verification for eMRTD Active Authentication.
+//! Key generation and signing exist only in crate-internal regression tests.
 //!
 //! Ed448 provides 224-bit security (vs 128-bit for Ed25519) and is used
 //! in newer ePassports with higher security requirements.
 //!
-//! # Example
-//!
-//! ```ignore
-//! use marty_verification::crypto::ed448::{ed448_generate, ed448_sign, ed448_verify};
-//!
-//! // Generate a key pair
-//! let (private_key, public_key) = ed448_generate()?;
-//!
-//! // Sign a message
-//! let message = b"Hello, World!";
-//! let signature = ed448_sign(&private_key, message)?;
-//!
-//! // Verify the signature
-//! assert!(ed448_verify(&public_key, message, &signature)?);
-//! ```
+//! Verification accepts only public-key bytes, a message, and a signature.
 
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 use ed448_goldilocks_plus::rand_core::OsRng;
 use ed448_goldilocks_plus::{Signature, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 use ed448_goldilocks_plus::{SigningKey, SECRET_KEY_LENGTH};
 
 use crate::{CryptoError, CryptoResult};
 
 /// Ed448 private key size in bytes (57 bytes).
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub const ED448_PRIVATE_KEY_SIZE: usize = SECRET_KEY_LENGTH;
 
 /// Ed448 public key size in bytes (57 bytes).
@@ -44,7 +30,7 @@ pub const ED448_SIGNATURE_SIZE: usize = SIGNATURE_LENGTH;
 ///
 /// # Returns
 /// A tuple of (private_key, public_key) as byte vectors.
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub fn ed448_generate() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
@@ -63,7 +49,7 @@ pub fn ed448_generate() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 ///
 /// # Returns
 /// 114-byte signature
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub fn ed448_sign(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != ED448_PRIVATE_KEY_SIZE {
         return Err(CryptoError::crypto_error(format!(
@@ -94,7 +80,7 @@ pub fn ed448_sign(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
 ///
 /// # Returns
 /// 114-byte signature
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub fn ed448_sign_with_context(
     private_key: &[u8],
     message: &[u8],
@@ -315,7 +301,7 @@ pub fn verify_ed448_spki(
     Ok(verifying_key.verify_raw(&sig, message).is_ok())
 }
 
-#[cfg(all(test, feature = "eddsa-local-signing"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

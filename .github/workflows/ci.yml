@@ -159,6 +159,16 @@ jobs:
                 ;;
             esac
           done
+      - name: Exercise private-key and session security boundaries
+        if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-crypto') || contains(steps.affected.outputs.packages, 'marty-verification') || contains(steps.affected.outputs.packages, 'marty-iso18013') || contains(steps.affected.outputs.packages, 'marty-bindings') || contains(steps.affected.outputs.packages, 'marty-didcomm')
+        run: |
+          cargo test --locked -p marty-crypto --no-default-features --features bbs-verification,ecdh,signature-verification,jwk,kdf,ocsp,crl,public-key-codec,symmetric
+          cargo test --locked -p marty-crypto-test-support
+          cargo test --locked -p marty-verification --no-default-features --features csca,ephemeral-session-keys --lib
+          cargo test --locked -p marty-iso18013 --no-default-features --features session-protocol
+          cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys
+          cargo test --locked -p marty-bindings --no-default-features --features didcomm-encrypted-envelope encrypted_envelope_module_exposes_anoncrypt_only
+          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
       - name: Smoke marty-oid4vci benchmarks
         if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-oid4vci')
         run: |
@@ -339,9 +349,10 @@ jobs:
             cargo test --locked -p "$crate" --no-default-features
             cargo test --locked -p "$crate"
           done
-          cargo test --locked -p marty-crypto --no-default-features --features full
+          cargo test --locked -p marty-crypto --no-default-features --features bbs-verification,ecdh,signature-verification,jwk,kdf,ocsp,crl,public-key-codec,symmetric
+          cargo test --locked -p marty-crypto-test-support
           cargo test --locked -p marty-bindings --no-default-features
-          cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys ephemeral_session_module_does_not_restore_credential_keys
+          cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys ephemeral_session_module_exports_only_opaque_session_crypto
           cargo test --locked -p marty-bindings --no-default-features --features didcomm-encrypted-envelope encrypted_envelope_module_exposes_anoncrypt_only
           cargo check --locked -p marty-bindings
       - name: Exercise protocol features
@@ -349,7 +360,7 @@ jobs:
         run: |
           cargo build --locked -p marty-verification --no-default-features
           cargo build --locked -p marty-verification
-          cargo check --locked -p marty-verification --no-default-features --features authority-issuance
+          cargo test --locked -p marty-verification --no-default-features --features csca,ephemeral-session-keys --lib
           cargo check --locked -p marty-verification --no-default-features --features kms-only,python,iaca,csca,eudi
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
@@ -503,7 +514,7 @@ jobs:
         shell: cmd
         run: |
           python -m venv .venv-3.12
-          .venv-3.12\Scripts\python -m pip install --disable-pip-version-check maturin pytest
+          .venv-3.12\Scripts\python -m pip install --disable-pip-version-check cryptography==50.0.1 maturin pytest
           set VIRTUAL_ENV=%CD%\.venv-3.12
           .venv-3.12\Scripts\maturin develop --features python
           .venv-3.12\Scripts\python -m pytest python\tests\
@@ -530,15 +541,13 @@ jobs:
         working-directory: marty-verification
         run: |
           python -m venv .venv
-          .venv/bin/python -m pip install --disable-pip-version-check 'maturin[patchelf]==1.14.1' pytest
+          .venv/bin/python -m pip install --disable-pip-version-check cryptography==50.0.1 'maturin[patchelf]==1.14.1' pytest
           .venv/bin/maturin develop
           .venv/bin/python -m pytest \
             python/tests/test_production_kms_surface.py \
+            python/tests/test_dtc_external_signing.py \
             python/tests/test_mrz_golden_vectors.py \
             python/tests/test_emrtd_golden_vectors.py
-          .venv/bin/maturin develop --features python,local-key-operations,iaca,csca,eudi
-          .venv/bin/python -m pytest python/tests/ \
-            --ignore=python/tests/test_production_kms_surface.py
       - name: Install native transport build dependencies
         run: sudo apt-get update && sudo apt-get install --yes libpcsclite-dev libdbus-1-dev pkg-config
       - name: Build and test ISO bindings

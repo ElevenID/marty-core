@@ -4,18 +4,19 @@ Python bindings for the `marty-verification` Rust library, providing cryptograph
 
 ## Features
 
-- **Open Badges 3**: Current/default issuance and verification profile
-- **Open Badges 2**: Temporary migration-only issuance and verification support
+- **Open Badges 3**: Current/default verification profile
+- **Open Badges 2**: Temporary migration-only verification support
 - **mDoc/mDL Verification**: Verify mobile driver's licenses (ISO 18013-5)
 - **eMRTD Verification**: Verify electronic machine-readable travel documents
 - **MRZ Parsing**: Parse and validate machine-readable zone data
 - **Certificate Operations**: Parse and verify X.509 certificate chains
-- **Cryptographic Primitives**: Ed25519, P-256, RSA, hashing, JWK/JWS/JWE
+- **Public Cryptography**: Ed25519, ECDSA, and RSA verification; hashing;
+  public-key/certificate conversion to bounded public JWKs
 
-The released verifier wheel intentionally excludes CSCA/DSC key generation,
-certificate/SOD construction, and passport personalization. Rust development
-and authority tooling can select the explicit `authority-issuance` feature to
-compile those APIs; ordinary `csca` enables eMRTD verification only.
+The verifier has no selectable local-key, certificate-builder, or
+authority-issuance feature. CSCA/DSC key generation, certificate/SOD
+construction, and passport personalization belong behind remote KMS-backed
+service APIs; ordinary `csca` enables eMRTD verification only.
 
 ## Installation
 
@@ -33,27 +34,14 @@ only for a short migration window: review on 2026-09-01 and target removal on
 [marty-core#96](https://github.com/ElevenID/marty-core/issues/96). Do not build
 new integrations against the OB2 entry points.
 
-Current integrations should use `open_badge_ob3_issue` and
-`open_badge_ob3_verify`. The OB2 example below documents the temporary
-migration interface only.
+Current integrations should use the Open Badges verification entry points.
+Issuance must use a service-level prepare/KMS/assemble flow rather than passing
+private JWK material to this verifier.
 
 ```python
-from marty_verification_py import open_badge_ob2_issue, open_badge_ob2_verify
+from marty_verification_py import open_badge_ob3_verify
 
-# Temporarily issue an Open Badge v2 credential during migration
-request = {
-    "assertion": {
-        "@context": "https://w3id.org/openbadges/v2",
-        "type": "Assertion",
-        "badge": {...},
-        "recipient": {"identity": "user@example.com", "type": "email"}
-    },
-    "signing": {
-        "jwk": {...},
-        "alg": "ES256"
-    }
-}
-result = open_badge_ob2_issue(json.dumps(request))
+result = open_badge_ob3_verify(signed_credential, trusted_issuer_document)
 ```
 
 ### MRZ Parsing

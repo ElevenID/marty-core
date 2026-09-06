@@ -411,23 +411,23 @@ pub fn verify_parsed_certificate_signature(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use der::asn1::{Any, BitString};
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use rand::rngs::OsRng;
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use rsa::pkcs1::RsaPssParams;
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use rsa::pkcs8::DecodePrivateKey;
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use rsa::pss::{Signature as PssSignature, SigningKey as PssSigningKey};
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use rsa::signature::{RandomizedSigner, SignatureEncoding};
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use rsa::RsaPrivateKey;
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use sha2::Sha256;
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     use spki::AlgorithmIdentifierOwned;
 
     use super::*;
@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(info.fingerprint_sha256.len(), 64);
     }
 
-    #[cfg(feature = "cert-builder")]
+    #[cfg(test)]
     #[test]
     fn verifies_certificate_with_parameterized_rsa_pss_signature() {
         use crate::cert_builder::{create_ca_certificate, create_signed_certificate};

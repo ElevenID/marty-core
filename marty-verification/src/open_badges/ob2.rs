@@ -2,19 +2,19 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::jwk::{jws_sign, JwsHeader};
 use crate::jwk::{jws_verify, public_key_pem_to_jwk, Jwk};
 
 use super::contexts::ob2_context_uri;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use super::types::OpenBadgesIssueResult;
 use super::types::{DocumentStore, OpenBadgesVerificationResult};
 
 const DEFAULT_HASH_ALG: &str = "sha256";
 
 #[derive(Debug, Deserialize)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 struct IssueOb2Request {
     assertion: Value,
     #[serde(default)]
@@ -33,7 +33,7 @@ pub struct VerifyOb2Request {
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 struct Ob2RecipientInput {
     identity: String,
     #[serde(rename = "type")]
@@ -47,7 +47,7 @@ struct Ob2RecipientInput {
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 struct Ob2SigningOptions {
     jwk: Value,
     #[serde(default)]
@@ -60,7 +60,7 @@ struct Ob2SigningOptions {
     verification_type: Option<String>,
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn issue_ob2_json(request_json: &str) -> VerificationResult<String> {
     let req: IssueOb2Request = serde_json::from_str(request_json)
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB2 issue request: {}", e)))?;
@@ -191,7 +191,7 @@ pub fn verify_ob2(req: VerifyOb2Request) -> VerificationResult<OpenBadgesVerific
     Ok(result)
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn build_recipient(
     input: Ob2RecipientInput,
     warnings: &mut Vec<String>,
@@ -225,7 +225,7 @@ fn build_recipient(
     Ok(Value::Object(recipient))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_assertion(
     assertion: &Value,
     signing: &Ob2SigningOptions,
@@ -266,7 +266,7 @@ fn sign_assertion(
     Ok(signature)
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn build_verification(signing: &Ob2SigningOptions, warnings: &mut Vec<String>) -> Value {
     let mut verification = serde_json::Map::new();
     let verification_type = signing
@@ -523,14 +523,14 @@ fn normalize_ob2(assertion: &Value, badge: Option<&Value>, issuer: Option<&Value
     })
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn set_value(target: &mut Value, key: &str, value: Value) {
     if let Value::Object(ref mut map) = target {
         map.insert(key.to_string(), value);
     }
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn default_alg_for_jwk(jwk: &Jwk) -> String {
     match jwk.key_type() {
         crate::jwk::KeyType::EcP256 => "ES256".to_string(),

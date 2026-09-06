@@ -10,7 +10,6 @@
 //!
 //! - `iaca` (default): AAMVA mDL trust chain verification
 //! - `csca` (default): ePassport/eMRTD trust chain verification
-//! - `authority-issuance`: Explicit CSCA/DSC generation and passport personalization
 //! - `aamva-client`: Async client for AAMVA Digital Trust Service
 //! - `icao-client`: Async client for ICAO PKD
 //!
@@ -28,16 +27,6 @@
 //! assert!(result.is_valid());
 //! ```
 
-#[cfg(all(
-    feature = "kms-only",
-    any(
-        feature = "authority-issuance",
-        feature = "cert-builder",
-        feature = "local-key-operations"
-    )
-))]
-compile_error!("kms-only builds cannot include local key operations or authority builders");
-
 #[cfg(feature = "csca")]
 pub mod active_authentication;
 pub mod asn1;
@@ -47,7 +36,6 @@ pub mod credential_format;
 pub mod device_auth;
 pub mod dtc;
 
-#[cfg(not(feature = "local-key-operations"))]
 /// KMS-only and verification builds do not expose in-process DTC signing.
 ///
 /// ```compile_fail
@@ -80,15 +68,6 @@ pub mod verification;
 #[cfg(any(feature = "aamva-client", feature = "icao-client"))]
 pub mod pkd;
 
-/// eMRTD issuance infrastructure (CSCA, DSC, EF.SOD builder).
-///
-/// Available only when the explicit `authority-issuance` feature is enabled.
-/// Ordinary `csca` verification does not compile authority private-key types
-/// or certificate/SOD builders into the verifier surface.
-#[cfg(feature = "authority-issuance")]
-pub mod issuance;
-
-#[cfg(not(feature = "authority-issuance"))]
 /// The default verifier surface intentionally has no authority issuance API.
 ///
 /// ```compile_fail
@@ -127,8 +106,6 @@ pub use verification::mdl::{
 };
 
 // Re-export chip I/O types for government NFC integration
-#[cfg(all(feature = "csca", feature = "local-key-operations"))]
-pub use chip_io::{derive_bac_base_keys, BacKeys, PaceKeys, PacePassword, PaceSession};
 #[cfg(feature = "csca")]
 pub use chip_io::{mrz_check_digit, ApduCommand, ApduResponse, MockPassportChip, PassportChip};
 #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
@@ -136,3 +113,24 @@ pub use chip_io::{BacHandshake, BacSession, MrzKeyInfo, PaceCompatibilityHandsha
 
 // Re-export crypto primitives from marty-crypto
 pub use marty_crypto::{verify_signature, HashAlgorithm, SignatureAlgorithm};
+
+// Preserve legacy behavior and imported compliance suites as crate-internal
+// tests. This lets them exercise test-only signing fixtures without restoring
+// any production-selectable private-key API or modifying the imported sources.
+#[cfg(test)]
+extern crate self as marty_verification;
+#[cfg(test)]
+#[path = "../tests/dtc_tests.rs"]
+mod dtc_behavior_tests;
+#[cfg(all(test, feature = "csca", feature = "ephemeral-session-keys"))]
+#[path = "../tests/eac_behavior.rs"]
+mod eac_behavior_tests;
+#[cfg(test)]
+#[path = "../tests/open_badges_tests.rs"]
+mod open_badges_behavior_tests;
+#[cfg(test)]
+#[path = "../tests/open_badges_conformance.rs"]
+mod open_badges_conformance_tests;
+#[cfg(all(test, feature = "csca", feature = "ephemeral-session-keys"))]
+#[path = "../tests/passport_chip_behavior.rs"]
+mod passport_chip_behavior_tests;

@@ -82,7 +82,10 @@ mod tests {
         let reader = Session::reader_from_engagement(&engagement, SessionConfig::default())
             .await
             .unwrap();
-        device.establish(&reader.public_key().await).await.unwrap();
+        device
+            .establish(&reader.public_key().await.unwrap())
+            .await
+            .unwrap();
         device
     }
 

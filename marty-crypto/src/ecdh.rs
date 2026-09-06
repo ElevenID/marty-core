@@ -22,8 +22,30 @@ use p384::{
 };
 use rand::rngs::OsRng;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 use crate::{CryptoError, CryptoResult};
+
+#[cfg(not(test))]
+/// Production ECDH exposes generated, opaque, one-use agreement state only.
+/// Raw private-key import/export and reusable agreement helpers are test-only:
+///
+/// ```compile_fail
+/// let _ = marty_crypto::ecdh::P256KeyPair::from_secret_key(&[7u8; 32]);
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_crypto::ecdh::p256_generate_keypair();
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_crypto::ecdh::p256_agree(&[7u8; 32], &[4u8; 65]);
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_crypto::ecdh::ecies_decrypt(&[7u8; 32], b"ciphertext", b"aad");
+/// ```
+pub struct NoRawPrivateKeyApis;
 
 // ============================================================================
 // X25519 Key Agreement
@@ -43,7 +65,8 @@ impl X25519KeyPair {
         Self { secret, public }
     }
 
-    /// Create from a 32-byte secret key.
+    /// Create from a 32-byte secret key for deterministic test vectors.
+    #[cfg(test)]
     pub fn from_secret_key(secret_bytes: &[u8]) -> CryptoResult<Self> {
         if secret_bytes.len() != 32 {
             return Err(CryptoError::internal(
@@ -74,7 +97,17 @@ impl X25519KeyPair {
     /// # Returns
     ///
     /// 32-byte shared secret.
+    #[cfg(not(test))]
+    pub fn agree(self, peer_public: &[u8]) -> CryptoResult<Zeroizing<[u8; 32]>> {
+        self.agree_inner(peer_public).map(Zeroizing::new)
+    }
+
+    #[cfg(test)]
     pub fn agree(&self, peer_public: &[u8]) -> CryptoResult<[u8; 32]> {
+        self.agree_inner(peer_public)
+    }
+
+    fn agree_inner(&self, peer_public: &[u8]) -> CryptoResult<[u8; 32]> {
         if peer_public.len() != 32 {
             return Err(CryptoError::internal(
                 "X25519 public key must be 32 bytes".to_string(),
@@ -86,6 +119,11 @@ impl X25519KeyPair {
 
         let peer_key = X25519PublicKey::from(bytes);
         let shared = self.secret.diffie_hellman(&peer_key);
+        if !shared.was_contributory() {
+            return Err(CryptoError::key_error(
+                "X25519 peer public key is non-contributory",
+            ));
+        }
 
         Ok(shared.to_bytes())
     }
@@ -102,7 +140,7 @@ impl X25519KeyPair {
 /// # Returns
 ///
 /// (ephemeral_public_key, shared_secret) tuple.
-pub fn x25519_ephemeral_agree(peer_public: &[u8]) -> CryptoResult<([u8; 32], [u8; 32])> {
+pub fn x25519_ephemeral_agree(peer_public: &[u8]) -> CryptoResult<([u8; 32], Zeroizing<[u8; 32]>)> {
     if peer_public.len() != 32 {
         return Err(CryptoError::internal(
             "X25519 public key must be 32 bytes".to_string(),
@@ -116,8 +154,13 @@ pub fn x25519_ephemeral_agree(peer_public: &[u8]) -> CryptoResult<([u8; 32], [u8
     let public = X25519PublicKey::from(&secret);
     let peer_key = X25519PublicKey::from(bytes);
     let shared = secret.diffie_hellman(&peer_key);
+    if !shared.was_contributory() {
+        return Err(CryptoError::key_error(
+            "X25519 peer public key is non-contributory",
+        ));
+    }
 
-    Ok((public.to_bytes(), shared.to_bytes()))
+    Ok((public.to_bytes(), Zeroizing::new(shared.to_bytes())))
 }
 
 /// Generate a new X25519 key pair.
@@ -125,6 +168,7 @@ pub fn x25519_ephemeral_agree(peer_public: &[u8]) -> CryptoResult<([u8; 32], [u8
 /// # Returns
 ///
 /// (secret_key, public_key) as 32-byte arrays.
+#[cfg(test)]
 pub fn x25519_generate_keypair() -> ([u8; 32], [u8; 32]) {
     // Generate from random 32 bytes since StaticSecret doesn't expose its bytes
     let mut secret_bytes = [0u8; 32];
@@ -153,7 +197,8 @@ impl P256KeyPair {
         Self { secret }
     }
 
-    /// Create from a 32-byte secret key (scalar).
+    /// Create from a 32-byte secret key (scalar) for deterministic test vectors.
+    #[cfg(test)]
     pub fn from_secret_key(secret_bytes: &[u8]) -> CryptoResult<Self> {
         let secret = P256SecretKey::from_slice(secret_bytes)
             .map_err(|e| CryptoError::internal(format!("Invalid P-256 secret key: {}", e)))?;
@@ -181,7 +226,17 @@ impl P256KeyPair {
     /// # Returns
     ///
     /// 32-byte shared secret (x-coordinate of the shared point).
+    #[cfg(not(test))]
+    pub fn agree(self, peer_public: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> {
+        self.agree_inner(peer_public).map(Zeroizing::new)
+    }
+
+    #[cfg(test)]
     pub fn agree(&self, peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
+        self.agree_inner(peer_public)
+    }
+
+    fn agree_inner(&self, peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
         let peer_key = P256PublicKey::from_sec1_bytes(peer_public)
             .map_err(|e| CryptoError::internal(format!("Invalid P-256 public key: {}", e)))?;
 
@@ -196,6 +251,7 @@ impl P256KeyPair {
 /// # Returns
 ///
 /// (secret_key, public_key_uncompressed) tuple.
+#[cfg(test)]
 pub fn p256_generate_keypair() -> (Vec<u8>, Vec<u8>) {
     let keypair = P256KeyPair::generate();
     let secret = keypair.secret.to_bytes().to_vec();
@@ -204,9 +260,17 @@ pub fn p256_generate_keypair() -> (Vec<u8>, Vec<u8>) {
 }
 
 /// Perform P-256 ECDH key agreement.
+#[cfg(test)]
 pub fn p256_agree(secret_key: &[u8], peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
     let keypair = P256KeyPair::from_secret_key(secret_key)?;
     keypair.agree(peer_public)
+}
+
+/// Validate a P-256 SEC1 public point without generating secret material.
+pub fn validate_p256_public_key(public_key: &[u8]) -> CryptoResult<()> {
+    P256PublicKey::from_sec1_bytes(public_key)
+        .map(|_| ())
+        .map_err(|error| CryptoError::internal(format!("Invalid P-256 public key: {error}")))
 }
 
 // ============================================================================
@@ -225,7 +289,8 @@ impl P384KeyPair {
         Self { secret }
     }
 
-    /// Create from a 48-byte secret key (scalar).
+    /// Create from a 48-byte secret key (scalar) for deterministic test vectors.
+    #[cfg(test)]
     pub fn from_secret_key(secret_bytes: &[u8]) -> CryptoResult<Self> {
         let secret = P384SecretKey::from_slice(secret_bytes)
             .map_err(|e| CryptoError::internal(format!("Invalid P-384 secret key: {}", e)))?;
@@ -245,7 +310,17 @@ impl P384KeyPair {
     }
 
     /// Perform ECDH key agreement.
+    #[cfg(not(test))]
+    pub fn agree(self, peer_public: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> {
+        self.agree_inner(peer_public).map(Zeroizing::new)
+    }
+
+    #[cfg(test)]
     pub fn agree(&self, peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
+        self.agree_inner(peer_public)
+    }
+
+    fn agree_inner(&self, peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
         let peer_key = P384PublicKey::from_sec1_bytes(peer_public)
             .map_err(|e| CryptoError::internal(format!("Invalid P-384 public key: {}", e)))?;
 
@@ -256,6 +331,7 @@ impl P384KeyPair {
 }
 
 /// Generate a new P-384 ECDH key pair.
+#[cfg(test)]
 pub fn p384_generate_keypair() -> (Vec<u8>, Vec<u8>) {
     let keypair = P384KeyPair::generate();
     let secret = keypair.secret.to_bytes().to_vec();
@@ -264,6 +340,7 @@ pub fn p384_generate_keypair() -> (Vec<u8>, Vec<u8>) {
 }
 
 /// Perform P-384 ECDH key agreement.
+#[cfg(test)]
 pub fn p384_agree(secret_key: &[u8], peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
     let keypair = P384KeyPair::from_secret_key(secret_key)?;
     keypair.agree(peer_public)
@@ -300,7 +377,7 @@ pub fn ecies_encrypt(
 
     // Derive encryption key using HKDF
     let info = b"ECIES-X25519-AES256GCM";
-    let key = hkdf_sha256(&shared_secret, &[], info, 32)?;
+    let key = Zeroizing::new(hkdf_sha256(shared_secret.as_ref(), &[], info, 32)?);
 
     // Generate random nonce
     let mut nonce = [0u8; 12];
@@ -325,6 +402,7 @@ pub fn ecies_encrypt(
 /// * `recipient_secret` - 32-byte X25519 secret key
 /// * `ciphertext` - Data encrypted with `ecies_encrypt`
 /// * `aad` - Additional authenticated data (must match encryption)
+#[cfg(test)]
 pub fn ecies_decrypt(
     recipient_secret: &[u8],
     ciphertext: &[u8],
@@ -391,7 +469,18 @@ mod tests {
         // Recipient derives the same shared secret
         let recipient_shared = recipient.agree(&ephem_public).unwrap();
 
-        assert_eq!(sender_shared, recipient_shared);
+        assert_eq!(sender_shared.as_ref(), &recipient_shared);
+    }
+
+    #[test]
+    fn x25519_rejects_non_contributory_peer_keys() {
+        let mut low_order_one = [0u8; 32];
+        low_order_one[0] = 1;
+        for peer in [[0u8; 32], low_order_one] {
+            let keypair = X25519KeyPair::generate();
+            assert!(keypair.agree(&peer).is_err());
+            assert!(x25519_ephemeral_agree(&peer).is_err());
+        }
     }
 
     #[test]

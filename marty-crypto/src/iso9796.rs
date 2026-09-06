@@ -25,7 +25,7 @@
 //! )?;
 //! ```
 
-#[cfg(feature = "rsa-local-signing")]
+#[cfg(test)]
 use rsa::{pkcs8::DecodePrivateKey, traits::PrivateKeyParts, RsaPrivateKey};
 use rsa::{pkcs8::DecodePublicKey, traits::PublicKeyParts, BigUint, RsaPublicKey};
 use serde::{Deserialize, Serialize};
@@ -189,7 +189,7 @@ fn scheme1_message(encoded: &[u8]) -> CryptoResult<&[u8]> {
 
 /// Create a deterministic Scheme 1 message-recovery signature for tests and
 /// passport-chip simulators. Production passport chips sign internally.
-#[cfg(feature = "rsa-local-signing")]
+#[cfg(test)]
 pub fn iso9796_scheme1_sign(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let private_key = RsaPrivateKey::from_pkcs8_der(private_key_der)
         .map_err(|error| CryptoError::crypto_error(format!("Failed to parse RSA key: {error}")))?;
@@ -410,7 +410,7 @@ pub fn iso9796_recover_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "rsa-local-signing")]
+    #[cfg(test)]
     use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 
     #[test]
@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "rsa-local-signing")]
+    #[cfg(test)]
     fn scheme1_test_signer_round_trip_and_tamper_rejection() {
         let private_key = RsaPrivateKey::new(&mut rand::rngs::OsRng, 1024).unwrap();
         let private_der = private_key.to_pkcs8_der().unwrap();

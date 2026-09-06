@@ -100,7 +100,7 @@ pub fn ob3_context_uri() -> &'static str {
     CONTEXT_OPENBADGES_V3
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn security_v2_context_uri() -> &'static str {
     CONTEXT_SECURITY_V2
 }

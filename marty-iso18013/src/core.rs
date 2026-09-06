@@ -13,7 +13,15 @@ use isomdl::definitions::{CoseKey, EC2Curve};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+
+const MAX_DEVICE_ENGAGEMENT_CBOR_BYTES: usize = 64 * 1024;
+const MAX_DEVICE_ENGAGEMENT_QR_URI_BYTES: usize = 90 * 1024;
+const MAX_DEVICE_RETRIEVAL_METHODS: usize = 8;
+const MAX_TRANSPORT_PARAMETERS: usize = 16;
+const MAX_TRANSPORT_PARAMETER_NAME_BYTES: usize = 64;
+const MAX_TRANSPORT_PARAMETER_VALUE_BYTES: usize = 4096;
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
@@ -64,11 +72,9 @@ pub struct DeviceEngagement {
     /// Optional device-specific data
     pub device_data: Option<HashMap<String, Vec<u8>>>,
 
-    /// Private half of EDeviceKey for holder-side session establishment.
-    ///
-    /// This is present only on an engagement generated locally. It is never
-    /// serialized, exposed to Python, or included in debug output.
-    ephemeral_secret: Option<Vec<u8>>,
+    /// Opaque, shared one-use EDeviceKey state for holder-side establishment.
+    /// Clones share the same state; the private key is never copied or exported.
+    ephemeral_key: Option<Arc<Mutex<Option<marty_crypto::ecdh::P256KeyPair>>>>,
 }
 
 impl fmt::Debug for DeviceEngagement {
@@ -80,7 +86,7 @@ impl fmt::Debug for DeviceEngagement {
             .field("engagement_method", &self.engagement_method)
             .field("device_key", &self.device_key)
             .field("device_data", &self.device_data)
-            .field("has_ephemeral_secret", &self.ephemeral_secret.is_some())
+            .field("has_ephemeral_key", &self.ephemeral_key.is_some())
             .finish()
     }
 }
@@ -96,9 +102,34 @@ pub struct TransportInfo {
 }
 
 impl DeviceEngagement {
+    fn validate_resource_bounds(&self) -> Result<()> {
+        if self.transports.len() > MAX_DEVICE_RETRIEVAL_METHODS {
+            return Err(Error::InvalidEngagement(format!(
+                "too many retrieval methods; maximum is {MAX_DEVICE_RETRIEVAL_METHODS}"
+            )));
+        }
+        for transport in &self.transports {
+            if transport.parameters.len() > MAX_TRANSPORT_PARAMETERS {
+                return Err(Error::InvalidEngagement(format!(
+                    "too many transport parameters; maximum is {MAX_TRANSPORT_PARAMETERS}"
+                )));
+            }
+            if transport.parameters.iter().any(|(name, value)| {
+                name.len() > MAX_TRANSPORT_PARAMETER_NAME_BYTES
+                    || value.len() > MAX_TRANSPORT_PARAMETER_VALUE_BYTES
+            }) {
+                return Err(Error::InvalidEngagement(
+                    "transport parameter exceeds its encoded size limit".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Create a new device engagement for QR code presentation
     pub fn new_qr() -> Result<Self> {
-        let (ephemeral_secret, device_key) = Self::generate_device_key()?;
+        let ephemeral_key = marty_crypto::ecdh::P256KeyPair::generate();
+        let device_key = ephemeral_key.public_key_uncompressed();
 
         Ok(Self {
             version: "1.0".to_string(),
@@ -106,7 +137,7 @@ impl DeviceEngagement {
             engagement_method: EngagementMethod::QR,
             device_key,
             device_data: None,
-            ephemeral_secret: Some(ephemeral_secret),
+            ephemeral_key: Some(Arc::new(Mutex::new(Some(ephemeral_key)))),
         })
     }
 
@@ -146,13 +177,19 @@ impl DeviceEngagement {
         Ok(())
     }
 
-    /// Generate a new ephemeral device key (P-256)
-    fn generate_device_key() -> Result<(Vec<u8>, Vec<u8>)> {
-        Ok(marty_crypto::ecdh::p256_generate_keypair())
-    }
-
-    pub(crate) fn ephemeral_secret(&self) -> Option<&[u8]> {
-        self.ephemeral_secret.as_deref()
+    pub(crate) fn take_ephemeral_key_pair(&self) -> Result<marty_crypto::ecdh::P256KeyPair> {
+        let state = self.ephemeral_key.as_ref().ok_or_else(|| {
+            Error::InvalidEngagement(
+                "holder session requires a locally generated DeviceEngagement key".to_string(),
+            )
+        })?;
+        state
+            .lock()
+            .map_err(|_| Error::InvalidState("DeviceEngagement key state poisoned".to_string()))?
+            .take()
+            .ok_or_else(|| {
+                Error::InvalidState("DeviceEngagement key was already consumed".to_string())
+            })
     }
 
     pub(crate) fn cose_key_from_sec1(public_key: &[u8]) -> Result<CoseKey> {
@@ -181,7 +218,7 @@ impl DeviceEngagement {
                 public_key.extend_from_slice(x);
                 public_key.extend_from_slice(y);
                 // Validate that the coordinates represent a point on P-256.
-                marty_crypto::ecdh::P256KeyPair::generate().agree(&public_key)?;
+                marty_crypto::ecdh::validate_p256_public_key(&public_key)?;
                 Ok(public_key)
             }
             _ => Err(Error::InvalidEngagement(
@@ -191,6 +228,7 @@ impl DeviceEngagement {
     }
 
     fn to_iso(&self) -> Result<isomdl::definitions::DeviceEngagement> {
+        self.validate_resource_bounds()?;
         if self.version != "1.0" {
             return Err(Error::InvalidEngagement(format!(
                 "unsupported DeviceEngagement version {}",
@@ -317,14 +355,16 @@ impl DeviceEngagement {
             }
         }
 
-        Ok(Self {
+        let engagement = Self {
             version: value.version,
             transports,
             engagement_method: EngagementMethod::QR,
             device_key,
             device_data: None,
-            ephemeral_secret: None,
-        })
+            ephemeral_key: None,
+        };
+        engagement.validate_resource_bounds()?;
+        Ok(engagement)
     }
 
     /// Encode the device engagement as CBOR
@@ -335,6 +375,11 @@ impl DeviceEngagement {
 
     /// Decode device engagement from CBOR
     pub fn from_cbor(data: &[u8]) -> Result<Self> {
+        if data.len() > MAX_DEVICE_ENGAGEMENT_CBOR_BYTES {
+            return Err(Error::InvalidEngagement(format!(
+                "DeviceEngagement CBOR exceeds {MAX_DEVICE_ENGAGEMENT_CBOR_BYTES} bytes"
+            )));
+        }
         let mut cursor = std::io::Cursor::new(data);
         let value: isomdl::definitions::DeviceEngagement =
             ciborium::de::from_reader(&mut cursor).map_err(Error::CborDecode)?;
@@ -356,6 +401,11 @@ impl DeviceEngagement {
 
     /// Decode and validate an ISO `mdoc:` QR payload.
     pub fn from_qr_uri(uri: &str) -> Result<Self> {
+        if uri.len() > MAX_DEVICE_ENGAGEMENT_QR_URI_BYTES {
+            return Err(Error::InvalidEngagement(format!(
+                "DeviceEngagement QR URI exceeds {MAX_DEVICE_ENGAGEMENT_QR_URI_BYTES} bytes"
+            )));
+        }
         let tagged = Tag24::<isomdl::definitions::DeviceEngagement>::from_qr_code_uri(uri)
             .map_err(|error| Error::InvalidEngagement(error.to_string()))?;
         Self::from_cbor(&tagged.inner_bytes)
@@ -496,5 +546,35 @@ mod tests {
         cbor.push(0x00);
         assert!(DeviceEngagement::from_cbor(&cbor).is_err());
         assert!(DeviceEngagement::from_cbor(&[0xff, 0xff]).is_err());
+    }
+
+    #[test]
+    fn engagement_bounds_apply_before_decode_and_transcript_encoding() {
+        assert!(
+            DeviceEngagement::from_cbor(&vec![0u8; MAX_DEVICE_ENGAGEMENT_CBOR_BYTES + 1]).is_err()
+        );
+        assert!(DeviceEngagement::from_qr_uri(&format!(
+            "mdoc:{}",
+            "A".repeat(MAX_DEVICE_ENGAGEMENT_QR_URI_BYTES)
+        ))
+        .is_err());
+
+        let mut engagement = DeviceEngagement::new_qr().unwrap();
+        engagement.transports = (0..=MAX_DEVICE_RETRIEVAL_METHODS)
+            .map(|_| TransportInfo {
+                method: TransportMethod::NFC,
+                parameters: HashMap::new(),
+            })
+            .collect();
+        assert!(engagement.to_cbor().is_err());
+
+        engagement.transports = vec![TransportInfo {
+            method: TransportMethod::NFC,
+            parameters: HashMap::from([(
+                "oversized".to_string(),
+                vec![0u8; MAX_TRANSPORT_PARAMETER_VALUE_BYTES + 1],
+            )]),
+        }];
+        assert!(engagement.to_cbor().is_err());
     }
 }

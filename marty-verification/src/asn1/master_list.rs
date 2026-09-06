@@ -301,13 +301,18 @@ mod tests {
         use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
         use cms::signed_data::{EncapsulatedContentInfo, SignerIdentifier};
         use der::{Any, Tag};
-        use marty_crypto::cert_builder::create_ca_certificate;
-        use marty_crypto::keygen::KeyType;
         use p256::pkcs8::DecodePrivateKey;
+        use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
 
-        let (signer_der, signer_key_pem) =
-            create_ca_certificate("ICAO Master List Signer", None, 365, KeyType::EcdsaP256)
-                .unwrap();
+        let signer_key = KeyPair::generate().unwrap();
+        let mut signer_params = CertificateParams::default();
+        signer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ICAO Master List Signer");
+        signer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let signer = signer_params.self_signed(&signer_key).unwrap();
+        let signer_der = signer.der().to_vec();
+        let signer_key_pem = signer_key.serialize_pem();
         let signer_cert = Certificate::from_der(&signer_der).unwrap();
         let mut cert_list = der::asn1::SetOfVec::new();
         cert_list.insert(signer_cert.clone()).unwrap();

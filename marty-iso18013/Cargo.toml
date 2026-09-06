@@ -6,6 +6,7 @@ authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
 description = "ISO 18013-5 mobile driving license protocol implementation"
 repository = "https://github.com/ElevenID/marty-core"
+autotests = false
 
 [lib]
 name = "marty_iso18013"
@@ -47,6 +48,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 
 # Logging
 tracing = { version = "0.1", optional = true }
+zeroize = { workspace = true, optional = true }
 
 # Optional: Python bindings
 pyo3 = { workspace = true, optional = true }
@@ -78,6 +80,7 @@ session-protocol = [
     "dep:tokio",
     "dep:tracing",
     "dep:uuid",
+    "dep:zeroize",
     "marty-crypto/ecdh",
     "marty-crypto/kdf",
     "marty-crypto/symmetric",
@@ -108,10 +111,6 @@ required-features = ["session-protocol"]
 
 [[test]]
 name = "selective_disclosure"
-required-features = ["session-protocol"]
-
-[[test]]
-name = "session_conformance"
 required-features = ["session-protocol"]
 
 [[bench]]

@@ -24,7 +24,7 @@ const MODELED_JWE_HEADER_MEMBERS: [&str; 11] = [
     "alg", "enc", "typ", "cty", "kid", "jku", "jwk", "epk", "apu", "apv", "zip",
 ];
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HaipSessionPrivateJwk {
@@ -197,7 +197,7 @@ fn decode_party_info(value: Option<&str>) -> VerificationResult<Vec<u8>> {
 /// The public and private JSON values carry the same random key identifier and
 /// JOSE encryption metadata. Callers may wrap the private JSON with their KMS,
 /// but key generation and JWK construction remain canonical Rust behavior.
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(test)]
 pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(String, String)> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p256::SecretKey;
@@ -224,11 +224,62 @@ pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(Strin
     Ok((public.to_json()?, private.to_json()?))
 }
 
+/// One-use HAIP response decryption state.
+///
+/// The private P-256 key never crosses the Rust API boundary. Callers receive
+/// only the public JWK and consume this object when decrypting one response.
+#[cfg(feature = "ephemeral-session-keys")]
+pub struct HaipResponseDecryptionSession {
+    private_key: Option<p256::SecretKey>,
+    public_jwk: Jwk,
+}
+
+#[cfg(feature = "ephemeral-session-keys")]
+impl HaipResponseDecryptionSession {
+    pub fn generate() -> VerificationResult<Self> {
+        use elliptic_curve::sec1::ToEncodedPoint;
+        use rand::rngs::OsRng;
+
+        let private_key = p256::SecretKey::random(&mut OsRng);
+        let point = private_key.public_key().to_encoded_point(false);
+        let mut public_jwk = Jwk {
+            kty: "EC".to_string(),
+            crv: Some("P-256".to_string()),
+            x: Some(base64url_encode(point.x().ok_or_else(|| {
+                VerificationError::internal("HAIP P-256 key has no x coordinate".to_string())
+            })?)),
+            y: Some(base64url_encode(point.y().ok_or_else(|| {
+                VerificationError::internal("HAIP P-256 key has no y coordinate".to_string())
+            })?)),
+            ..Default::default()
+        };
+        public_jwk.kid = Some(format!("oid4vp-haip-{}", uuid::Uuid::new_v4()));
+        public_jwk.alg = Some("ECDH-ES".to_string());
+        public_jwk.use_ = Some("enc".to_string());
+        Ok(Self {
+            private_key: Some(private_key),
+            public_jwk,
+        })
+    }
+
+    pub fn public_jwk_json(&self) -> VerificationResult<String> {
+        self.public_jwk.to_json()
+    }
+
+    pub fn decrypt(mut self, compact_jwe: &str) -> VerificationResult<Vec<u8>> {
+        validate_haip_response_header(compact_jwe)?;
+        let private_key = self
+            .private_key
+            .take()
+            .ok_or_else(|| VerificationError::internal("HAIP session already consumed"))?;
+        jwe_decrypt_with_p256_session_key(compact_jwe, &private_key)
+    }
+}
+
 /// Decrypt a bounded ECDH-ES compact JWE using a P-256 private JWK JSON value.
 ///
 /// The private JSON is accepted only by this session-scoped HAIP entry point;
-/// generic [`Jwk::from_json`] remains public-key-only without
-/// `local-key-operations`.
+/// generic [`Jwk::from_json`] remains public-key-only in production builds.
 ///
 /// ```
 /// use marty_verification::jwk::{
@@ -242,7 +293,7 @@ pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(Strin
 /// assert_eq!(decrypt_haip_response(&encrypted, &private_json)?, b"session payload");
 /// # Ok::<(), Box<marty_verification::VerificationError>>(())
 /// ```
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(test)]
 pub fn decrypt_haip_response(
     compact_jwe: &str,
     private_jwk_json: &str,
@@ -257,7 +308,7 @@ pub fn decrypt_haip_response(
     jwe_decrypt_with_p256_session_key(compact_jwe, &private_key)
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(test)]
 fn parse_haip_session_private_jwk(private_jwk_json: &str) -> VerificationResult<p256::SecretKey> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p256::SecretKey;
@@ -627,18 +678,12 @@ fn parse_and_validate_direct_jwe(jwe: &str) -> VerificationResult<ParsedDirectJw
 /// # Returns
 ///
 /// Decrypted plaintext.
-#[cfg(any(
-    test,
-    all(feature = "ephemeral-session-keys", feature = "local-key-operations")
-))]
+#[cfg(test)]
 pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>> {
     jwe_decrypt_with_session_key(jwe, recipient_key)
 }
 
-#[cfg(any(
-    test,
-    all(feature = "ephemeral-session-keys", feature = "local-key-operations")
-))]
+#[cfg(test)]
 fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>> {
     let parsed = parse_and_validate_direct_jwe(jwe)?;
 
@@ -658,8 +703,6 @@ fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationR
 
             match (recipient_key.kty.as_str(), recipient_key.crv.as_deref()) {
                 ("OKP", Some("X25519")) => {
-                    use marty_crypto::ecdh::X25519KeyPair;
-
                     if epk.kty != "OKP" || epk.crv.as_deref() != Some("X25519") {
                         return Err(VerificationError::internal(
                             "ECDH-ES epk does not match the X25519 recipient key".to_string(),
@@ -689,9 +732,16 @@ fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationR
                         ));
                     }
 
-                    let keypair = X25519KeyPair::from_secret_key(&d_bytes)?;
-                    let shared = keypair.agree(&epk_bytes)?;
-                    shared.to_vec()
+                    let secret_bytes: [u8; 32] = d_bytes.as_slice().try_into().map_err(|_| {
+                        VerificationError::internal("X25519 private key must be 32 bytes")
+                    })?;
+                    let public_bytes: [u8; 32] = epk_bytes
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| VerificationError::internal("X25519 epk must be 32 bytes"))?;
+                    let secret = x25519_dalek::StaticSecret::from(secret_bytes);
+                    let public = x25519_dalek::PublicKey::from(public_bytes);
+                    secret.diffie_hellman(&public).as_bytes().to_vec()
                 }
                 ("EC", Some("P-256")) => {
                     use elliptic_curve::sec1::ToEncodedPoint;

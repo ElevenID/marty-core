@@ -1,22 +1,22 @@
-//! Open Badges verification and issuance helpers.
+//! Open Badges verification helpers.
 //!
 //! Open Badges 3 (OB3) is the current/default profile. Open Badges 2 (OB2)
 //! verification remains available for a short migration window, reviewed on
-//! 2026-09-01 with target removal on 2026-10-01. OB2 and OB3 issuance helpers
-//! are compiled only with `local-key-operations`; verification remains available
-//! without local key support. New integrations must use OB3. The exception is tracked in
+//! 2026-09-01 with target removal on 2026-10-01. Local issuance helpers exist
+//! only for crate-internal regression tests; production builds are verification-only.
+//! New integrations must use OB3. The exception is tracked in
 //! <https://github.com/ElevenID/marty-core/issues/96>.
 //!
 //! OB2 uses JWS signatures; OB3 uses Data Integrity proofs.
 //!
 //! # WASM Compatibility Note
 //!
-//! The synchronous OB3 functions (`issue_ob3_json` and `verify_ob3_json`) are **not available**
-//! on `wasm32` targets because they use blocking async runtime internally (`futures::executor::block_on`),
-//! which is incompatible with single-threaded WASM environments.
+//! The synchronous OB3 verification functions are **not available** on
+//! `wasm32` targets because they use a blocking async runtime internally
+//! (`futures::executor::block_on`), which is incompatible with single-threaded
+//! WASM environments.
 //!
 //! For WASM targets, use the async versions:
-//! - `issue_ob3_json_async` - Async OB3 credential issuance (local-key builds only)
 //! - [`verify_ob3_json_async`] - Async OB3 credential verification
 //! - [`verify_ob3_json_with_status_lists_async`] - Async OB3 verification with
 //!   separately authenticated status-list inputs
@@ -28,7 +28,7 @@
 //!
 //! | Feature | OB2 | OB3 |
 //! |---------|-----|-----|
-//! | JWS Signatures | Issuance: `local-key-operations`; verification: ES256, ES384, EdDSA | — |
+//! | JWS Signatures | Verification: ES256, ES384, EdDSA | — |
 //! | Data Integrity Proofs | — | ✓ (JsonWebSignature2020, Ed25519Signature2018/2020) |
 //! | Recipient Hashing | ✓ (SHA1, SHA256, SHA512) | — |
 //! | Credential Status / Revocation | — | ✓ (authenticated W3C Bitstring Status List v1.0) |
@@ -61,15 +61,12 @@ pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
 /// }
 /// ```
 const _: () = ();
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub use ob2::issue_ob2_json;
 pub use ob2::{verify_ob2, verify_ob2_json, VerifyOb2Request};
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(test, feature = "local-key-operations")
-))]
+#[cfg(all(not(target_arch = "wasm32"), test))]
 pub use ob3::issue_ob3_json;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub use ob3::issue_ob3_json_async;
 pub use ob3::{
     verify_ob3_async, verify_ob3_json_async, verify_ob3_json_with_status_lists_async,
@@ -86,7 +83,7 @@ pub use types::{
 pub use x509_suite::X509Signature2021;
 pub use x509_verification_method::X509VerificationKey2021;
 
-#[cfg(not(feature = "local-key-operations"))]
+#[cfg(not(test))]
 /// Open Badges verification builds do not expose local private-JWK issuance.
 ///
 /// ```compile_fail
