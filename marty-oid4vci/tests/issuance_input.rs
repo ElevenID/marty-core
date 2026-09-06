@@ -1,5 +1,29 @@
 use marty_oid4vci::{issuance_input::normalize_zk_predicate_claims, types::SignedCredential};
 use serde_json::json;
+
+#[test]
+fn typed_key_admission_preserves_supported_curves_and_metadata_checks() {
+    use marty_oid4vci::{signer::derive_typed_jwk_algorithm, types::SigningAlgorithm};
+    for (curve, expected) in [
+        ("P-256", SigningAlgorithm::ES256),
+        ("P-384", SigningAlgorithm::ES384),
+        ("secp256k1", SigningAlgorithm::ES256K),
+    ] {
+        let key: ssi_jwk::JWK = serde_json::from_value(json!({"kty":"EC", "crv":curve})).unwrap();
+        assert_eq!(derive_typed_jwk_algorithm(&key).unwrap(), expected);
+    }
+    let mut key = ssi_jwk::JWK::generate_ed25519().unwrap();
+    assert_eq!(
+        derive_typed_jwk_algorithm(&key).unwrap(),
+        SigningAlgorithm::EdDSA
+    );
+    key.algorithm = Some(ssi_jwk::Algorithm::ES256);
+    assert!(derive_typed_jwk_algorithm(&key).is_err());
+    for value in [json!({"kty":"EC"}), json!({"kty":"EC", "crv":"unknown"})] {
+        let key = serde_json::from_value(value).unwrap();
+        assert!(derive_typed_jwk_algorithm(&key).is_err());
+    }
+}
 use std::collections::HashMap;
 
 #[test]

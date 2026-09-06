@@ -1,7 +1,7 @@
-//! Fail-closed verification helpers for compact JWT/JWS inputs.
+//! Signing and fail-closed verification helpers for compact JWT/JWS inputs.
 //!
 //! Product services retain claim and tenant policy composition, while this
-//! module owns JOSE parsing, public-key validation, and signature verification.
+//! module owns JOSE encoding, parsing, key validation, signing, and verification.
 
 use base64::Engine;
 use jsonwebtoken::{
