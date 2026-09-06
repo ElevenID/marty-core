@@ -15,9 +15,9 @@ name = "marty_crypto"
 crate-type = ["rlib"]
 
 [features]
-# Preserve the historical feature-complete default while allowing consumers
-# with a narrow security boundary to compile only the primitives they use.
-default = ["full"]
+# Marty runtime consumers must choose verification/session capabilities
+# explicitly. Local signing and private-key tooling are never implicit.
+default = []
 # Enforcement marker for processes whose long-term credential keys live in a
 # remote KMS. It enables no primitives by itself; lib.rs rejects combinations
 # that would restore an in-process credential private-key capability.

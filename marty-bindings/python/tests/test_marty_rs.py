@@ -4,13 +4,14 @@ These tests exercise the PyO3 FFI surface. They require the native extension
 to be built first:
 
     cd marty-core/marty-bindings
-    maturin develop --release --features local-key-operations
+    maturin develop --release
 
-This suite covers the explicit offline/development key-operations surface.
-Production builds intentionally omit those symbols and are checked by the
-Rust ``production_module_excludes_private_key_operations`` regression test.
+The extension deliberately omits long-term issuer/holder private-key import,
+generation, signing, and DIDComm key decryption functions. Explicit short-lived
+protocol-session capabilities remain separate. Issuers use the format-specific
+prepare -> remote sign -> assemble APIs.
 
-Or for venv-based development (after building with that feature):
+Or for venv-based development:
 
     pip install -e ".[dev]"
 """
@@ -24,24 +25,13 @@ import pytest
 # All tests are skipped if the native extension hasn't been built yet.
 _marty_rs = pytest.importorskip("marty_rs._marty_rs", reason="native extension not built")
 
-ISSUER_DID = "https://issuer.example.test"
-ISSUER_PRIVATE_JWK = json.dumps(
-    {
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
-        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
-    }
-)
-
-
 def test_canonical_top_level_import_exposes_native_bindings():
     import _marty_rs as canonical
     import marty_rs
 
-    assert canonical.generate_p256_key is _marty_rs.generate_p256_key
     assert canonical.TokenStatusList is _marty_rs.TokenStatusList
-    assert canonical.generate_did_key is _marty_rs.generate_did_key
+    assert canonical.oid4vci_prepare_jwt_vc is _marty_rs.oid4vci_prepare_jwt_vc
+    assert canonical.oid4vci_assemble_jwt_vc is _marty_rs.oid4vci_assemble_jwt_vc
     assert (
         canonical.oid4vci_verify_detached_signature
         is _marty_rs.oid4vci_verify_detached_signature
@@ -63,6 +53,80 @@ def test_native_backend_diagnostics_are_explicit_and_versioned():
     assert diagnostics["version"]
     assert "oidc_id_token_validation" in diagnostics["capabilities"]
     assert "credential_presentation_metadata" in diagnostics["capabilities"]
+
+
+def test_private_key_operations_are_not_packaged():
+    private_key_operations = {
+        "generate_p256_key",
+        "generate_p256_jwk",
+        "generate_p256_did_jwk",
+        "generate_p384_key",
+        "generate_ed25519_key",
+        "generate_did_key",
+        "sign_p256",
+        "sign_p384",
+        "sign_ed25519",
+        "create_verifiable_credential",
+        "oid4vci_sign_credential",
+        "oid4vci_create_proof_jwt",
+        "oid4vci_prepare_credential",
+        "oid4vci_assemble_credential",
+        "vds_nc_sign_profile",
+        "didcomm_encrypt_authcrypt",
+        "didcomm_decrypt",
+        "didcomm_decrypt_authcrypt",
+    }
+    assert not (private_key_operations & set(dir(_marty_rs)))
+    assert hasattr(_marty_rs, "oid4vci_prepare_jwt_vc")
+    assert hasattr(_marty_rs, "oid4vci_assemble_jwt_vc")
+
+
+@pytest.mark.parametrize(
+    ("operation", "public_key", "message", "signature"),
+    [
+        (
+            _marty_rs.verify_p256,
+            bytes.fromhex(
+                "0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6"
+                "7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299"
+            ),
+            b"sample",
+            bytes.fromhex(
+                "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716"
+                "f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8"
+            ),
+        ),
+        (
+            _marty_rs.verify_p384,
+            bytes.fromhex(
+                "04aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385"
+                "502f25dbf55296c3a545e3872760ab73617de4a96262c6f5d9e98bf9292dc29f8"
+                "f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f"
+            ),
+            b"sample",
+            bytes.fromhex(
+                "306502301f30a1b9119f64fcf6d04fbd2892e71926675a40e8ceaee3ff3ebba581"
+                "58db477f6a7e7d79b4b692bbe815a168cb0701023100e1669b9c87c57e033d22cb"
+                "8b2628dc15dcb9762b48269b9bfb5d000af1d01db1f7916b539abceea6880b74c"
+                "058610b25"
+            ),
+        ),
+        (
+            _marty_rs.verify_ed25519,
+            bytes.fromhex(
+                "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+            ),
+            b"",
+            bytes.fromhex(
+                "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+                "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+            ),
+        ),
+    ],
+)
+def test_public_verification_fixed_vectors(operation, public_key, message, signature):
+    assert operation(public_key, message, signature) is True
+    assert operation(public_key, b"tampered", signature) is False
 
 
 def test_open_badge_presentation_metadata_matches_canonical_rust_issuer_profile():
@@ -146,151 +210,6 @@ class TestStatusLists:
             _marty_rs.BitstringStatusList.from_base64url("not-multibase", 131_072)
 
 
-# =========================================================================
-# Key generation
-# =========================================================================
-
-
-class TestKeyGeneration:
-    """Tests for key pair generation functions."""
-
-    def test_generate_p256_returns_two_byte_strings(self):
-        secret, public = _marty_rs.generate_p256_key()
-        assert isinstance(secret, bytes)
-        assert isinstance(public, bytes)
-
-    def test_generate_did_key_returns_ed25519_private_jwk(self):
-        did, private_jwk_json = _marty_rs.generate_did_key()
-        private_jwk = json.loads(private_jwk_json)
-
-        assert did.startswith("did:key:z6Mk")
-        assert private_jwk["kty"] == "OKP"
-        assert private_jwk["crv"] == "Ed25519"
-        assert private_jwk["x"]
-        assert private_jwk["d"]
-
-    def test_generate_p256_key_lengths(self):
-        secret, public = _marty_rs.generate_p256_key()
-        assert len(secret) == 32, "P-256 secret key must be 32 bytes"
-        assert len(public) == 65, "P-256 uncompressed public key must be 65 bytes"
-
-    def test_generate_p256_jwk_returns_private_and_public_keys(self):
-        private_json, public_json = _marty_rs.generate_p256_jwk()
-        private_jwk = json.loads(private_json)
-        public_jwk = json.loads(public_json)
-
-        assert private_jwk["kty"] == "EC"
-        assert private_jwk["crv"] == "P-256"
-        assert "d" in private_jwk
-        assert "d" not in public_jwk
-        assert public_jwk["x"] == private_jwk["x"]
-        assert public_jwk["y"] == private_jwk["y"]
-
-    def test_generate_p256_did_jwk_uses_public_material_for_identifier(self):
-        issuer_did, private_json = _marty_rs.generate_p256_did_jwk()
-        assert issuer_did.startswith("did:jwk:")
-        assert "d" in json.loads(private_json)
-
-    def test_generate_p256_unique_keys(self):
-        """Each call must produce a distinct key pair."""
-        s1, _ = _marty_rs.generate_p256_key()
-        s2, _ = _marty_rs.generate_p256_key()
-        assert s1 != s2
-
-    def test_generate_p384_key_lengths(self):
-        secret, public = _marty_rs.generate_p384_key()
-        assert len(secret) == 48, "P-384 secret key must be 48 bytes"
-        assert len(public) == 97, "P-384 uncompressed public key must be 97 bytes"
-
-    def test_generate_ed25519_key_lengths(self):
-        secret, public = _marty_rs.generate_ed25519_key()
-        assert len(secret) == 32
-        assert len(public) == 32
-
-
-# =========================================================================
-# Signing and verification — round-trip
-# =========================================================================
-
-
-class TestSignAndVerify:
-    """Sign-then-verify round-trip tests for each algorithm."""
-
-    MESSAGE = b"The quick brown fox jumps over the lazy dog"
-
-    # -- P-256 ----------------------------------------------------------------
-
-    def test_p256_sign_verify_roundtrip(self):
-        secret, public = _marty_rs.generate_p256_key()
-        signature = _marty_rs.sign_p256(secret, self.MESSAGE)
-        assert isinstance(signature, bytes)
-        assert _marty_rs.verify_p256(public, self.MESSAGE, signature) is True
-
-    def test_p256_wrong_message_fails(self):
-        secret, public = _marty_rs.generate_p256_key()
-        sig = _marty_rs.sign_p256(secret, self.MESSAGE)
-        assert _marty_rs.verify_p256(public, b"tampered", sig) is False
-
-    def test_p256_wrong_key_fails(self):
-        secret, _ = _marty_rs.generate_p256_key()
-        _, other_public = _marty_rs.generate_p256_key()
-        sig = _marty_rs.sign_p256(secret, self.MESSAGE)
-        assert _marty_rs.verify_p256(other_public, self.MESSAGE, sig) is False
-
-    # -- P-384 ----------------------------------------------------------------
-
-    def test_p384_sign_verify_roundtrip(self):
-        secret, public = _marty_rs.generate_p384_key()
-        sig = _marty_rs.sign_p384(secret, self.MESSAGE)
-        assert _marty_rs.verify_p384(public, self.MESSAGE, sig) is True
-
-    def test_p384_wrong_message_fails(self):
-        secret, public = _marty_rs.generate_p384_key()
-        sig = _marty_rs.sign_p384(secret, self.MESSAGE)
-        assert _marty_rs.verify_p384(public, b"tampered", sig) is False
-
-    # -- Ed25519 --------------------------------------------------------------
-
-    def test_ed25519_sign_verify_roundtrip(self):
-        secret, public = _marty_rs.generate_ed25519_key()
-        sig = _marty_rs.sign_ed25519(secret, self.MESSAGE)
-        assert isinstance(sig, bytes)
-        assert len(sig) == 64, "Ed25519 signature must be 64 bytes"
-        assert _marty_rs.verify_ed25519(public, self.MESSAGE, sig) is True
-
-    def test_ed25519_wrong_message_fails(self):
-        secret, public = _marty_rs.generate_ed25519_key()
-        sig = _marty_rs.sign_ed25519(secret, self.MESSAGE)
-        assert _marty_rs.verify_ed25519(public, b"tampered", sig) is False
-
-
-# =========================================================================
-# Error handling
-# =========================================================================
-
-
-class TestErrorHandling:
-    """Verify that invalid inputs produce proper Python exceptions."""
-
-    def test_sign_p256_bad_key_raises(self):
-        with pytest.raises(RuntimeError):
-            _marty_rs.sign_p256(b"too-short", b"msg")
-
-    def test_sign_ed25519_bad_key_raises(self):
-        with pytest.raises(RuntimeError):
-            _marty_rs.sign_ed25519(b"x" * 16, b"msg")
-
-    def test_create_vc_bad_json_raises_value_error(self):
-        with pytest.raises(ValueError, match="Invalid claims JSON"):
-            _marty_rs.create_verifiable_credential(
-                issuer_did=ISSUER_DID,
-                issuer_jwk_json=ISSUER_PRIVATE_JWK,
-                subject_id="did:example:holder",
-                credential_type="ExampleCredential",
-                claims_json="not json",
-            )
-
-
 class TestMdocPresentationVerification:
     """The production wheel exposes fail-closed ISO presentation bindings."""
 
@@ -322,37 +241,6 @@ class TestMdocPresentationVerification:
         assert result.revocation_checked is False
         assert result.not_revoked is None
         assert result.error
-
-
-# =========================================================================
-# Verifiable Credentials
-# =========================================================================
-
-
-class TestVerifiableCredentials:
-    """Test the standards-aware create_verifiable_credential binding."""
-
-    def test_create_vc_returns_signed_compact_jwt(self):
-        credential, credential_id = _marty_rs.create_verifiable_credential(
-            issuer_did=ISSUER_DID,
-            issuer_jwk_json=ISSUER_PRIVATE_JWK,
-            subject_id="did:example:holder",
-            credential_type="ExampleCredential",
-            claims_json=json.dumps({"name": "Alice"}),
-        )
-        assert credential.count(".") == 2
-        assert credential_id.startswith("urn:uuid:")
-
-    def test_create_vc_rejects_unknown_format(self):
-        with pytest.raises(ValueError, match="Unsupported credential format"):
-            _marty_rs.create_verifiable_credential(
-                issuer_did=ISSUER_DID,
-                issuer_jwk_json=ISSUER_PRIVATE_JWK,
-                subject_id="did:example:holder",
-                credential_type="ExampleCredential",
-                claims_json="{}",
-                format="unknown",
-            )
 
 
 # =========================================================================
@@ -399,51 +287,6 @@ class TestOID4VCI:
 
     def test_pkce_s256_invalid(self):
         assert _marty_rs.oid4vci_verify_pkce_s256("wrong", "wrong") is False
-
-    def test_proof_jwt_roundtrip(self):
-        """Create and verify a proof JWT."""
-        jwt = _marty_rs.oid4vci_create_proof_jwt(self.ISSUER_URL, "nonce-xyz")
-        assert jwt.count(".") == 2, "JWT must have 3 parts"
-
-        holder_did, nonce, holder_public_jwk = _marty_rs.oid4vci_verify_proof_jwt(
-            jwt, "nonce-xyz", self.ISSUER_URL
-        )
-        assert holder_did.startswith("did:key:")
-        assert nonce == "nonce-xyz"
-        assert json.loads(holder_public_jwk)["kty"] == "OKP"
-
-    def test_proof_jwt_bad_nonce_fails(self):
-        jwt = _marty_rs.oid4vci_create_proof_jwt(self.ISSUER_URL, "nonce-a")
-        with pytest.raises(RuntimeError, match="[Nn]once"):
-            _marty_rs.oid4vci_verify_proof_jwt(jwt, "nonce-b", None)
-
-    def test_remote_mdoc_prepare_sign_assemble_is_single_use(self):
-        """Issuer-profile signing retains COSE state inside the extension."""
-        reserved_credential_id = (
-            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"
-        )
-        prepared = _marty_rs.oid4vci_prepare_mdoc(
-            "did:web:issuer.example",
-            "ES256",
-            "org.iso.18013.5.1.mDL",
-            "org.iso.18013.5.1",
-            json.dumps({"given_name": "Erika"}),
-            3600,
-            reserved_credential_id,
-        )
-        assert prepared.credential_id == reserved_credential_id
-        assert prepared.tbs_data
-
-        private_key, _ = _marty_rs.generate_p256_key()
-        raw_signature = _marty_rs.sign_p256(private_key, prepared.tbs_data)
-        credential, credential_id = _marty_rs.oid4vci_assemble_mdoc(
-            prepared, raw_signature
-        )
-        assert credential
-        assert credential_id == reserved_credential_id
-        with pytest.raises(RuntimeError, match="only be assembled once"):
-            _marty_rs.oid4vci_assemble_mdoc(prepared, raw_signature)
-
 
 # =========================================================================
 # OID4VP Verification
