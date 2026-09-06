@@ -1,30 +1,35 @@
 # KMS-only Rust build surface plan
 
-Status: implementation and local validation complete; final CI and merges are tracked in the ElevenID pull requests
+Status: complete; implementation, independent review, full CI, and ElevenID merges verified
 
 Recorded: 2026-09-05
 
 Scope owner: ElevenID
 
-## Recovery checkpoint (2026-09-05)
+## Recovery checkpoint (2026-09-06)
 
-The positive-capability/KMS-only implementation is finalized on the local
-ElevenID-only branch `codex/kms-only-build-surface-clean`. Marty-core PR 308
-tracks its published branch `codex/kms-only-build-surface`. No upstream pull
-request or push has been made. This document is the durable recovery record;
-the branch, exact commits, test evidence, and unresolved gates below supersede
-chat context.
+The positive-capability/KMS-only implementation is merged in the four ElevenID
+repositories. No upstream pull request or push was made. This document is the
+durable recovery record; the exact reviewed heads, merge commits, test evidence,
+and deferred work below supersede chat context.
 
-The reviewed and published DCO-clean Marty checkpoint is
-`e7e1033574f865c86f196c9ec77f593017f87738`. Exact ElevenID fork heads are
-isomdl `2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9`, sd-jwt
-`302984b4431c331408c58c62f23a07339394c986`, and Longfellow
-`1acd01c032531732bb0cd6a28c6d8577393216d1`. Isomdl PR 17 and SD-JWT PR 33 are
-merged; the SD-JWT feature branch is deliberately retained because GitHub
-required a squash merge and Marty pins its reviewed tip. The public-fork
-corrections remain available as small DCO-signed commits. Marty pins the exact
-isomdl and sd-jwt heads; no upstream branch was pushed and no upstream pull
-request was opened.
+The final independently reviewed Marty head is
+`99b06345c0429149536b23ecfa5156d93457ab92`; PR 308 merged it as
+`72d4f214c8e71b4ed41b7d60cdbb638231c112a6`. Exact reviewed public-fork heads
+and ElevenID merge commits are:
+
+- isomdl PR 17: `2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9`, merged as
+  `4e3fd6398467032c80b1023855e674a65481bfa3`;
+- sd-jwt PR 33: `302984b4431c331408c58c62f23a07339394c986`, merged as
+  `74c086841f8086507e5dc8b6a1acf59feecf0809`; and
+- Longfellow PR 15: `72183da18032a737bb70260dfaeb3cba15e402e6`, merged as
+  `dd745a47074288865c5be038f485d96219380f09`.
+
+The SD-JWT feature branch is deliberately retained because GitHub required a
+squash merge and Marty pins its reviewed tip. The public-fork corrections remain
+available as small DCO-signed commits. Marty pins the exact isomdl and sd-jwt
+reviewed heads. No upstream branch was pushed and no upstream pull request was
+opened.
 
 Review corrections implemented after the base checkpoint include fail-closed remote signature
 assembly (including VDS-NC), private-DTC signing feature gates, wallet feature
@@ -76,10 +81,17 @@ clippy, five negative KMS/local-capability compile probes, default verification
 tests, the full mock-ZKP workspace suite, unchanged third-party compliance
 suites, the corrected Longfellow current-v8 proof flow, runtime limit tests, and
 the verifier-only release build. Native Longfellow/ZKP C++ cannot build in this
-Windows environment because its Linux prerequisites are absent; the ElevenID
-Linux CI job remains that native gate. Remaining gates are successful PR CI and
-the Longfellow and Marty merges. The unrelated tracked Python bytecode remains
-excluded.
+Windows environment because its Linux prerequisites are absent; ElevenID Linux
+merge-queue CI supplied that native gate. Both independent reviewers reported
+clean final heads. Marty PR 308 passed its complete merge-group matrix, including
+the corrected production and development Python binding surfaces, before
+merging. Longfellow PR 15 passed all supported CMake platforms,
+reference/AArch64 checks, and its production workspace merge-group run before
+merging. The unrelated tracked Python bytecode remains excluded.
+
+Longfellow's obsolete Debian 11 workflow lane was retired after Debian 11 LTS
+ended. Its strict branch protection was updated to remove only the stale
+`Build on Debian 11` context; the other 13 required checks remain enabled.
 
 Security disclosure remains deferred by instruction. Candidate confidential,
 anonymous upstream reports are the inherited Longfellow circuit/archive and
