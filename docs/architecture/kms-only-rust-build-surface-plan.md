@@ -23,7 +23,7 @@ merge. Published ElevenID fork heads are isomdl
 `codex/kms-only-build-surface`, sd-jwt
 `15f20899fd7e4660919be7e0ca7b33b852cfe79a` on
 `codex/digest-lane-acceleration`, and Longfellow
-`c5a0484ec6f821c80d1527ad3be955fea4155143`. The public-fork corrections are
+`1c9506823064b5b8e719d67698985a3015bef6f4`. The public-fork corrections are
 split into small DCO-signed commits. Marty now pins the exact isomdl and sd-jwt
 heads; no upstream branch was pushed and no upstream pull request was opened.
 
