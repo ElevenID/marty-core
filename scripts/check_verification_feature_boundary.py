@@ -166,6 +166,10 @@ def check_repository(root: Path = ROOT) -> None:
         "the explicitly feature-complete matrix must continue to exercise authority issuance",
     )
 
+    require(
+        "python" not in verification["features"]["local-key-operations"],
+        "native and browser local-key operations must not select Python bindings",
+    )
     verification_crypto = verification["dependencies"]["marty-crypto"]
     require(
         verification_crypto.get("default-features") is False,
