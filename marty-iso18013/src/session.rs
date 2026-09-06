@@ -10,12 +10,15 @@ use marty_crypto::symmetric::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
 use zeroize::{Zeroize, Zeroizing};
 
 /// ISO 18013-5 message direction for session-key and IV selection.
+///
+/// Declaration order is the protocol encoding: reader is `0`, device is `1`.
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionDirection {
-    /// Messages sent by the mobile document device.
-    Device,
     /// Messages sent by the reader.
     Reader,
+    /// Messages sent by the mobile document device.
+    Device,
 }
 
 impl SessionDirection {
@@ -27,7 +30,7 @@ impl SessionDirection {
     }
 
     fn iv_marker(self) -> u8 {
-        u8::from(matches!(self, Self::Device))
+        self as u8
     }
 }
 
