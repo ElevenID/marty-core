@@ -61,9 +61,9 @@ pub const MAX_CONCURRENT_SIGNING_WORKERS: usize = 64;
 /// payloads because Rust's panic hook observes them before this library can
 /// perform scoped-worker cleanup.
 ///
-/// [`crate::types::IssuerKey`] is intentionally not opted in automatically.
-/// Callers that have audited a signer implementation and its backend may expose
-/// this capability through an owned newtype.
+/// Fixture-only local signers are intentionally not opted in automatically.
+/// Callers that have audited a remote signer implementation and its backend may
+/// expose this capability through an owned newtype.
 ///
 /// The concurrent path is native-only. WebAssembly callers continue to use the
 /// serial [`Es256SignerScope`].

@@ -1,7 +1,7 @@
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::formats::mdoc;
 use crate::signer::CredentialSigner;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential, ZkPredicateBinding};
 
@@ -22,7 +22,7 @@ use super::ZK_PROOF_TYPE_LIGERO;
 /// `"age_over_18": true`) and must list that exact claim identifier as its
 /// sole supported predicate. Longfellow proves inclusion of this signed value;
 /// it does not derive age from a hidden birth date.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn sign_zk_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -52,12 +52,12 @@ pub fn sign_zk_mdoc(
 
 /// Sign a ZK-enabled mDoc credential using any [`CredentialSigner`].
 ///
-/// This is the BYOK-aware variant of [`sign_zk_mdoc`]. For local JWK signing,
-/// pass an `&IssuerKey`. For remote/KMS signing, pass a custom
-/// [`CredentialSigner`] implementation.
+/// Production callers provide a [`CredentialSigner`] implementation that
+/// delegates to their remote KMS/HSM. Local JWK signing exists only in the
+/// crate's fixture-only `cfg(test)` path.
 ///
 /// The ZK wrapping (predicate bindings + proof type) is applied identically to
-/// [`sign_zk_mdoc`] — only the underlying mDoc COSE signing is delegated to the
+/// the fixture path; only the underlying mDoc COSE signing is delegated to the
 /// external signer.
 pub fn sign_zk_mdoc_with_signer(
     signer: &dyn CredentialSigner,

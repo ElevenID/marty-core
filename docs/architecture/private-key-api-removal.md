@@ -52,6 +52,12 @@ format-specific remote signing handles.
   one-use preparation state and require explicit verification-method IDs.
 - Rust and Python surface tests reject the removed names while requiring the
   remote-signing replacements.
+- `marty-oid4vci` no longer declares a `local-key-operations` feature or a
+  production `ssi-crypto` dependency. Its legacy local issuer implementation is
+  compiled only by Rust's non-selectable `cfg(test)` boundary.
+- Existing local-signing and conformance test sources are compiled unchanged as
+  crate-internal tests. Downstream fixture signers use the same
+  prepare -> signer callback -> assemble contract as a remote KMS.
 
 VDS-NC verification remains available. VDS-NC and ZK mdoc issuance are
 intentionally unavailable until they have bounded, opaque, format-specific KMS
@@ -59,16 +65,12 @@ handles; callers must not fall back to local signing.
 
 ## Remaining migration
 
-1. Move test fixture signers out of production crates into a publish-disabled
-   test-support crate.
-2. Remove the `local-key-operations` API from `marty-oid4vci` and retain only
-   preparation, remote signer contracts, signature validation, and assembly.
-3. Split `marty-crypto` into a verification crate and a publish-disabled local
+1. Split `marty-crypto` into a verification crate and a publish-disabled local
    test-support crate, then remove its production-selectable keygen, private
    codec, signing, and authority-builder features.
-4. Move wallet/holder and DIDComm agent key ownership to their explicit product
+2. Move wallet/holder and DIDComm agent key ownership to their explicit product
    roots; do not expose those capabilities through the issuer bindings.
-5. Add dependency/symbol checks for each shipping artifact and re-measure final
+3. Add dependency/symbol checks for each shipping artifact and re-measure final
    wheel/library size.
 
 ## Required validation

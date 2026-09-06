@@ -16,11 +16,11 @@ use std::fmt;
 use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
 use crate::error::{Oid4vciError, Oid4vciResult};
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_jwk::JWK;
 
 /// Encode header and payload as base64url, sign, and produce a compact JWT.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn sign_compact_jwt(
     jwk: &JWK,
     header: &serde_json::Value,

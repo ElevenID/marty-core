@@ -2668,11 +2668,39 @@ mod tests {
 
     #[test]
     fn test_sd_jwt_binding_verifies_and_returns_reconstructed_claims() {
-        use marty_oid4vci::formats::sd_jwt::sign_sd_jwt;
+        use base64::Engine as _;
+        use marty_oid4vci::formats::sd_jwt::{assemble_sd_jwt, prepare_sd_jwt};
+        use marty_oid4vci::signer::CredentialSigner;
         use marty_oid4vci::types::{
-            CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential,
-            SigningAlgorithm,
+            CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm,
         };
+
+        struct TestEd25519Signer([u8; 32]);
+
+        impl std::fmt::Debug for TestEd25519Signer {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("TestEd25519Signer([redacted])")
+            }
+        }
+
+        impl CredentialSigner for TestEd25519Signer {
+            fn sign(&self, message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
+                marty_crypto::ed25519::sign(&self.0, message)
+                    .map_err(|error| marty_oid4vci::Oid4vciError::SigningError(error.to_string()))
+            }
+
+            fn algorithm(&self) -> SigningAlgorithm {
+                SigningAlgorithm::EdDSA
+            }
+
+            fn issuer_id(&self) -> &str {
+                "https://issuer.example.test"
+            }
+
+            fn kid_url(&self) -> String {
+                "https://issuer.example.test#signing-key".to_string()
+            }
+        }
 
         let issuer_jwk = r#"{
             "kty":"OKP",
@@ -2685,11 +2713,11 @@ mod tests {
             "crv":"Ed25519",
             "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
         }"#;
-        let issuer = IssuerKey {
-            issuer_id: "https://issuer.example.test".to_string(),
-            jwk_json: issuer_jwk.to_string(),
-            algorithm: SigningAlgorithm::EdDSA,
-        };
+        let issuer_jwk: serde_json::Value = serde_json::from_str(issuer_jwk).unwrap();
+        let issuer_secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(issuer_jwk["d"].as_str().unwrap())
+            .unwrap();
+        let issuer = TestEd25519Signer(issuer_secret.try_into().unwrap());
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".to_string()),
             credential_type: "IdentityCredential".to_string(),
@@ -2705,7 +2733,11 @@ mod tests {
             w3c_context: Vec::new(),
             w3c_types: Vec::new(),
         };
-        let compact = match sign_sd_jwt(&issuer, &claims).expect("SD-JWT issuance") {
+        let prepared = prepare_sd_jwt(&issuer, &claims).expect("SD-JWT preparation");
+        let signature = issuer
+            .sign(prepared.signing_input().as_bytes())
+            .expect("test signer");
+        let compact = match assemble_sd_jwt(prepared, &signature).expect("SD-JWT assembly") {
             SignedCredential::SdJwt { compact, .. } => compact,
             _ => panic!("expected SD-JWT credential"),
         };

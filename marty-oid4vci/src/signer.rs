@@ -1,19 +1,16 @@
 //! Credential signing abstraction.
 //!
 //! Provides the [`CredentialSigner`] trait that decouples credential construction
-//! from key material, enabling local JWK signing, HSM-backed signing, or
-//! remote KMS signing through a unified interface.
-//!
-//! `IssuerKey` implements `CredentialSigner` directly, preserving full backward
-//! compatibility — existing call-sites that pass `&IssuerKey` work unchanged.
+//! from key material. Production implementors delegate to a remote KMS or HSM;
+//! local JWK signing exists only in the crate's non-selectable test build.
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_crypto::AlgorithmInstance;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_jwk::{Params, JWK};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::types::IssuerKey;
 use crate::types::SigningAlgorithm;
 
@@ -28,13 +25,13 @@ pub const MAX_REMOTE_RSA_SIGNATURE_BYTES: usize = crate::bounded_jwt::MAX_RSA_SI
 
 /// Trait for signing credential payloads.
 ///
-/// Abstracts key material so that signing can be performed locally (JWK),
-/// via a hardware security module, or through a remote KMS.
+/// Abstracts key material so that signing can be delegated to a hardware
+/// security module or remote KMS.
 ///
 /// # Implementors
 ///
-/// - `IssuerKey` — local JWK-based signer in local-key-enabled builds.
-/// - (future) `KmsSigner` — delegates to an external KMS via callback.
+/// Product implementations delegate to an external key manager. The crate's
+/// local JWK implementation is available only to its own `cfg(test)` build.
 ///
 /// Implementors must ensure their [`std::fmt::Debug`] representation never
 /// includes private key material, credentials, signing payloads, or backend
@@ -109,10 +106,10 @@ fn validate_ed25519_encoding(signature: &[u8]) -> bool {
 }
 
 // =============================================================================
-// IssuerKey as CredentialSigner (backward compat)
+// Fixture-only IssuerKey implementation
 // =============================================================================
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl CredentialSigner for IssuerKey {
     fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
         let jwk: JWK = serde_json::from_str(&self.jwk_json)
@@ -143,7 +140,7 @@ impl CredentialSigner for IssuerKey {
 /// `alg` is deliberately excluded from this decision. Callers validate that
 /// optional metadata separately so it can only narrow, never override, the
 /// key type and exact curve.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub(crate) fn derive_signing_algorithm(
     key_type: Option<&str>,
     curve: Option<&str>,
@@ -174,7 +171,7 @@ pub(crate) fn derive_signing_algorithm(
 }
 
 /// Require optional JWK `alg` metadata to agree with the structural family.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub(crate) fn validate_declared_jwk_algorithm(
     structural_algorithm: SigningAlgorithm,
     declared_algorithm: Option<&str>,
@@ -202,7 +199,7 @@ pub(crate) fn validate_declared_jwk_algorithm(
     Ok(())
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 /// Derive the signing family from a parsed JWK and validate its optional `alg` metadata.
 pub fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> {
     let (key_type, curve) = match &jwk.params {
@@ -220,7 +217,7 @@ pub fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> 
 }
 
 /// Bind an [`IssuerKey`]'s public algorithm hint to its actual JWK family.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub(crate) fn validate_issuer_key_algorithm(
     issuer_key: &IssuerKey,
     jwk: &JWK,
@@ -236,7 +233,7 @@ pub(crate) fn validate_issuer_key_algorithm(
 }
 
 /// Sign a message using a JWK's private key.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub(crate) fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
     let secret_key = extract_secret_key(jwk)?;
     let alg_instance = get_algorithm_instance(jwk)?;
@@ -247,7 +244,7 @@ pub(crate) fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>>
 }
 
 /// Extract a [`SecretKey`](ssi_crypto::SecretKey) from a JWK for signing.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::SecretKey> {
     match &jwk.params {
         Params::OKP(params) => {
@@ -279,7 +276,7 @@ pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::SecretK
 }
 
 /// Get the [`AlgorithmInstance`] for a JWK.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub(crate) fn get_algorithm_instance(jwk: &JWK) -> Oid4vciResult<AlgorithmInstance> {
     match &jwk.params {
         Params::OKP(_) => Ok(AlgorithmInstance::EdDSA),
