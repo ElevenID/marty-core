@@ -349,9 +349,10 @@ fn combined_signer_routes_reject_mismatch_without_credentials() {
 fn combined_zk_mdoc_route_rejects_mismatch_without_credentials() {
     let key = issuer_key(&JWK::generate_p256(), SigningAlgorithm::EdDSA);
     let mut claims = base_claims(CredentialPayloadFormat::default());
+    claims.claims.insert("age_over_18".into(), json!(true));
     claims.zk_predicate_claims = vec![ZkPredicateBinding::multi(
-        "given_name",
-        vec!["non_empty".into()],
+        "age_over_18",
+        vec!["age_over_18".into()],
     )];
     assert_key_error_without_private_material(
         formats::sign_credential_with_signer(&CredentialFormat::ZkMdoc, &key, &claims),

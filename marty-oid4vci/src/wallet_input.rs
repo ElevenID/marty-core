@@ -2,7 +2,7 @@
 //!
 //! This module is intentionally network-free. It identifies protocol envelopes
 //! and normalizes credential-offer handoffs before a wallet elects to resolve
-//! any by-reference object through [`crate::wallet::WalletEngine`].
+//! any by-reference object through the selected wallet product's resolution engine.
 
 use serde::{Deserialize, Serialize};
 use url::Url;

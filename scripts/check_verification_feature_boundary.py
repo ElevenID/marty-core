@@ -216,25 +216,13 @@ def check_repository(root: Path = ROOT) -> None:
         "secp256k1 proof verification must omit combined signing support",
     )
     require(
-        oid4vci["dependencies"]["ssi-crypto"].get("optional") is True
-        and not oid4vci["dependencies"]["ssi-crypto"].get("features", [])
+        "ssi-crypto" not in oid4vci["dependencies"]
         and not oid4vci["dependencies"]["ssi-jwk"].get("features", []),
-        "SSI signing and key-generation algorithms must be absent from normal roles",
+        "SSI signing and key-generation algorithms must be absent from production dependencies",
     )
     require(
-        {
-            "dep:ssi-crypto",
-            "ssi-crypto/ed25519",
-            "ssi-crypto/secp256r1",
-            "ssi-crypto/secp256k1",
-            "ssi-crypto/secp384r1",
-            "ssi-jwk/ed25519",
-            "ssi-jwk/secp256r1",
-            "ssi-jwk/secp256k1",
-            "ssi-jwk/secp384r1",
-        }
-        <= set(oid4vci["features"]["local-key-operations"]),
-        "legacy SSI signing support must require local-key-operations",
+        "local-key-operations" not in oid4vci["features"],
+        "OID4VCI local issuer keys must not be a downstream-selectable capability",
     )
     require(
         oid4vci["dependencies"]["jsonwebtoken"].get("default-features") is False

@@ -1,12 +1,12 @@
 //! VDS-NC credential format (`vds_nc`).
 //!
-//! This module provides a signer-agnostic VDS-NC construction path that works
-//! with local JWK signing (`IssuerKey`) and external/KMS-backed signing via
-//! the `CredentialSigner` trait.
+//! This module provides a signer-agnostic VDS-NC construction path. Production
+//! callers delegate through the `CredentialSigner` trait to an external KMS/HSM;
+//! local JWK signing is fixture-only under `cfg(test)`.
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::{validate_remote_signature, validate_rsa_signature_encoding, CredentialSigner};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
 
@@ -30,7 +30,7 @@ impl std::fmt::Debug for PreparedVdsNc {
 
 impl PreparedVdsNc {
     /// Reconstruct a prepared envelope from a `header~payload_json` signing input.
-    #[cfg(feature = "local-key-operations")]
+    #[cfg(test)]
     pub fn from_signing_input(signing_input: String, credential_id: String) -> Oid4vciResult<Self> {
         let (_header, payload_json) =
             super::vds_nc_profile::validate_signing_input(&signing_input)?;
@@ -76,7 +76,7 @@ impl PreparedVdsNc {
     }
 }
 
-#[cfg(all(feature = "issuer", not(feature = "local-key-operations")))]
+#[cfg(feature = "issuer")]
 /// Marker documenting that KMS issuer builds cannot reconstruct prepared VDS state.
 ///
 /// ```compile_fail
@@ -85,7 +85,7 @@ impl PreparedVdsNc {
 pub struct NoPreparedVdsNcReconstruction;
 
 /// Sign a VDS-NC credential using a local issuer key.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn sign_vds_nc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,

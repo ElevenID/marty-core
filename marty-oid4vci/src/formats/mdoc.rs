@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::{validate_remote_signature, CredentialSigner};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
 
@@ -51,7 +51,7 @@ const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi"
 ///   - `issuerAuth`: COSE_Sign1(MobileSecurityObject)
 ///
 /// The resulting credential is base64url-encoded for transport.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn sign_mdoc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -64,7 +64,7 @@ pub fn sign_mdoc(
 /// This remains crate-private so remote/BYOK flows continue through explicit
 /// prepare/sign/assemble APIs while scalar local issuance preserves the legacy
 /// issuer-key parsing, configured-algorithm, and signing error boundaries.
-#[cfg(any(test, all(feature = "issuer", feature = "local-key-operations")))]
+#[cfg(test)]
 pub(crate) fn sign_mdoc_with_device_key(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -73,7 +73,7 @@ pub(crate) fn sign_mdoc_with_device_key(
     sign_mdoc_with_optional_device_key(issuer_key, claims, Some(holder_public_jwk))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_mdoc_with_optional_device_key(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -169,8 +169,8 @@ fn sign_mdoc_with_optional_device_key(
 
 /// Sign an mDoc credential using any [`CredentialSigner`].
 ///
-/// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
-/// For remote/KMS signing, pass a custom `CredentialSigner` implementation.
+/// Production callers provide a `CredentialSigner` implementation that
+/// delegates to their remote KMS/HSM.
 pub fn sign_mdoc_with_signer(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -861,7 +861,7 @@ fn encode_validated_issuer_signed_item_bytes(
     Ok((issuer_signed_item_bytes, encoded_issuer_signed_item_bytes))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn plan_mdoc_digests<'a>(
     credential_id: u64,
     issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
@@ -1259,7 +1259,7 @@ fn validate_public_holder_jwk(jwk: &serde_json::Value) -> Oid4vciResult<()> {
 /// Sign a payload with COSE_Sign1 using the issuer's JWK.
 ///
 /// Returns the serialized COSE_Sign1 bytes.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn sign_cose_sign1(
     payload: &[u8],
     jwk: &ssi_jwk::JWK,

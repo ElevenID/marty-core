@@ -494,7 +494,7 @@ pub struct LogoEntry {
 // =============================================================================
 
 /// Issuer key material for credential signing.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 #[derive(Clone)]
 pub struct IssuerKey {
     /// The DID or key identifier for the issuer.
@@ -505,24 +505,24 @@ pub struct IssuerKey {
     pub algorithm: SigningAlgorithm,
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 const REDACTED_ISSUER_KEY_DIAGNOSTIC: &str = "IssuerKey([redacted])";
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl std::fmt::Debug for IssuerKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
     }
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl std::fmt::Display for IssuerKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
     }
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl IssuerKey {
     /// Returns the `kid` value to use in JWT/SD-JWT headers.
     ///
@@ -953,14 +953,14 @@ impl SignedCredential {
 /// Configuration for a specific issuer/organization.
 #[derive(Debug, Clone)]
 pub struct IssuerConfig {
-    /// The base URL for this issuer (e.g., "https://issuer.example.com/org/123").
+    /// The base URL for this issuer (e.g., <https://issuer.example.com/org/123>).
     pub credential_issuer_url: String,
     /// Human-readable name.
     pub issuer_name: String,
     /// Credential types this issuer supports.
     pub credential_types: Vec<CredentialTypeConfig>,
     /// Development/migration-only in-process issuer signing key.
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub issuer_key: IssuerKey,
     /// Token endpoint URL (if different from default).
     pub token_endpoint: Option<String>,
@@ -986,7 +986,7 @@ impl IssuerConfig {
             credential_issuer_url: String::new(),
             issuer_name: String::new(),
             credential_types: Vec::new(),
-            #[cfg(any(test, feature = "local-key-operations"))]
+            #[cfg(test)]
             issuer_key: IssuerKey {
                 issuer_id: String::new(),
                 jwk_json: String::new(),

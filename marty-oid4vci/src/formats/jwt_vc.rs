@@ -9,17 +9,17 @@
 
 #[cfg(any(test, feature = "issuer"))]
 use base64::Engine;
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use ssi_jwk::JWK;
 #[cfg(any(test, feature = "issuer"))]
 use std::collections::HashMap;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::signer::validate_issuer_key_algorithm;
 #[cfg(any(test, feature = "issuer"))]
 use crate::signer::{validate_remote_signature, CredentialSigner};
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
@@ -54,7 +54,7 @@ pub fn checked_jwt_vc_expiration(
 /// Branches on `claims.credential_payload_format`:
 /// - `W3cVcdmV2JwtVc` → VCDM v2 (`validFrom`/`validUntil`, v2 `@context`)
 /// - any other value  → VCDM v1 (`issuanceDate`/`expirationDate`, v1 `@context`)
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn sign_jwt_vc(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
@@ -154,8 +154,8 @@ pub fn sign_jwt_vc(
 
 /// Sign a W3C VC-JWT credential using any [`CredentialSigner`].
 ///
-/// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
-/// For remote/KMS signing, pass a custom `CredentialSigner` implementation.
+/// Production callers provide a `CredentialSigner` implementation that
+/// delegates to their remote KMS/HSM.
 #[cfg(any(test, feature = "issuer"))]
 pub fn sign_jwt_vc_with_signer(
     signer: &dyn CredentialSigner,
@@ -183,7 +183,7 @@ pub struct PreparedJwtVc {
 impl PreparedJwtVc {
     /// Reconstruct prepared JWT state for compatibility adapters that retain
     /// the exact signing input and algorithm out of process.
-    #[cfg(feature = "local-key-operations")]
+    #[cfg(test)]
     pub fn from_signing_input(
         signing_input: String,
         credential_id: String,
@@ -250,7 +250,7 @@ impl PreparedJwtVc {
     }
 }
 
-#[cfg(all(feature = "issuer", not(feature = "local-key-operations")))]
+#[cfg(feature = "issuer")]
 /// Marker documenting that KMS issuer builds cannot reconstruct prepared JWT state.
 ///
 /// ```compile_fail
@@ -728,7 +728,7 @@ pub fn assemble_jwt_vc(
     })
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub(crate) use crate::jose::sign_compact_jwt as encode_and_sign_jwt;
 
 #[cfg(test)]
