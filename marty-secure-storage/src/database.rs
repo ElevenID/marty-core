@@ -18,6 +18,9 @@ use crate::migrations::{get_schema_version, migrate_schema};
 use crate::models::*;
 use crate::schema::{SCHEMA, SCHEMA_VERSION};
 
+mod provenance;
+use provenance::{check_package_states, RecordKind, StoredProvenance};
+
 const MAX_PACKAGE_FUTURE_SKEW_SECONDS: i64 = 300;
 const MAX_QUEUE_BATCH_SIZE: usize = 1_000;
 const MAX_QUEUE_ERROR_CHARS: usize = 1_024;
@@ -832,29 +835,19 @@ impl SecureStorage {
     ) -> Result<Vec<TrustAnchorRecord>, StorageError> {
         let conn = self.conn.lock().await;
 
+        let projection = "SELECT id, anchor_type, jurisdiction, subject, issuer, serial_number,
+                   not_before, not_after, certificate_der, certificate_hash, source, synced_at,
+                   trust_domain, package_sequence, package_version,
+                   package_created_at, package_expires_at,
+                   package_signer_key_id, package_digest, package_imported_at
+            FROM trust_anchors WHERE anchor_type = ?";
         let sql = if jurisdiction.is_some() {
-            r#"
-            SELECT id, anchor_type, jurisdiction, subject, issuer, serial_number,
-                   not_before, not_after, certificate_der, certificate_hash, source, synced_at,
-                   trust_domain, package_sequence, package_version,
-                   package_created_at, package_expires_at,
-                   package_signer_key_id, package_digest, package_imported_at
-            FROM trust_anchors
-            WHERE anchor_type = ? AND jurisdiction = ?
-            "#
+            format!("{projection} AND jurisdiction = ?")
         } else {
-            r#"
-            SELECT id, anchor_type, jurisdiction, subject, issuer, serial_number,
-                   not_before, not_after, certificate_der, certificate_hash, source, synced_at,
-                   trust_domain, package_sequence, package_version,
-                   package_created_at, package_expires_at,
-                   package_signer_key_id, package_digest, package_imported_at
-            FROM trust_anchors
-            WHERE anchor_type = ?
-            "#
+            projection.to_owned()
         };
 
-        let mut stmt = conn.prepare(sql)?;
+        let mut stmt = conn.prepare(&sql)?;
         let mut rows = if let Some(jurisdiction) = jurisdiction {
             stmt.query(rusqlite::params![anchor_type.to_string(), jurisdiction])?
         } else {
@@ -868,38 +861,13 @@ impl SecureStorage {
         drop(rows);
         drop(stmt);
 
-        let mut package_states = HashMap::new();
-        for record in &records {
-            let Some(provenance) = &record.provenance else {
-                continue;
-            };
-            let stored = if let Some(stored) = package_states.get(&provenance.trust_domain) {
-                stored
-            } else {
-                let stored = load_open_badge_package_provenance(&conn, &provenance.trust_domain)?
-                    .ok_or_else(|| {
-                    StorageError::InvalidTrustPackage(format!(
-                        "trust anchor {} references missing package state for domain {}",
-                        record.anchor.id, provenance.trust_domain
-                    ))
-                })?;
-                package_states.insert(provenance.trust_domain.clone(), stored);
-                package_states
-                    .get(&provenance.trust_domain)
-                    .ok_or_else(|| {
-                        StorageError::InvalidTrustPackage(format!(
-                            "trust anchor {} could not load package state for domain {}",
-                            record.anchor.id, provenance.trust_domain
-                        ))
-                    })?
-            };
-            if stored != provenance {
-                return Err(StorageError::InvalidTrustPackage(format!(
-                    "trust anchor {} provenance conflicts with package state for domain {}",
-                    record.anchor.id, provenance.trust_domain
-                )));
-            }
-        }
+        check_package_states(
+            &conn,
+            records
+                .iter()
+                .map(|record| (record.anchor.id.as_str(), record.provenance.as_ref())),
+            RecordKind::Anchor,
+        )?;
         Ok(records)
     }
 
@@ -939,98 +907,23 @@ impl SecureStorage {
 
         while let Some(row) = rows.next()? {
             let method = map_open_badge_key_strict(row)?;
-            let trust_domain = row.get::<_, Option<String>>(10)?;
-            let sequence = row.get::<_, Option<i64>>(11)?;
-            let package_version = row.get::<_, Option<String>>(12)?;
-            let package_created_at = row.get::<_, Option<String>>(13)?;
-            let package_expires_at = row.get::<_, Option<String>>(14)?;
-            let signer_key_id = row.get::<_, Option<String>>(15)?;
-            let package_digest = row.get::<_, Option<String>>(16)?;
-            let package_imported_at = row.get::<_, Option<String>>(17)?;
-
-            let provenance = match trust_domain {
-                None => {
-                    if sequence.is_some()
-                        || package_version.is_some()
-                        || package_created_at.is_some()
-                        || package_expires_at.is_some()
-                        || signer_key_id.is_some()
-                        || package_digest.is_some()
-                        || package_imported_at.is_some()
-                    {
-                        return Err(StorageError::InvalidTrustPackage(format!(
-                            "method {} has partial package provenance",
-                            method.id
-                        )));
-                    }
-                    None
+            let stored = StoredProvenance::read(row)?;
+            if stored.is_governed() && !method.document.is_object() {
+                return Err(StorageError::InvalidTrustPackage(format!(
+                    "governed method {} has malformed document JSON",
+                    method.id
+                )));
+            }
+            let provenance = stored.decode(RecordKind::Method, &method.id)?;
+            if let Some(provenance) = &provenance {
+                if method.synced_at != provenance.created_at {
+                    return Err(StorageError::InvalidTrustPackage(format!(
+                        "governed method {} freshness does not match signed package time",
+                        method.id
+                    )));
                 }
-                Some(trust_domain) => {
-                    if !method.document.is_object() {
-                        return Err(StorageError::InvalidTrustPackage(format!(
-                            "governed method {} has malformed document JSON",
-                            method.id
-                        )));
-                    }
-                    let sequence = sequence.ok_or_else(|| {
-                        StorageError::InvalidTrustPackage(format!(
-                            "method {} is missing package sequence",
-                            method.id
-                        ))
-                    })?;
-                    let sequence = u64::try_from(sequence).map_err(|_| {
-                        StorageError::InvalidTrustPackage(format!(
-                            "method {} has invalid package sequence",
-                            method.id
-                        ))
-                    })?;
-                    let created_at = parse_stored_timestamp(
-                        package_created_at.as_deref(),
-                        &method.id,
-                        "package creation time",
-                    )?;
-                    let imported_at = parse_stored_timestamp(
-                        package_imported_at.as_deref(),
-                        &method.id,
-                        "package import time",
-                    )?;
-
-                    let provenance = OpenBadgeTrustPackageProvenance {
-                        trust_domain,
-                        sequence,
-                        package_version: required_stored_value(
-                            package_version,
-                            &method.id,
-                            "package version",
-                        )?,
-                        created_at,
-                        expires_at: parse_stored_timestamp(
-                            package_expires_at.as_deref(),
-                            &method.id,
-                            "package expiry time",
-                        )?,
-                        signer_key_id: required_stored_value(
-                            signer_key_id,
-                            &method.id,
-                            "package signer key id",
-                        )?,
-                        package_digest: required_stored_value(
-                            package_digest,
-                            &method.id,
-                            "package digest",
-                        )?,
-                        imported_at,
-                    };
-                    if method.synced_at != provenance.created_at {
-                        return Err(StorageError::InvalidTrustPackage(format!(
-                            "governed method {} freshness does not match signed package time",
-                            method.id
-                        )));
-                    }
-                    validate_open_badge_package(&provenance, std::slice::from_ref(&method))?;
-                    Some(provenance)
-                }
-            };
+                validate_open_badge_package(provenance, std::slice::from_ref(&method))?;
+            }
 
             records.push(OpenBadgeTrustRecord { method, provenance });
         }
@@ -1038,39 +931,13 @@ impl SecureStorage {
         drop(rows);
         drop(stmt);
 
-        let mut package_states = HashMap::new();
-        for record in &records {
-            let Some(provenance) = &record.provenance else {
-                continue;
-            };
-            let stored = if let Some(stored) = package_states.get(&provenance.trust_domain) {
-                stored
-            } else {
-                let stored = load_open_badge_package_provenance(&conn, &provenance.trust_domain)?
-                    .ok_or_else(|| {
-                    StorageError::InvalidTrustPackage(format!(
-                        "method {} references missing package state for domain {}",
-                        record.method.id, provenance.trust_domain
-                    ))
-                })?;
-                package_states.insert(provenance.trust_domain.clone(), stored);
-                package_states
-                    .get(&provenance.trust_domain)
-                    .ok_or_else(|| {
-                        StorageError::InvalidTrustPackage(format!(
-                            "method {} could not load package state for domain {}",
-                            record.method.id, provenance.trust_domain
-                        ))
-                    })?
-            };
-            if stored != provenance {
-                return Err(StorageError::InvalidTrustPackage(format!(
-                    "method {} provenance conflicts with package state for domain {}",
-                    record.method.id, provenance.trust_domain
-                )));
-            }
-        }
-
+        check_package_states(
+            &conn,
+            records
+                .iter()
+                .map(|record| (record.method.id.as_str(), record.provenance.as_ref())),
+            RecordKind::Method,
+        )?;
         Ok(records)
     }
 
@@ -1475,67 +1342,11 @@ fn map_trust_anchor_record(row: &rusqlite::Row<'_>) -> Result<TrustAnchorRecord,
         )?,
     };
 
-    let trust_domain = row.get::<_, Option<String>>(12)?;
-    let sequence = row.get::<_, Option<i64>>(13)?;
-    let package_version = row.get::<_, Option<String>>(14)?;
-    let package_created_at = row.get::<_, Option<String>>(15)?;
-    let package_expires_at = row.get::<_, Option<String>>(16)?;
-    let signer_key_id = row.get::<_, Option<String>>(17)?;
-    let package_digest = row.get::<_, Option<String>>(18)?;
-    let package_imported_at = row.get::<_, Option<String>>(19)?;
-    let provenance = match trust_domain {
-        None => {
-            if sequence.is_some()
-                || package_version.is_some()
-                || package_created_at.is_some()
-                || package_expires_at.is_some()
-                || signer_key_id.is_some()
-                || package_digest.is_some()
-                || package_imported_at.is_some()
-            {
-                return Err(StorageError::InvalidTrustPackage(format!(
-                    "trust anchor {id} has partial package provenance"
-                )));
-            }
-            None
-        }
-        Some(trust_domain) => {
-            let sequence = sequence.ok_or_else(|| {
-                StorageError::InvalidTrustPackage(format!(
-                    "trust anchor {id} is missing package sequence"
-                ))
-            })?;
-            let sequence = u64::try_from(sequence).map_err(|_| {
-                StorageError::InvalidTrustPackage(format!(
-                    "trust anchor {id} has invalid package sequence"
-                ))
-            })?;
-            let provenance = TrustPackageProvenance {
-                trust_domain,
-                sequence,
-                package_version: required_stored_value(package_version, &id, "package version")?,
-                created_at: parse_stored_timestamp(
-                    package_created_at.as_deref(),
-                    &id,
-                    "package creation time",
-                )?,
-                expires_at: parse_stored_timestamp(
-                    package_expires_at.as_deref(),
-                    &id,
-                    "package expiry time",
-                )?,
-                signer_key_id: required_stored_value(signer_key_id, &id, "package signer key id")?,
-                package_digest: required_stored_value(package_digest, &id, "package digest")?,
-                imported_at: parse_stored_timestamp(
-                    package_imported_at.as_deref(),
-                    &id,
-                    "package import time",
-                )?,
-            };
-            validate_trust_package(&provenance, std::slice::from_ref(&anchor), &[])?;
-            Some(provenance)
-        }
-    };
+    let provenance = StoredProvenance::read(row)?.decode(RecordKind::Anchor, &id)?;
+    if let Some(provenance) = &provenance {
+        validate_trust_package(provenance, std::slice::from_ref(&anchor), &[])?;
+    }
+
     Ok(TrustAnchorRecord { anchor, provenance })
 }
 
