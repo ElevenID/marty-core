@@ -756,3 +756,63 @@ fn resolved_issuer_key_debug_is_redacted() {
     assert_eq!(diagnostic, "ResolvedSdJwtIssuerKey([redacted])");
     assert!(!diagnostic.contains(&fixture.issuer_private_jwk));
 }
+
+#[test]
+fn prepared_presentation_binds_signature_and_bounds_public_keys() {
+    use p256::ecdsa::signature::Signer as _;
+
+    let fixture = fixture();
+    let mut holder_public: serde_json::Value =
+        serde_json::from_str(&fixture.holder_private_jwk).unwrap();
+    holder_public.as_object_mut().unwrap().remove("d");
+    let engine = WalletEngine::new();
+
+    let prepared = engine
+        .prepare_verified_sd_jwt_presentation(
+            &fixture.credential,
+            &["email".into()],
+            &fresh_nonce(),
+            "https://verifier.example",
+            &holder_public.to_string(),
+            &resolver_for(&fixture),
+        )
+        .unwrap();
+    let wrong_key = SigningKey::random(&mut OsRng);
+    let wrong_signature: p256::ecdsa::Signature = wrong_key.sign(prepared.signing_input());
+    assert!(prepared
+        .complete(wrong_signature.to_bytes().as_slice())
+        .is_err());
+
+    let oversized_holder = " ".repeat(marty_oid4vci::jose::MAX_PUBLIC_JWK_BYTES + 1);
+    let counting_resolver = CountingResolver::default();
+    assert!(engine
+        .prepare_verified_sd_jwt_presentation(
+            &fixture.credential,
+            &["email".into()],
+            &fresh_nonce(),
+            "https://verifier.example",
+            &oversized_holder,
+            &counting_resolver,
+        )
+        .is_err());
+    assert_eq!(counting_resolver.calls.load(Ordering::Relaxed), 0);
+
+    let oversized_issuer = StaticResolver {
+        key: ResolvedSdJwtIssuerKey::new(
+            fixture.issuer.clone(),
+            Some(fixture.issuer.clone()),
+            SigningAlgorithm::ES256,
+            " ".repeat(marty_oid4vci::jose::MAX_PUBLIC_JWK_BYTES + 1),
+        ),
+    };
+    assert!(engine
+        .prepare_verified_sd_jwt_presentation(
+            &fixture.credential,
+            &["email".into()],
+            &fresh_nonce(),
+            "https://verifier.example",
+            &holder_public.to_string(),
+            &oversized_issuer,
+        )
+        .is_err());
+}

@@ -84,6 +84,7 @@ pub trait SdJwtIssuerKeyResolver {
 /// Verified SD-JWT presentation awaiting an opaque holder-key signature.
 pub struct PreparedSdJwtPresentation {
     inner: sd_jwt_rs::PreparedKeyBindingPresentation,
+    holder_public_jwk_json: String,
 }
 
 impl std::fmt::Debug for PreparedSdJwtPresentation {
@@ -109,6 +110,22 @@ impl PreparedSdJwtPresentation {
 
     /// Assemble the key-bound presentation from the raw ES256 signature.
     pub fn complete(self, signature: &[u8]) -> Oid4vciResult<String> {
+        let verified = crate::jose::verify_detached_signature_with_public_jwk(
+            self.inner.signing_input(),
+            signature,
+            &self.holder_public_jwk_json,
+            "ES256",
+        )
+        .map_err(|_| {
+            Oid4vciError::SigningError(
+                "opaque holder signer returned an invalid ES256 signature".into(),
+            )
+        })?;
+        if !verified {
+            return Err(Oid4vciError::SigningError(
+                "opaque holder signer returned an invalid ES256 signature".into(),
+            ));
+        }
         self.inner.complete(signature).map_err(|_| {
             Oid4vciError::SigningError(
                 "opaque holder signer returned an invalid ES256 signature".into(),
@@ -136,6 +153,11 @@ pub(crate) fn prepare_verified_presentation(
 ) -> Oid4vciResult<PreparedSdJwtPresentation> {
     use sd_jwt_rs::{SDJWTHolder, SDJWTSerializationFormat};
 
+    if holder_public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Holder public JWK exceeds its size limit".into(),
+        ));
+    }
     if nonce.trim().is_empty() {
         return Err(Oid4vciError::InvalidRequest(
             "SD-JWT presentation nonce must not be empty".into(),
@@ -194,7 +216,10 @@ pub(crate) fn prepare_verified_presentation(
         .map_err(|_| {
             Oid4vciError::SigningError("Verified SD-JWT presentation preparation failed".into())
         })?;
-    Ok(PreparedSdJwtPresentation { inner })
+    Ok(PreparedSdJwtPresentation {
+        inner,
+        holder_public_jwk_json: holder_public_jwk_json.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -339,6 +364,11 @@ fn sd_jwt_issuer_decoding_key(
     context: &SdJwtIssuerContext,
     resolved: &ResolvedSdJwtIssuerKey,
 ) -> Oid4vciResult<jsonwebtoken::DecodingKey> {
+    if resolved.public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Issuer public JWK exceeds its size limit".into(),
+        ));
+    }
     let public_jwk =
         crate::jose::parse_unique_object(resolved.public_jwk_json.as_bytes(), "issuer public JWK")
             .map_err(|_| Oid4vciError::KeyError("Invalid issuer public JWK".into()))?;

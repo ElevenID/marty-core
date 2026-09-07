@@ -187,6 +187,7 @@ pub struct HolderKeyMaterial {
 /// OID4VCI holder proof awaiting a signature from an opaque platform signer.
 pub struct PreparedHolderProof {
     signing_input: String,
+    public_jwk_json: String,
 }
 
 impl std::fmt::Debug for PreparedHolderProof {
@@ -217,6 +218,22 @@ impl PreparedHolderProof {
                 "opaque holder signer returned an invalid ES256 signature".into(),
             )
         })?;
+        let verified = crate::jose::verify_detached_signature_with_public_jwk(
+            self.signing_input.as_bytes(),
+            signature,
+            &self.public_jwk_json,
+            "ES256",
+        )
+        .map_err(|_| {
+            Oid4vciError::SigningError(
+                "opaque holder signer returned an invalid ES256 signature".into(),
+            )
+        })?;
+        if !verified {
+            return Err(Oid4vciError::SigningError(
+                "opaque holder signer returned an invalid ES256 signature".into(),
+            ));
+        }
         Ok(format!(
             "{}.{}",
             self.signing_input,
@@ -704,6 +721,11 @@ impl WalletEngine {
     ) -> Oid4vciResult<PreparedHolderProof> {
         use jsonwebtoken::{Algorithm, Header};
 
+        if public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+            return Err(Oid4vciError::KeyError(
+                "Holder public JWK exceeds its size limit".into(),
+            ));
+        }
         let public_jwk =
             crate::jose::parse_unique_object(public_jwk_json.as_bytes(), "holder public JWK")?;
         let header_jwk = crate::jose::validate_public_jwk(&public_jwk, "ES256")?;
@@ -735,6 +757,8 @@ impl WalletEngine {
         let claims = serde_json::to_vec(&claims)
             .map_err(|error| Oid4vciError::SigningError(error.to_string()))?;
         Ok(PreparedHolderProof {
+            public_jwk_json: serde_json::to_string(&public_jwk)
+                .map_err(|error| Oid4vciError::KeyError(error.to_string()))?,
             signing_input: format!(
                 "{}.{}",
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header),
@@ -744,7 +768,7 @@ impl WalletEngine {
     }
 
     #[cfg(test)]
-    fn create_proof_jwt(
+    pub(crate) fn create_proof_jwt(
         &self,
         holder_kid: &str,
         c_nonce: &str,
@@ -1922,6 +1946,31 @@ mod tests {
             300,
         )
         .is_ok());
+
+        let wrong_signing_key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let prepared = engine
+            .prepare_proof_jwt(
+                &holder.holder_id,
+                "nonce-wrong-key",
+                "https://issuer.example",
+                &public_jwk.to_string(),
+            )
+            .unwrap();
+        let wrong_signature: p256::ecdsa::Signature =
+            wrong_signing_key.sign(prepared.signing_input());
+        assert!(prepared
+            .complete(wrong_signature.to_bytes().as_slice())
+            .is_err());
+
+        let oversized = " ".repeat(crate::jose::MAX_PUBLIC_JWK_BYTES + 1);
+        assert!(engine
+            .prepare_proof_jwt(
+                &holder.holder_id,
+                "nonce-oversized",
+                "https://issuer.example",
+                &oversized,
+            )
+            .is_err());
     }
 
     #[test]
