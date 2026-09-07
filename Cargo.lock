@@ -3985,6 +3985,7 @@ dependencies = [
  "marty-types",
  "marty-verification",
  "p256",
+ "p384",
  "pyo3",
  "serde",
  "serde_json",

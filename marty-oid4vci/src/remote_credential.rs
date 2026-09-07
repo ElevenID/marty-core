@@ -38,6 +38,7 @@ pub struct RemoteSignerMetadata {
     issuer_id: String,
     verification_method_id: String,
     algorithm: SigningAlgorithm,
+    public_jwk: String,
 }
 
 impl RemoteSignerMetadata {
@@ -45,6 +46,7 @@ impl RemoteSignerMetadata {
         issuer_id: &str,
         verification_method_id: &str,
         algorithm: &str,
+        public_jwk: String,
     ) -> Oid4vciResult<Self> {
         if !issuer_id.starts_with("did:") {
             return Err(protocol_error("issuer_id must be a DID"));
@@ -58,6 +60,7 @@ impl RemoteSignerMetadata {
             issuer_id: issuer_id.to_owned(),
             verification_method_id: verification_method_id.to_owned(),
             algorithm: parse_algorithm(algorithm)?,
+            public_jwk,
         })
     }
 }
@@ -80,6 +83,10 @@ impl CredentialSigner for RemoteSignerMetadata {
     fn kid_url(&self) -> String {
         self.verification_method_id.clone()
     }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        Ok(self.public_jwk.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -87,6 +94,7 @@ pub struct RemoteSdJwtRequest {
     pub issuer_id: String,
     pub verification_method_id: String,
     pub algorithm: String,
+    pub issuer_public_jwk: String,
     pub subject_id: Option<String>,
     pub credential_type: String,
     pub claims: HashMap<String, Value>,
@@ -111,6 +119,7 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
         &request.issuer_id,
         &request.verification_method_id,
         &request.algorithm,
+        request.issuer_public_jwk,
     )?;
     let claims = credential_claims(
         request.subject_id.clone(),
@@ -151,6 +160,7 @@ pub struct RemoteJwtVcRequest {
     pub issuer_id: String,
     pub verification_method_id: String,
     pub algorithm: String,
+    pub issuer_public_jwk: String,
     pub subject_id: Option<String>,
     pub credential_type: String,
     pub claims: HashMap<String, Value>,
@@ -173,6 +183,7 @@ pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<Prepa
         &request.issuer_id,
         &request.verification_method_id,
         &request.algorithm,
+        request.issuer_public_jwk,
     )?;
     let mut raw_claims = request.claims;
     let credential_status = raw_claims.remove("credentialStatus");
@@ -231,7 +242,9 @@ pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<Prepa
 #[derive(Clone)]
 pub struct RemoteMdocRequest {
     pub issuer_id: String,
+    pub verification_method_id: String,
     pub algorithm: String,
+    pub issuer_public_jwk: String,
     pub credential_type: String,
     pub namespace: String,
     pub claims: HashMap<String, Value>,
@@ -314,10 +327,12 @@ pub fn prepare_remote_mdoc(request: RemoteMdocRequest) -> Oid4vciResult<Prepared
     validate_credential_id(request.credential_id.as_deref())?;
     let algorithm = parse_mdoc_algorithm(&request.algorithm)?;
     let holder_jwk = request.holder_jwk.map(public_jwk).transpose()?;
-    let signer = MdocSignerMetadata {
-        issuer_id: request.issuer_id,
+    let signer = MdocSignerMetadata::new(
+        &request.issuer_id,
+        &request.verification_method_id,
         algorithm,
-    };
+        request.issuer_public_jwk,
+    )?;
     prepare_mdoc_with_credential_id_and_device_key(
         &signer,
         &mdoc_credential_claims(
@@ -406,7 +421,18 @@ fn validate_remote_mdoc_batch_item(
         request.claims,
         request.expiration_seconds,
     );
-    let preparation = validate_mdoc_preparation(algorithm, &claims, holder_jwk.as_ref())?;
+    let signer = MdocSignerMetadata::new(
+        &request.issuer_id,
+        &request.verification_method_id,
+        algorithm,
+        request.issuer_public_jwk,
+    )?;
+    let preparation = validate_mdoc_preparation(
+        algorithm,
+        crate::signer::validate_signer_public_jwk(&signer)?,
+        &claims,
+        holder_jwk.as_ref(),
+    )?;
 
     Ok(match credential_id {
         Some((credential_id, credential_uuid)) => {
@@ -468,7 +494,9 @@ fn mdoc_credential_claims(
 #[derive(Debug)]
 struct MdocSignerMetadata {
     issuer_id: String,
+    verification_method_id: String,
     algorithm: SigningAlgorithm,
+    public_jwk: String,
 }
 
 impl CredentialSigner for MdocSignerMetadata {
@@ -487,7 +515,35 @@ impl CredentialSigner for MdocSignerMetadata {
     }
 
     fn kid_url(&self) -> String {
-        self.issuer_id.clone()
+        self.verification_method_id.clone()
+    }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        Ok(self.public_jwk.clone())
+    }
+}
+
+impl MdocSignerMetadata {
+    fn new(
+        issuer_id: &str,
+        verification_method_id: &str,
+        algorithm: SigningAlgorithm,
+        public_jwk: String,
+    ) -> Oid4vciResult<Self> {
+        if !issuer_id.starts_with("did:") {
+            return Err(protocol_error("issuer_id must be a DID"));
+        }
+        if !verification_method_id.starts_with(&format!("{issuer_id}#")) {
+            return Err(protocol_error(
+                "verification_method_id must identify a key controlled by the issuer DID",
+            ));
+        }
+        Ok(Self {
+            issuer_id: issuer_id.to_owned(),
+            verification_method_id: verification_method_id.to_owned(),
+            algorithm,
+            public_jwk,
+        })
     }
 }
 
@@ -632,6 +688,35 @@ mod tests {
         RemoteMdocBatchItem, RemoteMdocRequest, RemoteSdJwtRequest, PRIVATE_JWK_MEMBERS,
     };
 
+    fn issuer_public_jwk() -> String {
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+        })
+        .to_string()
+    }
+
+    fn issuer_public_jwk_for_algorithm(algorithm: &str) -> String {
+        if algorithm != "ES384" {
+            return issuer_public_jwk();
+        }
+        use p384::elliptic_curve::sec1::ToEncodedPoint as _;
+
+        let mut scalar = [0u8; 48];
+        scalar[47] = 1;
+        let secret = p384::SecretKey::from_slice(&scalar).unwrap();
+        let point = secret.public_key().to_encoded_point(false);
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-384",
+            "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+            "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        })
+        .to_string()
+    }
+
     #[derive(Default)]
     struct CountingDigestExecutor {
         calls: AtomicUsize,
@@ -666,7 +751,9 @@ mod tests {
     ) -> RemoteMdocRequest {
         RemoteMdocRequest {
             issuer_id: "did:web:issuer.example".into(),
+            verification_method_id: "did:web:issuer.example#key-1".into(),
             algorithm: algorithm.into(),
+            issuer_public_jwk: issuer_public_jwk_for_algorithm(algorithm),
             credential_type: "org.iso.18013.5.1.mDL".into(),
             namespace: "org.iso.18013.5.1".into(),
             claims,
@@ -688,6 +775,7 @@ mod tests {
             issuer_id: "did:web:sd-jwt-issuer-canary.example".into(),
             verification_method_id: "did:web:sd-jwt-issuer-canary.example#key-canary".into(),
             algorithm: "ES256-canary".into(),
+            issuer_public_jwk: "issuer-public-jwk-canary".into(),
             subject_id: Some("did:example:sd-jwt-holder-canary".into()),
             credential_type: "SdJwtCredentialCanary".into(),
             claims: HashMap::from([(
@@ -708,6 +796,7 @@ mod tests {
             issuer_id: "did:web:jwt-vc-issuer-canary.example".into(),
             verification_method_id: "did:web:jwt-vc-issuer-canary.example#key-canary".into(),
             algorithm: "ES256-canary".into(),
+            issuer_public_jwk: "issuer-public-jwk-canary".into(),
             subject_id: Some("did:example:jwt-vc-holder-canary".into()),
             credential_type: "JwtVcCredentialCanary".into(),
             claims: HashMap::from([(
@@ -722,7 +811,9 @@ mod tests {
         };
         let mdoc = RemoteMdocRequest {
             issuer_id: "did:web:mdoc-issuer-canary.example".into(),
+            verification_method_id: "did:web:mdoc-issuer-canary.example#key-canary".into(),
             algorithm: "ES256-canary".into(),
+            issuer_public_jwk: "issuer-public-jwk-canary".into(),
             credential_type: "MdocCredentialCanary".into(),
             namespace: "mdoc.namespace.canary".into(),
             claims: HashMap::from([(
@@ -776,6 +867,7 @@ mod tests {
                 issuer_id: "did:web:issuer.example".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
                 algorithm: "ES256".to_owned(),
+                issuer_public_jwk: issuer_public_jwk(),
                 subject_id: Some("did:key:holder".to_owned()),
                 credential_type: "AccessBadge".to_owned(),
                 claims: HashMap::from([("name".to_owned(), serde_json::json!("Alice"))]),
@@ -812,6 +904,7 @@ mod tests {
                 issuer_id: "did:web:issuer.example".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
                 algorithm: "ES256".to_owned(),
+                issuer_public_jwk: issuer_public_jwk(),
                 subject_id: None,
                 credential_type: "AccessBadge".to_owned(),
                 claims: HashMap::from([
@@ -839,6 +932,7 @@ mod tests {
             issuer_id: "did:web:issuer.example".to_owned(),
             verification_method_id: "did:web:issuer.example#key-1".to_owned(),
             algorithm: "ES256".to_owned(),
+            issuer_public_jwk: issuer_public_jwk(),
             subject_id: Some("did:key:holder".to_owned()),
             credential_type: "AccessBadge".to_owned(),
             claims: HashMap::from([("name".to_owned(), serde_json::json!("Alice"))]),
@@ -864,6 +958,7 @@ mod tests {
             issuer_id: "did:web:issuer.example".to_owned(),
             verification_method_id: "did:web:issuer.example#key-1".to_owned(),
             algorithm: "ES256".to_owned(),
+            issuer_public_jwk: issuer_public_jwk(),
             subject_id: Some("did:key:holder".to_owned()),
             credential_type: "AccessBadge".to_owned(),
             claims: HashMap::from([(
@@ -889,7 +984,9 @@ mod tests {
     fn mdoc_preserves_reserved_identity_and_device_binding() {
         let prepared = prepare_remote_mdoc(RemoteMdocRequest {
             issuer_id: "did:web:issuer.example".to_owned(),
+            verification_method_id: "did:web:issuer.example#key-1".to_owned(),
             algorithm: "ES256".to_owned(),
+            issuer_public_jwk: issuer_public_jwk(),
             credential_type: "org.iso.18013.5.1.mDL".to_owned(),
             namespace: "org.iso.18013.5.1".to_owned(),
             claims: HashMap::from([("family_name".to_owned(), serde_json::json!("Smith"))]),

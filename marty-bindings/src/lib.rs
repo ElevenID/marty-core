@@ -1049,7 +1049,9 @@ impl PreparedMdocForRemoteSigning {
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     issuer_id,
+    verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     credential_type,
     namespace,
     claims_json,
@@ -1059,7 +1061,9 @@ impl PreparedMdocForRemoteSigning {
 ))]
 fn oid4vci_prepare_mdoc(
     issuer_id: &str,
+    verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     credential_type: &str,
     namespace: &str,
     claims_json: &str,
@@ -1081,7 +1085,9 @@ fn oid4vci_prepare_mdoc(
     let prepared = marty_oid4vci::remote_credential::prepare_remote_mdoc(
         marty_oid4vci::remote_credential::RemoteMdocRequest {
             issuer_id: issuer_id.to_owned(),
+            verification_method_id: verification_method_id.to_owned(),
             algorithm: algorithm.to_owned(),
+            issuer_public_jwk: issuer_public_jwk_json.to_owned(),
             credential_type: credential_type.to_owned(),
             namespace: namespace.to_owned(),
             claims,
@@ -1101,7 +1107,9 @@ fn oid4vci_prepare_mdoc(
 struct RemoteMdocBatchInput {
     batch_id: u64,
     issuer_id: String,
+    verification_method_id: String,
     algorithm: String,
+    issuer_public_jwk: String,
     credential_type: String,
     namespace: String,
     claims: std::collections::HashMap<String, serde_json::Value>,
@@ -1130,7 +1138,9 @@ fn oid4vci_prepare_mdoc_batch(
                 item.batch_id,
                 marty_oid4vci::remote_credential::RemoteMdocRequest {
                     issuer_id: item.issuer_id,
+                    verification_method_id: item.verification_method_id,
                     algorithm: item.algorithm,
+                    issuer_public_jwk: item.issuer_public_jwk,
                     credential_type: item.credential_type,
                     namespace: item.namespace,
                     claims: item.claims,
@@ -2072,12 +2082,11 @@ mod tests {
             }
 
             #[cfg(not(feature = "ephemeral-session-keys"))]
-            for session_operation in ["HaipResponseDecryptionSession"] {
-                assert!(
-                    !module.hasattr(session_operation).unwrap(),
-                    "{session_operation}"
-                );
-            }
+            let session_operation = "HaipResponseDecryptionSession";
+            assert!(
+                !module.hasattr(session_operation).unwrap(),
+                "{session_operation}"
+            );
 
             for remote_signing_operation in [
                 "oid4vci_prepare_sd_jwt",
@@ -2227,6 +2236,38 @@ mod tests {
         });
     }
 
+    fn remote_issuer_public_jwk(algorithm: &str) -> String {
+        use base64::Engine as _;
+
+        if algorithm == "ES384" {
+            let mut scalar = [0u8; 48];
+            scalar[47] = 1;
+            let key = p384::ecdsa::SigningKey::from_slice(&scalar).unwrap();
+            let point = key.verifying_key().to_encoded_point(false);
+            serde_json::json!({
+                "alg": algorithm,
+                "crv": "P-384",
+                "kty": "EC",
+                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+            })
+            .to_string()
+        } else {
+            let mut scalar = [0u8; 32];
+            scalar[31] = 1;
+            let key = p256::ecdsa::SigningKey::from_slice(&scalar).unwrap();
+            let point = key.verifying_key().to_encoded_point(false);
+            serde_json::json!({
+                "alg": algorithm,
+                "crv": "P-256",
+                "kty": "EC",
+                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+            })
+            .to_string()
+        }
+    }
+
     fn remote_mdoc_batch_input(
         batch_id: u64,
         credential_id: &str,
@@ -2235,7 +2276,9 @@ mod tests {
         serde_json::json!({
             "batch_id": batch_id,
             "issuer_id": "did:web:issuer.example",
+            "verification_method_id": "did:web:issuer.example#key-1",
             "algorithm": algorithm,
+            "issuer_public_jwk": remote_issuer_public_jwk(algorithm),
             "credential_type": "org.iso.18013.5.1.mDL",
             "namespace": "org.iso.18013.5.1",
             "claims": {
@@ -2416,13 +2459,12 @@ mod tests {
         assert!(oid4vci_assemble_mdoc(&mut prepared, vec![0; 63]).is_err());
         assert!(prepared.tbs_data().is_ok());
         assert!(prepared.credential_id().is_ok());
-        let (secret_key, _) = marty_crypto_test_support::ecdsa::generate_p256_keypair()
-            .expect("P-256 key generation");
-        let der_signature =
-            marty_crypto_test_support::ecdsa::sign_p256_sha256(&secret_key, &tbs_data)
-                .expect("remote signing");
-        let signature = marty_oid4vci::jose::normalize_ecdsa_signature(&der_signature, "ES256")
-            .expect("COSE signature normalization");
+        use p256::ecdsa::signature::Signer as _;
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        let signing_key = p256::ecdsa::SigningKey::from_slice(&scalar).unwrap();
+        let signature: p256::ecdsa::Signature = signing_key.sign(&tbs_data);
+        let signature = signature.to_bytes().to_vec();
 
         let (issuer_signed, assembled_credential_id) =
             oid4vci_assemble_mdoc(&mut prepared, signature).expect("native mDoc assembly");
@@ -2682,6 +2724,10 @@ mod tests {
 
             fn kid_url(&self) -> String {
                 "https://issuer.example.test#signing-key".to_string()
+            }
+
+            fn public_jwk(&self) -> marty_oid4vci::Oid4vciResult<String> {
+                Ok(r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#.into())
             }
         }
 

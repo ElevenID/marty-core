@@ -53,6 +53,7 @@ marty-crypto-test-support = { path = "../marty-crypto-test-support" }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["issuer", "verifier", "wallet", "jwt_vc_json", "sd_jwt", "mso_mdoc", "lti"] }
 marty-verification = { version = "0.1.5", path = "../marty-verification", default-features = false, features = ["ephemeral-session-keys"] }
 p256 = { workspace = true, features = ["ecdsa"] }
+p384 = { workspace = true, features = ["ecdsa"] }
 serde_json = "1.0"
 hex = "0.4"
 

@@ -252,6 +252,7 @@ fn salt(class: PayloadClass, item_count: usize, ordinal: usize) -> [u8; 32] {
 fn validate_fixture(fixture: &EvidenceFixture) -> ValidatedMdocPreparation {
     validate_mdoc_preparation(
         SigningAlgorithm::ES256,
+        crate::signer::TEST_ONLY_UNVERIFIED_SIGNER.into(),
         &fixture.claims,
         Some(&fixture.holder_public_jwk),
     )
@@ -547,6 +548,7 @@ fn measure_fixture(criterion: &mut Criterion, fixture: &EvidenceFixture) {
                 black_box(
                     validate_mdoc_preparation(
                         SigningAlgorithm::ES256,
+                        crate::signer::TEST_ONLY_UNVERIFIED_SIGNER.into(),
                         black_box(&fixture.claims),
                         Some(black_box(&fixture.holder_public_jwk)),
                     )

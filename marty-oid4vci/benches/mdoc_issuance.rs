@@ -156,7 +156,9 @@ fn fixture_with_credential_id(item_count: usize, credential_id: &str) -> RemoteM
 
     RemoteMdocRequest {
         issuer_id: "did:example:issuer".into(),
+        verification_method_id: "did:example:issuer#key-1".into(),
         algorithm: "ES256".into(),
+        issuer_public_jwk: r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into(),
         credential_type: DOC_TYPE.into(),
         namespace: NAMESPACE.into(),
         claims,
@@ -384,12 +386,15 @@ fn matrix_request(
         );
     }
 
+    let issuer_id = format!(
+        "did:example:matrix-issuer:{}:{item_count}:{batch_size}:{credential_ordinal}",
+        class.label()
+    );
     RemoteMdocRequest {
-        issuer_id: format!(
-            "did:example:matrix-issuer:{}:{item_count}:{batch_size}:{credential_ordinal}",
-            class.label()
-        ),
+        verification_method_id: format!("{issuer_id}#key-1"),
+        issuer_id,
         algorithm: "ES256".into(),
+        issuer_public_jwk: r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into(),
         credential_type: DOC_TYPE.into(),
         namespace: NAMESPACE.into(),
         claims,
