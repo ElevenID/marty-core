@@ -1638,7 +1638,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.119",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -6312,7 +6312,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=1efc5d2728174fe31a0fd74428f8186a43174ecd#1efc5d2728174fe31a0fd74428f8186a43174ecd"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=006acd6c599f726a6605ae4b0c039e906f150532#006acd6c599f726a6605ae4b0c039e906f150532"
 dependencies = [
  "base64 0.21.7",
  "curve25519-dalek",
