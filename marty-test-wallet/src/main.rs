@@ -29,7 +29,7 @@ struct WalletData {
 #[derive(Clone)]
 struct RemoteHolderSigner {
     client: reqwest::Client,
-    endpoint: String,
+    endpoint: reqwest::Url,
     key_id: String,
     public_jwk_json: String,
 }
@@ -124,16 +124,33 @@ fn validate_public_jwk_json(value: &str, label: &str) -> Result<(), String> {
 }
 
 impl RemoteHolderSigner {
-    fn from_env() -> Result<Self, String> {
-        let endpoint = required_env("MARTY_TEST_WALLET_SIGNER_URL")?;
-        if !(endpoint.starts_with("https://")
-            || endpoint.starts_with("http://127.0.0.1:")
-            || endpoint.starts_with("http://localhost:"))
-        {
+    fn validate_endpoint(value: &str) -> Result<reqwest::Url, String> {
+        let endpoint = reqwest::Url::parse(value)
+            .map_err(|_| "MARTY_TEST_WALLET_SIGNER_URL must be a valid URL".to_string())?;
+        if !endpoint.username().is_empty() || endpoint.password().is_some() {
+            return Err("MARTY_TEST_WALLET_SIGNER_URL must not contain credentials".into());
+        }
+
+        let is_loopback = endpoint
+            .host_str()
+            .map(|host| {
+                host.eq_ignore_ascii_case("localhost")
+                    || host
+                        .trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|address| address.is_loopback())
+            })
+            .unwrap_or(false);
+        if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && is_loopback) {
             return Err(
                 "MARTY_TEST_WALLET_SIGNER_URL must use HTTPS or a loopback test endpoint".into(),
             );
         }
+        Ok(endpoint)
+    }
+
+    fn from_env() -> Result<Self, String> {
+        let endpoint = Self::validate_endpoint(&required_env("MARTY_TEST_WALLET_SIGNER_URL")?)?;
         let key_id = required_env("MARTY_TEST_WALLET_HOLDER_KID")?;
         let public_jwk_json = required_env("MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK")?;
         validate_public_jwk_json(&public_jwk_json, "holder public JWK")?;
@@ -144,7 +161,10 @@ impl RemoteHolderSigner {
             return Err("holder public JWK must be an EC P-256 key".into());
         }
         Ok(Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .map_err(|_| "failed to configure opaque holder signer client".to_string())?,
             endpoint,
             key_id,
             public_jwk_json,
@@ -152,9 +172,9 @@ impl RemoteHolderSigner {
     }
 
     async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
-        let response = self
+        let mut response = self
             .client
-            .post(&self.endpoint)
+            .post(self.endpoint.clone())
             .json(&RemoteSignRequest {
                 algorithm: "ES256",
                 key_id: &self.key_id,
@@ -165,9 +185,22 @@ impl RemoteHolderSigner {
             .await
             .map_err(|_| AppError::unprocessable("Opaque holder signer is unavailable"))?
             .error_for_status()
-            .map_err(|_| AppError::unprocessable("Opaque holder signer rejected the request"))?
-            .json::<RemoteSignResponse>()
+            .map_err(|_| AppError::unprocessable("Opaque holder signer rejected the request"))?;
+        const MAX_SIGNER_RESPONSE_BYTES: usize = 16 * 1024;
+        let mut response_body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
+            .map_err(|_| AppError::unprocessable("Opaque holder signer returned invalid data"))?
+        {
+            if response_body.len().saturating_add(chunk.len()) > MAX_SIGNER_RESPONSE_BYTES {
+                return Err(AppError::unprocessable(
+                    "Opaque holder signer response exceeds its size limit",
+                ));
+            }
+            response_body.extend_from_slice(&chunk);
+        }
+        let response: RemoteSignResponse = serde_json::from_slice(&response_body)
             .map_err(|_| AppError::unprocessable("Opaque holder signer returned invalid JSON"))?;
         let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(response.signature)
@@ -716,6 +749,27 @@ fn disclosed_claim_names(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signer_endpoint_requires_https_or_an_actual_loopback_host() {
+        assert!(RemoteHolderSigner::validate_endpoint("https://signer.example/sign").is_ok());
+        assert!(RemoteHolderSigner::validate_endpoint("http://localhost:3000/sign").is_ok());
+        assert!(RemoteHolderSigner::validate_endpoint("http://127.0.0.1:3000/sign").is_ok());
+        assert!(RemoteHolderSigner::validate_endpoint("http://[::1]:3000/sign").is_ok());
+
+        for bypass in [
+            "http://localhost:@attacker.example/sign",
+            "http://127.0.0.1@attacker.example/sign",
+            "http://localhost.attacker.example/sign",
+            "http://192.0.2.10/sign",
+            "https://user:password@signer.example/sign",
+        ] {
+            assert!(
+                RemoteHolderSigner::validate_endpoint(bypass).is_err(),
+                "accepted unsafe signer URL: {bypass}"
+            );
+        }
+    }
 
     #[test]
     fn credential_value_accepts_canonical_single_and_batch_values() {
