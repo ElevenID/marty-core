@@ -26,6 +26,7 @@ compile_error!(
 use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use thiserror::Error;
+use zeroize::{Zeroize, Zeroizing};
 
 // ── Predicate ────────────────────────────────────────────────────────
 
@@ -266,6 +267,18 @@ impl AttributeRequest {
     }
 }
 
+impl Zeroize for AttributeRequest {
+    fn zeroize(&mut self) {
+        self.cbor_value.zeroize();
+    }
+}
+
+impl Drop for AttributeRequest {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 // ── MdocProveInput ────────────────────────────────────────────────────
 
 /// All public inputs required to run the mDoc ZK prover or verifier.
@@ -285,6 +298,22 @@ pub struct MdocProveInput {
     pub now: String,
     /// mDoc docType, e.g. `"org.iso.18013.5.1.mDL"`.
     pub doc_type: String,
+}
+
+impl Zeroize for MdocProveInput {
+    fn zeroize(&mut self) {
+        self.mdoc.zeroize();
+        self.transcript.zeroize();
+        for attribute in &mut self.attributes {
+            attribute.zeroize();
+        }
+    }
+}
+
+impl Drop for MdocProveInput {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 const MAX_COMPRESSED_CIRCUIT_BYTES: usize = 4 * 1024 * 1024;
@@ -354,10 +383,10 @@ fn validate_verifier_input(input: &MdocProveInput, proof: &[u8]) -> Result<(), Z
     Ok(())
 }
 
-// Circuit decompression and parsing can approach the 130 MB native cap.
-// Serialize native verification so attacker-controlled concurrency cannot
-// multiply that allocation by the number of request threads.
-static NATIVE_VERIFICATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Circuit generation, proving, and verification can each approach the native
+// memory cap. Share one permit so concurrent requests cannot multiply those
+// allocations or contend inside Longfellow's native runtime.
+static NATIVE_ZK_MEMORY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // ── Circuit ───────────────────────────────────────────────────────────
 
@@ -395,9 +424,7 @@ impl Circuit {
         };
         #[cfg(not(zk_mock))]
         {
-            let _native_guard = NATIVE_VERIFICATION_LOCK
-                .lock()
-                .map_err(|_| ZkError::Generic)?;
+            let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
             validate_circuit_identity(&bytes, spec_index)?;
         }
         Ok(Self { bytes, spec_index })
@@ -416,6 +443,8 @@ impl Circuit {
                 .max_by_key(|&i| ffi::kZkSpecs[i].version)
                 .ok_or(ZkError::InvalidInput)?
         };
+
+        let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
 
         let mut cb: *mut u8 = std::ptr::null_mut();
         let mut clen: usize = 0;
@@ -494,15 +523,19 @@ impl Prover {
         if input.attributes.len() != expected_n {
             return Err(ZkError::InvalidInput);
         }
-        let ffi_attrs = input
-            .attributes
-            .iter()
-            .map(|a| a.to_ffi())
-            .collect::<Result<Vec<_>, _>>()?;
+        let ffi_attrs = Zeroizing::new(
+            input
+                .attributes
+                .iter()
+                .map(|a| a.to_ffi())
+                .collect::<Result<Vec<_>, _>>()?,
+        );
 
         let pkx = CString::new(input.issuer_pkx.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let pky = CString::new(input.issuer_pky.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let now = CString::new(input.now.as_str()).map_err(|_| ZkError::InvalidInput)?;
+
+        let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
 
         let mut proof_ptr: *mut u8 = std::ptr::null_mut();
         let mut proof_len: usize = 0;
@@ -588,20 +621,20 @@ impl Verifier {
             return Err(ZkError::InvalidInput);
         }
 
-        let ffi_attrs = input
-            .attributes
-            .iter()
-            .map(|a| a.to_ffi())
-            .collect::<Result<Vec<_>, _>>()?;
+        let ffi_attrs = Zeroizing::new(
+            input
+                .attributes
+                .iter()
+                .map(|a| a.to_ffi())
+                .collect::<Result<Vec<_>, _>>()?,
+        );
 
         let pkx = CString::new(input.issuer_pkx.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let pky = CString::new(input.issuer_pky.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let now = CString::new(input.now.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let doc_type = CString::new(input.doc_type.as_str()).map_err(|_| ZkError::InvalidInput)?;
 
-        let _native_guard = NATIVE_VERIFICATION_LOCK
-            .lock()
-            .map_err(|_| ZkError::Generic)?;
+        let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
 
         let rc = unsafe {
             ffi::run_mdoc_verifier(
@@ -715,16 +748,16 @@ mod resource_boundary_tests {
     }
 
     #[test]
-    fn native_verification_concurrency_is_serialized() {
+    fn native_zk_memory_concurrency_is_serialized() {
         use std::sync::mpsc;
         use std::time::Duration;
 
-        let guard = NATIVE_VERIFICATION_LOCK.lock().unwrap();
+        let guard = NATIVE_ZK_MEMORY_LOCK.lock().unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (entered_tx, entered_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             started_tx.send(()).unwrap();
-            let _guard = NATIVE_VERIFICATION_LOCK.lock().unwrap();
+            let _guard = NATIVE_ZK_MEMORY_LOCK.lock().unwrap();
             entered_tx.send(()).unwrap();
         });
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -732,6 +765,20 @@ mod resource_boundary_tests {
         drop(guard);
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn mdoc_prove_input_zeroizes_sensitive_buffers() {
+        let mut value = input();
+        value.mdoc = vec![0x41; 16];
+        value.transcript = vec![0x42; 16];
+        value.attributes[0].cbor_value = vec![0x43; 16];
+
+        value.zeroize();
+
+        assert!(value.mdoc.is_empty());
+        assert!(value.transcript.is_empty());
+        assert!(value.attributes[0].cbor_value.is_empty());
     }
 }
 

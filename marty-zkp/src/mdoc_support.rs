@@ -1,4 +1,5 @@
 use crate::{AttributeRequest, MdocProveInput};
+use zeroize::Zeroize;
 
 /// Convenience wrapper that collects all inputs required to generate or verify
 /// a ZK proof for a single mDoc presentation.
@@ -20,6 +21,22 @@ pub struct MdocZkInput {
     pub now: String,
     /// mDoc docType, e.g. `"org.iso.18013.5.1.mDL"`.
     pub doc_type: String,
+}
+
+impl Zeroize for MdocZkInput {
+    fn zeroize(&mut self) {
+        self.mdoc.zeroize();
+        self.transcript.zeroize();
+        for attribute in &mut self.attributes {
+            attribute.zeroize();
+        }
+    }
+}
+
+impl Drop for MdocZkInput {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 impl MdocZkInput {
@@ -45,15 +62,15 @@ impl MdocZkInput {
 
     /// Convert into a [`MdocProveInput`] for use with [`crate::Prover`] and
     /// [`crate::Verifier`].
-    pub fn into_prove_input(self) -> MdocProveInput {
+    pub fn into_prove_input(mut self) -> MdocProveInput {
         MdocProveInput {
-            mdoc: self.mdoc,
-            issuer_pkx: self.issuer_pkx,
-            issuer_pky: self.issuer_pky,
-            transcript: self.transcript,
-            attributes: self.attributes,
-            now: self.now,
-            doc_type: self.doc_type,
+            mdoc: std::mem::take(&mut self.mdoc),
+            issuer_pkx: std::mem::take(&mut self.issuer_pkx),
+            issuer_pky: std::mem::take(&mut self.issuer_pky),
+            transcript: std::mem::take(&mut self.transcript),
+            attributes: std::mem::take(&mut self.attributes),
+            now: std::mem::take(&mut self.now),
+            doc_type: std::mem::take(&mut self.doc_type),
         }
     }
 }
