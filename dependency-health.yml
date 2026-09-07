@@ -64,7 +64,7 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/openwallet-foundation-labs/sd-jwt-rust
-    current: "0.7.1@de7a42cef689e2517d2d32a21a897977e72fc4da"
+    current: "0.7.1@f59f408cb80cf204a7cf820ef81a5bddc53f8407"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork

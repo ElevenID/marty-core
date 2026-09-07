@@ -6312,7 +6312,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=de7a42cef689e2517d2d32a21a897977e72fc4da#de7a42cef689e2517d2d32a21a897977e72fc4da"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=f59f408cb80cf204a7cf820ef81a5bddc53f8407#f59f408cb80cf204a7cf820ef81a5bddc53f8407"
 dependencies = [
  "base64 0.21.7",
  "curve25519-dalek",
