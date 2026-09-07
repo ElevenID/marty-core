@@ -745,9 +745,9 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let requests = Arc::new(AtomicUsize::new(0));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:8788")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let redirect_target = format!("http://{address}/followed");
         let app = Router::new()
             .route(
                 "/sign",
@@ -759,10 +759,7 @@ mod tests {
                             requests.fetch_add(1, Ordering::SeqCst);
                             (
                                 StatusCode::TEMPORARY_REDIRECT,
-                                [(
-                                    axum::http::header::LOCATION,
-                                    "http://127.0.0.1:8788/followed",
-                                )],
+                                [(axum::http::header::LOCATION, redirect_target.clone())],
                             )
                         }
                     }
@@ -782,13 +779,14 @@ mod tests {
                 }),
             );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let signer = RemoteHolderSigner {
-            client: RemoteHolderSigner::http_client().unwrap(),
-            key_id: "test-key".into(),
-            public_jwk_json: "{}".into(),
-        };
+        let response = RemoteHolderSigner::http_client()
+            .unwrap()
+            .post(format!("http://{address}/sign"))
+            .send()
+            .await
+            .unwrap();
 
-        assert!(signer.sign(b"payload").await.is_err());
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(requests.load(Ordering::SeqCst), 1);
         server.abort();
     }
