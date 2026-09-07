@@ -29,8 +29,6 @@ struct WalletData {
 #[derive(Clone)]
 struct RemoteHolderSigner {
     client: reqwest::Client,
-    #[cfg(test)]
-    endpoint_override: Option<reqwest::Url>,
     key_id: String,
     public_jwk_json: String,
 }
@@ -150,22 +148,13 @@ impl RemoteHolderSigner {
         }
         Ok(Self {
             client: Self::http_client()?,
-            #[cfg(test)]
-            endpoint_override: None,
             key_id,
             public_jwk_json,
         })
     }
 
     async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
-        #[cfg(not(test))]
         let request = self.client.post(HOLDER_SIGNER_SIDECAR_URL);
-        #[cfg(test)]
-        let request = self.client.post(
-            self.endpoint_override
-                .clone()
-                .unwrap_or_else(|| reqwest::Url::parse(HOLDER_SIGNER_SIDECAR_URL).unwrap()),
-        );
         let mut response = request
             .json(&RemoteSignRequest {
                 algorithm: "ES256",
@@ -756,32 +745,45 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let requests = Arc::new(AtomicUsize::new(0));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let redirect_url = format!("http://{address}/sign");
-        let app = Router::new().route(
-            "/sign",
-            post({
-                let requests = requests.clone();
-                move || {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:8788")
+            .await
+            .unwrap();
+        let app = Router::new()
+            .route(
+                "/sign",
+                post({
                     let requests = requests.clone();
-                    let redirect_url = redirect_url.clone();
-                    async move {
-                        requests.fetch_add(1, Ordering::SeqCst);
-                        (
-                            StatusCode::TEMPORARY_REDIRECT,
-                            [(axum::http::header::LOCATION, redirect_url)],
-                        )
+                    move || {
+                        let requests = requests.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            (
+                                StatusCode::TEMPORARY_REDIRECT,
+                                [(
+                                    axum::http::header::LOCATION,
+                                    "http://127.0.0.1:8788/followed",
+                                )],
+                            )
+                        }
                     }
-                }
-            }),
-        );
+                }),
+            )
+            .route(
+                "/followed",
+                post({
+                    let requests = requests.clone();
+                    move || {
+                        let requests = requests.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            Json(serde_json::json!({"signature": "invalid"}))
+                        }
+                    }
+                }),
+            );
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let signer = RemoteHolderSigner {
             client: RemoteHolderSigner::http_client().unwrap(),
-            endpoint_override: Some(
-                reqwest::Url::parse(&format!("http://{address}/sign")).unwrap(),
-            ),
             key_id: "test-key".into(),
             public_jwk_json: "{}".into(),
         };
