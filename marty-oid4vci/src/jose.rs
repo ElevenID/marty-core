@@ -215,6 +215,8 @@ fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
         "ES384" => Ok(Algorithm::ES384),
         "EdDSA" => Ok(Algorithm::EdDSA),
         "RS256" => Ok(Algorithm::RS256),
+        "RS384" => Ok(Algorithm::RS384),
+        "RS512" => Ok(Algorithm::RS512),
         "PS256" => Ok(Algorithm::PS256),
         _ => Err(Oid4vciError::JwtError(format!(
             "Unsupported JWT signature algorithm: {name}"
