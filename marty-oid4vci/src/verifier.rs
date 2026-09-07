@@ -819,7 +819,8 @@ impl VerificationEngine {
             };
             if nbf > now.saturating_add(60) {
                 return failed(
-                    "VP token is not yet valid".into(),
+                    "VP token signature verification rejected a token that is not yet valid"
+                        .into(),
                     VerificationCheckStatus::NotChecked,
                     VerificationCheckStatus::Failed,
                 );
