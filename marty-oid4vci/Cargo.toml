@@ -80,16 +80,21 @@ reqwest = { version = "0.13", default-features = false, features = ["form", "jso
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
-tokio = { workspace = true }
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35" }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "8ad5d9966b097b1f208ceb57bc3cad8bb4bdd2bb" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "sha256"] }
-aws-lc-rs = { version = "1.14", default-features = false, features = ["aws-lc-sys", "ring-io"] }
 ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+aws-lc-rs = { version = "1.14", default-features = false, features = ["aws-lc-sys", "ring-io"] }
+criterion = { workspace = true }
+tokio = { workspace = true }
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.76"
 
 [[bench]]
 name = "mdoc_issuance"
@@ -128,3 +133,8 @@ path = "tests/signing_payload_semantics.rs"
 [[test]]
 name = "benchmark_support"
 path = "tests/benchmark_support.rs"
+
+[[test]]
+name = "wasm_crypto_provider"
+path = "tests/wasm_crypto_provider.rs"
+required-features = ["verifier"]
