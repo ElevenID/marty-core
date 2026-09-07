@@ -124,6 +124,14 @@ fn validate_public_jwk_json(value: &str, label: &str) -> Result<(), String> {
 }
 
 impl RemoteHolderSigner {
+    fn http_client() -> Result<reqwest::Client, String> {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "failed to configure opaque holder signer client".to_string())
+    }
+
     fn validate_endpoint(value: &str) -> Result<reqwest::Url, String> {
         let endpoint = reqwest::Url::parse(value)
             .map_err(|_| "MARTY_TEST_WALLET_SIGNER_URL must be a valid URL".to_string())?;
@@ -161,10 +169,7 @@ impl RemoteHolderSigner {
             return Err("holder public JWK must be an EC P-256 key".into());
         }
         Ok(Self {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .map_err(|_| "failed to configure opaque holder signer client".to_string())?,
+            client: Self::http_client()?,
             endpoint,
             key_id,
             public_jwk_json,
@@ -769,6 +774,44 @@ mod tests {
                 "accepted unsafe signer URL: {bypass}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn opaque_signer_does_not_follow_post_redirects() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let redirect_url = format!("http://{address}/sign");
+        let app = Router::new().route(
+            "/sign",
+            post({
+                let requests = requests.clone();
+                move || {
+                    let requests = requests.clone();
+                    let redirect_url = redirect_url.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        (
+                            StatusCode::TEMPORARY_REDIRECT,
+                            [(axum::http::header::LOCATION, redirect_url)],
+                        )
+                    }
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let signer = RemoteHolderSigner {
+            client: RemoteHolderSigner::http_client().unwrap(),
+            endpoint: reqwest::Url::parse(&format!("http://{address}/sign")).unwrap(),
+            key_id: "test-key".into(),
+            public_jwk_json: "{}".into(),
+        };
+
+        assert!(signer.sign(b"payload").await.is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 
     #[test]
