@@ -130,9 +130,7 @@ fn required_string<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::pkcs8::EncodePrivateKey;
     use p256::SecretKey;
     use serde_json::json;
 
@@ -155,13 +153,7 @@ mod tests {
             "iat": 1,
             "exp": 2
         });
-        let der = secret.to_pkcs8_der().unwrap();
-        encode(
-            &Header::new(Algorithm::ES256),
-            &claims,
-            &EncodingKey::from_ec_der(der.as_bytes()),
-        )
-        .unwrap()
+        crate::jose::sign_test_compact_es256(&secret, &json!({"alg":"ES256","typ":"JWT"}), &claims)
     }
 
     #[test]

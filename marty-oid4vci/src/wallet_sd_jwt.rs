@@ -84,7 +84,6 @@ pub trait SdJwtIssuerKeyResolver {
 /// Verified SD-JWT presentation awaiting an opaque holder-key signature.
 pub struct PreparedSdJwtPresentation {
     inner: sd_jwt_rs::PreparedKeyBindingPresentation,
-    holder_public_jwk_json: String,
 }
 
 impl std::fmt::Debug for PreparedSdJwtPresentation {
@@ -110,22 +109,6 @@ impl PreparedSdJwtPresentation {
 
     /// Assemble the key-bound presentation from the raw ES256 signature.
     pub fn complete(self, signature: &[u8]) -> Oid4vciResult<String> {
-        let verified = crate::jose::verify_detached_signature_with_public_jwk(
-            self.inner.signing_input(),
-            signature,
-            &self.holder_public_jwk_json,
-            "ES256",
-        )
-        .map_err(|_| {
-            Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            )
-        })?;
-        if !verified {
-            return Err(Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            ));
-        }
         self.inner.complete(signature).map_err(|_| {
             Oid4vciError::SigningError(
                 "opaque holder signer returned an invalid ES256 signature".into(),
@@ -216,10 +199,7 @@ pub(crate) fn prepare_verified_presentation(
         .map_err(|_| {
             Oid4vciError::SigningError("Verified SD-JWT presentation preparation failed".into())
         })?;
-    Ok(PreparedSdJwtPresentation {
-        inner,
-        holder_public_jwk_json: holder_public_jwk_json.to_owned(),
-    })
+    Ok(PreparedSdJwtPresentation { inner })
 }
 
 #[cfg(test)]

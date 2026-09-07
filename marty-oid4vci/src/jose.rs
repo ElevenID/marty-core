@@ -47,6 +47,25 @@ pub fn sign_compact_jwt(
     Ok(format!("{}.{}", message, signature_b64))
 }
 
+/// Construct an ES256 compact JWS fixture without installing a production
+/// local-signing provider.
+#[cfg(test)]
+pub(crate) fn sign_test_compact_es256(
+    secret: &p256::SecretKey,
+    header: &serde_json::Value,
+    payload: &serde_json::Value,
+) -> String {
+    use p256::ecdsa::signature::Signer as _;
+
+    let protected = B64.encode(serde_json::to_vec(header).expect("test header JSON"));
+    let payload = B64.encode(serde_json::to_vec(payload).expect("test payload JSON"));
+    let signing_input = format!("{protected}.{payload}");
+    let signing_key = p256::ecdsa::SigningKey::from_slice(secret.to_bytes().as_slice())
+        .expect("valid P-256 test key");
+    let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
+    format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
+}
+
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 const PRIVATE_JWK_FIELDS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 /// Maximum compact JWT accepted by the direct JOSE verification boundary.
@@ -276,6 +295,9 @@ pub fn verify_compact_jwt_with_public_jwk(
     public_jwk_json: &str,
     expected_algorithm: &str,
 ) -> Oid4vciResult<VerifiedCompactJwt> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let (header_value, claims) = decode_unverified_compact_jwt(compact_jwt)?;
 
     let expected = algorithm(expected_algorithm)?;
@@ -327,6 +349,9 @@ pub fn verify_detached_signature_with_public_jwk(
     public_jwk_json: &str,
     expected_algorithm: &str,
 ) -> Oid4vciResult<bool> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let expected = algorithm(expected_algorithm)?;
     if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
         return Err(Oid4vciError::KeyError(
@@ -369,9 +394,7 @@ pub fn normalize_ecdsa_signature(
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::pkcs8::EncodePrivateKey;
     use p256::SecretKey;
     use serde_json::json;
 
@@ -381,13 +404,11 @@ mod tests {
         let x = URL_SAFE_NO_PAD.encode(public.x().expect("x coordinate"));
         let y = URL_SAFE_NO_PAD.encode(public.y().expect("y coordinate"));
         let jwk = json!({"kty":"EC","crv":"P-256","alg":"ES256","x":x,"y":y});
-        let der = secret.to_pkcs8_der().expect("PKCS#8 key");
-        let token = encode(
-            &Header::new(Algorithm::ES256),
+        let token = sign_test_compact_es256(
+            &secret,
+            &json!({"alg":"ES256","typ":"JWT"}),
             &json!({"sub":"wallet","jti":"assertion-1"}),
-            &EncodingKey::from_ec_der(der.as_bytes()),
-        )
-        .expect("signed JWT");
+        );
         (token, jwk.to_string())
     }
 
