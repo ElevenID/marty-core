@@ -18,6 +18,9 @@ cc = "1.0"
 cmake = "0.1"
 bindgen = "0.72" # In a real scenario, we'd use this to generate bindings
 
+[dev-dependencies]
+sha2.workspace = true
+
 [features]
 default = ["verifier"]
 verifier = []

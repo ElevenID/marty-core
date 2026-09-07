@@ -43,20 +43,23 @@ class MacWitness {
 
   void fill_witness(DenseFiller<Field>& fill) const {
     packer bp(f_);
-    uint8_t tmp[f_128::kBits];
-    for (size_t i = 0; i < 2; ++i) {
-      for (size_t j = 0; j < f_128::kBits; ++j) {
-        tmp[j] = ap_[i][j];
+    uint8_t tmp[f_128::kBits] = {};
+    with_secure_scratch(tmp, [&](auto& scratch) {
+      for (size_t i = 0; i < 2; ++i) {
+        for (size_t j = 0; j < f_128::kBits; ++j) {
+          scratch[j] = ap_[i][j];
+        }
+        fill.push_back(
+            bp.template pack<packed_v128>(scratch, f_128::kBits));
       }
-      fill.push_back(bp.template pack<packed_v128>(tmp, f_128::kBits));
-    }
 
-    for (size_t i = 0; i < 2; ++i) {
-      for (size_t j = 0; j < f_128::kBits; ++j) {
-        tmp[j] = x_[i][j];
+      for (size_t i = 0; i < 2; ++i) {
+        for (size_t j = 0; j < f_128::kBits; ++j) {
+          scratch[j] = x_[i][j];
+        }
+        fill.push_back(bp.template pack<packed_v128>(scratch, 128));
       }
-      fill.push_back(bp.template pack<packed_v128>(tmp, 128));
-    }
+    });
   }
 
   // Computes a mac witness on a 32-byte message x.

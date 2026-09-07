@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <vector>
@@ -458,6 +459,20 @@ TEST(mdoc, mdoc_hash_test_fp128_2) {
   mdoc_hash_run<Fp128<>>(
       Fg.of_string("164956748514267535023998284330560247862"), 1ull << 32, Fg,
       oa);
+}
+
+TEST(mdoc, oversized_legacy_attribute_fails_before_buffer_growth) {
+  static const Fp128<> F;
+  auto witness = Dense<Fp128<>>(1, 96 * 8);
+  DenseFiller<Fp128<>> filler(witness);
+  RequestedAttribute attr = {};
+  attr.id_len = 32;
+  attr.cbor_value_len = 64;
+  std::fill_n(attr.id, attr.id_len, static_cast<uint8_t>('a'));
+  std::fill_n(attr.cbor_value, attr.cbor_value_len, static_cast<uint8_t>(0xf5));
+
+  EXPECT_EQ(fill_attribute(filler, attr, F, 6),
+            MDOC_PROVER_ATTRIBUTE_TOO_LONG);
 }
 
 }  // namespace

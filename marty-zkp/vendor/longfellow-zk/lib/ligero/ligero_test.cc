@@ -305,5 +305,70 @@ TEST(Ligero, BlockEncUnderflowInLayout) {
   EXPECT_EQ(param.layout(1), SIZE_MAX);
 }
 
+TEST(Ligero, ZeroSizeProof) {
+  using Field = Fp<1>;
+  using ConvolutionFactory = FFTConvolutionFactory<Field>;
+  using ReedSolomonFactory = ReedSolomonFactory<Field, ConvolutionFactory>;
+
+  const Field F("18446744069414584321");
+  const ConvolutionFactory conv_factory(F, F.of_scalar(1753635133440165772ull),
+                                        1ull << 32);
+  const ReedSolomonFactory rs_factory(conv_factory, F);
+
+  size_t nw = 100;
+  size_t nq = 0;
+  size_t nreq = 10;
+  size_t nl = 0;
+  LigeroParam<Field> param(nw, nq, /*rateinv=*/4, nreq);
+  log(INFO, "ZeroSizeProof: param.block = %zu, param.block_enc = %zu",
+      param.block, param.block_enc);
+
+  std::vector<typename Field::Elt> W(nw, F.zero());
+  std::vector<LigeroQuadraticConstraint> lqc;         // empty
+  std::vector<LigeroLinearConstraint<Field>> llterm;  // empty
+
+  LigeroCommitment<Field> commitment;
+  LigeroProof<Field> proof(&param);
+  const LigeroHash hash_of_llterm{0xde, 0xad, 0xbe, 0xef};
+
+  SecureRandomEngine rng;
+  LigeroProver<Field, ReedSolomonFactory> prover(param);
+  Transcript ts((uint8_t*)"test", 4);
+
+  prover.commit(commitment, ts, W.data(), 0, lqc.data(), rs_factory, rng, F);
+  prover.prove(proof, ts, nl, llterm.size(), llterm.data(), hash_of_llterm,
+               lqc.data(), rs_factory, F);
+}
+
+TEST(Ligero, RejectsQuadraticIndicesBeforeWitnessAccess) {
+  using Field = Fp<1>;
+  using ConvolutionFactory = FFTConvolutionFactory<Field>;
+  using ReedSolomonFactory = ReedSolomonFactory<Field, ConvolutionFactory>;
+  const Field F("18446744069414584321");
+  const ConvolutionFactory conv_factory(F, F.of_scalar(1753635133440165772ull),
+                                        1ull << 32);
+  const ReedSolomonFactory rs_factory(conv_factory, F);
+  constexpr size_t nw = 8;
+  LigeroParam<Field> param(nw, /*nq=*/1, /*rateinv=*/4, /*nreq=*/2);
+  std::vector<Field::Elt> witness(nw, F.zero());
+
+  for (size_t invalid_member = 0; invalid_member < 3; ++invalid_member) {
+    LigeroQuadraticConstraint constraint{0, 0, 0};
+    if (invalid_member == 0) constraint.x = nw;
+    if (invalid_member == 1) constraint.y = nw;
+    if (invalid_member == 2) constraint.z = nw;
+    EXPECT_DEATH(
+        {
+          SecureRandomEngine rng;
+          Transcript transcript(reinterpret_cast<const uint8_t*>("bounds"), 6);
+          LigeroCommitment<Field> commitment;
+          LigeroProver<Field, ReedSolomonFactory> prover(param);
+          prover.commit(commitment, transcript, witness.data(), 0, &constraint,
+                        rs_factory, rng, F);
+        },
+        "l->(x|y|z) < p_.nw");
+  }
+}
+
 }  // namespace
 }  // namespace proofs

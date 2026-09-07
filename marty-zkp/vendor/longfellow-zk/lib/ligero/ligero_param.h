@@ -405,6 +405,9 @@ class LigeroCommon {
         // index into [_ , W] arrays
         size_t iw = j + i * p.w;
         const auto *l = &lqc[iw];
+        check(l->x < p.nw, "l->x < p.nw");
+        check(l->y < p.nw, "l->y < p.nw");
+        check(l->z < p.nw, "l->z < p.nw");
         F.add(Ax[iw], alphaq[iw][0]);
         F.sub(A[l->x], alphaq[iw][0]);
 
@@ -429,9 +432,11 @@ class LigeroCommon {
   static void column_hash(size_t n, const Elt x[/*n:incx*/], size_t incx,
                           SHA256 &sha, const Field &F) {
     for (size_t i = 0; i < n; ++i) {
-      uint8_t buf[Field::kBytes];
-      F.to_bytes_field(buf, x[i * incx]);
-      sha.Update(buf, sizeof(buf));
+      uint8_t buf[Field::kBytes] = {};
+      with_secure_scratch(buf, [&](auto& scratch) {
+        F.to_bytes_field(scratch, x[i * incx]);
+        sha.Update(scratch, sizeof(scratch));
+      });
     }
   }
 };

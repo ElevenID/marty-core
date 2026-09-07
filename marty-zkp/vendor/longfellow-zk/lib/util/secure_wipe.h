@@ -16,7 +16,9 @@
 #define PRIVACY_PROOFS_ZK_LIB_UTIL_SECURE_WIPE_H_
 
 #include <cstddef>
+#include <cstdlib>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace proofs {
@@ -74,6 +76,38 @@ class SecureObjectWipeGuard {
 
  private:
   T* value_;
+};
+
+template <typename T, typename Operation>
+void with_secure_scratch(T& scratch, Operation&& operation) {
+  SecureObjectWipeGuard<T> wipe(scratch);
+  std::forward<Operation>(operation)(scratch);
+}
+
+// Use after reserving the complete sensitive payload. Growing a guarded
+// vector could free an earlier allocation without wiping it, so fail closed
+// if either its allocation or capacity changes.
+template <typename T>
+class FixedCapacitySecureWipeGuard {
+ public:
+  explicit FixedCapacitySecureWipeGuard(std::vector<T>& values) noexcept
+      : values_(&values), data_(values.data()), capacity_(values.capacity()) {
+    static_assert(std::is_trivially_copyable_v<T>);
+  }
+  FixedCapacitySecureWipeGuard(const FixedCapacitySecureWipeGuard&) = delete;
+  FixedCapacitySecureWipeGuard& operator=(
+      const FixedCapacitySecureWipeGuard&) = delete;
+  ~FixedCapacitySecureWipeGuard() {
+    if (values_->data() != data_ || values_->capacity() != capacity_) {
+      std::abort();
+    }
+    secure_wipe_vector(*values_);
+  }
+
+ private:
+  std::vector<T>* values_;
+  T* data_;
+  size_t capacity_;
 };
 
 }  // namespace proofs
