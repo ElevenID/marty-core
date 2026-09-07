@@ -73,4 +73,31 @@ impl MdocZkInput {
             doc_type: std::mem::take(&mut self.doc_type),
         }
     }
+
+    /// Consume the helper and return its fields in declaration order.
+    ///
+    /// Callers assume responsibility for clearing the returned mdoc,
+    /// transcript, and attribute values after use.
+    #[allow(clippy::type_complexity)]
+    pub fn into_parts(
+        mut self,
+    ) -> (
+        Vec<u8>,
+        String,
+        String,
+        Vec<u8>,
+        Vec<AttributeRequest>,
+        String,
+        String,
+    ) {
+        (
+            std::mem::take(&mut self.mdoc),
+            std::mem::take(&mut self.issuer_pkx),
+            std::mem::take(&mut self.issuer_pky),
+            std::mem::take(&mut self.transcript),
+            std::mem::take(&mut self.attributes),
+            std::mem::take(&mut self.now),
+            std::mem::take(&mut self.doc_type),
+        )
+    }
 }

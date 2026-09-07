@@ -242,6 +242,18 @@ impl AttributeRequest {
         }
     }
 
+    /// Consume the request and return its fields.
+    ///
+    /// This preserves the pre-zeroization field-move use case while ensuring
+    /// partial/error paths still clear any fields left in `self`.
+    pub fn into_parts(mut self) -> (String, String, Vec<u8>) {
+        (
+            std::mem::take(&mut self.namespace),
+            std::mem::take(&mut self.id),
+            std::mem::take(&mut self.cbor_value),
+        )
+    }
+
     /// Convert to the C-ABI `RequestedAttribute` struct.
     fn to_ffi(&self) -> Result<ffi::RequestedAttribute, ZkError> {
         let ns = self.namespace.as_bytes();
@@ -313,6 +325,35 @@ impl Zeroize for MdocProveInput {
 impl Drop for MdocProveInput {
     fn drop(&mut self) {
         self.zeroize();
+    }
+}
+
+impl MdocProveInput {
+    /// Consume the input and return its fields in declaration order.
+    ///
+    /// Callers assume responsibility for clearing the returned mdoc,
+    /// transcript, and attribute values after use.
+    #[allow(clippy::type_complexity)]
+    pub fn into_parts(
+        mut self,
+    ) -> (
+        Vec<u8>,
+        String,
+        String,
+        Vec<u8>,
+        Vec<AttributeRequest>,
+        String,
+        String,
+    ) {
+        (
+            std::mem::take(&mut self.mdoc),
+            std::mem::take(&mut self.issuer_pkx),
+            std::mem::take(&mut self.issuer_pky),
+            std::mem::take(&mut self.transcript),
+            std::mem::take(&mut self.attributes),
+            std::mem::take(&mut self.now),
+            std::mem::take(&mut self.doc_type),
+        )
     }
 }
 
@@ -388,6 +429,12 @@ fn validate_verifier_input(input: &MdocProveInput, proof: &[u8]) -> Result<(), Z
 // allocations or contend inside Longfellow's native runtime.
 static NATIVE_ZK_MEMORY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn native_zk_memory_guard() -> std::sync::MutexGuard<'static, ()> {
+    NATIVE_ZK_MEMORY_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 // ── Circuit ───────────────────────────────────────────────────────────
 
 /// Pre-generated compressed circuit for a given number of attributes.
@@ -424,7 +471,7 @@ impl Circuit {
         };
         #[cfg(not(zk_mock))]
         {
-            let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
+            let _native_guard = native_zk_memory_guard();
             validate_circuit_identity(&bytes, spec_index)?;
         }
         Ok(Self { bytes, spec_index })
@@ -444,7 +491,7 @@ impl Circuit {
                 .ok_or(ZkError::InvalidInput)?
         };
 
-        let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
+        let _native_guard = native_zk_memory_guard();
 
         let mut cb: *mut u8 = std::ptr::null_mut();
         let mut clen: usize = 0;
@@ -535,7 +582,7 @@ impl Prover {
         let pky = CString::new(input.issuer_pky.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let now = CString::new(input.now.as_str()).map_err(|_| ZkError::InvalidInput)?;
 
-        let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
+        let _native_guard = native_zk_memory_guard();
 
         let mut proof_ptr: *mut u8 = std::ptr::null_mut();
         let mut proof_len: usize = 0;
@@ -634,7 +681,7 @@ impl Verifier {
         let now = CString::new(input.now.as_str()).map_err(|_| ZkError::InvalidInput)?;
         let doc_type = CString::new(input.doc_type.as_str()).map_err(|_| ZkError::InvalidInput)?;
 
-        let _native_guard = NATIVE_ZK_MEMORY_LOCK.lock().map_err(|_| ZkError::Generic)?;
+        let _native_guard = native_zk_memory_guard();
 
         let rc = unsafe {
             ffi::run_mdoc_verifier(
@@ -752,12 +799,12 @@ mod resource_boundary_tests {
         use std::sync::mpsc;
         use std::time::Duration;
 
-        let guard = NATIVE_ZK_MEMORY_LOCK.lock().unwrap();
+        let guard = native_zk_memory_guard();
         let (started_tx, started_rx) = mpsc::channel();
         let (entered_tx, entered_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             started_tx.send(()).unwrap();
-            let _guard = NATIVE_ZK_MEMORY_LOCK.lock().unwrap();
+            let _guard = native_zk_memory_guard();
             entered_tx.send(()).unwrap();
         });
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -765,6 +812,17 @@ mod resource_boundary_tests {
         drop(guard);
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn native_zk_memory_lock_recovers_after_panic() {
+        let _ = std::thread::spawn(|| {
+            let _guard = native_zk_memory_guard();
+            panic!("intentional poison test");
+        })
+        .join();
+
+        let _recovered = native_zk_memory_guard();
     }
 
     #[test]
