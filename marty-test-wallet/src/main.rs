@@ -29,10 +29,15 @@ struct WalletData {
 #[derive(Clone)]
 struct RemoteHolderSigner {
     client: reqwest::Client,
-    endpoint: reqwest::Url,
+    #[cfg(test)]
+    endpoint_override: Option<reqwest::Url>,
     key_id: String,
     public_jwk_json: String,
 }
+
+// Keep the browser-facing test wallet unable to initiate requests to arbitrary
+// network locations. A local signer agent owns KMS connectivity and policy.
+const HOLDER_SIGNER_SIDECAR_URL: &str = "http://127.0.0.1:8788/sign";
 
 #[derive(Serialize)]
 struct RemoteSignRequest<'a> {
@@ -132,33 +137,7 @@ impl RemoteHolderSigner {
             .map_err(|_| "failed to configure opaque holder signer client".to_string())
     }
 
-    fn validate_endpoint(value: &str) -> Result<reqwest::Url, String> {
-        let endpoint = reqwest::Url::parse(value)
-            .map_err(|_| "MARTY_TEST_WALLET_SIGNER_URL must be a valid URL".to_string())?;
-        if !endpoint.username().is_empty() || endpoint.password().is_some() {
-            return Err("MARTY_TEST_WALLET_SIGNER_URL must not contain credentials".into());
-        }
-
-        let is_loopback = endpoint
-            .host_str()
-            .map(|host| {
-                host.eq_ignore_ascii_case("localhost")
-                    || host
-                        .trim_matches(['[', ']'])
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|address| address.is_loopback())
-            })
-            .unwrap_or(false);
-        if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && is_loopback) {
-            return Err(
-                "MARTY_TEST_WALLET_SIGNER_URL must use HTTPS or a loopback test endpoint".into(),
-            );
-        }
-        Ok(endpoint)
-    }
-
     fn from_env() -> Result<Self, String> {
-        let endpoint = Self::validate_endpoint(&required_env("MARTY_TEST_WALLET_SIGNER_URL")?)?;
         let key_id = required_env("MARTY_TEST_WALLET_HOLDER_KID")?;
         let public_jwk_json = required_env("MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK")?;
         validate_public_jwk_json(&public_jwk_json, "holder public JWK")?;
@@ -170,16 +149,23 @@ impl RemoteHolderSigner {
         }
         Ok(Self {
             client: Self::http_client()?,
-            endpoint,
+            #[cfg(test)]
+            endpoint_override: None,
             key_id,
             public_jwk_json,
         })
     }
 
     async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
-        let mut response = self
-            .client
-            .post(self.endpoint.clone())
+        #[cfg(not(test))]
+        let request = self.client.post(HOLDER_SIGNER_SIDECAR_URL);
+        #[cfg(test)]
+        let request = self.client.post(
+            self.endpoint_override
+                .clone()
+                .unwrap_or_else(|| reqwest::Url::parse(HOLDER_SIGNER_SIDECAR_URL).unwrap()),
+        );
+        let mut response = request
             .json(&RemoteSignRequest {
                 algorithm: "ES256",
                 key_id: &self.key_id,
@@ -756,24 +742,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn signer_endpoint_requires_https_or_an_actual_loopback_host() {
-        assert!(RemoteHolderSigner::validate_endpoint("https://signer.example/sign").is_ok());
-        assert!(RemoteHolderSigner::validate_endpoint("http://localhost:3000/sign").is_ok());
-        assert!(RemoteHolderSigner::validate_endpoint("http://127.0.0.1:3000/sign").is_ok());
-        assert!(RemoteHolderSigner::validate_endpoint("http://[::1]:3000/sign").is_ok());
-
-        for bypass in [
-            "http://localhost:@attacker.example/sign",
-            "http://127.0.0.1@attacker.example/sign",
-            "http://localhost.attacker.example/sign",
-            "http://192.0.2.10/sign",
-            "https://user:password@signer.example/sign",
-        ] {
-            assert!(
-                RemoteHolderSigner::validate_endpoint(bypass).is_err(),
-                "accepted unsafe signer URL: {bypass}"
-            );
-        }
+    fn signer_endpoint_is_a_fixed_loopback_sidecar() {
+        let endpoint = reqwest::Url::parse(HOLDER_SIGNER_SIDECAR_URL).unwrap();
+        assert_eq!(endpoint.scheme(), "http");
+        assert_eq!(endpoint.host_str(), Some("127.0.0.1"));
+        assert_eq!(endpoint.port(), Some(8788));
+        assert_eq!(endpoint.path(), "/sign");
     }
 
     #[tokio::test]
@@ -804,7 +778,9 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let signer = RemoteHolderSigner {
             client: RemoteHolderSigner::http_client().unwrap(),
-            endpoint: reqwest::Url::parse(&format!("http://{address}/sign")).unwrap(),
+            endpoint_override: Some(
+                reqwest::Url::parse(&format!("http://{address}/sign")).unwrap(),
+            ),
             key_id: "test-key".into(),
             public_jwk_json: "{}".into(),
         };
