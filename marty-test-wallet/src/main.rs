@@ -7,8 +7,9 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
-use marty_oid4vci::types::CredentialFormat;
-use marty_oid4vci::wallet::{DcqlCredentialQuery, HolderKeyMaterial, WalletEngine};
+use marty_oid4vci::types::{CredentialFormat, SigningAlgorithm};
+use marty_oid4vci::wallet::{DcqlCredentialQuery, WalletEngine};
+use marty_oid4vci::{Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
@@ -16,12 +17,52 @@ use tokio::sync::RwLock;
 #[derive(Clone)]
 struct AppState {
     engine: Arc<WalletEngine>,
+    holder_signer: Arc<RemoteHolderSigner>,
+    issuer_resolver: Arc<TrustedIssuerResolver>,
     wallet: Arc<RwLock<WalletData>>,
 }
 
 struct WalletData {
-    holder: HolderKeyMaterial,
     credentials: Vec<StoredCredential>,
+}
+
+#[derive(Clone)]
+struct RemoteHolderSigner {
+    client: reqwest::Client,
+    endpoint: String,
+    key_id: String,
+    public_jwk_json: String,
+}
+
+#[derive(Serialize)]
+struct RemoteSignRequest<'a> {
+    algorithm: &'static str,
+    key_id: &'a str,
+    signing_input: String,
+}
+
+#[derive(Deserialize)]
+struct RemoteSignResponse {
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct TrustedIssuerKeyConfig {
+    issuer: String,
+    key_id: Option<String>,
+    algorithm: String,
+    public_jwk: Value,
+}
+
+struct TrustedIssuerKey {
+    issuer: String,
+    key_id: Option<String>,
+    algorithm: SigningAlgorithm,
+    public_jwk_json: String,
+}
+
+struct TrustedIssuerResolver {
+    keys: Vec<TrustedIssuerKey>,
 }
 
 #[derive(Clone)]
@@ -55,6 +96,149 @@ impl From<&StoredCredential> for CredentialSummary {
             claim_names: credential.claim_names.clone(),
             received_at: credential.received_at.clone(),
         }
+    }
+}
+
+fn required_env(name: &str) -> Result<String, String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{name} must be configured"))
+}
+
+fn validate_public_jwk_json(value: &str, label: &str) -> Result<(), String> {
+    if value.len() > marty_oid4vci::jose::MAX_PUBLIC_JWK_BYTES {
+        return Err(format!("{label} exceeds its size limit"));
+    }
+    let jwk: Value =
+        serde_json::from_str(value).map_err(|_| format!("{label} is not valid JSON"))?;
+    let object = jwk
+        .as_object()
+        .ok_or_else(|| format!("{label} must be a JSON object"))?;
+    for member in ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+        if object.contains_key(member) {
+            return Err(format!("{label} must not contain private key material"));
+        }
+    }
+    Ok(())
+}
+
+impl RemoteHolderSigner {
+    fn from_env() -> Result<Self, String> {
+        let endpoint = required_env("MARTY_TEST_WALLET_SIGNER_URL")?;
+        if !(endpoint.starts_with("https://")
+            || endpoint.starts_with("http://127.0.0.1:")
+            || endpoint.starts_with("http://localhost:"))
+        {
+            return Err(
+                "MARTY_TEST_WALLET_SIGNER_URL must use HTTPS or a loopback test endpoint".into(),
+            );
+        }
+        let key_id = required_env("MARTY_TEST_WALLET_HOLDER_KID")?;
+        let public_jwk_json = required_env("MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK")?;
+        validate_public_jwk_json(&public_jwk_json, "holder public JWK")?;
+        let jwk: Value = serde_json::from_str(&public_jwk_json).unwrap();
+        if jwk.get("kty").and_then(Value::as_str) != Some("EC")
+            || jwk.get("crv").and_then(Value::as_str) != Some("P-256")
+        {
+            return Err("holder public JWK must be an EC P-256 key".into());
+        }
+        Ok(Self {
+            client: reqwest::Client::new(),
+            endpoint,
+            key_id,
+            public_jwk_json,
+        })
+    }
+
+    async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .json(&RemoteSignRequest {
+                algorithm: "ES256",
+                key_id: &self.key_id,
+                signing_input: base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(signing_input),
+            })
+            .send()
+            .await
+            .map_err(|_| AppError::unprocessable("Opaque holder signer is unavailable"))?
+            .error_for_status()
+            .map_err(|_| AppError::unprocessable("Opaque holder signer rejected the request"))?
+            .json::<RemoteSignResponse>()
+            .await
+            .map_err(|_| AppError::unprocessable("Opaque holder signer returned invalid JSON"))?;
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(response.signature)
+            .map_err(|_| {
+                AppError::unprocessable("Opaque holder signer returned invalid base64url")
+            })?;
+        if signature.len() != 64 {
+            return Err(AppError::unprocessable(
+                "Opaque holder signer returned an invalid ES256 signature",
+            ));
+        }
+        Ok(signature)
+    }
+}
+
+impl TrustedIssuerResolver {
+    fn from_env() -> Result<Self, String> {
+        let encoded = required_env("MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS")?;
+        let configured: Vec<TrustedIssuerKeyConfig> =
+            serde_json::from_str(&encoded).map_err(|_| {
+                "MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS must be a JSON array".to_string()
+            })?;
+        if configured.is_empty() {
+            return Err("MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS must not be empty".into());
+        }
+        let keys = configured
+            .into_iter()
+            .map(|entry| {
+                let algorithm = match entry.algorithm.as_str() {
+                    "ES256" => SigningAlgorithm::ES256,
+                    "ES384" => SigningAlgorithm::ES384,
+                    "EdDSA" => SigningAlgorithm::EdDSA,
+                    "RS256" => SigningAlgorithm::RS256,
+                    _ => return Err("trusted issuer key uses an unsupported algorithm".to_string()),
+                };
+                let public_jwk_json = entry.public_jwk.to_string();
+                validate_public_jwk_json(&public_jwk_json, "trusted issuer public JWK")?;
+                Ok(TrustedIssuerKey {
+                    issuer: entry.issuer,
+                    key_id: entry.key_id,
+                    algorithm,
+                    public_jwk_json,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Self { keys })
+    }
+}
+
+impl SdJwtIssuerKeyResolver for TrustedIssuerResolver {
+    fn resolve(
+        &self,
+        issuer: &str,
+        key_id: Option<&str>,
+        algorithm: SigningAlgorithm,
+    ) -> Oid4vciResult<ResolvedSdJwtIssuerKey> {
+        let key = self
+            .keys
+            .iter()
+            .find(|candidate| {
+                candidate.issuer == issuer
+                    && candidate.key_id.as_deref() == key_id
+                    && candidate.algorithm == algorithm
+            })
+            .ok_or_else(|| Oid4vciError::KeyError("Issuer key is not explicitly trusted".into()))?;
+        Ok(ResolvedSdJwtIssuerKey::new(
+            key.issuer.clone(),
+            key.key_id.clone(),
+            key.algorithm,
+            key.public_jwk_json.clone(),
+        ))
     }
 }
 
@@ -117,12 +301,19 @@ async fn main() {
         .init();
 
     let engine = Arc::new(WalletEngine::new());
+    let holder_signer = Arc::new(
+        RemoteHolderSigner::from_env().expect("opaque holder signer configuration is required"),
+    );
+    let issuer_resolver = Arc::new(
+        TrustedIssuerResolver::from_env().expect("trusted issuer key configuration is required"),
+    );
     let state = AppState {
         wallet: Arc::new(RwLock::new(WalletData {
-            holder: engine.generate_holder_key(),
             credentials: Vec::new(),
         })),
         engine,
+        holder_signer,
+        issuer_resolver,
     };
     let app = Router::new()
         .route("/", get(index))
@@ -164,7 +355,6 @@ async fn list_credentials(State(state): State<AppState>) -> Json<Vec<CredentialS
 
 async fn reset_wallet(State(state): State<AppState>) -> StatusCode {
     let mut wallet = state.wallet.write().await;
-    wallet.holder = state.engine.generate_holder_key();
     wallet.credentials.clear();
     StatusCode::NO_CONTENT
 }
@@ -242,18 +432,21 @@ async fn receive_credential(
         .fetch_nonce(nonce_endpoint)
         .await
         .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let holder = {
-        let wallet = state.wallet.read().await;
-        wallet.holder.clone()
-    };
-    let proof = state
+    let prepared_proof = state
         .engine
-        .create_proof_jwt(
-            &format!("{}#{}", holder.holder_id, holder.holder_id),
+        .prepare_proof_jwt(
+            &state.holder_signer.key_id,
             &nonce_response.c_nonce,
             &offer.credential_issuer,
-            &holder.private_jwk,
+            &state.holder_signer.public_jwk_json,
         )
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let proof_signature = state
+        .holder_signer
+        .sign(prepared_proof.signing_input())
+        .await?;
+    let proof = prepared_proof
+        .complete(&proof_signature)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let response = state
         .engine
@@ -297,7 +490,7 @@ async fn present_credential(
     let dcql = presentation_request.dcql_query.as_ref().ok_or_else(|| {
         AppError::unprocessable("The browser test wallet requires a DCQL presentation request")
     })?;
-    let wallet = state.wallet.read().await;
+    let credentials = state.wallet.read().await.credentials.clone();
     let mut presentations = HashMap::new();
     for query in &dcql.credentials {
         let requested_format =
@@ -316,8 +509,7 @@ async fn present_credential(
                 query.format
             )));
         }
-        let credential = wallet
-            .credentials
+        let credential = credentials
             .iter()
             .find(|credential| credential_matches_query(credential, query, &requested_format))
             .ok_or_else(|| {
@@ -332,22 +524,28 @@ async fn present_credential(
             .filter_map(|claim| claim.path.first().cloned())
             .collect::<Vec<_>>();
         let presentation = match requested_format {
-            CredentialFormat::SdJwt => state
-                .engine
-                .create_sd_jwt_presentation(
-                    &credential.raw,
-                    &claims,
-                    &presentation_request.nonce,
-                    &presentation_request.client_id,
-                    &wallet.holder.private_jwk,
-                )
-                .map_err(|error| AppError::bad_request(error.to_string()))?,
+            CredentialFormat::SdJwt => {
+                let prepared = state
+                    .engine
+                    .prepare_verified_sd_jwt_presentation(
+                        &credential.raw,
+                        &claims,
+                        &presentation_request.nonce,
+                        &presentation_request.client_id,
+                        &state.holder_signer.public_jwk_json,
+                        state.issuer_resolver.as_ref(),
+                    )
+                    .map_err(|error| AppError::bad_request(error.to_string()))?;
+                let signature = state.holder_signer.sign(prepared.signing_input()).await?;
+                prepared
+                    .complete(&signature)
+                    .map_err(|error| AppError::bad_request(error.to_string()))?
+            }
             CredentialFormat::JwtVcJson => credential.raw.clone(),
             _ => unreachable!("unsupported formats are rejected before selection"),
         };
         presentations.insert(query.id.clone(), presentation);
     }
-    drop(wallet);
     let (vp_token, submission) = state
         .engine
         .build_presentation_for_request(&presentation_request, presentations)

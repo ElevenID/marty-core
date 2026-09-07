@@ -9,8 +9,20 @@ cryptographic operations and supports:
 - SD-JWT selective disclosure with nonce/audience key binding
 - W3C VC-JWT presentation for `jwt_vc_json` DCQL queries
 
-Private keys and credential material remain in the local wallet process. The
-browser API returns display metadata only. Run it with:
+Credential material remains in the local wallet process, but private keys do
+not. The test wallet requires an opaque ES256 signer and an explicit issuer-key
+trust set:
+
+- `MARTY_TEST_WALLET_SIGNER_URL`: HTTPS signer endpoint (loopback HTTP is
+  accepted for tests). It receives `algorithm`, `key_id`, and base64url
+  `signing_input`, and returns `{ "signature": "<base64url raw ES256>" }`.
+- `MARTY_TEST_WALLET_HOLDER_KID`: signer-owned holder key identifier.
+- `MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK`: public-only P-256 JWK JSON.
+- `MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS`: JSON array of exact trust entries,
+  each with `issuer`, optional `key_id`, `algorithm`, and `public_jwk`.
+
+The browser API returns display metadata only. Run it after configuring those
+values:
 
 ```text
 cargo run -p marty-test-wallet
