@@ -819,8 +819,7 @@ impl VerificationEngine {
             };
             if nbf > now.saturating_add(60) {
                 return failed(
-                    "VP token signature verification rejected a token that is not yet valid"
-                        .into(),
+                    "VP token is not yet valid; signature verification was not performed".into(),
                     VerificationCheckStatus::NotChecked,
                     VerificationCheckStatus::Failed,
                 );
@@ -2186,6 +2185,24 @@ mod tests {
         let result = test_engine().verify_vp_token(&token, "nonce");
         assert!(!result.check_valid);
         assert!(result.errors[0].contains("not-before claim is invalid"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_future_nbf_reports_unverified_temporal_rejection() {
+        use base64::Engine;
+        let encode =
+            |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+        let token = format!(
+            "{}.{}.AA",
+            encode(r#"{"alg":"ES256"}"#),
+            encode(
+                r#"{"aud":"did:example:verifier","nonce":"nonce","exp":9999999999,"nbf":9999999999}"#,
+            )
+        );
+        let result = test_engine().verify_vp_token(&token, "nonce");
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("not yet valid"));
+        assert!(result.errors[0].contains("signature verification was not performed"));
     }
 
     #[test]
