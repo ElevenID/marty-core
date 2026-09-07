@@ -46,7 +46,7 @@ sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "1efc5d2728
 jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "857fa570a2a9e5b3ed0c4132100131a30dc5432c", default-features = false, optional = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -82,7 +82,7 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true }
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "857fa570a2a9e5b3ed0c4132100131a30dc5432c" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35" }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "1efc5d2728174fe31a0fd74428f8186a43174ecd" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
