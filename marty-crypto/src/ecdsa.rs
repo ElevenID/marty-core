@@ -1,24 +1,24 @@
 //! ECDSA signature signing and verification for P-256, P-384, and P-521 curves.
 
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::Signature as P256Signature;
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 use p256::ecdsa::SigningKey as P256SigningKey;
 use p384::ecdsa::Signature as P384Signature;
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 use p384::ecdsa::SigningKey as P384SigningKey;
 use p521::ecdsa::Signature as P521Signature;
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 use p521::ecdsa::SigningKey as P521SigningKey;
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 use p521::ecdsa::VerifyingKey as P521VerifyingKey;
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 use rand::rngs::OsRng;
 
 use crate::{CryptoError, CryptoResult};
 
-#[cfg(not(feature = "ecdsa-local-signing"))]
+#[cfg(not(test))]
 /// Marker documenting the verifier-only ECDSA API boundary.
 ///
 /// Local signing and key generation do not exist in this build:
@@ -38,7 +38,7 @@ pub struct VerificationOnly;
 ///
 /// Tuple of (private_key_bytes, public_key_bytes).
 /// Private key is 32 bytes, public key is 65 bytes (uncompressed).
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 pub fn generate_p256_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = P256SigningKey::random(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
@@ -55,7 +55,7 @@ pub fn generate_p256_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 ///
 /// Tuple of (private_key_bytes, public_key_bytes).
 /// Private key is 48 bytes, public key is 97 bytes (uncompressed).
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 pub fn generate_p384_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = P384SigningKey::random(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
@@ -72,7 +72,7 @@ pub fn generate_p384_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 ///
 /// Tuple of (private_key_bytes, public_key_bytes).
 /// Private key is 66 bytes, public key is 133 bytes (uncompressed).
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 pub fn generate_p521_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
     let signing_key = P521SigningKey::random(&mut OsRng);
     // Get verifying key via the inner signing key's public key method
@@ -98,7 +98,7 @@ pub fn generate_p521_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
 /// # Returns
 ///
 /// DER-encoded signature.
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 pub fn sign_p256_sha256(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != 32 {
         return Err(CryptoError::internal(
@@ -124,7 +124,7 @@ pub fn sign_p256_sha256(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<
 /// # Returns
 ///
 /// DER-encoded signature.
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 pub fn sign_p384_sha384(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != 48 {
         return Err(CryptoError::internal(
@@ -150,7 +150,7 @@ pub fn sign_p384_sha384(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<
 /// # Returns
 ///
 /// DER-encoded signature.
-#[cfg(feature = "ecdsa-local-signing")]
+#[cfg(test)]
 pub fn sign_p521_sha512(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     if private_key.len() != 66 {
         return Err(CryptoError::internal(
@@ -376,7 +376,7 @@ pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Ve
     }
 }
 
-#[cfg(all(test, feature = "ecdsa-local-signing"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

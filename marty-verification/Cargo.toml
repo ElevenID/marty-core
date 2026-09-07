@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Trust chain verification for mDL (IACA) and eMRTD (CSCA)"
+autotests = false
+autobenches = false
 
 [lib]
 name = "marty_verification"
@@ -21,27 +23,10 @@ iaca = []           # AAMVA mDL verification
 csca = []           # ePassport/eMRTD verification
 eudi = []           # EU Digital Identity verification
 python = ["pyo3"]   # Verification-only Python bindings
-# Explicit opt-in for offline development and migration tools. Production
-# Python wheels omit every raw secret/private-key operation from the module.
-# Binding selection is independent: Python tools also enable `python`, while
-# native Rust and browser callers can use local keys without linking Python.
-local-key-operations = [
-    "ephemeral-session-keys",
-    "marty-crypto/ecdsa-local-signing",
-    "marty-crypto/eddsa-local-signing",
-    "marty-crypto/keygen",
-    "marty-crypto/pkcs12",
-    "marty-crypto/private-key-codec",
-    "marty-crypto/rsa-local-signing",
-    "ed25519-dalek/pem",
-    "ed25519-dalek/rand_core",
-    "p256/pem",
-    "p384/pem",
-    "p521/pem",
-]
 # Short-lived protocol/session secrets, distinct from credential issuer keys.
 ephemeral-session-keys = [
     "marty-crypto/ecdh",
+    "marty-crypto/kdf",
     "marty-crypto/symmetric",
     "p256/ecdh",
     "p384/ecdh",
@@ -50,12 +35,10 @@ network-tls-client = ["dep:reqwest"]
 aamva-client = ["network-tls-client", "tokio", "moka"]
 icao-client = ["network-tls-client", "tokio", "moka", "ldap3"]
 eudi-client = ["network-tls-client", "reqwest/stream", "tokio", "moka", "quick-xml"]
-cert-builder = ["marty-crypto/cert-builder", "x509-cert/builder"]   # Explicit certificate building utilities for Python bindings
-authority-issuance = ["csca", "marty-crypto/sod-builder", "cms/builder", "x509-cert/builder"] # CSCA/DSC generation and passport personalization
 cross-validation = []  # OpenSSL cross-validation tests
 serde = []
 test-fixtures = []  # Enable NIST PKITS test fixtures (requires downloading fixtures)
-full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "serde", "cert-builder", "authority-issuance"]
+full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "serde"]
 
 [dependencies]
 # Internal crate
@@ -65,7 +48,6 @@ marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features =
     "eddsa-verification",
     "hashing",
     "jwk",
-    "kdf",
     "ocsp",
     "rsa-verification",
     "public-key-codec",
@@ -145,44 +127,68 @@ zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 cms = { workspace = true, features = ["builder"] }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["crl-builder"] }
+marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["crl", "ecdh", "symmetric"] }
+marty-crypto-test-support = { path = "../marty-crypto-test-support" }
 marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["issuer", "mso_mdoc", "sd_jwt"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }
-rcgen = { workspace = true }
+rcgen = { workspace = true, features = ["aws_lc_rs"] }
 time = "0.3"
 proptest = { workspace = true }
 coset = "0.3.8"
 criterion = { workspace = true }
+p256 = { workspace = true, features = ["ecdh"] }
+p384 = { workspace = true, features = ["ecdh"] }
+x509-ocsp = { workspace = true }
+x25519-dalek = { workspace = true }
+
+[[test]]
+name = "chain_validation_tests"
+
+[[test]]
+name = "cross_validation"
+
+[[test]]
+name = "emrtd_data_golden_vectors"
+required-features = ["csca"]
+
+[[test]]
+name = "emrtd_golden_vectors"
+required-features = ["csca"]
+
+[[test]]
+name = "evidence_reconciliation_behavior"
+
+[[test]]
+name = "jwk_private_material_boundary"
+
+[[test]]
+name = "key_attestation_behavior"
+
+[[test]]
+name = "mdl_conformance"
+
+[[test]]
+name = "mrz_golden_vectors"
+
+[[test]]
+name = "open_badges_interop"
+
+[[test]]
+name = "open_badges_typed_api"
+
+[[test]]
+name = "passport_integrity_behavior"
+
+[[test]]
+name = "public_key_jwk_golden_vectors"
+
+[[test]]
+name = "trust_registry_sync_behavior"
 
 [[bench]]
 name = "verification_kernels"
 harness = false
-required-features = ["authority-issuance"]
-
-[[test]]
-name = "eac_behavior"
-required-features = ["local-key-operations"]
-
-[[test]]
-name = "dtc_tests"
-required-features = ["local-key-operations"]
-
-[[test]]
-name = "passport_chip_behavior"
-required-features = ["local-key-operations"]
-
-[[test]]
-name = "open_badges_conformance"
-required-features = ["local-key-operations"]
-
-[[test]]
-name = "open_badges_tests"
-required-features = ["local-key-operations"]
-
-[[test]]
-name = "public_key_jwk_golden_vectors"
-required-features = ["local-key-operations"]
 
 [target.'cfg(unix)'.dev-dependencies]
 openssl = { version = "0.10", features = ["vendored"] }

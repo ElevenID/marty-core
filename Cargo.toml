@@ -1,5 +1,5 @@
 [workspace]
-members = ["marty-python-adapters", "marty-types", "marty-crypto", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-status", "marty-bindings", "marty-oid4vci", "marty-oid4vci/tests/ui/wasm-serial-probe", "marty-didcomm", "marty-test-wallet"]
+members = ["marty-python-adapters", "marty-types", "marty-crypto", "marty-crypto-test-support", "marty-verification", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-status", "marty-bindings", "marty-oid4vci", "marty-oid4vci/tests/ui/wasm-serial-probe", "marty-didcomm", "marty-test-wallet"]
 resolver = "2"
 
 [workspace.package]
@@ -26,7 +26,7 @@ pem-rfc7468 = "0.7"
 signature = "2.0"
 
 # RSA support
-rsa = { version = "0.9", features = ["sha2", "pem"] }
+rsa = { version = "0.9", default-features = false, features = ["std", "sha2", "u64_digit"] }
 
 # PKCS standards
 pkcs8 = { version = "0.10", default-features = false, features = ["pem", "std"] }
@@ -59,7 +59,7 @@ x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 ed448-goldilocks-plus = "0.16"
 
 # BBS+ signatures (BLS12-381)
-zkryptium = { version = "0.6", features = ["bbsplus"] }
+zkryptium = { version = "0.6", default-features = false, features = ["bbsplus"] }
 
 # PKCS#12 (for key/cert bundle parsing)
 p12 = "0.6"

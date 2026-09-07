@@ -25,7 +25,6 @@
 //!     .build(&dsc_der, &dsc_key)?;
 //! ```
 
-#[cfg(feature = "sod-builder")]
 mod inner {
     use cms::builder::{SignedDataBuilder, SignerInfoBuilder};
     use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
@@ -263,5 +262,4 @@ mod inner {
 
 // ── Public re-exports (gated on sod-builder feature) ──────────────────────────
 
-#[cfg(feature = "sod-builder")]
 pub use inner::{build_emrtd_sod_der, EmrtdSodBuilder};

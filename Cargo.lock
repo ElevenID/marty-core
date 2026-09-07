@@ -586,6 +586,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00bdb5da18dac48ca2cc7cd4a98e533e8635a58e2361d13a1a4ee3888e0d72f1"
 dependencies = [
  "aws-lc-sys",
+ "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -4067,6 +4068,7 @@ dependencies = [
  "ciborium",
  "hex",
  "marty-crypto",
+ "marty-crypto-test-support",
  "marty-didcomm",
  "marty-iso18013",
  "marty-oid4vci",
@@ -4154,6 +4156,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-crypto-test-support"
+version = "0.1.61"
+dependencies = [
+ "der 0.7.10",
+ "ed25519-dalek",
+ "marty-crypto",
+ "p256",
+ "p384",
+ "pem-rfc7468 0.7.0",
+ "pkcs8",
+ "rand 0.8.7",
+ "rsa",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "marty-didcomm"
 version = "0.1.61"
 dependencies = [
@@ -4205,6 +4223,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -4349,6 +4368,7 @@ dependencies = [
  "isomdl",
  "ldap3",
  "marty-crypto",
+ "marty-crypto-test-support",
  "marty-oid4vci",
  "moka",
  "openssl",
@@ -4386,7 +4406,9 @@ dependencies = [
  "tracing-error",
  "url",
  "uuid",
+ "x25519-dalek",
  "x509-cert",
+ "x509-ocsp",
  "zeroize",
 ]
 
@@ -5951,6 +5973,7 @@ version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "091e7a8e7d86e6feb87a27ce8e2cba29d49eff9507afeebefab7eeb2ca667fb4"
 dependencies = [
+ "aws-lc-rs",
  "pem",
  "ring",
  "rustls-pki-types",
@@ -6128,7 +6151,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.17",
  "libc",
- "untrusted",
+ "untrusted 0.9.0",
  "windows-sys 0.52.0",
 ]
 
@@ -6295,7 +6318,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -8226,6 +8249,12 @@ checksum = "6889a77d49f1f013504cec6bf97a2c730394adedaeb1deb5ea08949a50541105"
 
 [[package]]
 name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
+
+[[package]]
+name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
@@ -8816,6 +8845,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
 dependencies = [
  "asn1-rs 0.7.2",
+ "aws-lc-rs",
  "data-encoding",
  "der-parser",
  "lazy_static",

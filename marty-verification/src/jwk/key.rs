@@ -5,9 +5,335 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::{VerificationError, VerificationResult};
+
+/// Largest JSON document accepted by [`Jwk::from_json`].
+pub const MAX_PUBLIC_JWK_JSON_BYTES: usize = 64 * 1024;
+/// Largest JSON document accepted by [`JwkSet::from_json`].
+pub const MAX_JWK_SET_JSON_BYTES: usize = 1024 * 1024;
+/// Largest number of keys accepted in a parsed JWK set.
+pub const MAX_JWK_SET_KEYS: usize = 128;
+const MAX_JWK_MEMBER_BYTES: usize = 16 * 1024;
+const MAX_JWK_LIST_ITEMS: usize = 128;
+const MAX_JWK_EXTENSION_MEMBERS: usize = 32;
+const MAX_JWK_EXTENSION_DEPTH: usize = 8;
+
+struct BoundedString(String);
+
+impl<'de> Deserialize<'de> for BoundedString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct StringVisitor;
+        impl serde::de::Visitor<'_> for StringVisitor {
+            type Value = BoundedString;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JWK string no larger than 16384 bytes")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                if value.len() > MAX_JWK_MEMBER_BYTES {
+                    return Err(E::custom("JWK string member exceeds 16384 bytes"));
+                }
+                Ok(BoundedString(value.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+                if value.len() > MAX_JWK_MEMBER_BYTES {
+                    return Err(E::custom("JWK string member exceeds 16384 bytes"));
+                }
+                Ok(BoundedString(value))
+            }
+        }
+        deserializer.deserialize_string(StringVisitor)
+    }
+}
+
+fn deserialize_bounded_option_string_vec<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringVecVisitor;
+    impl<'de> serde::de::Visitor<'de> for StringVecVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array containing at most 128 bounded strings")
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut values =
+                Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(MAX_JWK_LIST_ITEMS));
+            while values.len() < MAX_JWK_LIST_ITEMS {
+                match sequence.next_element::<BoundedString>()? {
+                    Some(value) => values.push(value.0),
+                    None => return Ok(values),
+                }
+            }
+            if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                return Err(serde::de::Error::custom(
+                    "JWK list member exceeds 128 items",
+                ));
+            }
+            Ok(values)
+        }
+    }
+
+    struct OptionalStringVecVisitor;
+    impl<'de> serde::de::Visitor<'de> for OptionalStringVecVisitor {
+        type Value = Option<Vec<String>>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("null or an array of bounded JWK strings")
+        }
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_seq(StringVecVisitor).map(Some)
+        }
+    }
+    deserializer.deserialize_option(OptionalStringVecVisitor)
+}
+
+struct BoundedOptionStringVecSeed;
+
+impl<'de> serde::de::DeserializeSeed<'de> for BoundedOptionStringVecSeed {
+    type Value = Option<Vec<String>>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserialize_bounded_option_string_vec(deserializer)
+    }
+}
+
+fn deserialize_bounded_jwk_vec<'de, D>(deserializer: D) -> Result<Vec<Jwk>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct JwkVecVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for JwkVecVisitor {
+        type Value = Vec<Jwk>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an array containing at most 128 public JWKs")
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut keys =
+                Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(MAX_JWK_SET_KEYS));
+            while keys.len() < MAX_JWK_SET_KEYS {
+                match sequence.next_element()? {
+                    Some(key) => keys.push(key),
+                    None => return Ok(keys),
+                }
+            }
+            if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                return Err(serde::de::Error::custom("JWK Set exceeds 128 keys"));
+            }
+            Ok(keys)
+        }
+    }
+
+    deserializer.deserialize_seq(JwkVecVisitor)
+}
+
+fn bounded_json_value_size(value: &serde_json::Value, depth: usize) -> Result<usize, String> {
+    if depth > MAX_JWK_EXTENSION_DEPTH {
+        return Err("JWK extension nesting exceeds 8 levels".to_string());
+    }
+    match value {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Ok(8)
+        }
+        serde_json::Value::String(value) => {
+            if value.len() > MAX_JWK_MEMBER_BYTES {
+                Err("JWK extension string exceeds 16384 bytes".to_string())
+            } else {
+                Ok(value.len())
+            }
+        }
+        serde_json::Value::Array(values) => {
+            if values.len() > MAX_JWK_LIST_ITEMS {
+                return Err("JWK extension array exceeds 128 items".to_string());
+            }
+            values.iter().try_fold(0usize, |size, value| {
+                size.checked_add(bounded_json_value_size(value, depth + 1)?)
+                    .ok_or_else(|| "JWK extension size overflow".to_string())
+            })
+        }
+        serde_json::Value::Object(values) => {
+            if values.len() > MAX_JWK_EXTENSION_MEMBERS {
+                return Err("JWK extension object exceeds 32 members".to_string());
+            }
+            values.iter().try_fold(0usize, |size, (key, value)| {
+                if key.len() > MAX_JWK_MEMBER_BYTES {
+                    return Err("JWK extension name exceeds 16384 bytes".to_string());
+                }
+                size.checked_add(key.len())
+                    .and_then(|size| {
+                        bounded_json_value_size(value, depth + 1)
+                            .ok()
+                            .and_then(|value_size| size.checked_add(value_size))
+                    })
+                    .ok_or_else(|| "JWK extension size overflow".to_string())
+            })
+        }
+    }
+}
+
+#[derive(Clone)]
+struct BoundedValueSeed {
+    depth: usize,
+    remaining: Rc<Cell<usize>>,
+}
+
+impl BoundedValueSeed {
+    fn consume<E: serde::de::Error>(&self, amount: usize) -> Result<(), E> {
+        let remaining = self.remaining.get();
+        if amount > remaining {
+            return Err(E::custom("JWK extensions exceed 65536 bytes"));
+        }
+        self.remaining.set(remaining - amount);
+        Ok(())
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for BoundedValueSeed {
+    type Value = serde_json::Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        if self.depth > MAX_JWK_EXTENSION_DEPTH {
+            return Err(serde::de::Error::custom(
+                "JWK extension nesting exceeds 8 levels",
+            ));
+        }
+        deserializer.deserialize_any(BoundedValueVisitor(self))
+    }
+}
+
+struct BoundedValueVisitor(BoundedValueSeed);
+
+impl<'de> serde::de::Visitor<'de> for BoundedValueVisitor {
+    type Value = serde_json::Value;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("bounded JSON extension data")
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        self.0.consume(1)?;
+        Ok(serde_json::Value::Null)
+    }
+    fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        self.visit_unit()
+    }
+    fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+        self.0.consume(1)?;
+        Ok(serde_json::Value::Bool(value))
+    }
+    fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        self.0.consume(8)?;
+        Ok(value.into())
+    }
+    fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        self.0.consume(8)?;
+        Ok(value.into())
+    }
+    fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+        self.0.consume(8)?;
+        serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| E::custom("non-finite JWK extension number"))
+    }
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        if value.len() > MAX_JWK_MEMBER_BYTES {
+            return Err(E::custom("JWK extension string exceeds 16384 bytes"));
+        }
+        self.0.consume(value.len())?;
+        Ok(serde_json::Value::String(value.to_owned()))
+    }
+    fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+        if value.len() > MAX_JWK_MEMBER_BYTES {
+            return Err(E::custom("JWK extension string exceeds 16384 bytes"));
+        }
+        self.0.consume(value.len())?;
+        Ok(serde_json::Value::String(value))
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut sequence: A,
+    ) -> Result<Self::Value, A::Error> {
+        let mut values = Vec::new();
+        while values.len() < MAX_JWK_LIST_ITEMS {
+            let seed = BoundedValueSeed {
+                depth: self.0.depth + 1,
+                remaining: self.0.remaining.clone(),
+            };
+            match sequence.next_element_seed(seed)? {
+                Some(value) => values.push(value),
+                None => return Ok(serde_json::Value::Array(values)),
+            }
+        }
+        if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
+            return Err(serde::de::Error::custom(
+                "JWK extension array exceeds 128 items",
+            ));
+        }
+        Ok(serde_json::Value::Array(values))
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut values = serde_json::Map::new();
+        while values.len() < MAX_JWK_EXTENSION_MEMBERS {
+            let Some(key) = map.next_key::<BoundedString>()? else {
+                return Ok(serde_json::Value::Object(values));
+            };
+            if values.contains_key(&key.0) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate JWK extension member '{}'",
+                    key.0
+                )));
+            }
+            self.0.consume(key.0.len())?;
+            let seed = BoundedValueSeed {
+                depth: self.0.depth + 1,
+                remaining: self.0.remaining.clone(),
+            };
+            values.insert(key.0, map.next_value_seed(seed)?);
+        }
+        if map.next_key::<serde::de::IgnoredAny>()?.is_some() {
+            return Err(serde::de::Error::custom(
+                "JWK extension object exceeds 32 members",
+            ));
+        }
+        Ok(serde_json::Value::Object(values))
+    }
+}
 
 const RESERVED_EXTENSION_MEMBERS: [&str; 23] = [
     "kty", "use", "key_ops", "alg", "kid", "x5u", "x5c", "x5t", "x5t#S256", "crv", "x", "y", "n",
@@ -17,6 +343,21 @@ const RESERVED_EXTENSION_MEMBERS: [&str; 23] = [
 fn validate_public_extensions(
     extensions: &HashMap<String, serde_json::Value>,
 ) -> Result<(), String> {
+    if extensions.len() > MAX_JWK_EXTENSION_MEMBERS {
+        return Err("JWK extensions exceed 32 members".to_string());
+    }
+    let size = extensions.iter().try_fold(0usize, |size, (key, value)| {
+        if key.len() > MAX_JWK_MEMBER_BYTES {
+            return Err("JWK extension name exceeds 16384 bytes".to_string());
+        }
+        let value_size = bounded_json_value_size(value, 0)?;
+        size.checked_add(key.len())
+            .and_then(|size| size.checked_add(value_size))
+            .ok_or_else(|| "JWK extensions exceed their size limit".to_string())
+    })?;
+    if size > MAX_PUBLIC_JWK_JSON_BYTES {
+        return Err("JWK extensions exceed 65536 bytes".to_string());
+    }
     if let Some(member) = RESERVED_EXTENSION_MEMBERS
         .iter()
         .find(|member| extensions.contains_key(**member))
@@ -28,88 +369,117 @@ fn validate_public_extensions(
     Ok(())
 }
 
-fn deserialize_public_extensions<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<String, serde_json::Value>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let extensions = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
-    validate_public_extensions(&extensions).map_err(serde::de::Error::custom)?;
-    Ok(extensions)
-}
-
-#[cfg(not(any(test, feature = "local-key-operations")))]
-fn reject_private_key_material<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let _ = serde_json::Value::deserialize(deserializer)?;
-    Err(serde::de::Error::custom(
-        "private JWK material is disabled in this build",
-    ))
-}
-
 // ============================================================================
 // JWK Structure
 // ============================================================================
 
 /// JSON Web Key (RFC 7517).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Jwk {
     /// Key type (kty): EC, RSA, OKP, oct
+    #[serde(deserialize_with = "deserialize_bounded_string")]
     pub kty: String,
 
     /// Key use: sig (signature) or enc (encryption)
-    #[serde(rename = "use", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "use",
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub use_: Option<String>,
 
     /// Key operations: sign, verify, encrypt, decrypt, etc.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string_vec",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub key_ops: Option<Vec<String>>,
 
     /// Algorithm intended for use with this key
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub alg: Option<String>,
 
     /// Key ID
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub kid: Option<String>,
 
     /// X.509 URL
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub x5u: Option<String>,
 
     /// X.509 certificate chain
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string_vec",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub x5c: Option<Vec<String>>,
 
     /// X.509 certificate SHA-1 thumbprint
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub x5t: Option<String>,
 
     /// X.509 certificate SHA-256 thumbprint
-    #[serde(rename = "x5t#S256", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "x5t#S256",
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub x5t_s256: Option<String>,
 
     // EC parameters
     /// Curve name (P-256, P-384, P-521, Ed25519, X25519)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub crv: Option<String>,
 
     /// X coordinate (EC public key)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub x: Option<String>,
 
     /// Y coordinate (EC public key)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub y: Option<String>,
 
     /// D value (EC/OKP private key)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub d: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -119,18 +489,30 @@ pub struct Jwk {
 
     // RSA parameters
     /// Modulus (RSA)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub n: Option<String>,
 
     /// Exponent (RSA)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub e: Option<String>,
 
     /// Private exponent (RSA private key)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub rsa_d: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -139,10 +521,14 @@ pub struct Jwk {
     pub(crate) rsa_d: Option<String>,
 
     /// First prime factor (RSA private key)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub p: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -151,10 +537,14 @@ pub struct Jwk {
     pub(crate) p: Option<String>,
 
     /// Second prime factor (RSA private key)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub q: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -163,10 +553,14 @@ pub struct Jwk {
     pub(crate) q: Option<String>,
 
     /// First factor CRT exponent (RSA private key)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub dp: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -175,10 +569,14 @@ pub struct Jwk {
     pub(crate) dp: Option<String>,
 
     /// Second factor CRT exponent (RSA private key)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub dq: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -187,10 +585,14 @@ pub struct Jwk {
     pub(crate) dq: Option<String>,
 
     /// First CRT coefficient (RSA private key)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub qi: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -200,10 +602,14 @@ pub struct Jwk {
 
     // Symmetric key
     /// Key value (symmetric key, base64url-encoded)
-    #[cfg(any(test, feature = "local-key-operations"))]
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(test)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_bounded_option_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub k: Option<String>,
-    #[cfg(not(any(test, feature = "local-key-operations")))]
+    #[cfg(not(test))]
     #[serde(
         default,
         deserialize_with = "reject_private_key_material",
@@ -214,6 +620,161 @@ pub struct Jwk {
     /// Additional parameters
     #[serde(flatten, deserialize_with = "deserialize_public_extensions")]
     pub(crate) extra: HashMap<String, serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for Jwk {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct JwkVisitor;
+        impl<'de> serde::de::Visitor<'de> for JwkVisitor {
+            type Value = Jwk;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a bounded public JWK object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Jwk, A::Error> {
+                let mut jwk = Jwk::default();
+                let mut has_kty = false;
+                let mut seen_members = HashSet::new();
+                let budget = Rc::new(Cell::new(MAX_PUBLIC_JWK_JSON_BYTES));
+                macro_rules! optional_string {
+                    ($field:ident) => {{
+                        let value = map
+                            .next_value::<Option<BoundedString>>()?
+                            .map(|value| value.0);
+                        if let Some(value) = &value {
+                            BoundedValueSeed {
+                                depth: 0,
+                                remaining: budget.clone(),
+                            }
+                            .consume::<A::Error>(value.len())?;
+                        }
+                        jwk.$field = value;
+                    }};
+                }
+                while let Some(key) = map.next_key::<BoundedString>()? {
+                    if !seen_members.insert(key.0.clone()) {
+                        return Err(serde::de::Error::custom(format!(
+                            "duplicate JWK member '{}'",
+                            key.0
+                        )));
+                    }
+                    BoundedValueSeed {
+                        depth: 0,
+                        remaining: budget.clone(),
+                    }
+                    .consume::<A::Error>(key.0.len())?;
+                    match key.0.as_str() {
+                        "kty" => {
+                            jwk.kty = map.next_value::<BoundedString>()?.0;
+                            BoundedValueSeed {
+                                depth: 0,
+                                remaining: budget.clone(),
+                            }
+                            .consume::<A::Error>(jwk.kty.len())?;
+                            has_kty = true;
+                        }
+                        "use" => optional_string!(use_),
+                        "key_ops" => {
+                            jwk.key_ops = map.next_value_seed(BoundedOptionStringVecSeed)?;
+                            if let Some(values) = &jwk.key_ops {
+                                for value in values {
+                                    BoundedValueSeed {
+                                        depth: 0,
+                                        remaining: budget.clone(),
+                                    }
+                                    .consume::<A::Error>(value.len())?;
+                                }
+                            }
+                        }
+                        "alg" => optional_string!(alg),
+                        "kid" => optional_string!(kid),
+                        "x5u" => optional_string!(x5u),
+                        "x5c" => {
+                            jwk.x5c = map.next_value_seed(BoundedOptionStringVecSeed)?;
+                            if let Some(values) = &jwk.x5c {
+                                for value in values {
+                                    BoundedValueSeed {
+                                        depth: 0,
+                                        remaining: budget.clone(),
+                                    }
+                                    .consume::<A::Error>(value.len())?;
+                                }
+                            }
+                        }
+                        "x5t" => optional_string!(x5t),
+                        "x5t#S256" => optional_string!(x5t_s256),
+                        "crv" => optional_string!(crv),
+                        "x" => optional_string!(x),
+                        "y" => optional_string!(y),
+                        "n" => optional_string!(n),
+                        "e" => optional_string!(e),
+                        "d" | "rsa_d" | "p" | "q" | "dp" | "dq" | "qi" | "oth" | "k" => {
+                            #[cfg(test)]
+                            {
+                                let value = map
+                                    .next_value::<Option<BoundedString>>()?
+                                    .map(|value| value.0);
+                                if let Some(value) = &value {
+                                    BoundedValueSeed {
+                                        depth: 0,
+                                        remaining: budget.clone(),
+                                    }
+                                    .consume::<A::Error>(value.len())?;
+                                }
+                                match key.0.as_str() {
+                                    "d" => jwk.d = value,
+                                    "rsa_d" => jwk.rsa_d = value,
+                                    "p" => jwk.p = value,
+                                    "q" => jwk.q = value,
+                                    "dp" => jwk.dp = value,
+                                    "dq" => jwk.dq = value,
+                                    "qi" => jwk.qi = value,
+                                    "k" => jwk.k = value,
+                                    "oth" => {
+                                        return Err(serde::de::Error::custom(
+                                            "unsupported private JWK member oth",
+                                        ))
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            #[cfg(not(test))]
+                            {
+                                map.next_value::<serde::de::IgnoredAny>()?;
+                                return Err(serde::de::Error::custom(
+                                    "private JWK material is disabled in this build",
+                                ));
+                            }
+                        }
+                        _ => {
+                            if jwk.extra.len() == MAX_JWK_EXTENSION_MEMBERS {
+                                return Err(serde::de::Error::custom(
+                                    "JWK extensions exceed 32 members",
+                                ));
+                            }
+                            if RESERVED_EXTENSION_MEMBERS.contains(&key.0.as_str()) {
+                                return Err(serde::de::Error::custom(
+                                    "reserved JWK extension member",
+                                ));
+                            }
+                            let seed = BoundedValueSeed {
+                                depth: 0,
+                                remaining: budget.clone(),
+                            };
+                            jwk.extra.insert(key.0, map.next_value_seed(seed)?);
+                        }
+                    }
+                }
+                if !has_kty {
+                    return Err(serde::de::Error::missing_field("kty"));
+                }
+                Ok(jwk)
+            }
+        }
+        deserializer.deserialize_map(JwkVisitor)
+    }
 }
 
 impl Jwk {
@@ -320,6 +881,11 @@ impl Jwk {
 
     /// Parse from JSON string.
     pub fn from_json(json: &str) -> VerificationResult<Self> {
+        if json.len() > MAX_PUBLIC_JWK_JSON_BYTES {
+            return Err(VerificationError::internal(format!(
+                "JWK JSON exceeds {MAX_PUBLIC_JWK_JSON_BYTES} bytes"
+            )));
+        }
         serde_json::from_str(json)
             .map_err(|e| VerificationError::internal(format!("JWK parsing failed: {}", e)))
     }
@@ -415,6 +981,7 @@ pub enum KeyType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JwkSet {
     /// Array of JWK values
+    #[serde(deserialize_with = "deserialize_bounded_jwk_vec")]
     pub keys: Vec<Jwk>,
 }
 
@@ -451,8 +1018,19 @@ impl JwkSet {
 
     /// Parse from JSON string.
     pub fn from_json(json: &str) -> VerificationResult<Self> {
-        serde_json::from_str(json)
-            .map_err(|e| VerificationError::internal(format!("JWK Set parsing failed: {}", e)))
+        if json.len() > MAX_JWK_SET_JSON_BYTES {
+            return Err(VerificationError::internal(format!(
+                "JWK Set JSON exceeds {MAX_JWK_SET_JSON_BYTES} bytes"
+            )));
+        }
+        let set: Self = serde_json::from_str(json)
+            .map_err(|e| VerificationError::internal(format!("JWK Set parsing failed: {}", e)))?;
+        if set.keys.len() > MAX_JWK_SET_KEYS {
+            return Err(VerificationError::internal(format!(
+                "JWK Set exceeds {MAX_JWK_SET_KEYS} keys"
+            )));
+        }
+        Ok(set)
     }
 }
 
@@ -467,7 +1045,7 @@ impl Default for JwkSet {
 // ============================================================================
 
 /// Generate a new EC P-256 JWK.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn generate_ec_p256() -> VerificationResult<Jwk> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p256::SecretKey;
@@ -495,7 +1073,7 @@ pub fn generate_ec_p256() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new EC P-384 JWK.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn generate_ec_p384() -> VerificationResult<Jwk> {
     use elliptic_curve::sec1::ToEncodedPoint;
     use p384::SecretKey;
@@ -523,39 +1101,41 @@ pub fn generate_ec_p384() -> VerificationResult<Jwk> {
 }
 
 /// Generate a new Ed25519 JWK.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn generate_ed25519() -> VerificationResult<Jwk> {
-    use marty_crypto::ed25519::Ed25519KeyPair;
+    use ed25519_dalek::SigningKey;
 
-    let keypair = Ed25519KeyPair::generate();
+    let keypair = SigningKey::generate(&mut rand::rngs::OsRng);
 
     Ok(Jwk {
         kty: "OKP".to_string(),
         crv: Some("Ed25519".to_string()),
-        x: Some(URL_SAFE_NO_PAD.encode(keypair.public_key())),
-        d: Some(URL_SAFE_NO_PAD.encode(keypair.secret_key())),
+        x: Some(URL_SAFE_NO_PAD.encode(keypair.verifying_key().to_bytes())),
+        d: Some(URL_SAFE_NO_PAD.encode(keypair.to_bytes())),
         ..Default::default()
     })
 }
 
 /// Generate a new X25519 JWK.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn generate_x25519() -> VerificationResult<Jwk> {
-    use marty_crypto::ecdh::x25519_generate_keypair;
+    use rand::rngs::OsRng;
+    use x25519_dalek::{PublicKey, StaticSecret};
 
-    let (secret, public) = x25519_generate_keypair();
+    let secret = StaticSecret::random_from_rng(OsRng);
+    let public = PublicKey::from(&secret);
 
     Ok(Jwk {
         kty: "OKP".to_string(),
         crv: Some("X25519".to_string()),
-        x: Some(URL_SAFE_NO_PAD.encode(public)),
-        d: Some(URL_SAFE_NO_PAD.encode(secret)),
+        x: Some(URL_SAFE_NO_PAD.encode(public.as_bytes())),
+        d: Some(URL_SAFE_NO_PAD.encode(secret.to_bytes())),
         ..Default::default()
     })
 }
 
 /// Generate a new symmetric key JWK.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn generate_symmetric(size: usize) -> VerificationResult<Jwk> {
     use rand::RngCore;
 
@@ -590,7 +1170,7 @@ pub fn import_ed25519_public(bytes: &[u8]) -> VerificationResult<Jwk> {
 }
 
 /// Import an Ed25519 private key from raw bytes.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn import_ed25519_private(secret: &[u8], public: &[u8]) -> VerificationResult<Jwk> {
     if secret.len() != 32 || public.len() != 32 {
         return Err(VerificationError::internal(
@@ -626,7 +1206,7 @@ pub fn export_ed25519_public(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
 }
 
 /// Export an Ed25519 private key to raw bytes.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn export_ed25519_private(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
     if jwk.kty != "OKP" || jwk.crv.as_deref() != Some("Ed25519") {
         return Err(VerificationError::internal(

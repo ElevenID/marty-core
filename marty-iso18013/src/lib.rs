@@ -96,6 +96,14 @@ pub use selective::SelectiveDisclosure;
 #[cfg(feature = "session-protocol")]
 pub use transport::Transport;
 
+// Keep the imported session compliance source unchanged while compiling it
+// inside the crate, where test-only compatibility helpers are available.
+#[cfg(all(test, feature = "session-protocol"))]
+extern crate self as marty_iso18013;
+#[cfg(all(test, feature = "session-protocol"))]
+#[path = "../tests/session_conformance.rs"]
+mod session_conformance;
+
 #[cfg(feature = "python")]
 #[pymodule]
 fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -6,10 +6,6 @@ use pyo3::types::PyBytes;
 use pyo3::types::PyDict;
 
 // ============================================================================
-// Key Derivation Bindings
-// ============================================================================
-
-// ============================================================================
 // Certificate Bindings
 // ============================================================================
 
@@ -106,35 +102,6 @@ pub(super) fn verify_certificate_signature(cert_der: &[u8], issuer_der: &[u8]) -
 // ============================================================================
 // Key Serialization Bindings
 // ============================================================================
-
-/// Load a private key from PEM format, return PKCS#8 DER.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn load_private_key_pem<'py>(
-    py: Python<'py>,
-    pem_data: &str,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let der = marty_crypto::serialization::load_private_key_pem(pem_data).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &der))
-}
-
-/// Validate/load a private key from DER format.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn load_private_key_der<'py>(
-    py: Python<'py>,
-    der_data: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let der = marty_crypto::serialization::load_private_key_der(der_data).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &der))
-}
-
-/// Save a private key to PEM format (PKCS#8).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn save_private_key_pem(private_key_der: &[u8]) -> PyResult<String> {
-    marty_crypto::serialization::save_private_key_pem(private_key_der).map_err(to_pyerr)
-}
 
 /// Load a public key from PEM format (SPKI), return DER.
 #[pyfunction]
@@ -236,25 +203,6 @@ pub(super) fn p256_public_jwk_to_pem(public_jwk_json: &str) -> PyResult<String> 
     marty_crypto::serialization::save_public_key_pem(&spki).map_err(to_pyerr)
 }
 
-/// Extract public key from private key (PKCS#8 DER).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn extract_public_key<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let pubkey =
-        marty_crypto::serialization::extract_public_key(private_key_der).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &pubkey))
-}
-
-/// Detect the type of a private key.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn detect_private_key_type(der_data: &[u8]) -> PyResult<String> {
-    marty_crypto::serialization::detect_private_key_type(der_data).map_err(to_pyerr)
-}
-
 /// Detect the type of a public key.
 #[pyfunction]
 pub(super) fn detect_public_key_type(der_data: &[u8]) -> PyResult<String> {
@@ -265,19 +213,6 @@ pub(super) fn detect_public_key_type(der_data: &[u8]) -> PyResult<String> {
 #[pyfunction]
 pub(super) fn get_key_size(public_key_der: &[u8]) -> PyResult<usize> {
     marty_crypto::serialization::get_key_size(public_key_der).map_err(to_pyerr)
-}
-
-/// Convert raw EC private key bytes to PKCS#8 DER format.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn raw_private_key_to_pkcs8<'py>(
-    py: Python<'py>,
-    raw_key: &[u8],
-    key_type: &str,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let der = marty_crypto::serialization::raw_private_key_to_pkcs8(raw_key, key_type)
-        .map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &der))
 }
 
 /// Convert raw public key bytes to SPKI DER format.
@@ -292,18 +227,6 @@ pub(super) fn raw_public_key_to_spki<'py>(
     Ok(PyBytes::new(py, &der))
 }
 
-/// Extract raw private key bytes from PKCS#8 DER format.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn pkcs8_to_raw_private_key<'py>(
-    py: Python<'py>,
-    pkcs8_der: &[u8],
-) -> PyResult<(Bound<'py, PyBytes>, String)> {
-    let (raw, key_type) =
-        marty_crypto::serialization::pkcs8_to_raw_private_key(pkcs8_der).map_err(to_pyerr)?;
-    Ok((PyBytes::new(py, &raw), key_type))
-}
-
 /// Extract raw public key bytes from SPKI DER format.
 #[pyfunction]
 pub(super) fn spki_to_raw_public_key<'py>(
@@ -315,148 +238,9 @@ pub(super) fn spki_to_raw_public_key<'py>(
     Ok((PyBytes::new(py, &raw), key_type))
 }
 
-/// Derive a key using HKDF-SHA256.
-#[pyfunction]
-pub(super) fn hkdf_sha256<'py>(
-    py: Python<'py>,
-    ikm: &[u8],
-    salt: &[u8],
-    info: &[u8],
-    length: usize,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result = marty_crypto::kdf::hkdf_sha256(ikm, salt, info, length).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &result))
-}
-
-/// Derive a key using HKDF-SHA384.
-#[pyfunction]
-pub(super) fn hkdf_sha384<'py>(
-    py: Python<'py>,
-    ikm: &[u8],
-    salt: &[u8],
-    info: &[u8],
-    length: usize,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result = marty_crypto::kdf::hkdf_sha384(ikm, salt, info, length).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &result))
-}
-
-/// Derive a key using PBKDF2-SHA256.
-#[pyfunction]
-pub(super) fn pbkdf2_sha256<'py>(
-    py: Python<'py>,
-    password: &[u8],
-    salt: &[u8],
-    iterations: u32,
-    key_length: usize,
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result = marty_crypto::kdf::pbkdf2_sha256(password, salt, iterations, key_length);
-    Ok(PyBytes::new(py, &result))
-}
-
-// ============================================================================
-// Symmetric Encryption Bindings
-// ============================================================================
-
-/// Encrypt data using AES-GCM.
-#[cfg(feature = "ephemeral-session-keys")]
-#[pyfunction]
-pub(super) fn aes_gcm_encrypt<'py>(
-    py: Python<'py>,
-    key: &[u8],
-    nonce: &[u8],
-    plaintext: &[u8],
-    aad: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result = match key.len() {
-        16 => marty_crypto::symmetric::aes_128_gcm_encrypt(key, nonce, plaintext, aad),
-        32 => marty_crypto::symmetric::aes_256_gcm_encrypt(key, nonce, plaintext, aad),
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "Key must be 16 bytes (AES-128) or 32 bytes (AES-256)",
-            ))
-        }
-    }
-    .map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &result))
-}
-
-/// Decrypt data using AES-GCM.
-#[cfg(feature = "ephemeral-session-keys")]
-#[pyfunction]
-pub(super) fn aes_gcm_decrypt<'py>(
-    py: Python<'py>,
-    key: &[u8],
-    nonce: &[u8],
-    ciphertext: &[u8],
-    aad: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result = match key.len() {
-        16 => marty_crypto::symmetric::aes_128_gcm_decrypt(key, nonce, ciphertext, aad),
-        32 => marty_crypto::symmetric::aes_256_gcm_decrypt(key, nonce, ciphertext, aad),
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "Key must be 16 bytes (AES-128) or 32 bytes (AES-256)",
-            ))
-        }
-    }
-    .map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &result))
-}
-
-/// Encrypt data using 3DES-CBC.
-#[cfg(feature = "ephemeral-session-keys")]
-#[pyfunction]
-pub(super) fn tdes_cbc_encrypt<'py>(
-    py: Python<'py>,
-    key: &[u8],
-    iv: &[u8],
-    plaintext: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result =
-        marty_crypto::des::tdes_cbc_encrypt_padded(key, iv, plaintext).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &result))
-}
-
-/// Decrypt data using 3DES-CBC.
-#[cfg(feature = "ephemeral-session-keys")]
-#[pyfunction]
-pub(super) fn tdes_cbc_decrypt<'py>(
-    py: Python<'py>,
-    key: &[u8],
-    iv: &[u8],
-    ciphertext: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result =
-        marty_crypto::des::tdes_cbc_decrypt_padded(key, iv, ciphertext).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &result))
-}
-
 // ============================================================================
 // Ed25519 Bindings
 // ============================================================================
-
-/// Generate an Ed25519 key pair.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ed25519_generate<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ed25519::generate_keypair();
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Sign a message with Ed25519.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ed25519_sign<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ed25519::sign(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
 
 /// Verify an Ed25519 signature.
 #[pyfunction]
@@ -474,99 +258,9 @@ pub(super) fn ed25519_verify(
 // ECDH Bindings
 // ============================================================================
 
-/// Generate an X25519 key pair.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn x25519_generate<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ecdh::x25519_generate_keypair();
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Perform X25519 key agreement.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn x25519_agree<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    peer_public: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let keypair =
-        marty_crypto::ecdh::X25519KeyPair::from_secret_key(secret_key).map_err(to_pyerr)?;
-    let shared = keypair.agree(peer_public).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &shared))
-}
-
-/// Generate a P-256 key pair.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn p256_generate<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ecdh::p256_generate_keypair();
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Perform P-256 ECDH key agreement.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn p256_agree<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    peer_public: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let result = marty_crypto::ecdh::p256_agree(secret_key, peer_public).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &result))
-}
-
 // ============================================================================
 // ECDSA Signing Bindings
 // ============================================================================
-
-/// Generate a P-256 ECDSA key pair for signing.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ecdsa_p256_generate<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ecdsa::generate_p256_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Generate a P-384 ECDSA key pair for signing.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ecdsa_p384_generate<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ecdsa::generate_p384_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Sign a message with ECDSA P-256 SHA-256 (ES256).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ecdsa_p256_sign<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ecdsa::sign_p256_sha256(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with ECDSA P-384 SHA-384 (ES384).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ecdsa_p384_sign<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ecdsa::sign_p384_sha384(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
 
 /// Verify an ECDSA P-256 SHA-256 signature.
 #[pyfunction]
@@ -588,28 +282,6 @@ pub(super) fn ecdsa_p384_verify(
     marty_crypto::ecdsa::verify_p384_sha384(public_key, message, signature).map_err(to_pyerr)
 }
 
-/// Generate a P-521 ECDSA key pair for signing.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ecdsa_p521_generate<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (secret, public) = marty_crypto::ecdsa::generate_p521_keypair().map_err(to_pyerr)?;
-    Ok((PyBytes::new(py, &secret), PyBytes::new(py, &public)))
-}
-
-/// Sign a message with ECDSA P-521 SHA-512 (ES512).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ecdsa_p521_sign<'py>(
-    py: Python<'py>,
-    secret_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ecdsa::sign_p521_sha512(secret_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
 /// Verify an ECDSA P-521 SHA-512 signature.
 #[pyfunction]
 pub(super) fn ecdsa_p521_verify(
@@ -623,100 +295,6 @@ pub(super) fn ecdsa_p521_verify(
 // ============================================================================
 // RSA Signing Bindings
 // ============================================================================
-
-/// Generate an RSA key pair (2048 bits by default).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-#[pyo3(signature = (bits = 2048))]
-pub(super) fn rsa_generate<'py>(
-    py: Python<'py>,
-    bits: usize,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (private_der, public_der) =
-        marty_crypto::rsa::generate_rsa_keypair(bits).map_err(to_pyerr)?;
-    Ok((
-        PyBytes::new(py, &private_der),
-        PyBytes::new(py, &public_der),
-    ))
-}
-
-/// Sign a message with RSA PKCS#1 v1.5 SHA-256 (RS256).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn rsa_pkcs1_sha256_sign<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::rsa::sign_pkcs1_sha256(private_key_der, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with RSA PKCS#1 v1.5 SHA-384 (RS384).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn rsa_pkcs1_sha384_sign<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::rsa::sign_pkcs1_sha384(private_key_der, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with RSA PKCS#1 v1.5 SHA-512 (RS512).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn rsa_pkcs1_sha512_sign<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::rsa::sign_pkcs1_sha512(private_key_der, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with RSA-PSS SHA-256 (PS256).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn rsa_pss_sha256_sign<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::rsa::sign_pss_sha256(private_key_der, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with RSA-PSS SHA-384 (PS384).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn rsa_pss_sha384_sign<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::rsa::sign_pss_sha384(private_key_der, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
-
-/// Sign a message with RSA-PSS SHA-512 (PS512).
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn rsa_pss_sha512_sign<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::rsa::sign_pss_sha512(private_key_der, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
 
 /// Verify an RSA PKCS#1 v1.5 SHA-256 signature.
 #[pyfunction]
@@ -779,94 +357,8 @@ pub(super) fn rsa_pss_sha512_verify(
 }
 
 // ============================================================================
-// Key Generation Bindings
-// ============================================================================
-
-/// Generate random bytes.
-#[pyfunction]
-pub(super) fn generate_random_bytes<'py>(py: Python<'py>, length: usize) -> Bound<'py, PyBytes> {
-    use rand::RngCore;
-
-    let mut bytes = vec![0u8; length];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    PyBytes::new(py, &bytes)
-}
-
-/// Generate a cryptographic key.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn generate_key<'py>(
-    py: Python<'py>,
-    key_type: &str,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    use marty_crypto::keygen::{generate_keypair, KeyType};
-
-    let kt = match key_type.to_lowercase().as_str() {
-        "ed25519" => KeyType::Ed25519,
-        "x25519" => KeyType::X25519,
-        "p256" | "ecdsa_p256" | "ec_p256" => KeyType::EcdsaP256,
-        "p384" | "ecdsa_p384" | "ec_p384" => KeyType::EcdsaP384,
-        "rsa2048" => KeyType::Rsa2048,
-        "rsa3072" => KeyType::Rsa3072,
-        "rsa4096" => KeyType::Rsa4096,
-        "aes128" => KeyType::Aes128,
-        "aes256" => KeyType::Aes256,
-        "hmac256" | "hmac_sha256" => KeyType::HmacSha256,
-        "hmac384" | "hmac_sha384" => KeyType::HmacSha384,
-        "hmac512" | "hmac_sha512" => KeyType::HmacSha512,
-        _ => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Unknown key type: {}",
-                key_type
-            )))
-        }
-    };
-
-    let key = generate_keypair(kt).map_err(to_pyerr)?;
-    Ok((
-        PyBytes::new(py, &key.private_key),
-        PyBytes::new(py, &key.public_key),
-    ))
-}
-
-// ============================================================================
 // Ed448 Bindings
 // ============================================================================
-
-/// Generate an Ed448 key pair.
-///
-/// Returns:
-///     Tuple of (private_key_bytes, public_key_bytes)
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ed448_generate<'py>(
-    py: Python<'py>,
-) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
-    let (private_key, public_key) = marty_crypto::ed448::ed448_generate().map_err(to_pyerr)?;
-    Ok((
-        PyBytes::new(py, &private_key),
-        PyBytes::new(py, &public_key),
-    ))
-}
-
-/// Sign a message using Ed448.
-///
-/// Args:
-///     private_key: 57-byte private key
-///     message: Message to sign
-///
-/// Returns:
-///     114-byte signature
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn ed448_sign<'py>(
-    py: Python<'py>,
-    private_key: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature = marty_crypto::ed448::ed448_sign(private_key, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
-}
 
 /// Verify an Ed448 signature.
 ///
@@ -885,112 +377,6 @@ pub(super) fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) 
 // ============================================================================
 // PKCS#12 Bindings
 // ============================================================================
-
-/// Parsed PKCS#12 data.
-#[cfg(feature = "local-key-operations")]
-#[pyclass(name = "Pkcs12Data")]
-pub struct PyPkcs12Data {
-    #[pyo3(get)]
-    pub private_key_algorithm: String,
-    #[pyo3(get)]
-    pub certificate_subject: Option<String>,
-    #[pyo3(get)]
-    pub friendly_name: Option<String>,
-    #[pyo3(get)]
-    pub chain_length: usize,
-    private_key_der: Vec<u8>,
-    certificate_der: Vec<u8>,
-    certificate_chain: Vec<Vec<u8>>,
-}
-
-#[cfg(feature = "local-key-operations")]
-impl Drop for PyPkcs12Data {
-    fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.private_key_der);
-    }
-}
-
-#[cfg(feature = "local-key-operations")]
-#[pymethods]
-impl PyPkcs12Data {
-    /// Get the private key in DER format.
-    fn private_key_der<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.private_key_der)
-    }
-
-    /// Get the private key in PEM format.
-    fn private_key_pem(&self) -> PyResult<String> {
-        pem_rfc7468::encode_string(
-            "PRIVATE KEY",
-            pem_rfc7468::LineEnding::LF,
-            &self.private_key_der,
-        )
-        .map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Failed to encode PEM: {}", e))
-        })
-    }
-
-    /// Get the certificate in DER format.
-    fn certificate_der<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.certificate_der)
-    }
-
-    /// Get the certificate in PEM format.
-    fn certificate_pem(&self) -> PyResult<String> {
-        pem_rfc7468::encode_string(
-            "CERTIFICATE",
-            pem_rfc7468::LineEnding::LF,
-            &self.certificate_der,
-        )
-        .map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("Failed to encode PEM: {}", e))
-        })
-    }
-
-    /// Get the certificate chain in PEM format.
-    fn chain_pem(&self) -> PyResult<Vec<String>> {
-        let mut result = vec![self.certificate_pem()?];
-        for cert in &self.certificate_chain {
-            let pem = pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, cert)
-                .map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!("Failed to encode PEM: {}", e))
-                })?;
-            result.push(pem);
-        }
-        Ok(result)
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "Pkcs12Data(algorithm={}, subject={:?}, chain_length={})",
-            self.private_key_algorithm, self.certificate_subject, self.chain_length
-        )
-    }
-}
-
-/// Parse a PKCS#12 (PFX) file.
-///
-/// Args:
-///     data: Raw PKCS#12 file bytes
-///     password: Password to decrypt the file
-///
-/// Returns:
-///     Pkcs12Data with private key, certificate, and chain
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn pkcs12_parse(data: &[u8], password: &str) -> PyResult<PyPkcs12Data> {
-    let mut parsed = marty_crypto::pkcs12::parse_pkcs12(data, password).map_err(to_pyerr)?;
-
-    Ok(PyPkcs12Data {
-        private_key_algorithm: parsed.private_key_algorithm.to_string(),
-        certificate_subject: parsed.certificate_subject.take(),
-        friendly_name: parsed.friendly_name.take(),
-        chain_length: parsed.certificate_chain.len() + 1,
-        private_key_der: std::mem::take(&mut parsed.private_key_der),
-        certificate_der: std::mem::take(&mut parsed.certificate_der),
-        certificate_chain: std::mem::take(&mut parsed.certificate_chain),
-    })
-}
 
 // ============================================================================
 // ISO 9796-2 Bindings
@@ -1096,19 +482,6 @@ pub(super) fn iso9796_recover<'py>(
             .map_err(to_pyerr)?;
 
     Ok(PyBytes::new(py, &recovered))
-}
-
-/// Create a Scheme 1 signature for passport-chip simulators and tests.
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn iso9796_scheme1_sign<'py>(
-    py: Python<'py>,
-    private_key_der: &[u8],
-    message: &[u8],
-) -> PyResult<Bound<'py, PyBytes>> {
-    let signature =
-        marty_crypto::iso9796::iso9796_scheme1_sign(private_key_der, message).map_err(to_pyerr)?;
-    Ok(PyBytes::new(py, &signature))
 }
 
 #[cfg(feature = "csca")]

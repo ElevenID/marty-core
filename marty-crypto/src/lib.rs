@@ -25,31 +25,20 @@
 //! //   --features signature-verification
 //! ```
 
-#[cfg(all(
-    feature = "kms-only",
-    any(
-        feature = "bbs",
-        feature = "cert-builder",
-        feature = "crl-builder",
-        feature = "ecdsa-local-signing",
-        feature = "eddsa-local-signing",
-        feature = "keygen",
-        feature = "pkcs12",
-        feature = "private-key-codec",
-        feature = "rsa-local-signing",
-        feature = "sod-builder"
-    )
-))]
-compile_error!(
-    "kms-only builds cannot include local signing, key generation, private-key codecs, or authority builders"
-);
-
 #[cfg(feature = "signature-verification")]
 pub mod algorithm_identifier;
-#[cfg(feature = "bbs")]
+#[cfg(feature = "bbs-verification")]
 pub mod bbs;
-#[cfg(feature = "cert-builder")]
-pub mod cert_builder;
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
+#[allow(dead_code)]
+mod cert_builder;
 #[cfg(feature = "x509-parsing")]
 pub mod certificate;
 #[cfg(feature = "crl")]
@@ -73,22 +62,60 @@ pub mod iso9796;
 pub mod jwk;
 #[cfg(feature = "kdf")]
 pub mod kdf;
-#[cfg(feature = "keygen")]
-pub mod keygen;
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
+#[allow(dead_code)]
+mod keygen;
 #[cfg(feature = "ocsp")]
 pub mod ocsp;
-#[cfg(feature = "pkcs12")]
-pub mod pkcs12;
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
+#[allow(dead_code)]
+mod pkcs12;
 #[cfg(feature = "rsa-verification")]
 pub mod rsa;
 #[cfg(feature = "public-key-codec")]
 pub mod serialization;
-#[cfg(feature = "sod-builder")]
-pub mod sod_builder;
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
+#[allow(dead_code, unused_imports)]
+mod sod_builder;
 #[cfg(feature = "symmetric")]
 pub mod symmetric;
 
 pub use error::{CryptoError, CryptoResult};
+
+// Preserve the unchanged local-signing CAVP sources as crate-internal tests.
+// `cfg(test)` is controlled by rustc and cannot be selected by dependants.
+#[cfg(all(test, any(feature = "signature-verification", feature = "ecdh")))]
+extern crate self as marty_crypto;
+#[cfg(all(test, feature = "ecdh", feature = "kdf"))]
+#[path = "../tests/cavp_ecdh.rs"]
+mod cavp_ecdh;
+#[cfg(all(test, feature = "signature-verification", feature = "ecdh"))]
+#[path = "../tests/cavp_ecdsa.rs"]
+mod cavp_ecdsa;
+#[cfg(all(test, feature = "signature-verification"))]
+#[path = "../tests/cavp_rsa.rs"]
+mod cavp_rsa;
 
 use serde::{Deserialize, Serialize};
 

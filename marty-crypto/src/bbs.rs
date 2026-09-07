@@ -1,7 +1,9 @@
 //! BBS+ signature operations.
 //!
-//! This module provides BBS+ signing, verification, and selective disclosure
-//! proof generation using the `zkryptium` crate (IETF draft-irtf-cfrg-bbs-signatures).
+//! Production builds provide BBS+ verification and holder-side selective
+//! disclosure proof generation using the `zkryptium` crate (IETF
+//! draft-irtf-cfrg-bbs-signatures). Issuer key generation and signing exist
+//! only in crate-internal regression tests.
 //!
 //! BBS+ signatures enable:
 //! - **Unlinkable selective disclosure**: Reveal a subset of signed messages
@@ -22,7 +24,10 @@
 //! - CRS-free (no trusted setup required)
 
 use crate::{CryptoError, CryptoResult};
-use zkryptium::bbsplus::keys::{BBSplusPublicKey, BBSplusSecretKey};
+use zkryptium::bbsplus::keys::BBSplusPublicKey;
+#[cfg(test)]
+use zkryptium::bbsplus::keys::BBSplusSecretKey;
+#[cfg(test)]
 use zkryptium::keys::pair::KeyPair;
 use zkryptium::schemes::algorithms::{BbsBls12381Sha256, BbsBls12381Shake256};
 use zkryptium::schemes::generics::{PoKSignature, Signature};
@@ -64,12 +69,14 @@ impl BbsCiphersuite {
 
 /// BBS+ key pair for multi-message signing and selective disclosure.
 #[derive(Clone)]
+#[cfg(test)]
 pub struct BbsKeyPair {
     secret_key: Vec<u8>,
     public_key: Vec<u8>,
     ciphersuite: BbsCiphersuite,
 }
 
+#[cfg(test)]
 impl BbsKeyPair {
     /// Generate a new BBS+ key pair.
     pub fn generate(ciphersuite: BbsCiphersuite) -> CryptoResult<Self> {
@@ -152,6 +159,18 @@ impl BbsKeyPair {
 }
 
 /// BBS+ public key for verification only.
+///
+/// Issuer key generation and signing are deliberately absent from production:
+///
+/// ```compile_fail
+/// let _ = marty_crypto::bbs::BbsKeyPair::generate(
+///     marty_crypto::bbs::BbsCiphersuite::Bls12381Sha256,
+/// );
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_crypto::bbs::bbs_sign;
+/// ```
 #[derive(Clone)]
 pub struct BbsVerifyingKey {
     public_key: Vec<u8>,
@@ -218,6 +237,7 @@ impl BbsVerifyingKey {
 // Standalone Functions
 // ============================================================================
 
+#[cfg(test)]
 fn parse_sk(bytes: &[u8]) -> CryptoResult<BBSplusSecretKey> {
     BBSplusSecretKey::from_bytes(bytes)
         .map_err(|e| CryptoError::internal(format!("Invalid BBS+ secret key: {:?}", e)))
@@ -229,6 +249,7 @@ fn parse_pk(bytes: &[u8]) -> CryptoResult<BBSplusPublicKey> {
 }
 
 /// Sign multiple messages with BBS+.
+#[cfg(test)]
 pub fn bbs_sign(
     secret_key: &[u8],
     public_key: &[u8],

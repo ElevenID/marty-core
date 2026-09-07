@@ -104,7 +104,7 @@ fn validate_digest_parameters(label: &str, parameters: Option<AnyRef<'_>>) -> Cr
     Ok(())
 }
 
-#[cfg(all(test, feature = "rsa-local-signing"))]
+#[cfg(test)]
 mod tests {
     use der::{asn1::Any, Decode, Encode};
     use rand::rngs::OsRng;

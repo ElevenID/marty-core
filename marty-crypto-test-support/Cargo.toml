@@ -1,0 +1,22 @@
+[package]
+name = "marty-crypto-test-support"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Non-publishable local signing fixtures for Marty tests"
+
+[dependencies]
+marty-crypto = { path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "rsa-verification"] }
+der = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["pkcs8"] }
+p256 = { workspace = true, features = ["arithmetic", "ecdsa", "pkcs8", "std"] }
+p384 = { workspace = true, features = ["arithmetic", "ecdsa", "pkcs8", "std"] }
+pem-rfc7468 = { workspace = true }
+pkcs8 = { workspace = true }
+rand = { workspace = true }
+rsa = { workspace = true, features = ["pem"] }
+sha2 = { workspace = true }

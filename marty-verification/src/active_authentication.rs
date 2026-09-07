@@ -51,7 +51,7 @@ pub fn build_internal_authenticate_apdu(challenge: &[u8]) -> VerificationResult<
             "Active Authentication challenge exceeds short APDU capacity",
         ));
     }
-    Ok(ApduCommand {
+    ApduCommand {
         cla: 0x00,
         ins: 0x88,
         p1: 0x00,
@@ -59,7 +59,7 @@ pub fn build_internal_authenticate_apdu(challenge: &[u8]) -> VerificationResult<
         data: challenge.to_vec(),
         le: Some(0),
     }
-    .to_bytes())
+    .to_bytes()
 }
 
 /// Parse a successful INTERNAL AUTHENTICATE response and return its signature.
@@ -118,9 +118,7 @@ pub fn verify_challenge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marty_crypto::iso9796::iso9796_scheme1_sign;
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
-    use rsa::RsaPrivateKey;
+    use marty_crypto_test_support::rsa::{generate_rsa_keypair, sign_iso9796_scheme1};
 
     #[test]
     fn builds_and_parses_internal_authenticate_apdus() {
@@ -139,14 +137,11 @@ mod tests {
 
     #[test]
     fn verifies_only_the_exact_challenge() {
-        let private_key = RsaPrivateKey::new(&mut rand::rngs::OsRng, 1024).unwrap();
-        let private_der = private_key.to_pkcs8_der().unwrap();
-        let public_der = private_key.to_public_key().to_public_key_der().unwrap();
+        let (private_der, public_der) = generate_rsa_keypair(2048).unwrap();
         let challenge = b"0123456789abcdef";
-        let signature = iso9796_scheme1_sign(private_der.as_bytes(), challenge).unwrap();
-
+        let signature = sign_iso9796_scheme1(&private_der, challenge).unwrap();
         let valid = verify_challenge(
-            public_der.as_bytes(),
+            &public_der,
             challenge,
             &signature,
             Iso9796HashAlgorithm::Sha256,
@@ -158,12 +153,10 @@ mod tests {
             Some(challenge.as_slice())
         );
 
-        let contained_but_not_exact = b"xx0123456789abcdefyy";
-        let signature =
-            iso9796_scheme1_sign(private_der.as_bytes(), contained_but_not_exact).unwrap();
+        let signature = sign_iso9796_scheme1(&private_der, b"xx0123456789abcdefyy").unwrap();
         assert!(
             !verify_challenge(
-                public_der.as_bytes(),
+                &public_der,
                 challenge,
                 &signature,
                 Iso9796HashAlgorithm::Sha256,

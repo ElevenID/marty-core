@@ -9,6 +9,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{VerificationError, VerificationResult};
 
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+const MAX_EAC_APDU_PLAINTEXT_BYTES: usize = 65_535;
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+const MAX_EAC_PROTECTED_MESSAGE_BYTES: usize = 65_584;
+
 #[cfg(not(feature = "ephemeral-session-keys"))]
 /// Marker for EAC builds that verify certificates but cannot create or retain
 /// reader-side session key material.
@@ -28,10 +33,7 @@ use crate::error::{VerificationError, VerificationResult};
 /// ```
 pub struct NoEphemeralSessionKeys;
 
-#[cfg(all(
-    feature = "ephemeral-session-keys",
-    not(feature = "local-key-operations")
-))]
+#[cfg(feature = "ephemeral-session-keys")]
 /// Marker documenting raw EAC secret APIs excluded from production session builds.
 ///
 /// ```compile_fail
@@ -84,20 +86,35 @@ impl EacAlgorithm {
 }
 
 /// Generate an ephemeral key pair as `(private scalar, SEC1 public point)`.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn generate_ephemeral_keypair(
     algorithm: EacAlgorithm,
 ) -> VerificationResult<(Vec<u8>, Vec<u8>)> {
     generate_ephemeral_keypair_inner(algorithm)
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(test)]
 fn generate_ephemeral_keypair_inner(
     algorithm: EacAlgorithm,
 ) -> VerificationResult<(Vec<u8>, Vec<u8>)> {
+    use elliptic_curve::sec1::ToEncodedPoint;
+    use rand::rngs::OsRng;
+
     match algorithm {
-        EacAlgorithm::EcdhP256Sha256 => Ok(marty_crypto::ecdh::p256_generate_keypair()),
-        EacAlgorithm::EcdhP384Sha384 => Ok(marty_crypto::ecdh::p384_generate_keypair()),
+        EacAlgorithm::EcdhP256Sha256 => {
+            let key = p256::SecretKey::random(&mut OsRng);
+            Ok((
+                key.to_bytes().to_vec(),
+                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+            ))
+        }
+        EacAlgorithm::EcdhP384Sha384 => {
+            let key = p384::SecretKey::random(&mut OsRng);
+            Ok((
+                key.to_bytes().to_vec(),
+                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+            ))
+        }
         EacAlgorithm::EcdhBrainpoolP256r1Sha256 => Err(VerificationError::internal(
             "Brainpool P-256 EAC is unavailable in the native backend",
         )),
@@ -110,7 +127,7 @@ fn generate_ephemeral_keypair_inner(
 }
 
 /// Perform actual ECDH with a generated private scalar and chip public point.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn agree(
     algorithm: EacAlgorithm,
     private_key: &[u8],
@@ -119,7 +136,7 @@ pub fn agree(
     agree_inner(algorithm, private_key, peer_public_key)
 }
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
+#[cfg(test)]
 fn agree_inner(
     algorithm: EacAlgorithm,
     private_key: &[u8],
@@ -127,12 +144,30 @@ fn agree_inner(
 ) -> VerificationResult<Vec<u8>> {
     let peer = normalize_ec_point(peer_public_key)?;
     match algorithm {
-        EacAlgorithm::EcdhP256Sha256 => {
-            marty_crypto::ecdh::p256_agree(private_key, &peer).map_err(Into::into)
-        }
-        EacAlgorithm::EcdhP384Sha384 => {
-            marty_crypto::ecdh::p384_agree(private_key, &peer).map_err(Into::into)
-        }
+        EacAlgorithm::EcdhP256Sha256 => p256::SecretKey::from_slice(private_key)
+            .map_err(|error| VerificationError::internal(format!("Invalid P-256 key: {error}")))
+            .and_then(|secret| {
+                let public = p256::PublicKey::from_sec1_bytes(&peer).map_err(|error| {
+                    VerificationError::internal(format!("Invalid P-256 peer key: {error}"))
+                })?;
+                Ok(
+                    p256::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine())
+                        .raw_secret_bytes()
+                        .to_vec(),
+                )
+            }),
+        EacAlgorithm::EcdhP384Sha384 => p384::SecretKey::from_slice(private_key)
+            .map_err(|error| VerificationError::internal(format!("Invalid P-384 key: {error}")))
+            .and_then(|secret| {
+                let public = p384::PublicKey::from_sec1_bytes(&peer).map_err(|error| {
+                    VerificationError::internal(format!("Invalid P-384 peer key: {error}"))
+                })?;
+                Ok(
+                    p384::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine())
+                        .raw_secret_bytes()
+                        .to_vec(),
+                )
+            }),
         EacAlgorithm::EcdhBrainpoolP256r1Sha256 => Err(VerificationError::internal(
             "Brainpool P-256 EAC is unavailable in the native backend",
         )),
@@ -147,27 +182,61 @@ fn agree_inner(
 /// Stateful EAC chip-authentication exchange that retains and zeroizes the
 /// reader's ephemeral private scalar internally.
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
-pub struct EacHandshake {
-    algorithm: EacAlgorithm,
-    private_key: Vec<u8>,
-    public_key: Vec<u8>,
+enum EacEphemeralKeyPair {
+    P256(marty_crypto::ecdh::P256KeyPair),
+    P384(marty_crypto::ecdh::P384KeyPair),
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
-impl Drop for EacHandshake {
-    fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.private_key);
+impl EacEphemeralKeyPair {
+    fn generate(algorithm: EacAlgorithm) -> VerificationResult<Self> {
+        match algorithm {
+            EacAlgorithm::EcdhP256Sha256 => {
+                Ok(Self::P256(marty_crypto::ecdh::P256KeyPair::generate()))
+            }
+            EacAlgorithm::EcdhP384Sha384 => {
+                Ok(Self::P384(marty_crypto::ecdh::P384KeyPair::generate()))
+            }
+            EacAlgorithm::EcdhBrainpoolP256r1Sha256 => Err(VerificationError::internal(
+                "Brainpool P-256 EAC is unavailable in the native backend",
+            )),
+            EacAlgorithm::Rsa2048Sha256 | EacAlgorithm::Rsa3072Sha256 => Err(
+                VerificationError::internal("RSA key agreement is not defined for EAC"),
+            ),
+        }
     }
+
+    fn public_key(&self) -> Vec<u8> {
+        match self {
+            Self::P256(key) => key.public_key_uncompressed(),
+            Self::P384(key) => key.public_key_uncompressed(),
+        }
+    }
+
+    fn agree(self, peer_public_key: &[u8]) -> VerificationResult<zeroize::Zeroizing<Vec<u8>>> {
+        match self {
+            Self::P256(key) => key.agree(peer_public_key).map_err(Into::into),
+            Self::P384(key) => key.agree(peer_public_key).map_err(Into::into),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+pub struct EacHandshake {
+    algorithm: EacAlgorithm,
+    key_pair: Option<EacEphemeralKeyPair>,
+    public_key: Vec<u8>,
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl EacHandshake {
     /// Begin an ECDH chip-authentication exchange with OS-generated randomness.
     pub fn begin(algorithm: EacAlgorithm) -> VerificationResult<Self> {
-        let (private_key, public_key) = generate_ephemeral_keypair_inner(algorithm)?;
+        let key_pair = EacEphemeralKeyPair::generate(algorithm)?;
+        let public_key = key_pair.public_key();
         Ok(Self {
             algorithm,
-            private_key,
+            key_pair: Some(key_pair),
             public_key,
         })
     }
@@ -179,14 +248,12 @@ impl EacHandshake {
 
     /// Consume the handshake and retain only derived secure-messaging state.
     pub fn complete(mut self, chip_public_key: &[u8]) -> VerificationResult<EacSecureMessaging> {
-        use zeroize::Zeroize;
-
-        let shared_secret = zeroize::Zeroizing::new(agree_inner(
-            self.algorithm,
-            &self.private_key,
-            chip_public_key,
-        )?);
-        self.private_key.zeroize();
+        let peer = normalize_ec_point(chip_public_key)?;
+        let shared_secret = self
+            .key_pair
+            .take()
+            .ok_or_else(|| VerificationError::internal("EAC handshake already consumed"))?
+            .agree(&peer)?;
         EacSecureMessaging::from_shared_secret(&shared_secret, self.algorithm)
     }
 }
@@ -203,71 +270,6 @@ fn normalize_ec_point(point: &[u8]) -> VerificationResult<Vec<u8>> {
         33 | 49 | 65 | 97 if matches!(point[0], 0x02..=0x04) => Ok(point.to_vec()),
         _ => Err(VerificationError::internal(
             "Invalid EAC elliptic-curve public point",
-        )),
-    }
-}
-
-/// Serialize the generated EC private scalar as PKCS#8 for compatibility APIs.
-#[cfg(feature = "local-key-operations")]
-pub fn encode_private_key(
-    algorithm: EacAlgorithm,
-    private_key: &[u8],
-) -> VerificationResult<Vec<u8>> {
-    use elliptic_curve::pkcs8::EncodePrivateKey;
-    match algorithm {
-        EacAlgorithm::EcdhP256Sha256 => p256::SecretKey::from_slice(private_key)
-            .map_err(|error| VerificationError::internal(format!("Invalid P-256 key: {error}")))?
-            .to_pkcs8_der()
-            .map(|document| document.as_bytes().to_vec())
-            .map_err(|error| {
-                VerificationError::internal(format!("P-256 key encoding failed: {error}"))
-            }),
-        EacAlgorithm::EcdhP384Sha384 => p384::SecretKey::from_slice(private_key)
-            .map_err(|error| VerificationError::internal(format!("Invalid P-384 key: {error}")))?
-            .to_pkcs8_der()
-            .map(|document| document.as_bytes().to_vec())
-            .map_err(|error| {
-                VerificationError::internal(format!("P-384 key encoding failed: {error}"))
-            }),
-        _ => Err(VerificationError::internal(
-            "No EAC private-key encoding is available for this algorithm",
-        )),
-    }
-}
-
-/// Sign the chip challenge with a PKCS#8 terminal private key.
-#[cfg(feature = "local-key-operations")]
-pub fn sign_terminal_challenge(
-    algorithm: EacAlgorithm,
-    private_key_der: &[u8],
-    challenge: &[u8],
-) -> VerificationResult<Vec<u8>> {
-    use elliptic_curve::pkcs8::DecodePrivateKey;
-    if challenge.is_empty() {
-        return Err(VerificationError::internal(
-            "EAC terminal challenge must not be empty",
-        ));
-    }
-    match algorithm {
-        EacAlgorithm::EcdhP256Sha256 => {
-            let key = p256::SecretKey::from_pkcs8_der(private_key_der).map_err(|error| {
-                VerificationError::internal(format!("Invalid P-256 terminal key: {error}"))
-            })?;
-            marty_crypto::ecdsa::sign_p256_sha256(key.to_bytes().as_slice(), challenge)
-                .map_err(Into::into)
-        }
-        EacAlgorithm::EcdhP384Sha384 => {
-            let key = p384::SecretKey::from_pkcs8_der(private_key_der).map_err(|error| {
-                VerificationError::internal(format!("Invalid P-384 terminal key: {error}"))
-            })?;
-            marty_crypto::ecdsa::sign_p384_sha384(key.to_bytes().as_slice(), challenge)
-                .map_err(Into::into)
-        }
-        EacAlgorithm::Rsa2048Sha256 | EacAlgorithm::Rsa3072Sha256 => {
-            marty_crypto::rsa::sign_pss_sha256(private_key_der, challenge).map_err(Into::into)
-        }
-        EacAlgorithm::EcdhBrainpoolP256r1Sha256 => Err(VerificationError::internal(
-            "Brainpool P-256 EAC is unavailable in the native backend",
         )),
     }
 }
@@ -339,7 +341,7 @@ pub fn serialize_certificate_metadata(
     .map_err(|error| VerificationError::internal(format!("EAC metadata encoding failed: {error}")))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn calculate_mac(key: &[u8], data: &[u8]) -> VerificationResult<Vec<u8>> {
     marty_crypto::symmetric::hmac_sha256(key, data).map_err(Into::into)
 }
@@ -363,7 +365,7 @@ impl Drop for EacSecureMessaging {
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl EacSecureMessaging {
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn new(shared_secret: &[u8], algorithm: EacAlgorithm) -> VerificationResult<Self> {
         Self::from_shared_secret(shared_secret, algorithm)
     }
@@ -405,7 +407,7 @@ impl EacSecureMessaging {
         })
     }
 
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn keys(&self) -> (&[u8; 32], &[u8; 32]) {
         (&self.mac_key, &self.encryption_key)
     }
@@ -419,7 +421,7 @@ impl EacSecureMessaging {
         self.encrypt_with_iv_inner(plaintext, &iv)
     }
 
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn encrypt_with_iv(&mut self, plaintext: &[u8], iv: &[u8]) -> VerificationResult<Vec<u8>> {
         self.encrypt_with_iv_inner(plaintext, iv)
     }
@@ -429,6 +431,11 @@ impl EacSecureMessaging {
         plaintext: &[u8],
         iv: &[u8],
     ) -> VerificationResult<Vec<u8>> {
+        if plaintext.len() > MAX_EAC_APDU_PLAINTEXT_BYTES {
+            return Err(VerificationError::internal(
+                "EAC APDU plaintext exceeds 65535 bytes",
+            ));
+        }
         let iv: [u8; 16] = iv
             .try_into()
             .map_err(|_| VerificationError::internal("EAC secure-messaging IV must be 16 bytes"))?;
@@ -448,7 +455,10 @@ impl EacSecureMessaging {
     }
 
     pub fn decrypt(&mut self, protected: &[u8]) -> VerificationResult<Vec<u8>> {
-        if protected.len() < 64 || !(protected.len() - 48).is_multiple_of(16) {
+        if protected.len() > MAX_EAC_PROTECTED_MESSAGE_BYTES
+            || protected.len() < 64
+            || !(protected.len() - 48).is_multiple_of(16)
+        {
             return Err(VerificationError::internal(
                 "Invalid EAC protected-message length",
             ));
@@ -496,9 +506,6 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "local-key-operations")]
-    use marty_crypto::ecdsa::verify_p256_sha256;
-
     #[test]
     fn p256_key_agreement_is_symmetric_and_rejects_bad_points() {
         let (left_private, left_public) =
@@ -533,14 +540,16 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "local-key-operations")]
-    fn terminal_challenge_signing_uses_the_native_key() {
-        let (private_key, public_key) = marty_crypto::ecdsa::generate_p256_keypair().unwrap();
-        let private_der = encode_private_key(EacAlgorithm::EcdhP256Sha256, &private_key).unwrap();
-        let challenge = b"chip-issued-terminal-authentication-challenge";
-        let signature =
-            sign_terminal_challenge(EacAlgorithm::EcdhP256Sha256, &private_der, challenge).unwrap();
-        assert!(verify_p256_sha256(&public_key, challenge, &signature).unwrap());
-        assert!(!verify_p256_sha256(&public_key, b"wrong", &signature).unwrap());
+    fn secure_messaging_rejects_oversized_apdu_before_crypto() {
+        let mut channel =
+            EacSecureMessaging::new(b"shared secret", EacAlgorithm::EcdhP256Sha256).unwrap();
+        assert!(channel
+            .encrypt(&vec![0u8; MAX_EAC_APDU_PLAINTEXT_BYTES + 1])
+            .is_err());
+        assert_eq!(channel.counters(), (0, 0));
+        assert!(channel
+            .decrypt(&vec![0u8; MAX_EAC_PROTECTED_MESSAGE_BYTES + 1])
+            .is_err());
+        assert_eq!(channel.counters(), (0, 0));
     }
 }

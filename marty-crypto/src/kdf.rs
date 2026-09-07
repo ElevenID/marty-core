@@ -227,6 +227,7 @@ pub fn derive_mdl_session_keys(
 /// # Returns
 ///
 /// Tuple of (k_enc, k_mac), each 16 bytes for 3DES.
+#[cfg(test)]
 pub fn derive_bac_keys(mrz_info: &str) -> (Vec<u8>, Vec<u8>) {
     use sha1::Digest;
 
@@ -248,6 +249,7 @@ pub fn derive_bac_keys(mrz_info: &str) -> (Vec<u8>, Vec<u8>) {
 }
 
 /// Derive a 3DES key from seed and counter.
+#[cfg(test)]
 fn derive_3des_key(k_seed: &[u8], counter: &[u8]) -> Vec<u8> {
     use sha1::Digest;
 
@@ -263,6 +265,7 @@ fn derive_3des_key(k_seed: &[u8], counter: &[u8]) -> Vec<u8> {
 }
 
 /// Adjust parity bits for DES keys.
+#[cfg(test)]
 fn adjust_parity(key: &mut [u8]) {
     for byte in key.iter_mut() {
         let parity = (*byte).count_ones() % 2;
@@ -271,6 +274,15 @@ fn adjust_parity(key: &mut [u8]) {
         }
     }
 }
+
+#[cfg(not(test))]
+/// Named BAC key-export helpers are excluded from production builds; use the
+/// opaque BAC handshake/session API in `marty-verification`.
+///
+/// ```compile_fail
+/// let _ = marty_crypto::kdf::derive_bac_keys("MRZ data");
+/// ```
+pub struct NoProtocolKeyExportApis;
 
 #[cfg(test)]
 mod tests {

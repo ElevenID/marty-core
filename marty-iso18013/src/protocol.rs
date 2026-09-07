@@ -5,15 +5,19 @@
 
 use crate::core::DeviceEngagement;
 use crate::error::{Error, Result};
-use crate::session::{SessionEncryption, SessionKeyAgreement};
+use crate::session::{SessionDirection, SessionEncryption, SessionKeyAgreement};
 use isomdl::definitions::helpers::Tag24;
 use isomdl::definitions::session::{Handover, SessionTranscript180135};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
+
+const MAX_SESSION_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_SESSION_TIMEOUT_SECS: u64 = 60 * 60;
 
 /// Session state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,12 +58,14 @@ pub struct SessionConfig {
 impl SessionConfig {
     #[new]
     #[pyo3(signature = (timeout_secs=300, max_message_size=1048576, verbose=false))]
-    fn py_new(timeout_secs: u64, max_message_size: usize, verbose: bool) -> Self {
-        Self {
+    fn py_new(timeout_secs: u64, max_message_size: usize, verbose: bool) -> PyResult<Self> {
+        let config = Self {
             timeout_secs,
-            max_message_size,
+            max_message_size: max_message_size.min(MAX_SESSION_MESSAGE_BYTES),
             verbose,
-        }
+        };
+        config.validate().map_err(Into::<PyErr>::into)?;
+        Ok(config)
     }
 
     #[getter]
@@ -68,8 +74,10 @@ impl SessionConfig {
     }
 
     #[setter]
-    fn set_timeout_secs(&mut self, value: u64) {
+    fn set_timeout_secs(&mut self, value: u64) -> PyResult<()> {
+        Self::validate_timeout(value).map_err(Into::<PyErr>::into)?;
         self.timeout_secs = value;
+        Ok(())
     }
 
     #[getter]
@@ -79,7 +87,7 @@ impl SessionConfig {
 
     #[setter]
     fn set_max_message_size(&mut self, value: usize) {
-        self.max_message_size = value;
+        self.max_message_size = value.min(MAX_SESSION_MESSAGE_BYTES);
     }
 }
 
@@ -90,6 +98,21 @@ impl Default for SessionConfig {
             max_message_size: 1024 * 1024, // 1 MB
             verbose: false,
         }
+    }
+}
+
+impl SessionConfig {
+    fn validate_timeout(timeout_secs: u64) -> Result<()> {
+        if !(1..=MAX_SESSION_TIMEOUT_SECS).contains(&timeout_secs) {
+            return Err(Error::InvalidRequest(format!(
+                "Session timeout must be between 1 and {MAX_SESSION_TIMEOUT_SECS} seconds"
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<()> {
+        Self::validate_timeout(self.timeout_secs)
     }
 }
 
@@ -107,6 +130,9 @@ pub struct Session {
 
     /// Configuration
     config: SessionConfig,
+
+    /// Monotonic deadline checked before every ephemeral secret operation.
+    deadline: Instant,
 
     role: SessionRole,
     engagement_bytes: Vec<u8>,
@@ -161,7 +187,7 @@ impl Session {
     fn public_key_py(&self) -> PyResult<Vec<u8>> {
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
-        Ok(runtime.block_on(self.public_key()))
+        runtime.block_on(self.public_key()).map_err(Into::into)
     }
 
     fn establish_py(&self, peer_public_key: &[u8]) -> PyResult<()> {
@@ -201,13 +227,9 @@ impl Session {
         engagement: &DeviceEngagement,
         config: SessionConfig,
     ) -> Result<Self> {
-        let secret = engagement.ephemeral_secret().ok_or_else(|| {
-            Error::InvalidEngagement(
-                "holder session requires a locally generated DeviceEngagement private key"
-                    .to_string(),
-            )
-        })?;
-        let key_agreement = SessionKeyAgreement::from_secret_key(secret)?;
+        config.validate()?;
+        let key_agreement =
+            SessionKeyAgreement::from_key_pair(engagement.take_ephemeral_key_pair()?);
         if key_agreement.public_key() != engagement.device_key {
             return Err(Error::InvalidEngagement(
                 "DeviceEngagement public key does not match its private key".to_string(),
@@ -221,6 +243,7 @@ impl Session {
         engagement: &DeviceEngagement,
         config: SessionConfig,
     ) -> Result<Self> {
+        config.validate()?;
         Self::new_for_role(
             engagement,
             config,
@@ -235,13 +258,18 @@ impl Session {
         key_agreement: SessionKeyAgreement,
         role: SessionRole,
     ) -> Result<Self> {
+        config.validate()?;
         let engagement_bytes = engagement.to_cbor()?;
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(config.timeout_secs))
+            .ok_or_else(|| Error::InvalidRequest("Session timeout is too large".to_string()))?;
 
         Ok(Self {
             state: Arc::new(RwLock::new(SessionState::Engagement)),
             encryption: Arc::new(RwLock::new(None)),
             key_agreement: Arc::new(RwLock::new(key_agreement)),
             config,
+            deadline,
             role,
             engagement_bytes,
             engagement_device_key: engagement.device_key.clone(),
@@ -250,16 +278,28 @@ impl Session {
 
     /// Get current session state
     pub async fn state(&self) -> SessionState {
+        let _ = self.ensure_not_expired().await;
         *self.state.read().await
     }
 
     /// Return this session's ephemeral public key for peer establishment.
-    pub async fn public_key(&self) -> Vec<u8> {
-        self.key_agreement.read().await.public_key()
+    pub async fn public_key(&self) -> Result<Vec<u8>> {
+        self.ensure_not_expired().await?;
+        if *self.state.read().await == SessionState::Terminated {
+            return Err(Error::InvalidState("Session is terminated".to_string()));
+        }
+        let key_agreement = self.key_agreement.read().await;
+        if Instant::now() >= self.deadline {
+            drop(key_agreement);
+            self.expire_session().await;
+            return Err(Error::Timeout);
+        }
+        Ok(key_agreement.public_key())
     }
 
     /// Establish secure session
     pub async fn establish(&self, peer_public_key: &[u8]) -> Result<()> {
+        self.ensure_not_expired().await?;
         let mut state = self.state.write().await;
 
         if *state != SessionState::Engagement {
@@ -276,21 +316,32 @@ impl Session {
 
         // Set peer key and derive shared secret.
         let mut ka = self.key_agreement.write().await;
-        ka.set_peer_key(peer_public_key.to_vec());
-        let shared_secret = ka.derive_shared_secret()?;
-
+        ka.validate_and_set_peer_key(peer_public_key.to_vec())?;
         let our_public_key = ka.public_key();
+        let shared_secret = ka.derive_shared_secret()?;
         let reader_public_key = match self.role {
             SessionRole::Device => peer_public_key,
             SessionRole::Reader => our_public_key.as_slice(),
         };
         let session_transcript =
             Self::build_session_transcript(&self.engagement_bytes, reader_public_key)?;
+        let send_direction = match self.role {
+            SessionRole::Device => SessionDirection::Device,
+            SessionRole::Reader => SessionDirection::Reader,
+        };
         let encryption = SessionEncryption::new_directional(
             &shared_secret,
             &session_transcript,
-            self.role == SessionRole::Device,
+            send_direction,
         )?;
+
+        if Instant::now() >= self.deadline {
+            ka.clear_private_state();
+            drop(ka);
+            *state = SessionState::Terminated;
+            *self.encryption.write().await = None;
+            return Err(Error::Timeout);
+        }
 
         *self.encryption.write().await = Some(encryption);
         *state = SessionState::Established;
@@ -300,18 +351,26 @@ impl Session {
 
     /// Encrypt and send a message
     pub async fn send_encrypted(&self, message: &[u8]) -> Result<Vec<u8>> {
+        self.ensure_not_expired().await?;
         if *self.state.read().await != SessionState::Established {
             return Err(Error::InvalidState(
                 "Cannot send outside an established session".to_string(),
             ));
         }
-        if message.len() > self.config.max_message_size {
+        let maximum_message_size = self.config.max_message_size.min(MAX_SESSION_MESSAGE_BYTES);
+        if message.len() > maximum_message_size {
             return Err(Error::InvalidRequest(format!(
                 "Message exceeds {} byte session limit",
-                self.config.max_message_size
+                maximum_message_size
             )));
         }
         let mut encryption = self.encryption.write().await;
+        if Instant::now() >= self.deadline {
+            *encryption = None;
+            drop(encryption);
+            self.expire_session().await;
+            return Err(Error::Timeout);
+        }
         let encryption = encryption
             .as_mut()
             .ok_or_else(|| Error::InvalidState("Session not established".to_string()))?;
@@ -321,18 +380,29 @@ impl Session {
 
     /// Receive and decrypt a message
     pub async fn receive_encrypted(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+        self.ensure_not_expired().await?;
         if *self.state.read().await != SessionState::Established {
             return Err(Error::InvalidState(
                 "Cannot receive outside an established session".to_string(),
             ));
         }
-        let maximum_ciphertext_size = self.config.max_message_size.saturating_add(16);
+        let maximum_ciphertext_size = self
+            .config
+            .max_message_size
+            .min(MAX_SESSION_MESSAGE_BYTES)
+            .saturating_add(16);
         if ciphertext.len() > maximum_ciphertext_size {
             return Err(Error::InvalidResponse(format!(
                 "Encrypted message exceeds {maximum_ciphertext_size} byte session limit"
             )));
         }
         let mut encryption = self.encryption.write().await;
+        if Instant::now() >= self.deadline {
+            *encryption = None;
+            drop(encryption);
+            self.expire_session().await;
+            return Err(Error::Timeout);
+        }
         let encryption = encryption
             .as_mut()
             .ok_or_else(|| Error::InvalidState("Session not established".to_string()))?;
@@ -345,7 +415,23 @@ impl Session {
         let mut state = self.state.write().await;
         *state = SessionState::Terminated;
         *self.encryption.write().await = None;
+        self.key_agreement.write().await.clear_private_state();
         Ok(())
+    }
+
+    async fn ensure_not_expired(&self) -> Result<()> {
+        if Instant::now() < self.deadline {
+            return Ok(());
+        }
+        self.expire_session().await;
+        Err(Error::Timeout)
+    }
+
+    async fn expire_session(&self) {
+        let mut state = self.state.write().await;
+        *state = SessionState::Terminated;
+        *self.encryption.write().await = None;
+        self.key_agreement.write().await.clear_private_state();
     }
 
     /// Build ISO 18013-5 `SessionTranscriptBytes`:
@@ -575,6 +661,23 @@ mod tests {
         assert!(config.verbose);
     }
 
+    #[tokio::test]
+    async fn session_rejects_pathological_timeouts_before_consuming_engagement_key() {
+        let engagement = DeviceEngagement::new_qr().unwrap();
+        for timeout_secs in [0, MAX_SESSION_TIMEOUT_SECS + 1] {
+            let config = SessionConfig {
+                timeout_secs,
+                ..SessionConfig::default()
+            };
+            assert!(Session::from_engagement(&engagement, config).await.is_err());
+        }
+        assert!(
+            Session::from_engagement(&engagement, SessionConfig::default())
+                .await
+                .is_ok()
+        );
+    }
+
     // ====================================================================
     // ResponseStatus
     // ====================================================================
@@ -658,9 +761,12 @@ mod tests {
         let session = Session::from_engagement(&engagement, config).await.unwrap();
 
         assert_eq!(session.state().await, SessionState::Engagement);
+        assert!(session.key_agreement.read().await.has_private_state());
 
         session.terminate().await.unwrap();
         assert_eq!(session.state().await, SessionState::Terminated);
+        assert!(!session.key_agreement.read().await.has_private_state());
+        assert!(session.public_key().await.is_err());
     }
 
     #[tokio::test]
@@ -686,6 +792,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_session_terminates_and_clears_encryption_keys() {
+        let engagement = DeviceEngagement::new_qr().unwrap();
+        let expiring_config = SessionConfig {
+            timeout_secs: 1,
+            ..SessionConfig::default()
+        };
+        let pre_establishment =
+            Session::reader_from_engagement(&engagement, expiring_config.clone())
+                .await
+                .unwrap();
+        assert!(pre_establishment
+            .key_agreement
+            .read()
+            .await
+            .has_private_state());
+        let session = Session::from_engagement(&engagement, expiring_config)
+            .await
+            .unwrap();
+        let peer = SessionKeyAgreement::new().unwrap();
+        session.establish(&peer.public_key()).await.unwrap();
+        assert!(session.encryption.read().await.is_some());
+
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        assert!(matches!(
+            pre_establishment.public_key().await,
+            Err(Error::Timeout)
+        ));
+        assert!(!pre_establishment
+            .key_agreement
+            .read()
+            .await
+            .has_private_state());
+        assert!(matches!(
+            session.send_encrypted(b"expired").await,
+            Err(Error::Timeout)
+        ));
+        assert_eq!(session.state().await, SessionState::Terminated);
+        assert!(session.encryption.read().await.is_none());
+        assert!(matches!(session.public_key().await, Err(Error::Timeout)));
+    }
+
+    #[tokio::test]
     async fn test_two_sessions_exchange_directional_messages() {
         let engagement = DeviceEngagement::new_qr().unwrap();
         let device = Session::from_engagement(&engagement, SessionConfig::default())
@@ -694,8 +842,8 @@ mod tests {
         let reader = Session::reader_from_engagement(&engagement, SessionConfig::default())
             .await
             .unwrap();
-        let device_key = device.public_key().await;
-        let reader_key = reader.public_key().await;
+        let device_key = device.public_key().await.unwrap();
+        let reader_key = reader.public_key().await.unwrap();
 
         device.establish(&reader_key).await.unwrap();
         reader.establish(&device_key).await.unwrap();

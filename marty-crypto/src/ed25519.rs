@@ -14,14 +14,14 @@
 //! - Small signatures (64 bytes) and keys (32 bytes)
 
 use ed25519_dalek::{Signature, Verifier, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey, SECRET_KEY_LENGTH};
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 use rand::rngs::OsRng;
 
 use crate::{CryptoError, CryptoResult};
 
-#[cfg(not(feature = "eddsa-local-signing"))]
+#[cfg(not(test))]
 /// Marker documenting the verifier-only EdDSA API boundary.
 ///
 /// Secret-key import and local signing do not exist in this build:
@@ -37,12 +37,12 @@ pub struct VerificationOnly;
 
 /// Ed25519 key pair for signing and verification.
 #[derive(Clone)]
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub struct Ed25519KeyPair {
     signing_key: SigningKey,
 }
 
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 impl Ed25519KeyPair {
     /// Generate a new random Ed25519 key pair.
     pub fn generate() -> Self {
@@ -159,7 +159,7 @@ impl Ed25519VerifyingKey {
 /// Generate a new Ed25519 key pair.
 ///
 /// Returns (secret_key, public_key) as 32-byte arrays.
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub fn generate_keypair() -> ([u8; SECRET_KEY_LENGTH], [u8; PUBLIC_KEY_LENGTH]) {
     let keypair = Ed25519KeyPair::generate();
     (keypair.secret_key(), keypair.public_key())
@@ -175,7 +175,7 @@ pub fn generate_keypair() -> ([u8; SECRET_KEY_LENGTH], [u8; PUBLIC_KEY_LENGTH]) 
 /// # Returns
 ///
 /// 64-byte signature.
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub fn sign(secret_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
     let keypair = Ed25519KeyPair::from_secret_key(secret_key)?;
     Ok(keypair.sign_vec(message))
@@ -264,7 +264,7 @@ pub fn verify_ed25519_spki(
 /// Parse a PEM-encoded Ed25519 private key.
 ///
 /// Supports PKCS#8 format: `-----BEGIN PRIVATE KEY-----`
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub fn parse_private_key_pem(pem: &str) -> CryptoResult<Ed25519KeyPair> {
     // Strip PEM headers and decode base64
     let lines: Vec<&str> = pem
@@ -282,7 +282,7 @@ pub fn parse_private_key_pem(pem: &str) -> CryptoResult<Ed25519KeyPair> {
 }
 
 /// Parse a DER-encoded Ed25519 private key (PKCS#8 format).
-#[cfg(feature = "eddsa-local-signing")]
+#[cfg(test)]
 pub fn parse_private_key_der(der: &[u8]) -> CryptoResult<Ed25519KeyPair> {
     // PKCS#8 structure for Ed25519:
     // SEQUENCE {
@@ -348,7 +348,7 @@ pub fn parse_public_key_der(der: &[u8]) -> CryptoResult<Ed25519VerifyingKey> {
 // Tests
 // ============================================================================
 
-#[cfg(all(test, feature = "eddsa-local-signing"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
