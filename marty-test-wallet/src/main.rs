@@ -13,6 +13,7 @@ use marty_oid4vci::{Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIs
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone)]
 struct AppState {
@@ -26,11 +27,17 @@ struct WalletData {
     credentials: Vec<StoredCredential>,
 }
 
-#[derive(Clone)]
 struct RemoteHolderSigner {
     client: reqwest::Client,
     key_id: String,
     public_jwk_json: String,
+    authentication_token: Zeroizing<String>,
+}
+
+impl Drop for RemoteHolderSigner {
+    fn drop(&mut self) {
+        self.authentication_token.zeroize();
+    }
 }
 
 // Keep the browser-facing test wallet unable to initiate requests to arbitrary
@@ -139,6 +146,23 @@ impl RemoteHolderSigner {
     fn from_env() -> Result<Self, String> {
         let key_id = required_env("MARTY_TEST_WALLET_HOLDER_KID")?;
         let public_jwk_json = required_env("MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK")?;
+        let authentication_token =
+            Zeroizing::new(required_env("MARTY_TEST_WALLET_HOLDER_SIGNER_TOKEN")?);
+        let decoded_token = Zeroizing::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(authentication_token.as_bytes())
+                .map_err(|_| {
+                    "MARTY_TEST_WALLET_HOLDER_SIGNER_TOKEN must be canonical base64url".to_string()
+                })?,
+        );
+        if decoded_token.len() != 32
+            || base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&*decoded_token)
+                != *authentication_token
+        {
+            return Err(
+                "MARTY_TEST_WALLET_HOLDER_SIGNER_TOKEN must encode exactly 32 bytes".to_string(),
+            );
+        }
         validate_public_jwk_json(&public_jwk_json, "holder public JWK")?;
         let jwk: Value = serde_json::from_str(&public_jwk_json).unwrap();
         if jwk.get("kty").and_then(Value::as_str) != Some("EC")
@@ -150,18 +174,25 @@ impl RemoteHolderSigner {
             client: Self::http_client()?,
             key_id,
             public_jwk_json,
+            authentication_token,
         })
     }
 
-    async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
-        let request = self.client.post(HOLDER_SIGNER_SIDECAR_URL);
-        let mut response = request
+    fn sign_request(&self, signing_input: &[u8]) -> reqwest::RequestBuilder {
+        self.client
+            .post(HOLDER_SIGNER_SIDECAR_URL)
+            .bearer_auth(self.authentication_token.as_str())
             .json(&RemoteSignRequest {
                 algorithm: "ES256",
                 key_id: &self.key_id,
                 signing_input: base64::engine::general_purpose::URL_SAFE_NO_PAD
                     .encode(signing_input),
             })
+    }
+
+    async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
+        let mut response = self
+            .sign_request(signing_input)
             .send()
             .await
             .map_err(|_| AppError::unprocessable("Opaque holder signer is unavailable"))?
@@ -738,6 +769,25 @@ mod tests {
         assert_eq!(endpoint.host_str(), Some("127.0.0.1"));
         assert_eq!(endpoint.port(), Some(8788));
         assert_eq!(endpoint.path(), "/sign");
+    }
+
+    #[test]
+    fn signer_request_uses_a_sensitive_bearer_credential() {
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0x5a; 32]);
+        let signer = RemoteHolderSigner {
+            client: RemoteHolderSigner::http_client().unwrap(),
+            key_id: "holder-key".into(),
+            public_jwk_json: r#"{"kty":"EC","crv":"P-256","x":"x","y":"y"}"#.into(),
+            authentication_token: Zeroizing::new(token.clone()),
+        };
+
+        let request = signer.sign_request(b"prepared bytes").build().unwrap();
+        let authorization = request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap();
+        assert_eq!(authorization.to_str().unwrap(), format!("Bearer {token}"));
+        assert!(authorization.is_sensitive());
     }
 
     #[tokio::test]

@@ -18,11 +18,16 @@ operator- or request-selected network locations.
 
 - `MARTY_TEST_WALLET_HOLDER_KID`: signer-owned holder key identifier.
 - `MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK`: public-only P-256 JWK JSON.
+- `MARTY_TEST_WALLET_HOLDER_SIGNER_TOKEN`: a canonical base64url encoding of
+  exactly 32 random bytes. The wallet sends it as a sensitive bearer credential;
+  the loopback sidecar must reject every request without the exact value.
 - `MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS`: JSON array of exact trust entries,
   each with `issuer`, optional `key_id`, `algorithm`, and `public_jwk`.
 
-The sidecar receives `algorithm`, `key_id`, and base64url `signing_input`, and
-returns `{ "signature": "<base64url raw ES256>" }`.
+After authenticating the bearer credential, the sidecar receives `algorithm`,
+`key_id`, and base64url `signing_input`, and returns
+`{ "signature": "<base64url raw ES256>" }`. Generate a fresh token for each
+test run and expose it only to the wallet and signer processes.
 
 The browser API returns display metadata only. Run it after configuring those
 values:
