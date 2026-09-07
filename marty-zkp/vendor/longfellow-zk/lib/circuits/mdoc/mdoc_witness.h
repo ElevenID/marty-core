@@ -35,6 +35,7 @@
 #include "circuits/mdoc/mdoc_hash.h"
 #include "circuits/mdoc/mdoc_zk.h"
 #include "circuits/sha/flatsha256_witness.h"
+#include "util/secure_wipe.h"
 #include "gf2k/gf2_128.h"
 #include "util/crypto.h"
 #include "util/log.h"
@@ -101,6 +102,12 @@ struct FullAttribute {
 
 class ParsedMdoc {
  public:
+  ~ParsedMdoc() {
+    secure_wipe_vector(attributes_);
+    secure_wipe_vector(doc_type_);
+    secure_wipe_vector(tagged_mso_bytes_);
+  }
+
   // Various cbor indices/witnesses for intermediate structures.
   CborIndex t_mso_, sig_, dksig_;
   CborIndex valid_, valid_from_, valid_until_;
@@ -449,6 +456,7 @@ template <class Field>
 void fill_bit_string(DenseFiller<Field>& filler, const uint8_t s[/*len*/],
                      size_t len, size_t max, const Field& Fs) {
   std::vector<typename Field::Elt> v(max * 8, Fs.of_scalar(2));
+  SecureWipeGuard<typename Field::Elt> wipe_v(v);
   for (size_t i = 0; i < max && i < len; ++i) {
     fill_byte(v, s[i], i, Fs);
   }
@@ -480,9 +488,11 @@ MdocProverErrorCode fill_attribute(DenseFiller<Field>& filler,
 
   // Both cases rely on the zero-padding of v.
   std::vector<typename Field::Elt> v(96 * 8, F.zero());
+  SecureWipeGuard<typename Field::Elt> wipe_v(v);
 
   if (version >= 7) {
     std::vector<uint8_t> vbuf;
+    SecureWipeGuard<uint8_t> wipe_vbuf(vbuf);
     append_text_len(vbuf, attr.id_len);
     vbuf.insert(vbuf.end(), attr.id, attr.id + attr.id_len);
     for (size_t j = 0; j < vbuf.size() && j < 32; ++j) {
@@ -509,6 +519,7 @@ MdocProverErrorCode fill_attribute(DenseFiller<Field>& filler,
     // version < 7
     // Append the length of the elementIdentifier.
     std::vector<uint8_t> vbuf;
+    SecureWipeGuard<uint8_t> wipe_vbuf(vbuf);
     append_text_len(vbuf, attr.id_len);
     vbuf.insert(vbuf.end(), attr.id, attr.id + attr.id_len);
     append_text_len(vbuf, 12);  // len of "elementValue"
@@ -557,6 +568,13 @@ class MdocSignatureWitness {
         dkw_(Fn, ec),
         macs_{MacWitnessF(ec.f_, gf_), MacWitnessF(ec.f_, gf_),
               MacWitnessF(ec.f_, gf_)} {}
+
+  ~MdocSignatureWitness() {
+    secure_wipe_object(e_);
+    secure_wipe_object(e2_);
+    secure_wipe_object(dpkx_);
+    secure_wipe_object(dpky_);
+  }
 
   void fill_witness(DenseFiller<Field>& filler) const {
     filler.push_back(e_);
@@ -648,6 +666,23 @@ class MdocHashWitness {
 
   explicit MdocHashWitness(size_t num_attr, const EC& ec, const Field& Fn)
       : ec_(ec), fn_(Fn), num_attr_(num_attr) {}
+
+  ~MdocHashWitness() {
+    secure_wipe_object(e_);
+    secure_wipe_object(dpkx_);
+    secure_wipe_object(dpky_);
+    secure_wipe_object(signed_bytes_);
+    secure_wipe_object(numb_);
+    secure_wipe_object(num_attr_);
+    for (auto& bytes : attr_bytes_) secure_wipe_vector(bytes);
+    for (auto& witnesses : atw_) secure_wipe_vector(witnesses);
+    secure_wipe_vector(attr_n_);
+    secure_wipe_vector(attr_mso_);
+    secure_wipe_vector(attr_ei_);
+    secure_wipe_vector(attr_ev_);
+    secure_wipe_vector(attr_sh_);
+    secure_wipe_object(bw_);
+  }
 
   void fill_cbor_index(DenseFiller<Field>& df, const CborIndex& ind) const {
     df.push_back(ind.k, kCborIndexBits, fn_);
@@ -741,6 +776,7 @@ class MdocHashWitness {
     if (version < 4) return MDOC_PROVER_VERSION_NOT_SUPPORTED;
 
     std::vector<uint8_t> buf;
+    SecureWipeGuard<uint8_t> wipe_buf(buf);
     if (pm_.t_mso_.len >= max_shablocks(version) * 64 - 9 - kCose1PrefixLen) {
       log(ERROR, "tagged mso is too big: %zu", pm_.t_mso_.len);
       return MDOC_PROVER_TAGGED_MSO_TOO_BIG;

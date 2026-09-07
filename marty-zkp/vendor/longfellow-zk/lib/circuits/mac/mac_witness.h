@@ -21,6 +21,7 @@
 #include "arrays/dense.h"
 #include "circuits/logic/bit_plucker_encoder.h"
 #include "gf2k/gf2_128.h"
+#include "util/secure_wipe.h"
 
 namespace proofs {
 
@@ -34,6 +35,11 @@ class MacWitness {
 
  public:
   explicit MacWitness(const Field& F, const f_128& GF) : f_(F), gf_(GF) {}
+
+  ~MacWitness() {
+    secure_wipe_object(ap_);
+    secure_wipe_object(x_);
+  }
 
   void fill_witness(DenseFiller<Field>& fill) const {
     packer bp(f_);
@@ -73,6 +79,8 @@ class MacGF2Witness {
   using gf2k = f_128::Elt;
 
  public:
+  ~MacGF2Witness() { secure_wipe_object(ap_); }
+
   void fill_witness(DenseFiller<f_128>& fill) const {
     fill.push_back(ap_[0]);
     fill.push_back(ap_[1]);

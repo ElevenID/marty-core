@@ -49,6 +49,7 @@
 #include "util/log.h"
 #include "util/panic.h"
 #include "util/readbuffer.h"
+#include "util/secure_wipe.h"
 #include "zk/zk_proof.h"
 #include "zk/zk_verifier.h"
 #include "zstd.h"
@@ -159,6 +160,7 @@ void compute_macs(size_t len, const Elt x[], gf2k gmacs[/* 6 */],
   f_128 gf;
   MACReference<f_128> mac_ref;
   uint8_t buf[Fp256Base::kBytes];
+  SecureObjectWipeGuard<uint8_t[Fp256Base::kBytes]> wipe_buf(buf);
 
   for (size_t i = 0; i < len; ++i) {
     p256_base.to_bytes_field(buf, x[i]);
@@ -173,6 +175,11 @@ struct ProverState {
   gf2k ap[6];     //  mac keys for the above
   using mac_witness = MacGF2Witness;
   mac_witness macs[3];
+
+  ~ProverState() {
+    secure_wipe_object(common);
+    secure_wipe_object(ap);
+  }
 };
 #endif
 
@@ -280,13 +287,17 @@ MdocProverErrorCode fill_witness(
   }
 
   // compute macs
-  state = {.common = {hw->e_, hw->dpkx_, hw->dpky_}};
+  state.common[0] = hw->e_;
+  state.common[1] = hw->dpkx_;
+  state.common[2] = hw->dpky_;
   MACReference<f_128> mac_ref;
   mac_ref.sample(state.ap, 6, &rng);
 
   uint8_t buf[Fp256Base::kBytes];
+  SecureObjectWipeGuard<uint8_t[Fp256Base::kBytes]> wipe_buf(buf);
 
   Fp256Base::Elt tt[3] = {hw->e_, hw->dpkx_, hw->dpky_};
+  SecureObjectWipeGuard<Fp256Base::Elt[3]> wipe_tt(tt);
   for (size_t i = 0; i < 3; ++i) {
     p256_base.to_bytes_field(buf, tt[i]);
     sw->macs_[i].compute_witness(&state.ap[2 * i], buf);
@@ -309,6 +320,7 @@ MdocProverErrorCode fill_witness(
 gf2k generate_mac_key(Transcript& t) {
   f_128 gf;
   uint8_t buf[f_128::kBytes];
+  SecureObjectWipeGuard<uint8_t[f_128::kBytes]> wipe_buf(buf);
   t.bytes(buf, f_128::kBytes);
   return gf.of_bytes_field(buf).value();
 }
@@ -535,7 +547,10 @@ MdocProverErrorCode run_mdoc_prover(
   // inputs.
 
   gf2k av = generate_mac_key(tp), macs[6];
+  SecureObjectWipeGuard<gf2k> wipe_av(av);
+  SecureObjectWipeGuard<gf2k[6]> wipe_macs(macs);
   uint8_t macs_b[6 * f_128::kBytes];
+  SecureObjectWipeGuard<uint8_t[6 * f_128::kBytes]> wipe_macs_b(macs_b);
   compute_macs(3, state.common, macs, macs_b, state.ap, av);
   update_macs(W_sig, W_hash, kSigMacIndex,
               getHashMacIndex(attrs_len, zk_spec->version), macs, av, Fs);

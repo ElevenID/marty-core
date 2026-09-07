@@ -30,6 +30,7 @@
 #include "sumcheck/transcript_sumcheck.h"
 #include "util/log.h"
 #include "util/panic.h"
+#include "util/secure_wipe.h"
 #include "zk/zk_common.h"
 #include "zk/zk_proof.h"
 
@@ -67,7 +68,18 @@ class ZkProver : public ProverLayers<Field> {
         pad_(c_.nl),
         witness_(n_witness_),
         lqc_(c_.nl),
-        lp_(nullptr) {}
+        lp_(nullptr) {
+    // Avoid reallocating after private witnesses have been copied. A vector
+    // growth would otherwise release an unwiped copy of the old allocation.
+    witness_.reserve(n_witness_ + ZkCommon<Field>::pad_size(c_));
+  }
+
+  ~ZkProver() {
+    lp_.reset();
+    secure_wipe_vector(witness_);
+    secure_wipe_vector(pad_.l);
+    secure_wipe_vector(lqc_);
+  }
 
   void commit(ZkProof<Field>& zkp, const Dense<Field>& W, Transcript& tp,
               RandomEngine& rng) {
@@ -95,6 +107,7 @@ class ZkProver : public ProverLayers<Field> {
     lp_ = std::make_unique<LigeroProver<Field, ReedSolomonFactory>>(zkp.param);
     lp_->commit(zkp.com, tp, &witness_[0], subfield_boundary, &lqc_[0], rsf_,
                 rng, f_);
+    secure_wipe_vector(witness_);
 
     log(INFO, "ZK Commitment done");
   }
@@ -122,15 +135,19 @@ class ZkProver : public ProverLayers<Field> {
     }
     bindings bnd;
     ProofAux<Field> aux(c_.nl);
+    SecureWipeGuard<Elt> wipe_bound_quad(aux.bound_quad);
 
     TranscriptSumcheck<Field> tsts(tst, f_);
     super::prove(&zkp.proof, &pad_, &c_, in, &aux, bnd, tsts, f_);
+    secure_wipe_vector(pad_.l);
     log(INFO, "ZK sumcheck done");
 
     // 5. Simulate the verifier to assemble constraints on the committed vals.
     //    Form the sparse matrix A and vector b such that A*w = b.
     std::vector<LigeroLinearConstraint<Field>> a;
+    SecureWipeGuard<LigeroLinearConstraint<Field>> wipe_a(a);
     std::vector<Elt> b;
+    SecureWipeGuard<Elt> wipe_b(b);
     size_t ci = ZkCommon<Field>::verifier_constraints(c_, W, zkp.proof, &aux, a,
                                                       b, tsp, n_witness_, f_);
     log(INFO, "ZK constraints done");
@@ -143,6 +160,8 @@ class ZkProver : public ProverLayers<Field> {
     const LigeroHash hash_of_A{0xde, 0xad, 0xbe, 0xef};
     lp_->prove(zkp.com_proof, tsp, ci, a.size(), &a[0], hash_of_A, &lqc_[0],
                rsf_, f_);
+    lp_.reset();
+    secure_wipe_vector(lqc_);
 
     log(INFO, "Prover Done: flag");
     return true;

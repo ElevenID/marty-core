@@ -29,6 +29,7 @@
 #include "random/transcript.h"
 #include "util/crypto.h"
 #include "util/panic.h"
+#include "util/secure_wipe.h"
 
 namespace proofs {
 template <class Field, class InterpolatorFactory>
@@ -38,6 +39,8 @@ class LigeroProver {
  public:
   explicit LigeroProver(const LigeroParam<Field> &p)
       : p_(p), mc_(p.block_enc - p.dblock), tableau_(p.nrow * p.block_enc) {}
+
+  ~LigeroProver() { secure_wipe_vector(tableau_); }
 
   // The SUBFIELD_BOUNDARY parameter is kind of a hack.
   //
@@ -95,6 +98,7 @@ class LigeroProver {
 
     {
       std::vector<Elt> u_ldt(p_.nwqrow);
+      SecureWipeGuard<Elt> wipe_u_ldt(u_ldt);
 
       // V -> P
       LigeroTranscript<Field>::gen_uldt(&u_ldt[0], p_, ts, F);
@@ -103,8 +107,11 @@ class LigeroProver {
 
     {
       std::vector<Elt> alphal(nl);
+      SecureWipeGuard<Elt> wipe_alphal(alphal);
       std::vector<std::array<Elt, 3>> alphaq(p_.nq);
+      SecureWipeGuard<std::array<Elt, 3>> wipe_alphaq(alphaq);
       std::vector<Elt> A(p_.nwqrow * p_.w);
+      SecureWipeGuard<Elt> wipe_A(A);
 
       // V -> P
       LigeroTranscript<Field>::gen_alphal(nl, &alphal[0], ts, F);
@@ -118,6 +125,7 @@ class LigeroProver {
 
     {
       std::vector<Elt> u_quad(p_.nqtriples);
+      SecureWipeGuard<Elt> wipe_u_quad(u_quad);
 
       // V -> P
       LigeroTranscript<Field>::gen_uquad(&u_quad[0], p_, ts, F);
@@ -293,6 +301,7 @@ class LigeroProver {
     Blas<Field>::copy(p_.dblock, y, 1, &tableau_at(p_.idot, 0), 1);
 
     std::vector<Elt> Aext(p_.dblock);
+    SecureWipeGuard<Elt> wipe_Aext(Aext);
     for (size_t i = 0; i < p_.nwqrow; ++i) {
       LigeroCommon<Field>::layout_Aext(&Aext[0], p_, i, &A[0], F);
       interpA->interpolate(&Aext[0]);
@@ -306,7 +315,9 @@ class LigeroProver {
   void quadratic_proof(Elt y0[/*r*/], Elt y2[/*dblock - block*/],
                        const Elt u_quad[/*nqtriples*/], const Field &F) {
     std::vector<Elt> y(p_.dblock);
+    SecureWipeGuard<Elt> wipe_y(y);
     std::vector<Elt> tmp(p_.dblock);
+    SecureWipeGuard<Elt> wipe_tmp(tmp);
 
     // IQUAD blinding row with coefficient 1
     Blas<Field>::copy(p_.dblock, &y[0], 1, &tableau_at(p_.iquad, 0), 1);
