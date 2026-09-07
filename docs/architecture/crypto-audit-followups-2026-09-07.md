@@ -1,6 +1,6 @@
 # Cryptography audit follow-ups
 
-Status: implementation complete; independent review and integration in progress
+Status: first review corrections implemented; clean re-review and integration pending
 
 Recorded: 2026-09-07
 
@@ -18,9 +18,9 @@ The exact implementation heads entering final review are:
 | Repository | Review head | Work completed |
 | --- | --- | --- |
 | `isomdl-elevenid` | `135df12ac4257e212b96ca632c2f609d6b98f876` | single-owner and zeroizing session secrets, redacted diagnostics, verification-only default, removal of production local mdoc signing, transactional authenticated-decryption counters |
-| `sd-jwt-rust` | `ea04ab35245814b6131b7984df796db76c2ca975` | opaque remote signing, holder/issuer/tooling feature isolation, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier |
-| `longfellow-zk` | `d92f2588f94be0567e8f26254bca7b9845cbe77c` | verifier-only default and guaranteed clearing of prover RNG, witness, field, folding, tableau, proof-auxiliary, padding, hash, and mdoc MAC buffers |
-| `marty-core` | `179b6bbe717946c641aa99fa7b553143c612d218` | exact KMS-signature binding, bounded native proving, zeroizing ZK inputs, QR/PNG feature isolation, fixed loopback signer boundary and mandatory authenticated requests |
+| `sd-jwt-rust` | `8ad5d9966b097b1f208ceb57bc3cad8bb4bdd2bb` | cryptographically bound opaque remote completion, holder/issuer/tooling feature isolation, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
+| `longfellow-zk` | `76ea9755a5d06c04d4eb741cde97da1cadae7499` | verifier-only default and targeted clearing of Rust and C++ prover RNG, witness, field, folding, tableau, proof-auxiliary, padding, hash, and mdoc MAC buffers |
+| `marty-core` | `f292cd3bd38460709cfadec7ec0c4e6a7742ec8d` | exact KMS-signature binding for all supported credential formats, bounded native proving, zeroizing ZK inputs, vendored C++ witness clearing, QR/PNG isolation, authenticated OS-IPC signer agent, and final fork pins |
 
 These are review heads, not final integrated or merged revisions. Update this
 section after every correction round and after ElevenID merge-queue CI.
@@ -39,19 +39,23 @@ Marty verifies every returned JWT, SD-JWT, and mdoc signature against the exact
 prepared bytes and expected public JWK before assembly. A signature over another
 payload, from another key, or using an incompatible algorithm fails closed.
 
-The test-wallet holder signer is confined to a fixed loopback endpoint, bypasses
-proxies, refuses redirects, and requires a fresh 32-byte canonical base64url
-bearer token. The token is stored in zeroizing memory and the authorization
-header is marked sensitive. The sidecar contract requires the same token and
-must reject missing or incorrect authentication.
+The test-wallet holder signer uses only OS-local IPC: a Windows named pipe that
+rejects remote clients or a Unix socket in a private directory. Every request
+and response is HMAC-bound to a fresh 32-byte authentication key. Requests also
+bind the version, random nonce, timestamp, algorithm, key ID, and exact signing
+input; stale and replayed requests fail closed. The implemented signer agent is
+the only component that can contact its operator-configured HTTPS KMS endpoint.
+Neither wallet nor agent handles a private key.
 
 ### Secret and witness lifetime
 
-Mdoc session keys and Longfellow/Marty witness, prover, transcript-working, RNG,
-padding, hash, MAC, and auxiliary buffers are cleared on all normal and early
-return paths by zeroizing guards or guaranteed destructor paths. Diagnostic
-representations no longer reveal mdoc session-key material. Marty FFI inputs
-that can contain requested claims or witness data also clear on drop.
+Mdoc session keys use zeroizing storage. The audited Longfellow/Marty witness,
+prover, transcript-working, RNG, padding, hash, MAC, and auxiliary allocations
+now use zeroizing guards or C++ destructor wipes on normal, error, and unwind
+paths covered by their owning scopes. Diagnostic representations no longer
+reveal mdoc session-key material. Marty FFI inputs that can contain requested
+claims or witness data also clear on drop. This is a targeted lifetime claim,
+not a claim that every allocation in either repository has been proven erased.
 
 ### Native prover resource bound
 
@@ -107,18 +111,26 @@ free of this advisory until its remaining graph is resolved.
 - SD-JWT native all-feature tests, role/feature checks, WebAssembly compilation,
   three WebAssembly runtime provider tests, strict linting, dependency-tree
   exclusion of `rsa`, and offline advisory audit pass.
-- Longfellow algebra, sumcheck, Ligero, runtime-ZK, mdoc-ZK unit and end-to-end
-  proof-vector tests pass, including current and legacy proof flows; affected
-  crates pass strict linting and the offline advisory audit.
+- Longfellow's complete Rust workspace passes, including algebra, sumcheck,
+  Ligero, runtime-ZK, mdoc-ZK unit and end-to-end proof vectors and current and
+  legacy proof flows, with no ignored tests. The changed C++ translation unit
+  passes syntax compilation in both verifier and prover configurations; its
+  utility has direct object/vector/scope-exit wipe tests. The full local native
+  link is unavailable on this Windows host because OpenSSL and zstd development
+  headers are absent, so ElevenID CI must run that required lane before merge.
 - Marty KMS/credential, bindings, ZK unit and conformance, ISO 18013 unit/CBOR/
-  COSE/mdoc/selective-disclosure, QR dependency-tree, and authenticated signer
-  tests pass. A strict all-features lint failure is confined to pre-existing
-  generated PyO3 deprecations outside this work's files.
+  COSE/mdoc/selective-disclosure, no-render QR profile, and authenticated signer
+  tests pass. The previously ignored wrong-witness ZK test now runs in mock mode
+  and passes. Signer-agent tests exercise real Windows named-pipe success and
+  wrong-key rejection plus missing MAC, stale nonce, replay, response binding,
+  and key validation, with no ignored tests. A strict all-features lint failure
+  is confined to pre-existing generated PyO3 deprecations outside this work's
+  files.
 
 Final acceptance still requires both independent reviewers to report no
-corrections, exact fork pin updates in Marty, full post-pin tests, ElevenID-only
-feature branches and pull requests, successful protected CI, self-review, and
-merge. No upstream repository will receive a branch, issue, or pull request.
+corrections, full post-pin tests, ElevenID-only pull requests, successful
+protected CI, self-review, and merge. The fork pins and ElevenID feature branches
+are current. No upstream repository will receive a branch, issue, or pull request.
 
 ## Deferred items
 
