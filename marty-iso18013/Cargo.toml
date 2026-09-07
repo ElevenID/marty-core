@@ -109,7 +109,7 @@ required-features = ["session-protocol"]
 
 [[test]]
 name = "mdoc_structure"
-required-features = ["session-protocol"]
+required-features = ["session-protocol", "qr-render"]
 
 [[test]]
 name = "selective_disclosure"

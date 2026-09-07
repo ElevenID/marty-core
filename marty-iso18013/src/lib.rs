@@ -21,10 +21,10 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! # #[cfg(feature = "session-protocol")]
+//! # #[cfg(all(feature = "session-protocol", feature = "qr-render"))]
 //! use marty_iso18013::{DeviceEngagement, Session, SessionConfig};
 //!
-//! # #[cfg(feature = "session-protocol")]
+//! # #[cfg(all(feature = "session-protocol", feature = "qr-render"))]
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create device engagement
 //! let engagement = DeviceEngagement::new_qr()?;
