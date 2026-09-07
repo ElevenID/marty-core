@@ -3174,6 +3174,44 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 [[package]]
 name = "isomdl"
 version = "0.2.0"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=058d67504d88143a2e136d9722a64fba668ee381#058d67504d88143a2e136d9722a64fba668ee381"
+dependencies = [
+ "anyhow",
+ "base64 0.13.1",
+ "ciborium",
+ "const-oid",
+ "coset",
+ "der 0.7.10",
+ "digest 0.10.7",
+ "ecdsa",
+ "elliptic-curve",
+ "getrandom 0.2.17",
+ "hex",
+ "isomdl-macros 0.1.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=058d67504d88143a2e136d9722a64fba668ee381)",
+ "p256",
+ "p384",
+ "p521",
+ "pem-rfc7468 0.7.0",
+ "rand 0.8.7",
+ "sec1",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "sha1",
+ "sha2 0.10.9",
+ "signature",
+ "strum 0.24.1",
+ "strum_macros 0.24.3",
+ "thiserror 1.0.69",
+ "time",
+ "tracing",
+ "uuid",
+ "x509-cert",
+]
+
+[[package]]
+name = "isomdl"
+version = "0.2.0"
 source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9#2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9"
 dependencies = [
  "aes",
@@ -3195,7 +3233,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
- "isomdl-macros",
+ "isomdl-macros 0.1.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9)",
  "p256",
  "p384",
  "p521",
@@ -3215,6 +3253,16 @@ dependencies = [
  "tracing",
  "uuid",
  "x509-cert",
+]
+
+[[package]]
+name = "isomdl-macros"
+version = "0.1.0"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=058d67504d88143a2e136d9722a64fba668ee381#058d67504d88143a2e136d9722a64fba668ee381"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4205,7 +4253,7 @@ dependencies = [
  "criterion",
  "hex",
  "image",
- "isomdl",
+ "isomdl 0.2.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9)",
  "marty-crypto",
  "marty-types",
  "marty-verification",
@@ -4237,7 +4285,7 @@ dependencies = [
  "criterion",
  "curve25519-dalek",
  "ed25519-dalek",
- "isomdl",
+ "isomdl 0.2.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=058d67504d88143a2e136d9722a64fba668ee381)",
  "jsonwebtoken",
  "k256",
  "marty-crypto",
@@ -4365,7 +4413,7 @@ dependencies = [
  "hex",
  "hmac",
  "iref",
- "isomdl",
+ "isomdl 0.2.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9)",
  "ldap3",
  "marty-crypto",
  "marty-crypto-test-support",
@@ -6408,7 +6456,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=302984b4431c331408c58c62f23a07339394c986#302984b4431c331408c58c62f23a07339394c986"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=dd8c78ab1717def722ef169a298a26cb4da484ef#dd8c78ab1717def722ef169a298a26cb4da484ef"
 dependencies = [
  "base64 0.21.7",
  "curve25519-dalek",

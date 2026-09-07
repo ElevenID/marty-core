@@ -4,14 +4,13 @@
 //! with credential requests. This replaces the previous insecure approach of
 //! only extracting the `kid` header without signature verification.
 //!
-//! It also exposes `create_proof_jwt` for generating spec-correct holder
-//! proof-of-possession JWTs (e.g. for integration tests and wallet clients).
+//! A local holder proof generator is retained only for crate-internal tests.
 
 use base64::Engine;
-#[cfg(any(test, feature = "holder-key-operations"))]
+#[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-#[cfg(any(test, feature = "holder-key-operations"))]
+#[cfg(test)]
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use ssi_jwk::{Params, JWK};
@@ -872,7 +871,7 @@ pub fn extract_proof_jwts(request: &crate::types::CredentialRequest) -> Oid4vciR
 // ---------------------------------------------------------------------------
 
 /// Base58btc encoder using the Bitcoin alphabet (no multibase prefix).
-#[cfg(any(test, feature = "holder-key-operations"))]
+#[cfg(test)]
 fn base58btc_encode(data: &[u8]) -> String {
     const ALPHA: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let n_leading = data.iter().take_while(|&&b| b == 0).count();
@@ -904,7 +903,7 @@ fn base58btc_encode(data: &[u8]) -> String {
 /// The returned JWT passes `verify_jwt_proof` because the `kid` is a `did:key`
 /// whose public key is resolved inline (no network I/O) and the signature is
 /// verified cryptographically.
-#[cfg(any(test, feature = "holder-key-operations"))]
+#[cfg(test)]
 pub fn create_proof_jwt(aud: &str, c_nonce: &str) -> Oid4vciResult<String> {
     // Generate ephemeral Ed25519 key pair
     let signing_key = SigningKey::generate(&mut OsRng);

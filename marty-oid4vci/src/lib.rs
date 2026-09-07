@@ -46,9 +46,6 @@
 //! }).unwrap();
 //! ```
 
-#[cfg(all(feature = "kms-only", feature = "holder-key-operations"))]
-compile_error!("kms-only builds cannot include holder key operations");
-
 #[cfg(test)]
 extern crate self as marty_oid4vci;
 
@@ -56,7 +53,7 @@ mod bounded_jwt;
 pub mod discovery;
 pub mod error;
 pub mod formats;
-#[cfg(any(test, feature = "holder-key-operations"))]
+#[cfg(test)]
 pub mod holder_key;
 pub mod issuance_input;
 #[cfg(feature = "issuer")]
@@ -96,7 +93,7 @@ pub mod wallet;
 mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
-#[cfg(any(test, feature = "holder-key-operations"))]
+#[cfg(test)]
 pub use holder_key::{
     generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
     DidJwkHolderKeyMaterial,
@@ -165,7 +162,6 @@ mod sd_jwt_vc_conformance;
 #[path = "../tests/sd_jwt_wallet_verified_presentation.rs"]
 mod sd_jwt_wallet_verified_presentation;
 
-#[cfg(not(feature = "holder-key-operations"))]
 /// Issuer and verifier artifacts cannot create holder proof keys.
 ///
 /// ```compile_fail
@@ -220,7 +216,9 @@ pub use wallet::{
     PresentationRequestQueryType, PresentationResponse, WalletEngine, ZkProofEntry,
 };
 #[cfg(feature = "wallet")]
-pub use wallet_sd_jwt::{ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver};
+pub use wallet_sd_jwt::{
+    PreparedSdJwtPresentation, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
+};
 
 #[cfg(feature = "lti")]
 pub use lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};

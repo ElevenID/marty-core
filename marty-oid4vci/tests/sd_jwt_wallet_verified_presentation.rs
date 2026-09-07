@@ -313,13 +313,16 @@ fn verified_presentation_rejects_invalid_issuer_signature() {
             &["email".into()],
             &fresh_nonce(),
             "https://verifier.example",
-            "not-a-holder-jwk",
+            &fixture.holder_private_jwk,
             &resolver_for(&fixture),
         )
         .unwrap_err();
 
     assert!(matches!(error, Oid4vciError::InvalidRequest(_)));
-    assert!(error.to_string().contains("issuer verification failed"));
+    assert!(
+        error.to_string().contains("issuer verification failed"),
+        "{error}"
+    );
 }
 
 #[test]

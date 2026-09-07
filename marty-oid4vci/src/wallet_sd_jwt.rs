@@ -70,7 +70,7 @@ impl ResolvedSdJwtIssuerKey {
 /// The `issuer`, `key_id`, and `algorithm` inputs are unverified key-selection
 /// hints. A resolver must apply its own allowlist and SSRF policy and must not
 /// treat those inputs as authenticated. After resolution,
-/// [`WalletEngine::create_verified_sd_jwt_presentation`](crate::wallet::WalletEngine::create_verified_sd_jwt_presentation)
+/// [`WalletEngine::prepare_verified_sd_jwt_presentation`](crate::wallet::WalletEngine::prepare_verified_sd_jwt_presentation)
 /// verifies the JWS before using its signed claims or the holder key.
 pub trait SdJwtIssuerKeyResolver {
     fn resolve(
@@ -81,6 +81,42 @@ pub trait SdJwtIssuerKeyResolver {
     ) -> Oid4vciResult<ResolvedSdJwtIssuerKey>;
 }
 
+/// Verified SD-JWT presentation awaiting an opaque holder-key signature.
+pub struct PreparedSdJwtPresentation {
+    inner: sd_jwt_rs::PreparedKeyBindingPresentation,
+}
+
+impl std::fmt::Debug for PreparedSdJwtPresentation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedSdJwtPresentation")
+            .field("algorithm", &SigningAlgorithm::ES256)
+            .field("contents", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PreparedSdJwtPresentation {
+    /// Algorithm the KMS, secure enclave, or platform keystore must use.
+    pub const fn algorithm(&self) -> SigningAlgorithm {
+        SigningAlgorithm::ES256
+    }
+
+    /// Exact ASCII JWS signing input to send to the opaque signer.
+    pub fn signing_input(&self) -> &[u8] {
+        self.inner.signing_input()
+    }
+
+    /// Assemble the key-bound presentation from the raw ES256 signature.
+    pub fn complete(self, signature: &[u8]) -> Oid4vciResult<String> {
+        self.inner.complete(signature).map_err(|_| {
+            Oid4vciError::SigningError(
+                "opaque holder signer returned an invalid ES256 signature".into(),
+            )
+        })
+    }
+}
+
 struct SdJwtIssuerContext {
     issuer: String,
     key_id: Option<String>,
@@ -89,15 +125,15 @@ struct SdJwtIssuerContext {
     payload: serde_json::Value,
 }
 
-/// Verify issuer and holder bindings before performing any KB-JWT signing.
-pub(crate) fn create_verified_presentation(
+/// Verify issuer and holder bindings before preparing any KB-JWT signing input.
+pub(crate) fn prepare_verified_presentation(
     credential: &str,
     claims_to_disclose: &[String],
     nonce: &str,
     audience: &str,
-    holder_jwk_json: &str,
+    holder_public_jwk_json: &str,
     issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
-) -> Oid4vciResult<String> {
+) -> Oid4vciResult<PreparedSdJwtPresentation> {
     use sd_jwt_rs::{SDJWTHolder, SDJWTSerializationFormat};
 
     if nonce.trim().is_empty() {
@@ -142,24 +178,54 @@ pub(crate) fn create_verified_presentation(
     )
     .map_err(|_| Oid4vciError::InvalidRequest("SD-JWT issuer verification failed".into()))?;
 
-    let (encoding_key, holder_public_key) = verified_p256_holder_key(holder_jwk_json)?;
-    validate_sd_jwt_holder_binding(&issuer_context.payload, &holder_public_key)?;
+    validate_sd_jwt_holder_binding(&issuer_context.payload, holder_public_jwk_json)?;
 
     let disclosures = claims_to_disclose
         .iter()
         .map(|claim| (claim.clone(), serde_json::Value::Bool(true)))
         .collect();
-    holder
-        .create_presentation(
+    let inner = holder
+        .prepare_key_binding_presentation(
             disclosures,
-            Some(nonce.to_string()),
-            Some(audience.to_string()),
-            Some(encoding_key),
+            nonce.to_string(),
+            audience.to_string(),
             Some("ES256".to_string()),
         )
         .map_err(|_| {
-            Oid4vciError::SigningError("Verified SD-JWT presentation creation failed".into())
-        })
+            Oid4vciError::SigningError("Verified SD-JWT presentation preparation failed".into())
+        })?;
+    Ok(PreparedSdJwtPresentation { inner })
+}
+
+#[cfg(test)]
+pub(crate) fn create_verified_presentation(
+    credential: &str,
+    claims_to_disclose: &[String],
+    nonce: &str,
+    audience: &str,
+    holder_private_jwk_json: &str,
+    issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
+) -> Oid4vciResult<String> {
+    use p256::ecdsa::signature::Signer as _;
+
+    let signing_key =
+        crate::holder_key::p256_signing_key_from_private_jwk(holder_private_jwk_json)?;
+    let mut public_jwk: serde_json::Value = serde_json::from_str(holder_private_jwk_json)
+        .map_err(|error| Oid4vciError::KeyError(error.to_string()))?;
+    public_jwk
+        .as_object_mut()
+        .ok_or_else(|| Oid4vciError::KeyError("Holder JWK must be an object".into()))?
+        .remove("d");
+    let prepared = prepare_verified_presentation(
+        credential,
+        claims_to_disclose,
+        nonce,
+        audience,
+        &public_jwk.to_string(),
+        issuer_key_resolver,
+    )?;
+    let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
+    prepared.complete(signature.to_bytes().as_slice())
 }
 
 fn parse_sd_jwt_issuer_context(credential: &str) -> Oid4vciResult<SdJwtIssuerContext> {
@@ -337,27 +403,9 @@ fn decode_p256_jwk_coordinate(value: &serde_json::Value, name: &str) -> Oid4vciR
     Ok(decoded)
 }
 
-fn verified_p256_holder_key(jwk_json: &str) -> Oid4vciResult<(jsonwebtoken::EncodingKey, Vec<u8>)> {
-    use p256::pkcs8::EncodePrivateKey as _;
-
-    let signing_key = crate::holder_key::p256_signing_key_from_private_jwk(jwk_json)?;
-    let public_key = signing_key
-        .verifying_key()
-        .to_encoded_point(false)
-        .as_bytes()
-        .to_vec();
-    let der = signing_key
-        .to_pkcs8_der()
-        .map_err(|error| Oid4vciError::KeyError(format!("PKCS#8 DER encoding failed: {error}")))?;
-    Ok((
-        jsonwebtoken::EncodingKey::from_ec_der(der.as_bytes()),
-        public_key,
-    ))
-}
-
 fn validate_sd_jwt_holder_binding(
     issuer_payload: &serde_json::Value,
-    holder_public_key: &[u8],
+    holder_public_jwk_json: &str,
 ) -> Oid4vciResult<()> {
     use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
@@ -371,10 +419,13 @@ fn validate_sd_jwt_holder_binding(
                 "Verified SD-JWT is missing an object-valued `cnf.jwk`".into(),
             )
         })?;
-    crate::jose::validate_public_jwk(
-        &serde_json::Value::Object(cnf_jwk.clone()),
-        SigningAlgorithm::ES256.as_str(),
-    )?;
+    let cnf_jwk = serde_json::Value::Object(cnf_jwk.clone());
+    crate::jose::validate_public_jwk(&cnf_jwk, SigningAlgorithm::ES256.as_str())?;
+    let holder_jwk =
+        crate::jose::parse_unique_object(holder_public_jwk_json.as_bytes(), "holder public JWK")?;
+    crate::jose::validate_public_jwk(&holder_jwk, SigningAlgorithm::ES256.as_str())?;
+    let cnf_jwk = cnf_jwk.as_object().expect("validated JWK is an object");
+    let holder_jwk = holder_jwk.as_object().expect("validated JWK is an object");
     if cnf_jwk.get("kty").and_then(serde_json::Value::as_str) != Some("EC")
         || cnf_jwk.get("crv").and_then(serde_json::Value::as_str) != Some("P-256")
     {
@@ -382,17 +433,28 @@ fn validate_sd_jwt_holder_binding(
             "Verified SD-JWT `cnf.jwk` must be an EC P-256 public key".into(),
         ));
     }
-    let x = decode_p256_jwk_coordinate(cnf_jwk.get("x").unwrap_or(&serde_json::Value::Null), "x")?;
-    let y = decode_p256_jwk_coordinate(cnf_jwk.get("y").unwrap_or(&serde_json::Value::Null), "y")?;
-    let mut sec1 = Vec::with_capacity(65);
-    sec1.push(0x04);
-    sec1.extend_from_slice(&x);
-    sec1.extend_from_slice(&y);
-    let bound_public_key = p256::PublicKey::from_sec1_bytes(&sec1)
-        .map_err(|error| Oid4vciError::KeyError(format!("Invalid `cnf.jwk` point: {error}")))?;
-    if bound_public_key.to_encoded_point(false).as_bytes() != holder_public_key {
+    if holder_jwk.get("kty").and_then(serde_json::Value::as_str) != Some("EC")
+        || holder_jwk.get("crv").and_then(serde_json::Value::as_str) != Some("P-256")
+    {
         return Err(Oid4vciError::KeyError(
-            "Holder private key does not match the verified SD-JWT `cnf.jwk`".into(),
+            "Holder public JWK must be an EC P-256 key".into(),
+        ));
+    }
+    let public_key = |jwk: &serde_json::Map<String, serde_json::Value>, label: &str| {
+        let x = decode_p256_jwk_coordinate(jwk.get("x").unwrap_or(&serde_json::Value::Null), "x")?;
+        let y = decode_p256_jwk_coordinate(jwk.get("y").unwrap_or(&serde_json::Value::Null), "y")?;
+        let mut sec1 = Vec::with_capacity(65);
+        sec1.push(0x04);
+        sec1.extend_from_slice(&x);
+        sec1.extend_from_slice(&y);
+        p256::PublicKey::from_sec1_bytes(&sec1)
+            .map_err(|error| Oid4vciError::KeyError(format!("Invalid {label} point: {error}")))
+    };
+    let bound_public_key = public_key(cnf_jwk, "`cnf.jwk`")?;
+    let supplied_public_key = public_key(holder_jwk, "holder public JWK")?;
+    if bound_public_key.to_encoded_point(false) != supplied_public_key.to_encoded_point(false) {
+        return Err(Oid4vciError::KeyError(
+            "Holder public key does not match the verified SD-JWT `cnf.jwk`".into(),
         ));
     }
     Ok(())
