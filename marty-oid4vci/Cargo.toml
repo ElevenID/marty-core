@@ -20,7 +20,7 @@ default = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
 kms-only = ["marty-crypto/kms-only"] # Reject in-process credential private-key capabilities
 issuer = [
     "isomdl?/issuer-planning",
-    "sd-jwt-rs/issuer-planning",
+    "sd-jwt-rs/issuer-completion",
     "p256/ecdsa-core",
     "p384/ecdsa-core",
 ] # OID4VCI issuer preparation and remote-signature assembly support
@@ -42,7 +42,7 @@ serde_json = { workspace = true }
 
 # Crypto and signing
 ssi-jwk = { version = "0.4.0", default-features = false }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "8ad5d9966b097b1f208ceb57bc3cad8bb4bdd2bb", default-features = false, features = ["verifier"] }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9", default-features = false, features = ["verifier"] }
 jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
@@ -81,7 +81,7 @@ tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "135df12ac4257e212b96ca632c2f609d6b98f876" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "8ad5d9966b097b1f208ceb57bc3cad8bb4bdd2bb" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "sha256"] }
@@ -91,6 +91,7 @@ ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 aws-lc-rs = { version = "1.14", default-features = false, features = ["aws-lc-sys", "ring-io"] }
 criterion = { workspace = true }
+marty-crypto-test-support = { path = "../marty-crypto-test-support" }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]

@@ -128,6 +128,7 @@ pub mod serialization {
     use der::Decode;
     use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _};
     use marty_crypto::{CryptoError, CryptoResult};
+    use pkcs8::EncodePublicKey as _;
 
     pub fn load_private_key_pem(pem: &str) -> CryptoResult<Vec<u8>> {
         let (label, bytes) = pem_rfc7468::decode_vec(pem.as_bytes())
@@ -143,6 +144,51 @@ pub mod serialization {
     pub fn save_private_key_pem(der: &[u8]) -> CryptoResult<String> {
         pem_rfc7468::encode_string("PRIVATE KEY", pem_rfc7468::LineEnding::LF, der)
             .map_err(|error| CryptoError::internal(error.to_string()))
+    }
+
+    /// Derive the public SPKI for a test-only PKCS#8 fixture.
+    pub fn extract_public_key(der: &[u8]) -> CryptoResult<Vec<u8>> {
+        match detect_private_key_type(der)?.as_str() {
+            "EC_P256" => p256::SecretKey::from_pkcs8_der(der)
+                .map_err(|error| CryptoError::internal(error.to_string()))?
+                .public_key()
+                .to_public_key_der()
+                .map(|document| document.as_bytes().to_vec())
+                .map_err(|error| CryptoError::internal(error.to_string())),
+            "EC_P384" => p384::SecretKey::from_pkcs8_der(der)
+                .map_err(|error| CryptoError::internal(error.to_string()))?
+                .public_key()
+                .to_public_key_der()
+                .map(|document| document.as_bytes().to_vec())
+                .map_err(|error| CryptoError::internal(error.to_string())),
+            "Ed25519" => ed25519_dalek::SigningKey::from_pkcs8_der(der)
+                .map_err(|error| CryptoError::internal(error.to_string()))?
+                .verifying_key()
+                .to_public_key_der()
+                .map(|document| document.as_bytes().to_vec())
+                .map_err(|error| CryptoError::internal(error.to_string())),
+            "RSA" => {
+                use rsa::pkcs8::DecodePrivateKey as _;
+                let private = rsa::RsaPrivateKey::from_pkcs8_der(der)
+                    .map_err(|error| CryptoError::internal(error.to_string()))?;
+                rsa::RsaPublicKey::from(&private)
+                    .to_public_key_der()
+                    .map(|document| document.as_bytes().to_vec())
+                    .map_err(|error| CryptoError::internal(error.to_string()))
+            }
+            kind => Err(CryptoError::internal(format!(
+                "Unsupported test private-key type {kind}"
+            ))),
+        }
+    }
+
+    /// Convert a test-only private fixture into a public JWK for an algorithm.
+    pub fn public_jwk_from_private_key(der: &[u8], algorithm: &str) -> CryptoResult<String> {
+        let public_der = extract_public_key(der)?;
+        let mut jwk = marty_crypto::jwk::public_key_der_to_jwk(&public_der)?;
+        jwk.alg = Some(algorithm.to_owned());
+        serde_json::to_string(&jwk)
+            .map_err(|error| CryptoError::internal(format!("Could not serialize JWK: {error}")))
     }
 
     pub fn detect_private_key_type(der: &[u8]) -> CryptoResult<String> {
@@ -248,10 +294,14 @@ mod tests {
     #[test]
     fn rsa_fixture_enforces_minimum_and_signs() {
         assert!(crate::rsa::generate_rsa_keypair(1024).is_err());
-        let (private, _) = crate::rsa::generate_rsa_keypair(2048).unwrap();
+        let (private, public) = crate::rsa::generate_rsa_keypair(2048).unwrap();
         assert!(!crate::rsa::sign_pss_sha256(&private, b"fixture")
             .unwrap()
             .is_empty());
+        assert_eq!(
+            crate::serialization::extract_public_key(&private).unwrap(),
+            public
+        );
     }
 
     #[test]

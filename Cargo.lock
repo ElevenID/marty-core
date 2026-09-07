@@ -248,7 +248,7 @@ checksum = "726535892e8eae7e70657b4c8ea93d26b8553afb1ce617caee529ef96d7dee6c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.119",
  "synstructure 0.12.6",
 ]
 
@@ -1524,7 +1524,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.119",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3843,6 +3843,7 @@ dependencies = [
  "pkcs8",
  "rand 0.8.7",
  "rsa",
+ "serde_json",
  "sha2 0.10.9",
 ]
 
@@ -3917,6 +3918,7 @@ dependencies = [
  "jsonwebtoken",
  "k256",
  "marty-crypto",
+ "marty-crypto-test-support",
  "marty-iso18013",
  "marty-zkp",
  "p256",
@@ -4105,6 +4107,7 @@ dependencies = [
  "marty-types",
  "pyo3",
  "serde",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "zeroize",
 ]
@@ -5908,7 +5911,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=8ad5d9966b097b1f208ceb57bc3cad8bb4bdd2bb#8ad5d9966b097b1f208ceb57bc3cad8bb4bdd2bb"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9#c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",

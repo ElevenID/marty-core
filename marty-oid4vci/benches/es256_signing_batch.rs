@@ -129,6 +129,18 @@ impl CredentialSigner for BenchmarkSigner {
     fn kid_url(&self) -> String {
         "did:example:benchmark-issuer#key-1".into()
     }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        let point = self.signing_key.verifying_key().to_encoded_point(false);
+        Ok(serde_json::json!({
+            "alg": "ES256",
+            "crv": "P-256",
+            "kty": "EC",
+            "x": URL_SAFE_NO_PAD.encode(point.x().expect("uncompressed P-256 x coordinate")),
+            "y": URL_SAFE_NO_PAD.encode(point.y().expect("uncompressed P-256 y coordinate")),
+        })
+        .to_string())
+    }
 }
 
 impl BoundedConcurrentCredentialSigner for BenchmarkSigner {

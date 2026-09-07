@@ -1669,10 +1669,18 @@ fn vds_nc_sign_profile(
         w3c_context: vec![],
         w3c_types: vec![],
     };
+    let public_key_der =
+        marty_crypto_test_support::serialization::extract_public_key(&private_key_der)
+            .map_err(vds_nc_error)?;
+    let public_jwk = serde_json::to_string(
+        &marty_crypto::jwk::public_key_der_to_jwk(&public_key_der).map_err(vds_nc_error)?,
+    )
+    .map_err(vds_nc_error)?;
     let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc_profile(
         signer_id,
         certificate_reference,
         algorithm,
+        &public_jwk,
         &credential_claims,
     )
     .map_err(vds_nc_error)?;
@@ -3080,6 +3088,38 @@ mod tests {
         assert_eq!(verified["field_consistency_valid"], true);
         assert_eq!(verified["signer_id"], "TESTSGN");
 
+        let tampered = signed["barcode_data"]
+            .as_str()
+            .unwrap()
+            .replace("X123456", "X123457");
+        assert_ne!(tampered, signed["barcode_data"].as_str().unwrap());
+        let tampered_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(&tampered, &public_pem, "2027-01-01", None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tampered_result["signature_valid"], false);
+        assert_eq!(tampered_result["is_valid"], false);
+
+        let (_, wrong_public_key) =
+            marty_crypto_test_support::ecdsa::generate_p256_keypair().unwrap();
+        let wrong_public_der =
+            marty_crypto::serialization::raw_public_key_to_spki(&wrong_public_key, "EC_P256")
+                .unwrap();
+        let wrong_public_pem =
+            marty_crypto::serialization::save_public_key_pem(&wrong_public_der).unwrap();
+        let wrong_key_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(
+                signed["barcode_data"].as_str().unwrap(),
+                &wrong_public_pem,
+                "2027-01-01",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(wrong_key_result["signature_valid"], false);
+        assert_eq!(wrong_key_result["is_valid"], false);
+
         let policy: serde_json::Value = serde_json::from_str(
             &vds_nc_validate_profile(
                 signed["barcode_data"].as_str().unwrap(),
@@ -3129,6 +3169,35 @@ mod tests {
         .unwrap();
         assert_eq!(rsa_verified["is_valid"], true);
         assert_eq!(rsa_verified["algorithm"], "PS256");
+
+        let rsa_tampered = rsa_signed["barcode_data"]
+            .as_str()
+            .unwrap()
+            .replace("X123456", "X123457");
+        assert_ne!(rsa_tampered, rsa_signed["barcode_data"].as_str().unwrap());
+        let rsa_tampered_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(&rsa_tampered, &rsa_public_pem, "2027-01-01", None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rsa_tampered_result["signature_valid"], false);
+        assert_eq!(rsa_tampered_result["is_valid"], false);
+
+        let (_, wrong_rsa_public_der) =
+            marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
+        let wrong_rsa_public_pem =
+            marty_crypto::serialization::save_public_key_pem(&wrong_rsa_public_der).unwrap();
+        let rsa_wrong_key_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(
+                rsa_signed["barcode_data"].as_str().unwrap(),
+                &wrong_rsa_public_pem,
+                "2027-01-01",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rsa_wrong_key_result["signature_valid"], false);
+        assert_eq!(rsa_wrong_key_result["is_valid"], false);
 
         assert_eq!(
             vds_nc_select_barcode_format(2_000, "L", Some("QR")).unwrap(),

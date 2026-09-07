@@ -617,6 +617,65 @@ mod tests {
         assert!(assemble_vds_nc(wrong_key_prepared, signature.to_bytes().as_slice()).is_err());
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn rsa_pss_profile_signatures_bind_every_algorithm_to_payload_and_public_key() {
+        type Signer = fn(&[u8], &[u8]) -> marty_crypto::CryptoResult<Vec<u8>>;
+
+        let (private_key, _) = marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
+        let (wrong_private_key, _) =
+            marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
+        let cases: [(&str, Signer); 3] = [
+            ("PS256", marty_crypto_test_support::rsa::sign_pss_sha256),
+            ("PS384", marty_crypto_test_support::rsa::sign_pss_sha384),
+            ("PS512", marty_crypto_test_support::rsa::sign_pss_sha512),
+        ];
+
+        for (algorithm, sign) in cases {
+            let issuer_jwk = marty_crypto_test_support::serialization::public_jwk_from_private_key(
+                &private_key,
+                algorithm,
+            )
+            .unwrap();
+            let wrong_jwk = marty_crypto_test_support::serialization::public_jwk_from_private_key(
+                &wrong_private_key,
+                algorithm,
+            )
+            .unwrap();
+            let prepared = prepare_vds_nc_profile(
+                "TESTSGN",
+                "TESTCERT001",
+                algorithm,
+                &issuer_jwk,
+                &cmc_claims("AUS"),
+            )
+            .unwrap();
+            let signature = sign(&private_key, prepared.signing_payload()).unwrap();
+            assert!(assemble_vds_nc_raw(prepared, &signature).is_ok());
+
+            let mut wrong_payload = prepare_vds_nc_profile(
+                "TESTSGN",
+                "TESTCERT001",
+                algorithm,
+                &issuer_jwk,
+                &cmc_claims("AUS"),
+            )
+            .unwrap();
+            wrong_payload.signing_input.push(' ');
+            assert!(assemble_vds_nc_raw(wrong_payload, &signature).is_err());
+
+            let wrong_key = prepare_vds_nc_profile(
+                "TESTSGN",
+                "TESTCERT001",
+                algorithm,
+                &wrong_jwk,
+                &cmc_claims("AUS"),
+            )
+            .unwrap();
+            assert!(assemble_vds_nc_raw(wrong_key, &signature).is_err());
+        }
+    }
+
     #[test]
     fn rsa_signature_width_is_bounded_to_supported_moduli() {
         assert!(normalize_signature_bytes("PS256", &[1; 255]).is_err());

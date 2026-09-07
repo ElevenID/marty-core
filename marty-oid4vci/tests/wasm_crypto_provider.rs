@@ -55,3 +55,29 @@ fn marty_and_sd_jwt_share_curve_verification_provider() {
         );
     }
 }
+
+#[wasm_bindgen_test]
+fn browser_build_rejects_every_rsa_pss_algorithm() {
+    let public_jwk = |algorithm: &str| {
+        serde_json::json!({
+            "kty": "RSA",
+            "alg": algorithm,
+            "n": URL_SAFE_NO_PAD.encode([0xA5; 256]),
+            "e": "AQAB",
+        })
+        .to_string()
+    };
+
+    for algorithm in ["PS256", "PS384", "PS512"] {
+        assert!(
+            marty_oid4vci::jose::verify_detached_signature_with_public_jwk(
+                b"browser RSA-PSS must remain unavailable",
+                &[0x5A; 256],
+                &public_jwk(algorithm),
+                algorithm,
+            )
+            .is_err(),
+            "{algorithm} unexpectedly became available in the browser build"
+        );
+    }
+}
