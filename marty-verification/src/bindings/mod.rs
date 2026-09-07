@@ -202,10 +202,10 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Crypto Operations - PKCS#12
 
     // Crypto Operations - ISO 9796-2
-    m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
-    m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
     #[cfg(feature = "csca")]
     {
+        m.add_function(wrap_pyfunction!(iso9796_verify, m)?)?;
+        m.add_function(wrap_pyfunction!(iso9796_recover, m)?)?;
         m.add_function(wrap_pyfunction!(
             active_authentication_generate_challenge,
             m

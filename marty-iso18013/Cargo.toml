@@ -20,7 +20,7 @@ marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features =
 # CBOR and COSE
 ciborium = "0.2"
 coset = { version = "0.3", optional = true }
-isomdl = { version = "0.2", optional = true }
+isomdl = { version = "0.2", default-features = false, features = ["session-key-agreement"], optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"], optional = true }

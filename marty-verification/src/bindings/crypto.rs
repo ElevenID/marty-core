@@ -395,6 +395,7 @@ pub(super) fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) 
 ///     True if signature is valid
 #[pyfunction]
 #[pyo3(signature = (public_key_der, message, signature, scheme=2, hash_alg="sha256"))]
+#[cfg(feature = "csca")]
 pub(super) fn iso9796_verify(
     public_key_der: &[u8],
     message: &[u8],
@@ -444,6 +445,7 @@ pub(super) fn iso9796_verify(
 ///     Recovered message portion
 #[pyfunction]
 #[pyo3(signature = (public_key_der, signature, scheme=2, hash_alg=None))]
+#[cfg(feature = "csca")]
 pub(super) fn iso9796_recover<'py>(
     py: Python<'py>,
     public_key_der: &[u8],

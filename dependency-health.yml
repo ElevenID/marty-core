@@ -64,7 +64,7 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/openwallet-foundation-labs/sd-jwt-rust
-    current: "0.7.1@dd8c78ab1717def722ef169a298a26cb4da484ef"
+    current: "0.7.1@1efc5d2728174fe31a0fd74428f8186a43174ecd"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
@@ -76,7 +76,7 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/spruceid/isomdl
-    current: "0.2.0@058d67504d88143a2e136d9722a64fba668ee381"
+    current: "0.2.0@2a1b8e1acc4935af7cb299f825b1f309b60c8530"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
