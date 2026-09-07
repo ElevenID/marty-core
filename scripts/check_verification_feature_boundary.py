@@ -206,9 +206,9 @@ def check_repository(root: Path = ROOT) -> None:
     require(
         "jsonwebtoken/rust_crypto" not in oid4vci["features"]["issuer"]
         and "jsonwebtoken/rust_crypto" in oid4vci["features"]["verifier"]
-        and "jsonwebtoken/rust_crypto"
-        in oid4vci["features"]["holder-key-operations"],
-        "JWT crypto must be absent from issuer planning and explicit for verification/holders",
+        and "holder-key-operations" not in oid4vci["features"]
+        and "verifier" in oid4vci["features"]["wallet"],
+        "JWT crypto must be absent from issuer planning and available to opaque-signer wallets only through verification",
     )
 
     bindings_crypto = bindings["dependencies"]["marty-crypto"]

@@ -2595,13 +2595,32 @@ mod tests {
     // Proof JWT round-trip (pure Rust)
     // ====================================================================
 
+    fn test_proof_jwt(aud: &str, c_nonce: &str) -> String {
+        use p256::ecdsa::signature::Signer as _;
+
+        let signing_key = p256::ecdsa::SigningKey::from_slice(&[7u8; 32]).unwrap();
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let public_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": base64_url_encode(point.x().unwrap()),
+            "y": base64_url_encode(point.y().unwrap()),
+        });
+        let public_jwk_json = public_jwk.to_string();
+        let holder_id = format!("did:jwk:{}", base64_url_encode(public_jwk_json.as_bytes()));
+        let prepared = marty_oid4vci::WalletEngine::new()
+            .prepare_proof_jwt(&holder_id, c_nonce, aud, &public_jwk_json)
+            .unwrap();
+        let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
+        prepared.complete(signature.to_bytes().as_slice()).unwrap()
+    }
+
     #[test]
     fn test_proof_jwt_create_and_verify() {
         let aud = "https://issuer.example.com";
         let c_nonce = "test-nonce-12345";
 
-        let jwt = marty_oid4vci::proof::create_proof_jwt(aud, c_nonce)
-            .expect("proof JWT creation should succeed");
+        let jwt = test_proof_jwt(aud, c_nonce);
 
         // JWT should have 3 dot-separated parts
         assert_eq!(
@@ -2615,8 +2634,8 @@ mod tests {
             .expect("proof JWT verification should succeed");
 
         assert!(
-            verified.holder_id.starts_with("did:key:"),
-            "holder_did should be a did:key, got: {}",
+            verified.holder_id.starts_with("did:jwk:"),
+            "holder_did should be a did:jwk, got: {}",
             verified.holder_id
         );
         assert_eq!(verified.nonce.as_deref(), Some(c_nonce));
@@ -2624,8 +2643,7 @@ mod tests {
 
     #[test]
     fn test_proof_jwt_wrong_nonce_fails() {
-        let jwt = marty_oid4vci::proof::create_proof_jwt("https://issuer.example.com", "nonce-a")
-            .expect("creation should succeed");
+        let jwt = test_proof_jwt("https://issuer.example.com", "nonce-a");
 
         let result = marty_oid4vci::proof::verify_jwt_proof(&jwt, "", Some("nonce-b"), 300);
         assert!(result.is_err(), "wrong nonce must fail verification");

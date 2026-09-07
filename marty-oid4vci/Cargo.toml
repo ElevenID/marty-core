@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 
 [features]
 default = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
-kms-only = ["marty-crypto/kms-only"] # Reject in-process credential/holder private-key capabilities
+kms-only = ["marty-crypto/kms-only"] # Reject in-process credential private-key capabilities
 issuer = [
     "isomdl?/issuer-planning",
     "sd-jwt-rs?/issuer-planning",
@@ -25,15 +25,8 @@ issuer = [
     "p384/ecdsa-core",
 ] # OID4VCI issuer preparation and remote-signature assembly support
 verifier = ["jsonwebtoken/rust_crypto", "sd-jwt-rs?/verifier"] # OID4VP signature verification support
-wallet = ["dep:reqwest", "dep:tokio", "holder-key-operations", "sd_jwt", "sd-jwt-rs/holder", "verifier"]  # OID4VCI/OID4VP wallet/holder support
+wallet = ["dep:reqwest", "dep:tokio", "sd_jwt", "sd-jwt-rs/holder", "verifier"]  # OID4VCI/OID4VP wallet/holder support; signing is delegated
 lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
-holder-key-operations = [
-    "ed25519-dalek/pkcs8",
-    "ed25519-dalek/rand_core",
-    "jsonwebtoken/rust_crypto",
-    "p256/ecdsa",
-    "p256/pkcs8",
-] # Wallet/authenticator-owned holder and device keys
 jwt_vc_json = []    # W3C VC-JWT credential format
 sd_jwt = ["dep:sd-jwt-rs"] # IETF SD-JWT format; role features select implementation capabilities
 mso_mdoc = ["dep:isomdl"] # ISO 18013-5 mDoc format; issuer adds planning
@@ -49,11 +42,11 @@ serde_json = { workspace = true }
 
 # Crypto and signing
 ssi-jwk = { version = "0.4.0", default-features = false }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "302984b4431c331408c58c62f23a07339394c986", default-features = false, optional = true }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "f59f408cb80cf204a7cf820ef81a5bddc53f8407", default-features = false, optional = true }
 jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9", default-features = false, optional = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -89,8 +82,10 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 tokio = { workspace = true }
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "302984b4431c331408c58c62f23a07339394c986" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "f59f408cb80cf204a7cf820ef81a5bddc53f8407" }
+p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
+ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 

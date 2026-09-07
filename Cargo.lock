@@ -168,54 +168,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
 
 [[package]]
-name = "anstream"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824a212faf96e9acacdbd09febd34438f8f711fb84e09a8916013cd7815ca28d"
-dependencies = [
- "anstyle",
- "anstyle-parse",
- "anstyle-query",
- "anstyle-wincon",
- "colorchoice",
- "is_terminal_polyfill",
- "utf8parse",
-]
-
-[[package]]
 name = "anstyle"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
-
-[[package]]
-name = "anstyle-parse"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ce7f38b242319f7cabaa6813055467063ecdc9d355bbb4ce0c68908cd8130e"
-dependencies = [
- "utf8parse",
-]
-
-[[package]]
-name = "anstyle-query"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "anstyle-wincon"
-version = "3.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
-dependencies = [
- "anstyle",
- "once_cell_polyfill",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "anyhow"
@@ -486,16 +442,6 @@ dependencies = [
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "async-signature"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a012215311c77e8be50bd74aa76b6f17a565ee2a241931f0499940b32bf20bec"
-dependencies = [
- "async-trait",
- "signature",
 ]
 
 [[package]]
@@ -1261,16 +1207,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd059f9da4f5c36b3787f65d38ccaab1cc315f07b01f89abc8359ee6a8205011"
 dependencies = [
  "clap_builder",
- "clap_derive",
-]
-
-[[package]]
-name = "clap-stdin"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6843ca418f46b4658e03825cb100092697f6b7f94a122281c408cb39f4562f25"
-dependencies = [
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -1279,22 +1215,8 @@ version = "4.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f09628afdcc538b57f3c6341e9c8e9970f18e4a481690a64974d7023bd33548b"
 dependencies = [
- "anstream",
  "anstyle",
  "clap_lex",
- "strsim",
-]
-
-[[package]]
-name = "clap_derive"
-version = "4.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2ce8604710f6733aa641a2b3731eaa1e8b3d9973d5e3565da11800813f997a9"
-dependencies = [
- "heck 0.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1358,12 +1280,6 @@ name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
-
-[[package]]
-name = "colorchoice"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "combination"
@@ -1722,7 +1638,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.119",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -3166,25 +3082,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "is_terminal_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
 name = "isomdl"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9#2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=d1161a32bbe0aaaead3903ad3349c45e32636c35#d1161a32bbe0aaaead3903ad3349c45e32636c35"
 dependencies = [
  "aes",
  "aes-gcm",
  "anyhow",
  "asn1-rs 0.5.2",
- "async-signature",
  "base64 0.13.1",
  "ciborium",
- "clap",
- "clap-stdin",
  "const-oid",
  "coset",
  "der 0.7.10",
@@ -3215,12 +3122,13 @@ dependencies = [
  "tracing",
  "uuid",
  "x509-cert",
+ "zeroize",
 ]
 
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9#2db80a9d34cf549b76d9d5e4fb8ca9c33b41e5e9"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=d1161a32bbe0aaaead3903ad3349c45e32636c35#d1161a32bbe0aaaead3903ad3349c45e32636c35"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4076,6 +3984,7 @@ dependencies = [
  "marty-status",
  "marty-types",
  "marty-verification",
+ "p256",
  "pyo3",
  "serde",
  "serde_json",
@@ -4323,6 +4232,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "marty-oid4vci",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -4880,12 +4790,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "once_cell_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oorandom"
@@ -6408,7 +6312,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=302984b4431c331408c58c62f23a07339394c986#302984b4431c331408c58c62f23a07339394c986"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=f59f408cb80cf204a7cf820ef81a5bddc53f8407#f59f408cb80cf204a7cf820ef81a5bddc53f8407"
 dependencies = [
  "base64 0.21.7",
  "curve25519-dalek",
@@ -8325,12 +8229,6 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
-
-[[package]]
-name = "utf8parse"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"

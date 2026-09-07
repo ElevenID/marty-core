@@ -374,11 +374,7 @@ fn ietf_sub_iat_jti_and_aud_selectors_remain_unrestricted() {
     let (compact, generated_id, signed_payload) =
         signed_parts(sign_sd_jwt(&key, &allowed).unwrap());
     assert!(signed_payload.get("sub").is_none());
-    // The pinned local issuer has historically kept `iat` permanently
-    // disclosed. Accepting the selector must not turn that legacy route into
-    // an error, while the Marty preparation route above remains capable of
-    // disclosing `iat` as draft-18 permits.
-    assert!(signed_payload["iat"].is_i64());
+    assert!(signed_payload.get("iat").is_none());
     assert!(signed_payload.get("jti").is_none());
     assert!(signed_payload.get("aud").is_none());
     let signed_disclosures = decoded_disclosures(&compact);
@@ -386,7 +382,7 @@ fn ietf_sub_iat_jti_and_aud_selectors_remain_unrestricted() {
         .iter()
         .map(|disclosure| disclosure[1].as_str().unwrap())
         .collect::<HashSet<_>>();
-    assert_eq!(signed_names, HashSet::from(["sub", "jti", "aud"]));
+    assert_eq!(signed_names, HashSet::from(["sub", "iat", "jti", "aud"]));
     let signed_jti = signed_disclosures
         .iter()
         .find(|disclosure| disclosure[1] == "jti")

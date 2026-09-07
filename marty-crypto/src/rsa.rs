@@ -18,6 +18,7 @@ use rsa::{
     traits::PublicKeyParts,
     RsaPublicKey,
 };
+#[cfg(feature = "emrtd-compat")]
 use sha1::Sha1;
 use sha2::{Sha256, Sha384, Sha512};
 
@@ -247,6 +248,7 @@ pub fn verify_pkcs1_sha512(
 ///
 /// `Ok(true)` if valid, `Ok(false)` if invalid signature.
 #[deprecated(note = "SHA-1 is cryptographically weak; use only for legacy eMRTD verification")]
+#[cfg(feature = "emrtd-compat")]
 pub fn verify_pkcs1_sha1(
     public_key_der: &[u8],
     message: &[u8],

@@ -692,9 +692,6 @@ impl VerificationEngine {
     /// * `vp_token`         — compact JWT VP token from the wallet
     /// * `expected_nonce`   — nonce from the original authorization request
     pub fn verify_vp_token(&self, vp_token: &str, expected_nonce: &str) -> VerificationResult {
-        use base64::Engine;
-        use jsonwebtoken::{decode_header, Algorithm, DecodingKey, Validation};
-
         let failed = |message: String,
                       presentation_proof: VerificationCheckStatus,
                       transaction_binding: VerificationCheckStatus| {
@@ -730,62 +727,31 @@ impl VerificationEngine {
             );
         }
 
-        // ── Step 1: Parse JWT header ──────────────────────────────────
-        let header = match decode_header(vp_token) {
-            Ok(h) => h,
+        // ── Step 1: Bounded, canonical parse of unique JSON objects ────────
+        let (header, payload) = match crate::jose::decode_unverified_compact_jwt(vp_token) {
+            Ok(parts) => parts,
             Err(e) => {
                 return failed(
-                    format!("VP token header parse error: {e}"),
+                    format!("VP token parse error: {e}"),
                     VerificationCheckStatus::Failed,
                     VerificationCheckStatus::NotChecked,
                 )
             }
         };
 
-        let format_label = match header.alg {
-            Algorithm::ES256
-            | Algorithm::ES384
-            | Algorithm::RS256
-            | Algorithm::RS384
-            | Algorithm::RS512
-            | Algorithm::EdDSA => "jwt_vp_json",
-            unsupported => {
-                return failed(
-                    format!("Unsupported VP token signature algorithm: {unsupported:?}"),
-                    VerificationCheckStatus::Unsupported,
-                    VerificationCheckStatus::NotChecked,
-                )
-            }
-        };
-
-        // ── Step 2: Base64-decode payload to extract claims ───────────
-        let parts: Vec<&str> = vp_token.split('.').collect();
-        if parts.len() != 3 {
+        let Some(algorithm) = header.get("alg").and_then(serde_json::Value::as_str) else {
             return failed(
-                "VP token is not a valid compact JWT (expected 3 parts)".into(),
+                "VP token alg header is missing or invalid".into(),
                 VerificationCheckStatus::Failed,
                 VerificationCheckStatus::NotChecked,
             );
-        }
-
-        let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1])
-        {
-            Ok(b) => b,
-            Err(e) => {
-                return failed(
-                    format!("VP token payload base64 decode error: {e}"),
-                    VerificationCheckStatus::Failed,
-                    VerificationCheckStatus::NotChecked,
-                )
-            }
         };
-
-        let payload: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
-            Ok(v) => v,
-            Err(e) => {
+        let format_label = match algorithm {
+            "ES256" | "ES384" | "RS256" | "RS384" | "RS512" | "EdDSA" => "jwt_vp_json",
+            unsupported => {
                 return failed(
-                    format!("VP token payload JSON parse error: {e}"),
-                    VerificationCheckStatus::Failed,
+                    format!("Unsupported VP token signature algorithm: {unsupported}"),
+                    VerificationCheckStatus::Unsupported,
                     VerificationCheckStatus::NotChecked,
                 )
             }
@@ -843,26 +809,33 @@ impl VerificationEngine {
                 VerificationCheckStatus::Failed,
             );
         }
+        if let Some(nbf) = payload.get("nbf") {
+            let Some(nbf) = nbf.as_i64() else {
+                return failed(
+                    "VP token not-before claim is invalid".into(),
+                    VerificationCheckStatus::NotChecked,
+                    VerificationCheckStatus::Failed,
+                );
+            };
+            if nbf > now.saturating_add(60) {
+                return failed(
+                    "VP token is not yet valid; signature verification was not performed".into(),
+                    VerificationCheckStatus::NotChecked,
+                    VerificationCheckStatus::Failed,
+                );
+            }
+        }
 
         // ── Step 6: Locate presentation public key ───────────────────
         //   Priority:
         //   a) Header `jwk` (RFC 7517 §4.7) — set by spec-compliant wallets
         //   b) Payload `cnf.jwk`            — key confirmation claim (RFC 7800)
         //   c) Payload `sub_jwk`            — older/draft wallets
-        let jwk: Option<jsonwebtoken::jwk::Jwk> = header
-            .jwk
-            .clone()
-            .or_else(|| {
-                payload
-                    .get("cnf")
-                    .and_then(|c| c.get("jwk"))
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-            })
-            .or_else(|| {
-                payload
-                    .get("sub_jwk")
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-            });
+        let jwk = header
+            .get("jwk")
+            .cloned()
+            .or_else(|| payload.get("cnf").and_then(|c| c.get("jwk")).cloned())
+            .or_else(|| payload.get("sub_jwk").cloned());
 
         let jwk = match jwk {
             Some(j) => j,
@@ -875,28 +848,19 @@ impl VerificationEngine {
             }
         };
 
-        // ── Step 7: Build decoding key from JWK ──────────────────────
-        let decoding_key = match DecodingKey::from_jwk(&jwk) {
-            Ok(k) => k,
+        let jwk = match serde_json::to_string(&jwk) {
+            Ok(jwk) => jwk,
             Err(e) => {
                 return failed(
-                    format!("Cannot build decoding key from JWK: {e}"),
+                    format!("Cannot serialize presentation public key: {e}"),
                     VerificationCheckStatus::Failed,
                     VerificationCheckStatus::NotChecked,
                 )
             }
         };
 
-        // ── Step 8: Verify JWT signature ──────────────────────────────
-        // Claims (nonce, aud, exp) were already validated manually.
-        // jsonwebtoken is used here only for the cryptographic signature check.
-        let mut validation = Validation::new(header.alg);
-        validation.validate_aud = false; // validated manually above
-        validation.validate_exp = true;
-        validation.validate_nbf = true;
-        validation.leeway = 60; // 60s clock skew tolerance
-
-        match jsonwebtoken::decode::<serde_json::Value>(vp_token, &decoding_key, &validation) {
+        // ── Step 7: Verify with the same bounded, public-key-only JOSE boundary ───
+        match crate::jose::verify_compact_jwt_with_public_jwk(vp_token, &jwk, algorithm) {
             Ok(_) => {
                 let mut evidence = VerificationEvidence::not_checked();
                 evidence.presentation_proof = VerificationCheckStatus::Passed;
@@ -2180,9 +2144,65 @@ mod tests {
         let engine = test_engine();
         let result = engine.verify_vp_token("not.a.jwt.at.all", "nonce");
         assert!(!result.check_valid);
-        assert!(
-            result.errors[0].contains("header parse error") || result.errors[0].contains("3 parts")
+        assert!(result.errors[0].contains("three non-empty parts"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_rejects_oversized_input_before_parsing() {
+        let oversized = format!("{}.e30.AA", "A".repeat(crate::jose::MAX_COMPACT_JWT_BYTES));
+        let result = test_engine().verify_vp_token(&oversized, "nonce");
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("size limit"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_rejects_duplicate_claim_members() {
+        use base64::Engine;
+        let encode =
+            |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+        let token = format!(
+            "{}.{}.AA",
+            encode(r#"{"alg":"ES256"}"#),
+            encode(r#"{"nonce":"first","nonce":"second"}"#)
         );
+        let result = test_engine().verify_vp_token(&token, "first");
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("duplicate JSON object member"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_rejects_non_integer_nbf() {
+        use base64::Engine;
+        let encode =
+            |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+        let token = format!(
+            "{}.{}.AA",
+            encode(r#"{"alg":"ES256"}"#),
+            encode(
+                r#"{"aud":"did:example:verifier","nonce":"nonce","exp":9999999999,"nbf":"tomorrow"}"#,
+            )
+        );
+        let result = test_engine().verify_vp_token(&token, "nonce");
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("not-before claim is invalid"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_future_nbf_reports_unverified_temporal_rejection() {
+        use base64::Engine;
+        let encode =
+            |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+        let token = format!(
+            "{}.{}.AA",
+            encode(r#"{"alg":"ES256"}"#),
+            encode(
+                r#"{"aud":"did:example:verifier","nonce":"nonce","exp":9999999999,"nbf":9999999999}"#,
+            )
+        );
+        let result = test_engine().verify_vp_token(&token, "nonce");
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("not yet valid"));
+        assert!(result.errors[0].contains("signature verification was not performed"));
     }
 
     #[test]
