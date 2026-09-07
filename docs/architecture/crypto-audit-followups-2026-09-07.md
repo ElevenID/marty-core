@@ -20,7 +20,7 @@ The exact implementation heads entering final review are:
 | `isomdl-elevenid` | `135df12ac4257e212b96ca632c2f609d6b98f876` | single-owner and zeroizing session secrets, redacted diagnostics, verification-only default, removal of production local mdoc signing, transactional authenticated-decryption counters |
 | `sd-jwt-rust` | `c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9` | cryptographically bound opaque remote completion, backend-free issuer planning, holder/issuer/tooling feature isolation, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
 | `longfellow-zk` | `f19b357440ceb704c521678cf7bbe144eeab5f49` | verifier-only default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; executable sanitizer, unwind, allocation, and vendor-parity regressions |
-| `marty-core` | `f292cd3bd38460709cfadec7ec0c4e6a7742ec8d` | exact KMS-signature binding for all supported credential formats, bounded native proving, zeroizing ZK inputs, vendored C++ witness clearing, QR/PNG isolation, authenticated OS-IPC signer agent, and final fork pins |
+| `marty-core` | `bdcdb62b4149eebc91beffc93b5d6ba69d79d22c` | exact KMS-signature binding for all supported credential formats, native and browser VDS signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity, QR/PNG isolation, authenticated OS-IPC signer agent, and final fork pins |
 
 These are review heads, not final integrated or merged revisions. Update this
 section after every correction round and after ElevenID merge-queue CI.
