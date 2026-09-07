@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["iaca", "csca", "icao-client"]
 kms-only = ["marty-crypto/kms-only", "marty-oid4vci/kms-only"]
 iaca = []           # AAMVA mDL verification
-csca = []           # ePassport/eMRTD verification
+csca = ["marty-crypto/emrtd-compat"] # ePassport/eMRTD verification, including legacy ICAO algorithms
 eudi = []           # EU Digital Identity verification
 python = ["pyo3"]   # Verification-only Python bindings
 # Short-lived protocol/session secrets, distinct from credential issuer keys.

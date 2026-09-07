@@ -43,7 +43,7 @@ mod cert_builder;
 pub mod certificate;
 #[cfg(feature = "crl")]
 pub mod crl;
-#[cfg(feature = "symmetric")]
+#[cfg(feature = "emrtd-compat")]
 pub mod des;
 #[cfg(feature = "ecdh")]
 pub mod ecdh;
@@ -56,7 +56,7 @@ pub mod ed448;
 pub mod error;
 #[cfg(feature = "hashing")]
 pub mod hashing;
-#[cfg(feature = "rsa-verification")]
+#[cfg(feature = "emrtd-compat")]
 pub mod iso9796;
 #[cfg(feature = "jwk")]
 pub mod jwk;
@@ -341,10 +341,16 @@ pub fn verify_signature(
             ed25519::verify_ed25519_spki(public_key_der, message, signature)
         }
         SignatureAlgorithm::Ed448 => ed448::verify_ed448_spki(public_key_der, message, signature),
-        SignatureAlgorithm::RsaPkcs1Sha1 =>
-        {
-            #[allow(deprecated)]
-            rsa::verify_pkcs1_sha1(public_key_der, message, signature)
+        SignatureAlgorithm::RsaPkcs1Sha1 => {
+            #[cfg(feature = "emrtd-compat")]
+            {
+                #[allow(deprecated)]
+                return rsa::verify_pkcs1_sha1(public_key_der, message, signature);
+            }
+            #[cfg(not(feature = "emrtd-compat"))]
+            Err(CryptoError::unsupported_algorithm(
+                "RSA with SHA-1 requires the emrtd-compat feature".to_string(),
+            ))
         }
         SignatureAlgorithm::RsaPkcs1Sha256 => {
             rsa::verify_pkcs1_sha256(public_key_der, message, signature)

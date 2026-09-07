@@ -52,7 +52,10 @@ eddsa-verification = [
     "dep:ed448-goldilocks-plus",
     "ed25519-dalek/pkcs8",
 ]
-rsa-verification = ["dep:rsa", "dep:sha1", "dep:sha2"]
+rsa-verification = ["dep:rsa", "dep:sha2"]
+# Legacy ICAO algorithms stay first-class for eMRTD artifacts, but are absent
+# from unrelated verifier/session builds unless this capability is selected.
+emrtd-compat = ["rsa-verification", "dep:sha1", "dep:des", "dep:cbc", "dep:cipher"]
 jwk = [
     "dep:elliptic-curve",
     "dep:p256",
@@ -81,7 +84,7 @@ x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
 crl = ["x509", "dep:pem-rfc7468"]
 ocsp = ["x509", "dep:x509-ocsp"]
-symmetric = ["dep:aes", "dep:aes-gcm", "dep:cbc", "dep:cipher", "dep:cmac", "dep:des", "dep:hmac", "dep:sha2"]
+symmetric = ["dep:aes", "dep:aes-gcm", "dep:cbc", "dep:cipher", "dep:cmac", "dep:hmac", "dep:sha2"]
 kdf = ["hashing", "dep:hkdf", "dep:pbkdf2"]
 public-key-codec = [
     "dep:ed25519-dalek",
