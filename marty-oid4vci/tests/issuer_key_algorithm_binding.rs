@@ -410,6 +410,6 @@ fn serial_es256_batch_returns_no_credentials_for_contradictory_embedded_alg() {
     let error = scope
         .sign_batch(inputs)
         .expect_err("a rejected signer must not return a partial credential vector");
-    assert_eq!(error.kind(), SigningBatchErrorKind::ExecutorFailed);
+    assert_eq!(error.kind(), SigningBatchErrorKind::PreparationFailed);
     assert_eq!(error.item_ordinal(), Some(0));
 }

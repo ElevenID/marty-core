@@ -22,7 +22,9 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::{validate_signer_public_jwk, verify_remote_signature, CredentialSigner};
+use crate::signer::{
+    validate_signer_public_jwk_for_algorithm, verify_remote_signature, CredentialSigner,
+};
 #[cfg(test)]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
@@ -548,8 +550,9 @@ fn prepare_mdoc_with_inputs_and_digest_executor<'a>(
     next_salt: impl FnMut() -> [u8; 32],
     digest_executor: &dyn DigestExecutor,
 ) -> Oid4vciResult<PreparedMdoc> {
+    let algorithm = signer.algorithm();
     let mut preparation = validate_mdoc_preparation_with_issuer_claims(
-        signer.algorithm(),
+        algorithm,
         String::new(),
         claims,
         holder_public_jwk,
@@ -558,7 +561,7 @@ fn prepare_mdoc_with_inputs_and_digest_executor<'a>(
     // Preserve the format-validation boundary and error precedence before
     // consulting remote KMS metadata, then bind the validated key to the
     // otherwise-complete prepared state.
-    preparation.issuer_public_jwk = validate_signer_public_jwk(signer)?;
+    preparation.issuer_public_jwk = validate_signer_public_jwk_for_algorithm(signer, algorithm)?;
     prepare_validated_mdoc_with_digest_executor(
         preparation,
         credential_id,
@@ -1562,6 +1565,10 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:issuer#key-1".into()
         }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_public_jwk(self.0))
+        }
     }
 
     #[derive(Debug)]
@@ -1595,6 +1602,10 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "did:example:issuer#key-1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_public_jwk(self.algorithm))
         }
     }
 
@@ -1923,7 +1934,7 @@ mod tests {
         ValidatedMdocBatchPlanItem::with_generated_credential_id(
             validate_mdoc_preparation(
                 SigningAlgorithm::ES256,
-                crate::signer::TEST_ONLY_UNVERIFIED_SIGNER.into(),
+                crate::signer::test_es256_public_jwk(),
                 &test_mdoc_claims([]),
                 None,
             )
@@ -2041,7 +2052,7 @@ mod tests {
                     item.signed_at,
                     validate_mdoc_preparation(
                         item.signing_algorithm,
-                        crate::signer::TEST_ONLY_UNVERIFIED_SIGNER.into(),
+                        crate::signer::test_public_jwk(item.signing_algorithm),
                         &item.claims,
                         item.holder_public_jwk.as_ref(),
                     )
@@ -2086,15 +2097,11 @@ mod tests {
     ) -> (u64, String, Vec<u8>, String) {
         let credential_id = prepared.credential_id.clone();
         let tbs_data = prepared.tbs_data.clone();
-        let signature_len = match prepared.algorithm() {
-            SigningAlgorithm::ES256 | SigningAlgorithm::EdDSA | SigningAlgorithm::ES256K => 64,
-            SigningAlgorithm::ES384 => 96,
-            SigningAlgorithm::RS256 => 256,
-        };
+        let signature = crate::signer::test_signature(prepared.algorithm(), &prepared.tbs_data);
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id: assembled_id,
-        } = assemble_mdoc(prepared, &vec![0xa5; signature_len]).unwrap()
+        } = assemble_mdoc(prepared, &signature).unwrap()
         else {
             panic!("batch fixture must assemble an mdoc")
         };
@@ -2588,7 +2595,11 @@ mod tests {
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id,
-        } = assemble_mdoc(prepared, &[0xa5; 64]).unwrap()
+        } = ({
+            let signature =
+                crate::signer::test_signature(prepared.algorithm(), prepared.signing_payload());
+            assemble_mdoc(prepared, &signature).unwrap()
+        })
         else {
             panic!("nested fixture must assemble an mdoc");
         };
@@ -2671,7 +2682,11 @@ mod tests {
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id,
-        } = assemble_mdoc(prepared, &[0xa5; 64]).unwrap()
+        } = ({
+            let signature =
+                crate::signer::test_signature(prepared.algorithm(), prepared.signing_payload());
+            assemble_mdoc(prepared, &signature).unwrap()
+        })
         else {
             panic!("public nested fixture must assemble an mdoc");
         };

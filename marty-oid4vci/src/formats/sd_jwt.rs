@@ -1343,6 +1343,10 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:expiration-test-issuer#key-1".into()
         }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
+        }
     }
 
     #[derive(Debug)]
@@ -1363,6 +1367,10 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "https://issuer.example/keys/1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 

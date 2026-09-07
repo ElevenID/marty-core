@@ -5,7 +5,10 @@
 //! local JWK signing is fixture-only under `cfg(test)`.
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::{validate_remote_signature, validate_rsa_signature_encoding, CredentialSigner};
+use crate::signer::{
+    validate_remote_signature, validate_rsa_signature_encoding,
+    validate_signer_public_jwk_for_algorithm, CredentialSigner,
+};
 #[cfg(test)]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
@@ -20,6 +23,8 @@ pub struct PreparedVdsNc {
     credential_id: String,
     /// Protected profile algorithm that the remote signer must use.
     algorithm: String,
+    /// Public-only key that must verify the remote output.
+    issuer_public_jwk: String,
 }
 
 impl std::fmt::Debug for PreparedVdsNc {
@@ -31,7 +36,11 @@ impl std::fmt::Debug for PreparedVdsNc {
 impl PreparedVdsNc {
     /// Reconstruct a prepared envelope from a `header~payload_json` signing input.
     #[cfg(test)]
-    pub fn from_signing_input(signing_input: String, credential_id: String) -> Oid4vciResult<Self> {
+    pub fn from_signing_input(
+        signing_input: String,
+        credential_id: String,
+        issuer_public_jwk: String,
+    ) -> Oid4vciResult<Self> {
         let (_header, payload_json) =
             super::vds_nc_profile::validate_signing_input(&signing_input)?;
         let payload: serde_json::Value = serde_json::from_str(&payload_json)?;
@@ -50,6 +59,7 @@ impl PreparedVdsNc {
             signing_input,
             credential_id,
             algorithm,
+            issuer_public_jwk,
         })
     }
 
@@ -72,7 +82,20 @@ impl PreparedVdsNc {
 
     /// Validate and normalize remote output without consuming prepared state.
     pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<Vec<u8>> {
-        normalize_signature_bytes(&self.algorithm, signature)
+        let normalized = normalize_signature_bytes(&self.algorithm, signature)?;
+        let verified = crate::jose::verify_detached_signature_with_public_jwk(
+            self.signing_payload(),
+            &normalized,
+            &self.issuer_public_jwk,
+            &self.algorithm,
+        )?;
+        if !verified {
+            return Err(Oid4vciError::SigningError(
+                "remote VDS-NC signature does not verify with the configured issuer public key"
+                    .into(),
+            ));
+        }
+        Ok(normalized)
     }
 }
 
@@ -111,12 +134,15 @@ pub fn prepare_vds_nc(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<PreparedVdsNc> {
-    prepare_vds_nc_profile(
+    let algorithm = signer.algorithm();
+    let mut prepared = prepare_vds_nc_profile_envelope(
         signer.issuer_id(),
         &signer.kid_url(),
-        signer.algorithm().as_str(),
+        algorithm.as_str(),
         claims,
-    )
+    )?;
+    prepared.issuer_public_jwk = validate_signer_public_jwk_for_algorithm(signer, algorithm)?;
+    Ok(prepared)
 }
 
 /// Prepare a canonical VDS-NC profile using explicit signed metadata.
@@ -125,6 +151,26 @@ pub fn prepare_vds_nc(
 /// same envelope construction without expanding the general credential signer
 /// algorithm surface.
 pub fn prepare_vds_nc_profile(
+    issuer_id: &str,
+    key_id: &str,
+    algorithm: &str,
+    issuer_public_jwk: &str,
+    claims: &CredentialClaims,
+) -> Oid4vciResult<PreparedVdsNc> {
+    let mut prepared = prepare_vds_nc_profile_envelope(issuer_id, key_id, algorithm, claims)?;
+    if issuer_public_jwk.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Issuer public JWK exceeds its size limit".into(),
+        ));
+    }
+    let public_jwk =
+        crate::jose::parse_unique_object(issuer_public_jwk.as_bytes(), "issuer public JWK")?;
+    crate::jose::validate_public_jwk(&public_jwk, algorithm)?;
+    prepared.issuer_public_jwk = issuer_public_jwk.to_owned();
+    Ok(prepared)
+}
+
+fn prepare_vds_nc_profile_envelope(
     issuer_id: &str,
     key_id: &str,
     algorithm: &str,
@@ -146,6 +192,7 @@ pub fn prepare_vds_nc_profile(
         signing_input,
         credential_id,
         algorithm: algorithm.to_owned(),
+        issuer_public_jwk: String::new(),
     })
 }
 
@@ -226,15 +273,29 @@ mod tests {
     use crate::signer::CredentialSigner;
     use crate::types::SigningAlgorithm;
 
-    #[derive(Debug)]
-    struct TestSigner;
+    struct TestSigner {
+        signing_key: p256::ecdsa::SigningKey,
+    }
+
+    impl TestSigner {
+        fn new() -> Self {
+            Self {
+                signing_key: p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap(),
+            }
+        }
+    }
+
+    impl std::fmt::Debug for TestSigner {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("TestSigner([redacted])")
+        }
+    }
 
     impl CredentialSigner for TestSigner {
-        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-            let mut signature = vec![0u8; 64];
-            signature[31] = 1;
-            signature[63] = 1;
-            Ok(signature)
+        fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            use p256::ecdsa::signature::Signer as _;
+            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
+            Ok(signature.to_bytes().to_vec())
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -247,6 +308,12 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "did:example:vdsnc-issuer#key-1".to_string()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk_for_key(
+                &self.signing_key,
+            ))
         }
     }
 
@@ -281,7 +348,7 @@ mod tests {
 
     #[test]
     fn signs_vds_nc_with_signer() {
-        let signer = TestSigner;
+        let signer = TestSigner::new();
 
         let claims = cmc_claims("AUS");
 
@@ -297,16 +364,14 @@ mod tests {
 
     #[test]
     fn prepare_and_assemble_vds_nc_round_trip() {
-        let signer = TestSigner;
+        let signer = TestSigner::new();
 
         let claims = cmc_claims("USA");
 
         let prepared = prepare_vds_nc(&signer, &claims).unwrap();
         assert!(prepared.signing_input.starts_with("DC03USA~"));
 
-        let mut signature = [0u8; 64];
-        signature[31] = 1;
-        signature[63] = 1;
+        let signature = signer.sign(prepared.signing_payload()).unwrap();
         let assembled = assemble_vds_nc(prepared, &signature).unwrap();
         match assembled {
             SignedCredential::VdsNc { barcode_data, .. } => {
@@ -318,7 +383,12 @@ mod tests {
 
     #[test]
     fn prepared_vds_diagnostics_redact_signing_payload() {
-        let prepared = make_prepared("AUS", "ES256");
+        let signing_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
+        let prepared = make_prepared(
+            "AUS",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&signing_key),
+        );
         let diagnostic = format!("{prepared:?}");
         assert_eq!(diagnostic, "PreparedVdsNc([redacted])");
         assert!(!diagnostic.contains("CMC"));
@@ -326,7 +396,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_country() {
-        let signer = TestSigner;
+        let signer = TestSigner::new();
 
         let claims = cmc_claims("US");
 
@@ -343,7 +413,7 @@ mod tests {
     // are correctly normalized to raw (r || s) format during assembly.
     // =========================================================================
 
-    fn make_prepared(country: &str, algorithm: &str) -> PreparedVdsNc {
+    fn make_prepared(country: &str, algorithm: &str, issuer_public_jwk: String) -> PreparedVdsNc {
         let header = format!("DC03{}", country);
         let payload_json = r#"{"typ":"CMC"}"#.to_string();
         let signing_input = format!("{}~{}", header, payload_json);
@@ -351,7 +421,31 @@ mod tests {
             signing_input,
             credential_id: "urn:uuid:test".to_string(),
             algorithm: algorithm.to_string(),
+            issuer_public_jwk,
         }
+    }
+
+    fn p384_public_jwk(signing_key: &p384::ecdsa::SigningKey) -> String {
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        serde_json::json!({
+            "alg": "ES384",
+            "crv": "P-384",
+            "kty": "EC",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        })
+        .to_string()
+    }
+
+    fn ed25519_public_jwk(signing_key: &ed25519_dalek::SigningKey) -> String {
+        serde_json::json!({
+            "alg": "EdDSA",
+            "crv": "Ed25519",
+            "kty": "OKP",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(signing_key.verifying_key().to_bytes()),
+        })
+        .to_string()
     }
 
     fn barcode_signature_bytes(barcode_data: &str) -> Vec<u8> {
@@ -368,7 +462,11 @@ mod tests {
         use rand::rngs::OsRng;
 
         let signing_key = SigningKey::random(&mut OsRng);
-        let prepared = make_prepared("AUS", "ES256");
+        let prepared = make_prepared(
+            "AUS",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&signing_key),
+        );
         let sig_der: p256::ecdsa::DerSignature =
             signing_key.sign(prepared.signing_input.as_bytes());
 
@@ -400,7 +498,11 @@ mod tests {
         use rand::rngs::OsRng;
 
         let signing_key = SigningKey::random(&mut OsRng);
-        let prepared = make_prepared("GBR", "ES256");
+        let prepared = make_prepared(
+            "GBR",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&signing_key),
+        );
         let sig: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input.as_bytes());
         let raw_bytes = sig.to_bytes().to_vec();
 
@@ -422,7 +524,7 @@ mod tests {
         use rand::rngs::OsRng;
 
         let signing_key = SigningKey::random(&mut OsRng);
-        let prepared = make_prepared("DEU", "ES384");
+        let prepared = make_prepared("DEU", "ES384", p384_public_jwk(&signing_key));
         let sig_der: p384::ecdsa::DerSignature =
             signing_key.sign(prepared.signing_input.as_bytes());
 
@@ -451,8 +553,9 @@ mod tests {
     #[test]
     fn ed25519_signature_passes_through_unchanged() {
         use ed25519_dalek::{Signer as _, SigningKey};
-        let prepared = make_prepared("FRA", "EdDSA");
-        let raw_ed25519_sig = SigningKey::from_bytes(&[7u8; 32])
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let prepared = make_prepared("FRA", "EdDSA", ed25519_public_jwk(&signing_key));
+        let raw_ed25519_sig = signing_key
             .sign(prepared.signing_input.as_bytes())
             .to_bytes();
         let assembled = assemble_vds_nc(prepared, &raw_ed25519_sig).unwrap();
@@ -467,13 +570,51 @@ mod tests {
 
     #[test]
     fn malformed_signature_is_rejected_and_valid_signature_assembles() {
-        let prepared = make_prepared("AUS", "ES256");
+        use p256::ecdsa::{signature::Signer as _, SigningKey};
+        let signing_key = SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
+        let prepared = make_prepared(
+            "AUS",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&signing_key),
+        );
         assert!(assemble_vds_nc(prepared, &[0u8; 64]).is_err());
 
-        let mut valid = [0u8; 64];
-        valid[31] = 1;
-        valid[63] = 1;
-        assert!(assemble_vds_nc(make_prepared("AUS", "ES256"), &valid).is_ok());
+        let prepared = make_prepared(
+            "AUS",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&signing_key),
+        );
+        let valid: p256::ecdsa::Signature = signing_key.sign(prepared.signing_payload());
+        assert!(assemble_vds_nc(prepared, valid.to_bytes().as_slice()).is_ok());
+    }
+
+    #[test]
+    fn assembly_rejects_signature_for_wrong_payload_and_wrong_key() {
+        use p256::ecdsa::{signature::Signer as _, SigningKey};
+
+        let signing_key = SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
+        let wrong_key = SigningKey::from_bytes((&[8u8; 32]).into()).unwrap();
+        let prepared = make_prepared(
+            "AUS",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&signing_key),
+        );
+        let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_payload());
+
+        let mut wrong_payload = make_prepared(
+            "AUS",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&signing_key),
+        );
+        wrong_payload.signing_input.push(' ');
+        assert!(assemble_vds_nc(wrong_payload, signature.to_bytes().as_slice()).is_err());
+
+        let wrong_key_prepared = make_prepared(
+            "AUS",
+            "ES256",
+            crate::signer::test_es256_public_jwk_for_key(&wrong_key),
+        );
+        assert!(assemble_vds_nc(wrong_key_prepared, signature.to_bytes().as_slice()).is_err());
     }
 
     #[test]

@@ -224,7 +224,7 @@ impl PreparedJwtVc {
             signing_input,
             credential_id,
             algorithm,
-            issuer_public_jwk: crate::signer::TEST_ONLY_UNVERIFIED_SIGNER.into(),
+            issuer_public_jwk: crate::signer::test_es256_public_jwk(),
         })
     }
 
@@ -795,6 +795,10 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "did:example:expiration-test-issuer#key-1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 

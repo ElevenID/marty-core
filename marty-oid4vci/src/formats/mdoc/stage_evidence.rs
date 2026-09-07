@@ -76,6 +76,10 @@ impl CredentialSigner for EvidenceSigner {
     fn kid_url(&self) -> String {
         "did:example:stage-evidence-issuer#key-1".into()
     }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        Ok(crate::signer::test_es256_public_jwk())
+    }
 }
 
 fn require_evidence_enable() {
@@ -252,7 +256,7 @@ fn salt(class: PayloadClass, item_count: usize, ordinal: usize) -> [u8; 32] {
 fn validate_fixture(fixture: &EvidenceFixture) -> ValidatedMdocPreparation {
     validate_mdoc_preparation(
         SigningAlgorithm::ES256,
-        crate::signer::TEST_ONLY_UNVERIFIED_SIGNER.into(),
+        crate::signer::test_es256_public_jwk(),
         &fixture.claims,
         Some(&fixture.holder_public_jwk),
     )
@@ -548,7 +552,7 @@ fn measure_fixture(criterion: &mut Criterion, fixture: &EvidenceFixture) {
                 black_box(
                     validate_mdoc_preparation(
                         SigningAlgorithm::ES256,
-                        crate::signer::TEST_ONLY_UNVERIFIED_SIGNER.into(),
+                        crate::signer::test_es256_public_jwk(),
                         black_box(&fixture.claims),
                         Some(black_box(&fixture.holder_public_jwk)),
                     )
