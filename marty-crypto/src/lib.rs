@@ -110,7 +110,7 @@ extern crate self as marty_crypto;
 #[cfg(all(test, feature = "ecdh", feature = "kdf"))]
 #[path = "../tests/cavp_ecdh.rs"]
 mod cavp_ecdh;
-#[cfg(all(test, feature = "signature-verification"))]
+#[cfg(all(test, feature = "signature-verification", feature = "ecdh"))]
 #[path = "../tests/cavp_ecdsa.rs"]
 mod cavp_ecdsa;
 #[cfg(all(test, feature = "signature-verification"))]

@@ -1432,7 +1432,14 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 mod tests_with_cert_builder {
     use super::*;
     use crate::cert_builder::{create_ca_certificate, create_signed_certificate};

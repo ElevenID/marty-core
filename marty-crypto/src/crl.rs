@@ -23,13 +23,34 @@ use der::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use x509_cert::crl::{CertificateList, RevokedCert, TbsCertList};
 use x509_cert::ext::pkix::{BasicConstraints, KeyUsage};
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 use x509_cert::name::Name;
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 use x509_cert::serial_number::SerialNumber;
 use x509_cert::time::Time;
 use x509_cert::Certificate;
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 use x509_cert::Version;
 
 use crate::{CryptoError, CryptoResult};
@@ -497,7 +518,14 @@ fn extract_revocation_reason(cert: &RevokedCert) -> Option<RevocationReason> {
 // ============================================================================
 
 /// Entry for a revoked certificate.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 #[derive(Debug, Clone)]
 pub struct RevokedEntry {
     pub serial_hex: String,
@@ -505,7 +533,14 @@ pub struct RevokedEntry {
 }
 
 /// Builder for creating CRLs.
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 pub struct CrlBuilder {
     issuer: crate::cert_builder::DistinguishedName,
     validity_days: u32,
@@ -513,7 +548,14 @@ pub struct CrlBuilder {
     revoked_entries: Vec<RevokedEntry>,
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 impl Default for CrlBuilder {
     fn default() -> Self {
         Self {
@@ -525,7 +567,14 @@ impl Default for CrlBuilder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    feature = "ecdh",
+    feature = "signature-verification",
+    feature = "crl",
+    feature = "ocsp",
+    feature = "public-key-codec"
+))]
 impl CrlBuilder {
     /// Create a new CRL builder.
     pub fn new() -> Self {
@@ -905,12 +954,30 @@ impl CrlBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(test)]
+    #[cfg(all(
+        feature = "ecdh",
+        feature = "signature-verification",
+        feature = "crl",
+        feature = "ocsp",
+        feature = "public-key-codec"
+    ))]
     use crate::cert_builder::{create_ca_certificate, create_signed_certificate};
-    #[cfg(test)]
+    #[cfg(all(
+        feature = "ecdh",
+        feature = "signature-verification",
+        feature = "crl",
+        feature = "ocsp",
+        feature = "public-key-codec"
+    ))]
     use crate::keygen::KeyType;
 
-    #[cfg(test)]
+    #[cfg(all(
+        feature = "ecdh",
+        feature = "signature-verification",
+        feature = "crl",
+        feature = "ocsp",
+        feature = "public-key-codec"
+    ))]
     #[test]
     fn test_crl_builder() {
         // Create a CA certificate first
@@ -937,7 +1004,13 @@ mod tests {
         assert!(crl_info.revoked_serials.contains(&"0102030405".to_string()));
     }
 
-    #[cfg(test)]
+    #[cfg(all(
+        feature = "ecdh",
+        feature = "signature-verification",
+        feature = "crl",
+        feature = "ocsp",
+        feature = "public-key-codec"
+    ))]
     #[test]
     fn test_is_certificate_revoked() {
         let (_, ca_key_pem) = create_ca_certificate("Revocation CA", None, 365, KeyType::EcdsaP256)
@@ -953,7 +1026,13 @@ mod tests {
         assert!(!is_certificate_revoked(&crl_der, "cafebabe").unwrap());
     }
 
-    #[cfg(test)]
+    #[cfg(all(
+        feature = "ecdh",
+        feature = "signature-verification",
+        feature = "crl",
+        feature = "ocsp",
+        feature = "public-key-codec"
+    ))]
     #[test]
     fn authenticated_crl_is_bound_to_certificate_issuer_and_signature() {
         let (ca_der, ca_key) =
