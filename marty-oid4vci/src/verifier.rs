@@ -809,16 +809,21 @@ impl VerificationEngine {
                 VerificationCheckStatus::Failed,
             );
         }
-        if payload
-            .get("nbf")
-            .and_then(serde_json::Value::as_i64)
-            .is_some_and(|nbf| nbf > now.saturating_add(60))
-        {
-            return failed(
-                "VP token is not yet valid".into(),
-                VerificationCheckStatus::NotChecked,
-                VerificationCheckStatus::Failed,
-            );
+        if let Some(nbf) = payload.get("nbf") {
+            let Some(nbf) = nbf.as_i64() else {
+                return failed(
+                    "VP token not-before claim is invalid".into(),
+                    VerificationCheckStatus::NotChecked,
+                    VerificationCheckStatus::Failed,
+                );
+            };
+            if nbf > now.saturating_add(60) {
+                return failed(
+                    "VP token is not yet valid".into(),
+                    VerificationCheckStatus::NotChecked,
+                    VerificationCheckStatus::Failed,
+                );
+            }
         }
 
         // ── Step 6: Locate presentation public key ───────────────────
@@ -2163,6 +2168,23 @@ mod tests {
         let result = test_engine().verify_vp_token(&token, "first");
         assert!(!result.check_valid);
         assert!(result.errors[0].contains("duplicate JSON object member"));
+    }
+
+    #[test]
+    fn test_verify_vp_token_rejects_non_integer_nbf() {
+        use base64::Engine;
+        let encode =
+            |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes());
+        let token = format!(
+            "{}.{}.AA",
+            encode(r#"{"alg":"ES256"}"#),
+            encode(
+                r#"{"aud":"did:example:verifier","nonce":"nonce","exp":9999999999,"nbf":"tomorrow"}"#,
+            )
+        );
+        let result = test_engine().verify_vp_token(&token, "nonce");
+        assert!(!result.check_valid);
+        assert!(result.errors[0].contains("not-before claim is invalid"));
     }
 
     #[test]
