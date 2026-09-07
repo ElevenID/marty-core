@@ -43,11 +43,11 @@ serde_json = { workspace = true }
 # Crypto and signing
 ssi-jwk = { version = "0.4.0", default-features = false }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "f59f408cb80cf204a7cf820ef81a5bddc53f8407", default-features = false, optional = true }
-jsonwebtoken = { version = "10.3", default-features = false }
+jsonwebtoken = { version = "11.0", default-features = false }
 
 # ISO 18013-5 mDoc
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35", default-features = false, optional = true }
-coset = "0.3"
+coset = "0.4"
 ciborium = { workspace = true }
 
 # JWT and base64
@@ -56,8 +56,8 @@ base64 = { workspace = true }
 # Key management
 p256 = { workspace = true, features = ["arithmetic"] }
 p384 = { workspace = true, features = ["arithmetic"] }
-k256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa-core", "sha256"] }
-curve25519-dalek = "4.1"
+k256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa-core", "sha256"] }
+curve25519-dalek = "5.0"
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
