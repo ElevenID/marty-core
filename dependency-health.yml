@@ -76,7 +76,7 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/spruceid/isomdl
-    current: "0.2.0@2a1b8e1acc4935af7cb299f825b1f309b60c8530"
+    current: "0.2.0@857fa570a2a9e5b3ed0c4132100131a30dc5432c"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
