@@ -108,12 +108,7 @@ fn validate_public_key_for_algorithm(algorithm: SigningAlgorithm, jwk: &JWK) -> 
             k256::PublicKey::from_sec1_bytes(&ec_public_key(params, 32)?).is_ok()
         }
         (SigningAlgorithm::EdDSA, Params::OKP(params)) if params.curve == "Ed25519" => {
-            let Ok(bytes) = <[u8; 32]>::try_from(params.public_key.0.as_slice()) else {
-                return Err(Oid4vciError::KeyError(
-                    "Ed25519 issuer public key must contain 32 bytes".into(),
-                ));
-            };
-            ed25519_dalek::VerifyingKey::from_bytes(&bytes).is_ok()
+            strict_ed25519_verifying_key(params.public_key.0.as_slice()).is_ok()
         }
         (SigningAlgorithm::RS256, Params::RSA(_)) => true,
         _ => false,
@@ -206,16 +201,11 @@ pub(crate) fn verify_remote_signature(
                 .is_ok()
         }
         (SigningAlgorithm::EdDSA, Params::OKP(params)) if params.curve == "Ed25519" => {
-            let bytes: [u8; 32] = params.public_key.0.as_slice().try_into().map_err(|_| {
-                Oid4vciError::KeyError("Ed25519 issuer public key must contain 32 bytes".into())
-            })?;
-            let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|error| {
-                Oid4vciError::KeyError(format!("Invalid Ed25519 issuer public key: {error}"))
-            })?;
+            let key = strict_ed25519_verifying_key(params.public_key.0.as_slice())?;
             let signature = ed25519_dalek::Signature::from_slice(signature).map_err(|error| {
                 Oid4vciError::SigningError(format!("Invalid Ed25519 signature: {error}"))
             })?;
-            ed25519_dalek::Verifier::verify(&key, message, &signature).is_ok()
+            key.verify_strict(message, &signature).is_ok()
         }
         (SigningAlgorithm::RS256, Params::RSA(_)) => {
             crate::jose::verify_detached_signature_with_public_jwk(
@@ -238,6 +228,21 @@ pub(crate) fn verify_remote_signature(
         ));
     }
     Ok(())
+}
+
+fn strict_ed25519_verifying_key(bytes: &[u8]) -> Oid4vciResult<ed25519_dalek::VerifyingKey> {
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+        Oid4vciError::KeyError("Ed25519 issuer public key must contain 32 bytes".into())
+    })?;
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(|error| {
+        Oid4vciError::KeyError(format!("Invalid Ed25519 issuer public key: {error}"))
+    })?;
+    if key.is_weak() {
+        return Err(Oid4vciError::KeyError(
+            "Ed25519 issuer public key has small order".into(),
+        ));
+    }
+    Ok(key)
 }
 
 #[cfg(test)]
@@ -674,6 +679,36 @@ mod remote_signature_tests {
             signature.to_bytes().as_slice(),
         )
         .is_err());
+    }
+
+    #[test]
+    fn remote_eddsa_rejects_identity_key_arbitrary_message_forgery() {
+        let mut identity_key = [0u8; 32];
+        identity_key[0] = 1;
+        let identity_jwk = serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "alg": "EdDSA",
+            "x": URL_SAFE_NO_PAD.encode(identity_key),
+        })
+        .to_string();
+        let mut signature = [0u8; 64];
+        signature[0] = 0x58;
+        signature[1..32].fill(0x66);
+        signature[32] = 1;
+        assert!(validate_remote_signature(SigningAlgorithm::EdDSA, &signature).is_ok());
+
+        let error = verify_remote_signature(
+            SigningAlgorithm::EdDSA,
+            &identity_jwk,
+            b"arbitrary attacker-selected credential payload",
+            &signature,
+        )
+        .expect_err("remote completion must reject an identity issuer key forgery");
+        assert!(error.to_string().contains("small order"));
+
+        let jwk: JWK = serde_json::from_str(&identity_jwk).unwrap();
+        assert!(validate_public_key_for_algorithm(SigningAlgorithm::EdDSA, &jwk).is_err());
     }
 
     #[test]
