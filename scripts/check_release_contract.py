@@ -166,7 +166,7 @@ def _yaml_step_key_pattern(key: str) -> str:
 
 def _has_escaped_yaml_mapping_key(block: str) -> bool:
     return re.search(
-        r'^(?:    |      - |        )"[^"\r\n]*\\[^"\r\n]*"\s*:',
+        r'^\s*(?:-\s+)?"[^"\r\n]*\\[^"\r\n]*"\s*:',
         block,
         re.MULTILINE,
     ) is not None
@@ -200,7 +200,7 @@ def _step_uses_action(step: str, action: str) -> bool:
     )
 
 
-def _step_run_matches(step: str, command_pattern: re.Pattern[str]) -> bool:
+def _step_run_commands(step: str) -> list[str]:
     lines = step.splitlines()
     for index, line in enumerate(lines):
         run = re.match(
@@ -211,20 +211,25 @@ def _step_run_matches(step: str, command_pattern: re.Pattern[str]) -> bool:
             continue
         value = run.group(1).strip()
         if value and value[0] not in "|>" and not value.startswith("#"):
-            return command_pattern.match(value) is not None
+            return [value]
         if not value or value[0] not in "|>":
             continue
+        commands: list[str] = []
         for command in lines[index + 1 :]:
             stripped = command.strip()
             if stripped and len(command) - len(command.lstrip()) <= 8:
                 break
-            if (
-                stripped
-                and not stripped.startswith("#")
-                and command_pattern.match(stripped)
-            ):
-                return True
-    return False
+            if stripped and not stripped.startswith("#"):
+                commands.append(stripped)
+        return [" ".join(commands)] if value[0] == ">" and commands else commands
+    return []
+
+
+def _step_run_matches(step: str, command_pattern: re.Pattern[str]) -> bool:
+    return any(
+        command_pattern.match(command) is not None
+        for command in _step_run_commands(step)
+    )
 
 
 def _step_runs_cargo(step: str) -> bool:
@@ -236,6 +241,15 @@ def _step_runs_cargo_test(step: str) -> bool:
         step,
         re.compile(r"\bcargo(?:\+\S+|\s+\+\S+)?\s+test\b"),
     )
+
+
+def _cargo_test_commands(step: str) -> list[str]:
+    cargo_test = re.compile(r"\bcargo(?:\+\S+|\s+\+\S+)?\s+test\b")
+    return [
+        command
+        for command in _step_run_commands(step)
+        if cargo_test.match(command) is not None
+    ]
 
 
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
@@ -258,6 +272,13 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba"
     )
     errors: list[str] = []
+    if re.search(
+        rf"^{_yaml_step_key_pattern('defaults')}\s*", contents, re.MULTILINE
+    ):
+        errors.append(
+            ".github/workflows/ci.yml: WASM security jobs require the "
+            "failure-enforcing workflow default shell"
+        )
     for job in ("oid4vci-wasm-security", "crypto-wasm-security"):
         block = blocks.get(job)
         if block is None:
@@ -277,6 +298,10 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             errors.append(
                 f".github/workflows/ci.yml: {job} must not tolerate test failures"
             )
+        if _job_has_key(block, "defaults"):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must not override its default shell"
+            )
         steps = _workflow_step_blocks(block)
         cache_index = next(
             (
@@ -290,10 +315,9 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             (index for index, step in enumerate(steps) if _step_runs_cargo(step)),
             None,
         )
-        cargo_test_index = next(
-            (index for index, step in enumerate(steps) if _step_runs_cargo_test(step)),
-            None,
-        )
+        cargo_test_indices = [
+            index for index, step in enumerate(steps) if _step_runs_cargo_test(step)
+        ]
         if cache_index is None:
             errors.append(
                 f".github/workflows/ci.yml: {job} inherits RUSTC_WRAPPER=sccache "
@@ -304,20 +328,38 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                 f".github/workflows/ci.yml: {job} must install pinned sccache "
                 "before its first cargo command"
             )
-        if cargo_test_index is None:
+        if not cargo_test_indices:
             errors.append(
                 f".github/workflows/ci.yml: {job} must execute a cargo test command"
             )
-        elif _step_has_key(steps[cargo_test_index], "if"):
-            errors.append(
-                f".github/workflows/ci.yml: {job} must execute its cargo test "
-                "step unconditionally"
-            )
-        elif _step_has_key(steps[cargo_test_index], "continue-on-error"):
-            errors.append(
-                f".github/workflows/ci.yml: {job} must not tolerate cargo test "
-                "failures"
-            )
+        for cargo_test_index in cargo_test_indices:
+            cargo_test_step = steps[cargo_test_index]
+            if _step_has_key(cargo_test_step, "if"):
+                errors.append(
+                    f".github/workflows/ci.yml: {job} must execute every cargo "
+                    "test step unconditionally"
+                )
+            if _step_has_key(cargo_test_step, "continue-on-error"):
+                errors.append(
+                    f".github/workflows/ci.yml: {job} must not tolerate cargo "
+                    "test failures"
+                )
+            if _step_has_key(cargo_test_step, "shell"):
+                errors.append(
+                    f".github/workflows/ci.yml: {job} cargo test steps must use "
+                    "the failure-enforcing default shell"
+                )
+            for command in _cargo_test_commands(cargo_test_step):
+                if re.search(r"(?:^|\s)(?:--no-run|--help|--list|-h)(?:\s|=|$)", command):
+                    errors.append(
+                        f".github/workflows/ci.yml: {job} cargo test commands "
+                        "must execute tests"
+                    )
+                if re.search(r"\|\||[;&]", command):
+                    errors.append(
+                        f".github/workflows/ci.yml: {job} cargo test commands "
+                        "must directly enforce their exit status"
+                    )
     return errors
 
 

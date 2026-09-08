@@ -280,11 +280,12 @@ class NativeBuildCacheContractTests(unittest.TestCase):
     steps:
       - uses: {pinned}
       - run: cargo test --target wasm32-unknown-unknown
+      - run: cargo test another_selected_case
         if: false
 """
         errors = check_release_contract.check_wasm_security_cache_setup(workflow)
         self.assertTrue(
-            any("cargo test step unconditionally" in error for error in errors)
+            any("every cargo test step unconditionally" in error for error in errors)
         )
 
     def test_rejects_wasm_security_job_without_cargo_test(self) -> None:
@@ -322,6 +323,98 @@ class NativeBuildCacheContractTests(unittest.TestCase):
 """
         errors = check_release_contract.check_wasm_security_cache_setup(workflow)
         self.assertTrue(any("must execute a cargo test" in error for error in errors))
+
+    def test_rejects_nonexecuting_cargo_test_flags(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        for arguments in ("--no-run", "--help", "-- --list"):
+            with self.subTest(arguments=arguments):
+                workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test {arguments}
+"""
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow
+                )
+                self.assertTrue(any("must execute tests" in error for error in errors))
+
+    def test_rejects_shell_suppressed_cargo_test_failures(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        for suffix in ("|| true", "; exit 0", "&"):
+            with self.subTest(suffix=suffix):
+                workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown {suffix}
+"""
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow
+                )
+                self.assertTrue(
+                    any("directly enforce their exit status" in error for error in errors)
+                )
+
+    def test_rejects_custom_cargo_test_shell(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+        shell: bash {{0}}
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("failure-enforcing default shell" in error for error in errors))
+
+    def test_rejects_workflow_and_job_default_shell_overrides(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        for workflow_defaults, job_defaults in (
+            ("defaults:\n  run:\n    shell: bash {0}\n", ""),
+            ("", "    defaults:\n      run:\n        shell: bash {0}\n"),
+        ):
+            with self.subTest(
+                workflow_defaults=workflow_defaults, job_defaults=job_defaults
+            ):
+                workflow = f"""{workflow_defaults}jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+{job_defaults}    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+"""
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow
+                )
+                self.assertTrue(any("default shell" in error for error in errors))
 
     def test_rejects_tolerated_wasm_security_test_failures(self) -> None:
         pinned = (
