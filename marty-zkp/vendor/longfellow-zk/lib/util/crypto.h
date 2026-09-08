@@ -85,7 +85,7 @@ class PRF {
 
   ~PRF() {
     EVP_CIPHER_CTX_free(ctx_);
-    ctx_ = nullptr;
+    secure_wipe_object(ctx_);
   }
 
   // Disable copy for good measure.

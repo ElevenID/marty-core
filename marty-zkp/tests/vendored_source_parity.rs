@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
-const AUDITED_COMMIT: &str = "ecb0e9acafadc7b2e597daf715136f25731348ae";
+const AUDITED_COMMIT: &str = "58f6259c631a374a526b80f99222d03654883655";
 const LOCAL_SECURITY_ADAPTATIONS: &str = "lib/arrays/dense.h,lib/circuits/mdoc/mdoc_zk.cc";
 const AUDITED_FILES: &[(&str, &str)] = &[
     (
@@ -66,7 +66,7 @@ const AUDITED_FILES: &[(&str, &str)] = &[
     ),
     (
         "lib/util/crypto.h",
-        "309c934c9a3e09014eebfbde94b20ca9efd44568ee1a9bfab8e7c2b9f0192b5b",
+        "e338ce7dea04586d3ab83e644961609470a2ee15efe402861dee310a1532a0bb",
     ),
     (
         "lib/util/secure_wipe.h",
