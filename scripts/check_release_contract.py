@@ -226,6 +226,10 @@ def _step_action_value(step: str) -> str | None:
     return action.group(1) if action is not None else None
 
 
+def _normalized_step(step: str) -> str:
+    return "\n".join(line.rstrip() for line in step.splitlines()).rstrip()
+
+
 def _step_run_commands(step: str) -> list[str]:
     lines = step.splitlines()
     for index, line in enumerate(lines):
@@ -305,6 +309,23 @@ WASM_SECURITY_ACTIONS = (
     "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
     WASM_BINDGEN_INSTALLER_ACTION,
 )
+WASM_SECURITY_ACTION_STEPS = (
+    """      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false""",
+    """      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown""",
+    """      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0""",
+    """      - name: Install wasm-bindgen test runner
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        with:
+          tool: wasm-bindgen-cli@0.2.126""",
+)
 
 
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
@@ -358,6 +379,13 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                 f".github/workflows/ci.yml: {job} must not override its default shell"
             )
         steps = _workflow_step_blocks(block)
+        if any(
+            re.match(r"^      - (?:name|uses|run):", step) is None for step in steps
+        ):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use canonical "
+                "block-style steps"
+            )
         observed_run_commands = tuple(
             command for step in steps for command in _step_run_commands(step)
         )
@@ -375,6 +403,16 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             errors.append(
                 f".github/workflows/ci.yml: {job} must use its exact approved "
                 "action sequence"
+            )
+        observed_action_steps = tuple(
+            _normalized_step(step)
+            for step in steps
+            if _step_action_value(step) is not None
+        )
+        if observed_action_steps != WASM_SECURITY_ACTION_STEPS:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use its exact approved "
+                "action configuration"
             )
         cache_index = next(
             (

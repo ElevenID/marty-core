@@ -498,6 +498,36 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         )
         self.assertTrue(any("exact approved action sequence" in error for error in errors))
 
+    def test_rejects_flow_style_runner_replacement(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job_start = workflow.index("  crypto-wasm-security:")
+        test_start = workflow.index(
+            "      - name: Test browser key derivation and cleanup", job_start
+        )
+        replacement = (
+            "      - { uses: taiki-e/install-action@"
+            "fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7, with: { tool: "
+            "wasm-bindgen-cli@0.2.125 } }\n"
+        )
+        workflow = workflow[:test_start] + replacement + workflow[test_start:]
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("canonical block-style steps" in error for error in errors))
+
+    def test_rejects_checkout_ref_override(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        original = "          persist-credentials: false\n"
+        self.assertGreaterEqual(workflow.count(original), 2)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(original, original + "          ref: main\n")
+        )
+        self.assertEqual(
+            sum("exact approved action configuration" in error for error in errors), 2
+        )
+
     def test_rejects_custom_cargo_test_shell(self) -> None:
         pinned = (
             "mozilla-actions/sccache-action@"
