@@ -211,12 +211,21 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes binutils cmake libbenchmark-dev libgtest-dev libssl-dev libzstd-dev zlib1g-dev
       - name: Test vendored Longfellow security regressions
         run: |
+          set -euo pipefail
           cmake -S marty-zkp/vendor/longfellow-zk/lib -B target/longfellow-parser-test -DCMAKE_BUILD_TYPE=Release
           cmake --build target/longfellow-parser-test --target host_decoder_test mdoc_parser_test mdoc_zk_test mso2_test --parallel 2
-          target/longfellow-parser-test/cbor/host_decoder_test --gtest_color=no
-          target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test --gtest_color=no
-          target/longfellow-parser-test/circuits/mdoc/mdoc_zk_test --gtest_color=no
-          target/longfellow-parser-test/circuits/cbor_parser/mso2_test --gtest_color=no
+          require_gtest_count() {
+            local binary="$1" expected="$2" log="$3"
+            "$binary" --gtest_color=no 2>&1 | tee "$log"
+            grep -Fq "[  PASSED  ] $expected tests." "$log"
+            if grep -Fq "[  SKIPPED ]" "$log"; then
+              return 1
+            fi
+          }
+          require_gtest_count target/longfellow-parser-test/cbor/host_decoder_test 12 target/host_decoder_test.log
+          require_gtest_count target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test 9 target/mdoc_parser_test.log
+          require_gtest_count target/longfellow-parser-test/circuits/mdoc/mdoc_zk_test 11 target/mdoc_zk_test.log
+          require_gtest_count target/longfellow-parser-test/circuits/cbor_parser/mso2_test 4 target/mso2_test.log
       - name: Test the real verifier and registered circuit identity
         run: cargo test --locked -p marty-zkp --no-default-features --features verifier --test circuit_identity
       - name: Document the verifier-only API without prover links

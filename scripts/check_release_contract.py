@@ -369,6 +369,9 @@ WASM_SECURITY_TEST_STEPS = {
     ),
 }
 CI_GATE_SHA256 = "b27d57803fcafb19cf4171fb39101a8fd4cc27bd34de9d57c225b02b4bd46895"
+ZKP_NATIVE_SECURITY_JOB_SHA256 = (
+    "d230b5ab4c6c5ba18c2a5874332467cb879ff51b84de2d2f95ea73504ac1987e"
+)
 WASM_SECURITY_WORKFLOW_ENV = """env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -732,18 +735,33 @@ def check_zkp_native_security_tests(workflow_text: str | None = None) -> list[st
     block = contents[start:end].replace("\r\n", "\n")
     approved_test_step = """      - name: Test vendored Longfellow security regressions
         run: |
+          set -euo pipefail
           cmake -S marty-zkp/vendor/longfellow-zk/lib -B target/longfellow-parser-test -DCMAKE_BUILD_TYPE=Release
           cmake --build target/longfellow-parser-test --target host_decoder_test mdoc_parser_test mdoc_zk_test mso2_test --parallel 2
-          target/longfellow-parser-test/cbor/host_decoder_test --gtest_color=no
-          target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test --gtest_color=no
-          target/longfellow-parser-test/circuits/mdoc/mdoc_zk_test --gtest_color=no
-          target/longfellow-parser-test/circuits/cbor_parser/mso2_test --gtest_color=no
+          require_gtest_count() {
+            local binary="$1" expected="$2" log="$3"
+            "$binary" --gtest_color=no 2>&1 | tee "$log"
+            grep -Fq "[  PASSED  ] $expected tests." "$log"
+            if grep -Fq "[  SKIPPED ]" "$log"; then
+              return 1
+            fi
+          }
+          require_gtest_count target/longfellow-parser-test/cbor/host_decoder_test 12 target/host_decoder_test.log
+          require_gtest_count target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test 9 target/mdoc_parser_test.log
+          require_gtest_count target/longfellow-parser-test/circuits/mdoc/mdoc_zk_test 11 target/mdoc_zk_test.log
+          require_gtest_count target/longfellow-parser-test/circuits/cbor_parser/mso2_test 4 target/mso2_test.log
 """
     errors: list[str] = []
     if block.count(approved_test_step) != 1:
         errors.append(
             ".github/workflows/ci.yml: zkp-native-security must build and directly "
             "execute the exact approved Longfellow decoder, parser, proof, and MSO tests"
+        )
+    job_digest = hashlib.sha256(_normalized_step(block).encode("utf-8")).hexdigest()
+    if job_digest != ZKP_NATIVE_SECURITY_JOB_SHA256:
+        errors.append(
+            ".github/workflows/ci.yml: zkp-native-security must use its exact "
+            "approved native job mapping, environment, steps, and count assertions"
         )
     if "continue-on-error:" in block or re.search(r"^    if:", block, re.MULTILINE):
         errors.append(

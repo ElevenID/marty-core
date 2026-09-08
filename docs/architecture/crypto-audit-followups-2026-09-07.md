@@ -206,7 +206,7 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  65-test release-contract suite exact-allowlists the workflow preamble, each
+  69-test release-contract suite exact-allowlists the workflow preamble, each
   audited Ubuntu job and its full top-level mapping, every action configuration,
   the full environment, each complete test step, and the final CI gate, including
   scripts, selectors, runner pins, checkout, gate needs, result bindings, and
@@ -240,7 +240,9 @@ different locations require fresh review rather than relying on this triage.
   could reuse a stale native object. `build.rs` now watches the complete vendor
   source directory and revision marker, and the parity test enforces that watch.
   Marty's required CI builds and directly executes all four native binaries; the
-  release contract fails if any binary is removed or filtered. An isolated Linux
+  release contract freezes the complete job and fails if any binary is removed,
+  filtered, sharded, skipped, conditioned, or returns a different pass count.
+  The proof-fixture header is also pinned by source parity. An isolated Linux
   run passes all 36 native tests (12 decoder, 9 parser, 11 real ZK, 4 MSO), the
   complete verifier package (5 library, 5 circuit/CBOR identity, 1 parity, and 2
   compile-fail tests), and all 27 real-prover conformance tests with zero ignored

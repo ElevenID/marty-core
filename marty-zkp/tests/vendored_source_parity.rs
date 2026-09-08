@@ -70,6 +70,10 @@ const AUDITED_FILES: &[(&str, &str)] = &[
         "437399f2ea67a842ceff23a433c80259ddbc69fffa7543526ba12ab628cee93c",
     ),
     (
+        "lib/circuits/mdoc/mdoc_examples.h",
+        "59d9c46ba7048c22e4d4782e8adab6fb491a2bf5550f1f5e44c67cfbe391bee2",
+    ),
+    (
         "lib/circuits/mdoc/mdoc_parser_test.cc",
         "fa74c371ac7ec0e8e04b849d5fd1f0034e710da81f7d5643e7f59550779135b7",
     ),

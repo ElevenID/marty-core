@@ -147,7 +147,7 @@ class NativeBuildCacheContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         workflow = workflow.replace(
-            "          target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test --gtest_color=no\n",
+            "          require_gtest_count target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test 9 target/mdoc_parser_test.log\n",
             "",
         )
         errors = check_release_contract.check_zkp_native_security_tests(workflow)
@@ -158,11 +158,69 @@ class NativeBuildCacheContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         workflow = workflow.replace(
-            "mdoc_zk_test --gtest_color=no",
-            "mdoc_zk_test --gtest_color=no --gtest_filter=MdocZKTest.one_claim",
+            '            "$binary" --gtest_color=no 2>&1 | tee "$log"',
+            '            "$binary" --gtest_color=no --gtest_filter=MdocZKTest.one_claim 2>&1 | tee "$log"',
         )
         errors = check_release_contract.check_zkp_native_security_tests(workflow)
         self.assertTrue(any("exact approved Longfellow" in error for error in errors))
+
+    def test_rejects_native_zkp_job_filter_or_shard_environment(self) -> None:
+        checked_in = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        marker = "  zkp-native-security:\n    name: Native ZKP Security Boundary\n"
+        for environment in (
+            '    env:\n      GTEST_FILTER: "-*"\n',
+            "    env:\n      GTEST_TOTAL_SHARDS: 2\n      GTEST_SHARD_INDEX: 1\n",
+        ):
+            with self.subTest(environment=environment):
+                workflow = checked_in.replace(marker, marker + environment)
+                errors = check_release_contract.check_zkp_native_security_tests(
+                    workflow
+                )
+                self.assertTrue(
+                    any("exact approved native job" in error for error in errors)
+                )
+
+    def test_rejects_condition_after_native_zkp_test_script(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        marker = (
+            "          require_gtest_count target/longfellow-parser-test/circuits/"
+            "cbor_parser/mso2_test 4 target/mso2_test.log\n"
+        )
+        workflow = workflow.replace(marker, marker + "        if: false\n")
+        errors = check_release_contract.check_zkp_native_security_tests(workflow)
+        self.assertTrue(any("exact approved native job" in error for error in errors))
+
+    def test_rejects_extra_native_zkp_step_keys(self) -> None:
+        checked_in = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        marker = (
+            "          require_gtest_count target/longfellow-parser-test/circuits/"
+            "cbor_parser/mso2_test 4 target/mso2_test.log\n"
+        )
+        for extra_key in ("        shell: cmd\n", "        run: true\n"):
+            with self.subTest(extra_key=extra_key):
+                workflow = checked_in.replace(marker, marker + extra_key)
+                errors = check_release_contract.check_zkp_native_security_tests(
+                    workflow
+                )
+                self.assertTrue(
+                    any("exact approved native job" in error for error in errors)
+                )
+
+    def test_rejects_removed_native_zkp_count_assertion(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        workflow = workflow.replace(
+            " 11 target/mdoc_zk_test.log", " 1 target/mdoc_zk_test.log"
+        )
+        errors = check_release_contract.check_zkp_native_security_tests(workflow)
+        self.assertTrue(any("exact approved native job" in error for error in errors))
 
     def test_rejects_wasm_security_job_with_missing_rust_wrapper(self) -> None:
         pinned = (
