@@ -509,88 +509,6 @@ pub struct LocalListener {
 }
 
 #[cfg(windows)]
-fn current_windows_user_sid() -> std::io::Result<String> {
-    use std::ptr;
-    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
-    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-
-    struct OwnedHandle(HANDLE);
-    impl Drop for OwnedHandle {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                // SAFETY: this owns the real token handle returned by
-                // OpenProcessToken, not the current-process pseudo handle.
-                unsafe {
-                    CloseHandle(self.0);
-                }
-            }
-        }
-    }
-
-    let mut token = ptr::null_mut();
-    // SAFETY: `token` is a valid output pointer and GetCurrentProcess returns
-    // a process pseudo handle valid for the duration of this call.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let token = OwnedHandle(token);
-
-    let mut required = 0u32;
-    // The first call obtains the required size and is expected to fail with an
-    // insufficient-buffer error.
-    unsafe {
-        GetTokenInformation(token.0, TokenUser, ptr::null_mut(), 0, &mut required);
-    }
-    if required < u32::try_from(std::mem::size_of::<TOKEN_USER>()).unwrap() {
-        return Err(std::io::Error::last_os_error());
-    }
-    let words = usize::try_from(required)
-        .expect("Windows token information length fits usize")
-        .div_ceil(std::mem::size_of::<usize>());
-    let mut token_information = vec![0usize; words];
-    // SAFETY: the word buffer is aligned for TOKEN_USER and has `required`
-    // writable bytes. The returned SID points into that live buffer.
-    if unsafe {
-        GetTokenInformation(
-            token.0,
-            TokenUser,
-            token_information.as_mut_ptr().cast(),
-            required,
-            &mut required,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: GetTokenInformation initialized the buffer as TOKEN_USER.
-    let user = unsafe { &*token_information.as_ptr().cast::<TOKEN_USER>() };
-
-    let mut string_sid = ptr::null_mut();
-    // SAFETY: `user.User.Sid` remains valid while `token_information` lives,
-    // and `string_sid` is a valid output pointer.
-    if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut string_sid) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut length = 0usize;
-    // SAFETY: ConvertSidToStringSidW returns a NUL-terminated LocalAlloc string.
-    unsafe {
-        while *string_sid.add(length) != 0 {
-            length += 1;
-        }
-    }
-    // SAFETY: the scan above established exactly `length` initialized units.
-    let sid = String::from_utf16(unsafe { std::slice::from_raw_parts(string_sid, length) })
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid user SID"));
-    // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
-    unsafe {
-        LocalFree(string_sid.cast());
-    }
-    sid
-}
-
-#[cfg(windows)]
 fn current_windows_logon_sid() -> std::io::Result<String> {
     use std::ptr;
     use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
@@ -664,7 +582,8 @@ fn current_windows_logon_sid() -> std::io::Result<String> {
         .ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid group count")
         })?;
-    if initialized_bytes > token_information.len() * std::mem::size_of::<usize>() {
+    if initialized_bytes > usize::try_from(required).expect("Windows token group length fits usize")
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "Windows token group buffer is truncated",
@@ -706,8 +625,8 @@ fn current_windows_logon_sid() -> std::io::Result<String> {
 }
 
 #[cfg(windows)]
-fn current_owner_pipe_sddl(user_sid: &str, logon_sid: &str) -> String {
-    format!("D:P(A;;GA;;;{user_sid})(A;;GA;;;{logon_sid})")
+fn current_logon_pipe_sddl(logon_sid: &str) -> String {
+    format!("D:P(A;;GA;;;{logon_sid})")
 }
 
 #[cfg(windows)]
@@ -723,12 +642,11 @@ fn create_current_owner_pipe(
     };
     use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 
-    // A protected DACL grants full control only to the current user and exact
-    // logon session. The logon SID keeps filtered tokens usable without
-    // broadening access to other sessions or authenticated users.
-    let user_sid = current_windows_user_sid()?;
+    // A protected DACL grants full control only to the exact logon session.
+    // An account-level user ACE would be additive and would admit a different
+    // interactive or remote session owned by the same account.
     let logon_sid = current_windows_logon_sid()?;
-    let sddl: Vec<u16> = format!("{}\0", current_owner_pipe_sddl(&user_sid, &logon_sid))
+    let sddl: Vec<u16> = format!("{}\0", current_logon_pipe_sddl(&logon_sid))
         .encode_utf16()
         .collect();
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
@@ -853,14 +771,14 @@ mod tests {
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt as _;
+            use std::os::unix::fs::DirBuilderExt as _;
             // macOS permits fewer bytes in a Unix-domain socket path than Linux.
             // Keep this real transport fixture short while retaining a private,
             // unpredictable parent directory for the socket.
             let directory =
                 std::path::Path::new("/tmp").join(format!("mw-{}", Uuid::new_v4().simple()));
-            std::fs::create_dir(&directory).unwrap();
-            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700).create(&directory).unwrap();
             (
                 directory.join("signer.sock").to_string_lossy().into_owned(),
                 Some(directory),
@@ -871,23 +789,190 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn local_ipc_test_endpoint_fits_the_portable_unix_socket_path_budget() {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let (endpoint, cleanup) = endpoint();
+        let directory = cleanup.expect("Unix endpoint must own a private directory");
         assert!(std::path::Path::new(&endpoint).is_absolute());
         assert!(
             endpoint.as_bytes().len() <= 90,
             "Unix socket fixture path exceeds the conservative portable budget: {endpoint}"
         );
-        std::fs::remove_dir(cleanup.expect("Unix endpoint must own a private directory")).unwrap();
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "Unix socket fixture directory was not created privately"
+        );
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[cfg(windows)]
     #[test]
-    fn windows_pipe_dacl_is_limited_to_user_and_logon_session() {
-        let sddl = current_owner_pipe_sddl("S-1-5-21-1000", "S-1-5-5-100-200");
-        assert_eq!(sddl, "D:P(A;;GA;;;S-1-5-21-1000)(A;;GA;;;S-1-5-5-100-200)");
+    fn windows_pipe_dacl_is_limited_to_the_exact_logon_session() {
+        use std::ptr;
+        use windows_sys::Win32::Foundation::{LocalFree, LUID};
+        use windows_sys::Win32::Security::Authorization::{
+            AuthzAccessCheck, AuthzAddSidsToContext, AuthzFreeContext, AuthzFreeResourceManager,
+            AuthzInitializeContextFromSid, AuthzInitializeResourceManager,
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+            AUTHZ_ACCESS_REPLY, AUTHZ_ACCESS_REQUEST, AUTHZ_RM_FLAG_NO_AUDIT,
+            AUTHZ_SKIP_TOKEN_GROUPS, SDDL_REVISION_1,
+        };
+        use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, PSID, SID_AND_ATTRIBUTES};
+
+        unsafe fn parse_sid(sid: &str) -> PSID {
+            let sid: Vec<u16> = format!("{sid}\0").encode_utf16().collect();
+            let mut parsed_sid = ptr::null_mut();
+            // SAFETY: `sid` is NUL-terminated and parsed_sid is a valid output pointer.
+            assert_ne!(
+                unsafe { ConvertStringSidToSidW(sid.as_ptr(), &mut parsed_sid) },
+                0
+            );
+            parsed_sid
+        }
+
+        unsafe fn access_granted(
+            descriptor: PSECURITY_DESCRIPTOR,
+            user_sid: PSID,
+            logon_sid: PSID,
+        ) -> bool {
+            let mut resource_manager = ptr::null_mut();
+            // SAFETY: callbacks are absent for a local, non-auditing test
+            // resource manager, and the output pointer is valid.
+            assert_ne!(
+                unsafe {
+                    AuthzInitializeResourceManager(
+                        AUTHZ_RM_FLAG_NO_AUDIT,
+                        None,
+                        None,
+                        None,
+                        ptr::null(),
+                        &mut resource_manager,
+                    )
+                },
+                0
+            );
+            let mut base_context = ptr::null_mut();
+            // SAFETY: the parsed SID and resource manager remain live, and the
+            // context intentionally starts without ambient token groups.
+            assert_ne!(
+                unsafe {
+                    AuthzInitializeContextFromSid(
+                        AUTHZ_SKIP_TOKEN_GROUPS,
+                        user_sid,
+                        resource_manager,
+                        ptr::null(),
+                        LUID::default(),
+                        ptr::null(),
+                        &mut base_context,
+                    )
+                },
+                0
+            );
+            let logon_group = SID_AND_ATTRIBUTES {
+                Sid: logon_sid,
+                Attributes: 4, // SE_GROUP_ENABLED
+            };
+            let mut context = ptr::null_mut();
+            // SAFETY: the base context and enabled SID entry remain live.
+            assert_ne!(
+                unsafe {
+                    AuthzAddSidsToContext(
+                        base_context,
+                        &logon_group,
+                        1,
+                        ptr::null(),
+                        0,
+                        &mut context,
+                    )
+                },
+                0
+            );
+            let request = AUTHZ_ACCESS_REQUEST {
+                // FILE_WRITE_DATA is granted by GA but is not an implicit
+                // owner right, so the owner SID cannot create a false positive.
+                DesiredAccess: 0x0000_0002,
+                ..Default::default()
+            };
+            let mut granted = 0;
+            let mut evaluation = 0;
+            let mut error = 0;
+            let mut reply = AUTHZ_ACCESS_REPLY {
+                ResultListLength: 1,
+                GrantedAccessMask: &mut granted,
+                SaclEvaluationResults: &mut evaluation,
+                Error: &mut error,
+            };
+            // SAFETY: the contexts, descriptor, request, and single-result
+            // reply storage all remain live for this authorization check.
+            let checked = unsafe {
+                AuthzAccessCheck(
+                    0,
+                    context,
+                    &request,
+                    ptr::null_mut(),
+                    descriptor,
+                    ptr::null(),
+                    0,
+                    &mut reply,
+                    ptr::null_mut(),
+                )
+            };
+            assert_ne!(checked, 0, "{}", std::io::Error::last_os_error());
+            let allowed = error == 0 && granted & 0x0000_0002 != 0;
+            // SAFETY: all three handles were created above and are freed once.
+            unsafe {
+                AuthzFreeContext(context);
+                AuthzFreeContext(base_context);
+                AuthzFreeResourceManager(resource_manager);
+            }
+            allowed
+        }
+
+        let allowed_logon = "S-1-5-5-100-200";
+        let same_user = "S-1-5-21-1000-1000-1000-1001";
+        let different_logon = "S-1-5-5-100-201";
+        let sddl = current_logon_pipe_sddl(allowed_logon);
+        assert_eq!(sddl, "D:P(A;;GA;;;S-1-5-5-100-200)");
         for broad_principal in [";;;WD", ";;;AU", ";;;BU", ";;;BA"] {
             assert!(!sddl.contains(broad_principal));
         }
+
+        // AuthzAccessCheck requires an owner. It also has no object-specific
+        // generic mapping, so evaluate FILE_WRITE_DATA using the production
+        // DACL's exact trustee with an equivalent concrete access bit.
+        let encoded: Vec<u16> =
+            format!("O:{same_user}D:P(A;;0x00000002;;;{allowed_logon})\0")
+                .encode_utf16()
+                .collect();
+        let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        // SAFETY: encoded is NUL-terminated and descriptor is a valid output pointer.
+        assert_ne!(
+            unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    encoded.as_ptr(),
+                    SDDL_REVISION_1,
+                    &mut descriptor,
+                    ptr::null_mut(),
+                )
+            },
+            0
+        );
+        // Use Windows' authorization engine with the same user SID and one
+        // enabled logon group at a time. Only the exact session may receive GA.
+        let parsed_user = unsafe { parse_sid(same_user) };
+        let parsed_allowed_logon = unsafe { parse_sid(allowed_logon) };
+        let parsed_different_logon = unsafe { parse_sid(different_logon) };
+        assert!(unsafe { access_granted(descriptor, parsed_user, parsed_allowed_logon) });
+        assert!(!unsafe { access_granted(descriptor, parsed_user, parsed_different_logon) });
+        // SAFETY: these allocations came from Windows conversion routines.
+        unsafe {
+            LocalFree(parsed_different_logon.cast());
+            LocalFree(parsed_allowed_logon.cast());
+            LocalFree(parsed_user.cast());
+            LocalFree(descriptor.cast());
+        }
+
         let logon_sid = current_windows_logon_sid().unwrap();
         assert!(
             logon_sid.starts_with("S-1-5-5-"),
