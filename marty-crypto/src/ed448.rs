@@ -1,7 +1,8 @@
 //! Ed448 (Edwards curve over 448-bit field) verification operations.
 //!
 //! Production builds expose Ed448 verification for eMRTD Active Authentication.
-//! Key generation and signing exist only in crate-internal regression tests.
+//! Key generation and signing are absent; regression tests use fixed RFC 8032
+//! public verification vectors.
 //!
 //! Ed448 provides 224-bit security (vs 128-bit for Ed25519) and is used
 //! in newer ePassports with higher security requirements.
@@ -21,6 +22,18 @@ use ed448_goldilocks_plus::{
 use crate::{CryptoError, CryptoResult};
 
 const HASH_HEAD: [u8; 8] = *b"SigEd448";
+
+fn decompress_canonical_point(encoded: [u8; ED448_PUBLIC_KEY_SIZE]) -> Option<EdwardsPoint> {
+    // RFC 8032 reserves every bit except the high sign bit in the final octet.
+    if encoded[ED448_PUBLIC_KEY_SIZE - 1] & 0x7f != 0 {
+        return None;
+    }
+    let compressed = CompressedEdwardsY(encoded);
+    let point = Option::<EdwardsPoint>::from(compressed.decompress())?;
+    // The backend field parser reduces modulo p, so round-trip the point to
+    // reject y >= p aliases as required by RFC 8032 and RFC 8410.
+    (point.compress().0 == encoded).then_some(point)
+}
 
 /// Ed448 public key size in bytes (57 bytes).
 pub const ED448_PUBLIC_KEY_SIZE: usize = 57;
@@ -94,9 +107,7 @@ fn verify_ed448_inner(
     let public_key: [u8; ED448_PUBLIC_KEY_SIZE] = public_key
         .try_into()
         .map_err(|_| CryptoError::crypto_error("Invalid public key length"))?;
-    let compressed_public_key = CompressedEdwardsY(public_key);
-    let Some(public_point) = Option::<EdwardsPoint>::from(compressed_public_key.decompress())
-    else {
+    let Some(public_point) = decompress_canonical_point(public_key) else {
         return Ok(false);
     };
     if bool::from(public_point.is_identity()) {
@@ -108,8 +119,7 @@ fn verify_ed448_inner(
         .map_err(|_| CryptoError::crypto_error("Invalid signature length"))?;
     let mut r_bytes = [0u8; ED448_PUBLIC_KEY_SIZE];
     r_bytes.copy_from_slice(&signature[..ED448_PUBLIC_KEY_SIZE]);
-    let compressed_r = CompressedEdwardsY(r_bytes);
-    let Some(r) = Option::<EdwardsPoint>::from(compressed_r.decompress()) else {
+    let Some(r) = decompress_canonical_point(r_bytes) else {
         return Ok(false);
     };
     if bool::from(r.is_identity()) {
@@ -249,6 +259,37 @@ mod tests {
     }
 
     #[test]
+    fn rejects_noncanonical_public_key_and_r_encodings() {
+        let (public_key, signature) = empty_message_vector();
+
+        let mut reserved_public_key = public_key;
+        reserved_public_key[56] |= 1;
+        assert!(
+            Option::<EdwardsPoint>::from(CompressedEdwardsY(reserved_public_key).decompress())
+                .is_some()
+        );
+        assert!(decompress_canonical_point(reserved_public_key).is_none());
+        assert!(!ed448_verify(&reserved_public_key, b"", &signature).unwrap());
+
+        let mut reserved_r_signature = signature;
+        reserved_r_signature[56] |= 1;
+        let reserved_r: [u8; 57] = reserved_r_signature[..57].try_into().unwrap();
+        assert!(
+            Option::<EdwardsPoint>::from(CompressedEdwardsY(reserved_r).decompress()).is_some()
+        );
+        assert!(decompress_canonical_point(reserved_r).is_none());
+        assert!(!ed448_verify(&public_key, b"", &reserved_r_signature).unwrap());
+
+        // p + 1 reduces to the identity's y-coordinate in the backend parser.
+        let mut p_plus_one = [0u8; 57];
+        p_plus_one[28..56].fill(0xff);
+        assert!(
+            Option::<EdwardsPoint>::from(CompressedEdwardsY(p_plus_one).decompress()).is_some()
+        );
+        assert!(decompress_canonical_point(p_plus_one).is_none());
+    }
+
+    #[test]
     fn spki_requires_exact_ed448_algorithm_metadata() {
         let (public_key, signature) = empty_message_vector();
         let mut spki = hex::decode("3043300506032b6571033a00").unwrap();
@@ -266,5 +307,9 @@ mod tests {
         let mut null_parameters = hex::decode("3045300706032b65710500033a00").unwrap();
         null_parameters.extend_from_slice(&public_key);
         assert!(verify_ed448_spki(&null_parameters, b"", &signature).is_err());
+
+        let mut unused_bit = spki;
+        unused_bit[10] = 1;
+        assert!(verify_ed448_spki(&unused_bit, b"", &signature).is_err());
     }
 }

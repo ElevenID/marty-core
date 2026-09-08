@@ -373,8 +373,10 @@ fn validate_ed25519_encoding(signature: &[u8]) -> bool {
     let Some(point) = curve25519_dalek::edwards::CompressedEdwardsY(encoded_r).decompress() else {
         return false;
     };
+    // Small-order R is structurally well formed. Leave its rejection to the
+    // strict cryptographic verifier so this encoding check cannot mask a
+    // regression from verify_strict() to legacy verification.
     point.compress().to_bytes() == encoded_r
-        && !point.is_small_order()
         && bool::from(curve25519_dalek::scalar::Scalar::from_canonical_bytes(encoded_s).is_some())
         && signature.iter().any(|byte| *byte != 0)
 }
@@ -709,6 +711,43 @@ mod remote_signature_tests {
 
         let jwk: JWK = serde_json::from_str(&identity_jwk).unwrap();
         assert!(validate_public_key_for_algorithm(SigningAlgorithm::EdDSA, &jwk).is_err());
+    }
+
+    #[test]
+    fn remote_eddsa_strictly_rejects_small_order_r_with_nonweak_key() {
+        // C2SP CCTV Ed25519 vector 5: ordinary verification accepts this
+        // low-order R signature, while strict verification must reject it.
+        fn decode_hex<const N: usize>(value: &str) -> [u8; N] {
+            assert_eq!(value.len(), 2 * N);
+            let mut bytes = [0u8; N];
+            for (index, byte) in bytes.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&value[2 * index..2 * index + 2], 16).unwrap();
+            }
+            bytes
+        }
+        let public_key =
+            decode_hex("10eb7c3acfb2bed3e0d6ab89bf5a3d6afddd1176ce4812e38d9fd485058fdb1f");
+        let signature = decode_hex(
+            "00000000000000000000000000000000000000000000000000000000000000009472a69cd9a701a50d130ed52189e2455b23767db52cacb8716fb896ffeeac09",
+        );
+        let message = b"ed25519vectors 3";
+        let jwk = serde_json::json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "alg": "EdDSA",
+            "x": URL_SAFE_NO_PAD.encode(public_key),
+        })
+        .to_string();
+
+        let key = ed25519_dalek::VerifyingKey::from_bytes(&public_key).unwrap();
+        let parsed_signature = ed25519_dalek::Signature::from_bytes(&signature);
+        assert!(!key.is_weak());
+        assert!(ed25519_dalek::Verifier::verify(&key, message, &parsed_signature).is_ok());
+        assert!(key.verify_strict(message, &parsed_signature).is_err());
+        assert!(validate_remote_signature(SigningAlgorithm::EdDSA, &signature).is_ok());
+
+        verify_remote_signature(SigningAlgorithm::EdDSA, &jwk, message, &signature)
+            .expect_err("remote completion must use strict Ed25519 verification");
     }
 
     #[test]
