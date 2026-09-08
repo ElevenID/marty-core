@@ -364,6 +364,26 @@ WASM_SECURITY_WORKFLOW_ENV = """env:
   # Merge-queue and Dependabot refs create large, short-lived cache namespaces.
   # They still read the default/PR cache but do not duplicate compiler objects.
   SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}"""
+WASM_SECURITY_WORKFLOW_PREFIX = (
+    """name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+"""
+    + WASM_SECURITY_WORKFLOW_ENV
+)
 
 
 def _workflow_env_block(contents: str) -> str | None:
@@ -420,6 +440,17 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba"
     )
     errors: list[str] = []
+    jobs_header = re.search(r"^jobs:\s*$", contents, re.MULTILINE)
+    workflow_prefix = (
+        _normalized_step(contents[: jobs_header.start()])
+        if jobs_header is not None
+        else None
+    )
+    if workflow_prefix != WASM_SECURITY_WORKFLOW_PREFIX:
+        errors.append(
+            ".github/workflows/ci.yml: WASM security jobs require the exact "
+            "approved workflow preamble"
+        )
     if _workflow_env_block(contents) != WASM_SECURITY_WORKFLOW_ENV:
         errors.append(
             ".github/workflows/ci.yml: WASM security jobs require the exact "

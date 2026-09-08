@@ -614,6 +614,44 @@ class NativeBuildCacheContractTests(unittest.TestCase):
                     any("exact approved workflow environment" in error for error in errors)
                 )
 
+    def test_rejects_duplicate_root_environment(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(workflow.count("\njobs:\n"), 1)
+        duplicate = "\nenv:\n  BASH_ENV: .github/noop-cargo.sh\n"
+        mutated = workflow.replace("\njobs:\n", duplicate + "jobs:\n", 1)
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("exact approved workflow preamble" in error for error in errors))
+
+    def test_rejects_missing_pr_and_merge_queue_triggers(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        original = """on:
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+"""
+        self.assertEqual(workflow.count(original), 1)
+        mutated = workflow.replace(original, "on: workflow_dispatch\n", 1)
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("exact approved workflow preamble" in error for error in errors))
+
+    def test_rejects_pr_path_exclusions(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        original = "  pull_request:\n    branches: [main]\n"
+        replacement = original + "    paths-ignore:\n      - '**'\n"
+        self.assertEqual(workflow.count(original), 1)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(original, replacement, 1)
+        )
+        self.assertTrue(any("exact approved workflow preamble" in error for error in errors))
+
     def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
