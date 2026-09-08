@@ -159,21 +159,38 @@ def _workflow_step_blocks(job_block: str) -> list[str]:
     ]
 
 
+def _yaml_step_key_pattern(key: str) -> str:
+    escaped = re.escape(key)
+    return rf'(?:{escaped}|"{escaped}"|\'{escaped}\')\s*:'
+
+
 def _step_uses_action(step: str, action: str) -> bool:
     uses_action = re.search(
-        rf"^(?:      - |        )uses:\s*{re.escape(action)}\s*$",
+        rf"^(?:      - |        ){_yaml_step_key_pattern('uses')}"
+        rf"\s*{re.escape(action)}\s*$",
         step,
         re.MULTILINE,
     )
-    has_run = re.search(r"^(?:      - |        )run:\s*", step, re.MULTILINE)
-    has_condition = re.search(r"^(?:      - |        )if:\s*", step, re.MULTILINE)
+    has_run = re.search(
+        rf"^(?:      - |        ){_yaml_step_key_pattern('run')}\s*",
+        step,
+        re.MULTILINE,
+    )
+    has_condition = re.search(
+        rf"^(?:      - |        ){_yaml_step_key_pattern('if')}\s*",
+        step,
+        re.MULTILINE,
+    )
     return uses_action is not None and has_run is None and has_condition is None
 
 
 def _step_runs_cargo(step: str) -> bool:
     lines = step.splitlines()
     for index, line in enumerate(lines):
-        run = re.match(r"^(?:      - |        )run:\s*(.*)$", line)
+        run = re.match(
+            rf"^(?:      - |        ){_yaml_step_key_pattern('run')}\s*(.*)$",
+            line,
+        )
         if run is None:
             continue
         value = run.group(1).strip()
