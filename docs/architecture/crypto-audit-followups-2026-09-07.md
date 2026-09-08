@@ -206,7 +206,8 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  15-test release-contract suite rejects recurrence. The real Linux ZKP build
+  17-test release-contract suite rejects missing, commented, or late cache
+  actions. The real Linux ZKP build
   also detected an incomplete Longfellow algebra sync: `fp24.h` and
   `fp_generic.h` used the audited base-aware `digit` API while `nat.h` and
   `nat.cc` retained the old signature. The exact audited `nat` pair is now
@@ -214,6 +215,11 @@ different locations require fresh review rather than relying on this triage.
   Rust 1.97.1 Linux verifier build passes all three selected circuit-identity
   tests; the browser lanes pass one cleanup/KAT unit test, two KDF integration
   tests, and two provider-policy tests with no ignored or filtered cases.
+- Linux strict lint also found that the signer agent's listener is mutable only
+  for the Windows named-pipe implementation. The binding is now immutable on
+  Unix and explicitly shadowed as mutable on Windows. The exact full-workspace
+  Windows clippy command passes with warnings denied after exercising the
+  platform-specific binding.
 - The dependency-health checkpoint was re-run on 2026-09-08. RustCrypto's
   certificate/signature/elliptic-curve majors are stable but compatible RSA
   0.10 remains a release candidate; Affinidi DIDComm 0.15.8 requires the new
