@@ -1,10 +1,9 @@
 # Cryptography audit follow-ups
 
-Status: implementation and executable regression matrix pass; isomdl, SD-JWT,
-and Longfellow integrated with green post-merge CI; Marty correction review and
-integration pending
+Status: complete; all four repositories are independently reviewed, integrated
+on ElevenID main, and validated by protected CI
 
-Recorded: 2026-09-07
+Recorded: 2026-09-07; final integration checkpoint: 2026-09-08
 
 Scope owner: ElevenID
 
@@ -22,11 +21,13 @@ The exact implementation heads entering final review are:
 | `isomdl-elevenid` | reviewed `784a52943469622873c7ae3200dbc11e89d6bd8e`; merged `8915a0357c78dc91ee15a41ccc0103a8b5afe97a` | versioned single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, strict public-point-only certificate decoding without curve private-key codecs, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
 | `sd-jwt-rust` | `82143d688355315f22297b40ca18050a94cd2525` | versioned cryptographically bound opaque remote completion, backend-free issuer planning, standalone signing-free verification provider, signing-free issuer-completion/holder/verifier graphs, holder/verifier confirmation-key policy across every serialization, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier, and locked interop generator; this permanent rebase-merge revision is tree-equivalent to reviewed head `200ad57a276d28c7108255235b34afea67f07d06` |
 | `longfellow-zk` | reviewed `c4004b5edee8cbc4e2a76588c531f07994e3e7ab`; merged `2a329725e2dc7b41652621c0204cc47724fdfc59` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; non-elidable OpenSSL PRF-wrapper teardown; strict UTF-8, canonical CBOR lengths/scalars/wrappers, unambiguous map lookup, exact input consumption, semantic dates, overflow-safe lengths, and null rejection; executable sanitizer, unwind, allocation, vendor-parity, parser, real-proof, and production-random retry-verification regressions with complete public-statement binding |
-| `marty-core` | code checkpoint `a25bf347a675f56ba80e24a2f03080f6aa106cab` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity through `c4004b5`, direct native decoder/parser/proof/MSO tests, Cargo vendor-change invalidation, checked-accessor CBOR validation with end-to-end accepted/rejected-value regressions, zeroizing native/browser KDF and MAC state, exact-logon-session authenticated OS-IPC signer agent with Windows Authz cross-session denial and atomic Unix 0700 fixture coverage, CRLF-stable benchmark contracts, executable reduced issuer/mdoc/ZK feature coverage, synchronized 0.2 release metadata, isolated lockfile updates, and permanent integrated fork pins |
+| `marty-core` | reviewed `f37114e114675d9478f615436548d845e9f26f48`; merged `1ae5b71e53ebfd2bad29b2e7c23c3d048461245c` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity through `c4004b5`, direct native decoder/parser/proof/MSO tests, Cargo vendor-change invalidation, checked-accessor CBOR validation with end-to-end accepted/rejected-value regressions, zeroizing native/browser KDF and MAC state, exact-logon-session authenticated OS-IPC signer agent with Windows Authz cross-session denial and atomic Unix 0700 fixture coverage, CRLF-stable benchmark contracts, executable reduced issuer/mdoc/ZK feature coverage, synchronized 0.2 release metadata, isolated lockfile updates, and permanent integrated fork pins; the merge-queue squash commit is tree-identical to the reviewed head (`04b6a85f04087d03b95a8059b8f94a52332fb8d6`) |
 
-The table records reviewed implementation heads and, where integration has
-completed, final ElevenID main revisions. Marty remains pre-integration. Update
-this section after every correction round and after ElevenID merge-queue CI.
+The table records reviewed implementation heads and final ElevenID main
+revisions. Marty protected merge-group CI passed on Windows, macOS, and Ubuntu,
+including the executable platform and reduced-feature regressions discovered in
+the previous merge-group attempt. All companion release, organization-quality,
+and open-source-policy workflows passed.
 
 The Marty branch was rebased onto Marty PR #317 by dropping the duplicated PR
 commits and replaying only the later audit series. The PR #317 merge tree was
@@ -302,10 +303,10 @@ Every behavior or security gap discovered in this round has a selected,
 executable regression test. Ignored, compile-only, or zero-selected runs are not
 accepted as evidence for those gaps.
 
-Final acceptance still requires all independent reviewers to report no
-corrections, full post-pin tests, ElevenID-only pull requests, successful
-protected CI, self-review, and merge. The fork pins and ElevenID feature branches
-are current. No upstream repository will receive a branch, issue, or pull request.
+Final acceptance is complete: all independent reviewers reported no
+corrections, full post-pin tests passed, the ElevenID-only pull requests passed
+protected CI, and all changes are merged. The fork pins are current. No upstream
+repository received a branch, issue, or pull request.
 
 ## Deferred items
 
