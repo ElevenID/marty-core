@@ -134,6 +134,41 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_wasm_security_cache_setup(workflow)
         self.assertTrue(any("crypto-wasm-security inherits" in error for error in errors))
 
+    def test_rejects_wasm_security_cache_installed_after_cargo(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - run: cargo test --target wasm32-unknown-unknown
+      - uses: {pinned}
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("before its first cargo command" in error for error in errors))
+
+    def test_rejects_commented_wasm_security_cache_action(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+  crypto-wasm-security:
+    steps:
+      # uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("without installing pinned sccache" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

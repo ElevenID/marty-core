@@ -171,10 +171,24 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         block = blocks.get(job)
         if block is None:
             errors.append(f".github/workflows/ci.yml: missing required {job} job")
-        elif pinned_sccache not in block:
+            continue
+        cache_action = re.search(
+            rf"^\s+(?:-\s+)?uses:\s*{re.escape(pinned_sccache)}\s*$",
+            block,
+            re.MULTILINE,
+        )
+        rust_command = re.search(
+            r"^\s+(?!#)(?:run:\s*)?.*\bcargo(?:\s|\+)", block, re.MULTILINE
+        )
+        if cache_action is None:
             errors.append(
                 f".github/workflows/ci.yml: {job} inherits RUSTC_WRAPPER=sccache "
                 "without installing pinned sccache"
+            )
+        elif rust_command is not None and cache_action.start() > rust_command.start():
+            errors.append(
+                f".github/workflows/ci.yml: {job} must install pinned sccache "
+                "before its first cargo command"
             )
     return errors
 
