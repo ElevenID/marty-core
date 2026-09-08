@@ -423,7 +423,8 @@ async fn connect(endpoint: &str) -> Result<LocalStream, SignerIpcError> {
         return Err(SignerIpcError::InvalidEndpoint);
     }
     tokio::net::windows::named_pipe::ClientOptions::new()
-        // The signer never needs to identify or impersonate the wallet client.
+        // The DACL authenticates the exact logon session; the signer still
+        // receives no identity or impersonation capability from the client.
         .security_qos_flags(0) // SECURITY_ANONYMOUS
         .open(endpoint)
         .map_err(SignerIpcError::Connection)
@@ -590,6 +591,126 @@ fn current_windows_user_sid() -> std::io::Result<String> {
 }
 
 #[cfg(windows)]
+fn current_windows_logon_sid() -> std::io::Result<String> {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenGroups, SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    const SE_GROUP_LOGON_ID_MASK: u32 = 0xc000_0000;
+
+    struct OwnedHandle(HANDLE);
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: this owns the real token handle returned by
+                // OpenProcessToken, not the current-process pseudo handle.
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    let mut token = ptr::null_mut();
+    // SAFETY: `token` is a valid output pointer and GetCurrentProcess returns
+    // a process pseudo handle valid for the duration of this call.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let token = OwnedHandle(token);
+
+    let mut required = 0u32;
+    // The first call obtains the variable TOKEN_GROUPS buffer size.
+    unsafe {
+        GetTokenInformation(token.0, TokenGroups, ptr::null_mut(), 0, &mut required);
+    }
+    if required < u32::try_from(std::mem::size_of::<TOKEN_GROUPS>()).unwrap() {
+        return Err(std::io::Error::last_os_error());
+    }
+    let words = usize::try_from(required)
+        .expect("Windows token group length fits usize")
+        .div_ceil(std::mem::size_of::<usize>());
+    let mut token_information = vec![0usize; words];
+    // SAFETY: the word buffer is suitably aligned and has `required` writable
+    // bytes for the TOKEN_GROUPS returned by GetTokenInformation.
+    if unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenGroups,
+            token_information.as_mut_ptr().cast(),
+            required,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: GetTokenInformation initialized the buffer as TOKEN_GROUPS.
+    let groups = unsafe { &*token_information.as_ptr().cast::<TOKEN_GROUPS>() };
+    let entry_count = usize::try_from(groups.GroupCount)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid group count"))?;
+    let initialized_bytes = std::mem::offset_of!(TOKEN_GROUPS, Groups)
+        .checked_add(
+            entry_count
+                .checked_mul(std::mem::size_of::<SID_AND_ATTRIBUTES>())
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid group count")
+                })?,
+        )
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid group count")
+        })?;
+    if initialized_bytes > token_information.len() * std::mem::size_of::<usize>() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Windows token group buffer is truncated",
+        ));
+    }
+    // SAFETY: the validated GroupCount fits within the initialized buffer.
+    let entries = unsafe { std::slice::from_raw_parts(groups.Groups.as_ptr(), entry_count) };
+    let logon = entries
+        .iter()
+        .find(|entry| entry.Attributes & SE_GROUP_LOGON_ID_MASK == SE_GROUP_LOGON_ID_MASK)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "current Windows token has no logon SID",
+            )
+        })?;
+
+    let mut string_sid = ptr::null_mut();
+    // SAFETY: the group SID points into the live token-information buffer, and
+    // `string_sid` is a valid output pointer.
+    if unsafe { ConvertSidToStringSidW(logon.Sid, &mut string_sid) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut length = 0usize;
+    // SAFETY: ConvertSidToStringSidW returns a NUL-terminated LocalAlloc string.
+    unsafe {
+        while *string_sid.add(length) != 0 {
+            length += 1;
+        }
+    }
+    // SAFETY: the scan above established exactly `length` initialized units.
+    let sid = String::from_utf16(unsafe { std::slice::from_raw_parts(string_sid, length) })
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid logon SID"));
+    // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
+    unsafe {
+        LocalFree(string_sid.cast());
+    }
+    sid
+}
+
+#[cfg(windows)]
+fn current_owner_pipe_sddl(user_sid: &str, logon_sid: &str) -> String {
+    format!("D:P(A;;GA;;;{user_sid})(A;;GA;;;{logon_sid})")
+}
+
+#[cfg(windows)]
 fn create_current_owner_pipe(
     endpoint: &str,
     first_instance: bool,
@@ -602,11 +723,12 @@ fn create_current_owner_pipe(
     };
     use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 
-    // A protected DACL grants full control only to the current user's exact
-    // SID. The pipe remains local-only and cannot inherit a permissive DACL
-    // from the launching process or service account.
+    // A protected DACL grants full control only to the current user and exact
+    // logon session. The logon SID keeps filtered tokens usable without
+    // broadening access to other sessions or authenticated users.
     let user_sid = current_windows_user_sid()?;
-    let sddl: Vec<u16> = format!("D:P(A;;GA;;;{user_sid})\0")
+    let logon_sid = current_windows_logon_sid()?;
+    let sddl: Vec<u16> = format!("{}\0", current_owner_pipe_sddl(&user_sid, &logon_sid))
         .encode_utf16()
         .collect();
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
@@ -732,11 +854,11 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let directory = std::env::temp_dir().join(format!(
-                "marty-test-wallet-{}-{}",
-                std::process::id(),
-                Uuid::new_v4()
-            ));
+            // macOS permits fewer bytes in a Unix-domain socket path than Linux.
+            // Keep this real transport fixture short while retaining a private,
+            // unpredictable parent directory for the socket.
+            let directory =
+                std::path::Path::new("/tmp").join(format!("mw-{}", Uuid::new_v4().simple()));
             std::fs::create_dir(&directory).unwrap();
             std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
             (
@@ -744,6 +866,33 @@ mod tests {
                 Some(directory),
             )
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_ipc_test_endpoint_fits_the_portable_unix_socket_path_budget() {
+        let (endpoint, cleanup) = endpoint();
+        assert!(std::path::Path::new(&endpoint).is_absolute());
+        assert!(
+            endpoint.as_bytes().len() <= 90,
+            "Unix socket fixture path exceeds the conservative portable budget: {endpoint}"
+        );
+        std::fs::remove_dir(cleanup.expect("Unix endpoint must own a private directory")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pipe_dacl_is_limited_to_user_and_logon_session() {
+        let sddl = current_owner_pipe_sddl("S-1-5-21-1000", "S-1-5-5-100-200");
+        assert_eq!(sddl, "D:P(A;;GA;;;S-1-5-21-1000)(A;;GA;;;S-1-5-5-100-200)");
+        for broad_principal in [";;;WD", ";;;AU", ";;;BU", ";;;BA"] {
+            assert!(!sddl.contains(broad_principal));
+        }
+        let logon_sid = current_windows_logon_sid().unwrap();
+        assert!(
+            logon_sid.starts_with("S-1-5-5-"),
+            "token group selected as logon SID has the wrong authority: {logon_sid}"
+        );
     }
 
     #[tokio::test]

@@ -7,6 +7,10 @@ mod selectors;
 #[path = "../benches/support/signed_preparation.rs"]
 mod signed_preparation;
 
+fn normalize_source_line_endings(source: &str) -> String {
+    source.replace("\r\n", "\n")
+}
+
 #[test]
 fn benchmark_remote_signature_matches_the_public_fixture_key() {
     use base64::Engine as _;
@@ -35,6 +39,7 @@ fn benchmark_remote_signature_matches_the_public_fixture_key() {
 }
 
 #[test]
+#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 fn benchmark_mdoc_assembly_helper_signs_the_exact_prepared_payload() {
     use marty_oid4vci::{
         remote_credential::{prepare_remote_mdoc, RemoteMdocRequest},
@@ -85,10 +90,12 @@ fn mdoc_benchmark_preflights_use_only_the_tested_assembly_helper() {
 
 #[test]
 fn mixed_format_assembly_stage_pairs_each_prepared_payload_with_its_signature() {
-    let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("benches/es256_signing_batch.rs"),
-    )
-    .expect("mixed-format benchmark source must be readable");
+    let source = normalize_source_line_endings(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("benches/es256_signing_batch.rs"),
+        )
+        .expect("mixed-format benchmark source must be readable"),
+    );
     let trait_contract = r#"impl PreparedAssembly for BenchmarkPrepared {
     type Output = SignedCredential;
 
@@ -122,6 +129,14 @@ fn mixed_format_assembly_stage_pairs_each_prepared_payload_with_its_signature() 
         1,
         "the measured assembly stage must consume each opaque signed preparation"
     );
+}
+
+#[test]
+fn benchmark_source_contract_is_independent_of_checkout_line_endings() {
+    let unix = "impl PreparedAssembly {\n    fn assemble() {}\n}";
+    let windows = unix.replace('\n', "\r\n");
+    assert_eq!(normalize_source_line_endings(&windows), unix);
+    assert_eq!(normalize_source_line_endings(unix), unix);
 }
 
 #[test]

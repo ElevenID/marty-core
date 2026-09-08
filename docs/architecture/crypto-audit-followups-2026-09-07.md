@@ -272,6 +272,21 @@ different locations require fresh review rather than relying on this triage.
   Unix and explicitly shadowed as mutable on Windows. The exact full-workspace
   Windows clippy command passes with warnings denied after exercising the
   platform-specific binding.
+- The first protected merge-group run exposed three platform and feature-matrix
+  gaps that a pull-request-only run did not exercise. Windows checkouts use CRLF,
+  so the benchmark source contract now normalizes line endings and has an
+  explicit LF/CRLF equivalence regression. macOS has a smaller Unix-domain
+  socket path budget, so the real IPC fixture now creates an unpredictable 0700
+  directory directly under `/tmp`, with an executable 90-byte portable-path
+  bound. The reduced `issuer,mso_mdoc,zk_mdoc` combination no longer imports the
+  SD-JWT-dependent remote-credential API, while its seven applicable benchmark
+  tests still run. The real Windows pipe test also revealed that an exact user
+  SID alone can reject a filtered token; the protected DACL now grants access
+  only to that user SID and the current token's exact logon-session SID. A
+  Windows-only regression rejects broad Everyone, Authenticated Users, Users,
+  and Administrators principals and verifies the live logon SID authority. The
+  authenticated and wrong-key named-pipe tests both exercise the resulting real
+  transport with no ignored or filtered cases.
 - The dependency-health checkpoint was re-run on 2026-09-08. RustCrypto's
   certificate/signature/elliptic-curve majors are stable but compatible RSA
   0.10 remains a release candidate; Affinidi DIDComm 0.15.8 requires the new
