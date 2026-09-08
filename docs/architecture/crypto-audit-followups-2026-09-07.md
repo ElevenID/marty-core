@@ -1,6 +1,8 @@
 # Cryptography audit follow-ups
 
-Status: implementation and executable regression matrix pass; clean independent re-review and integration CI pending
+Status: implementation and executable regression matrix pass; isomdl and
+SD-JWT integrated with green post-merge CI; Longfellow reviewed with fully green
+protected CI; Longfellow and Marty integration pending
 
 Recorded: 2026-09-07
 
@@ -17,13 +19,19 @@ The exact implementation heads entering final review are:
 
 | Repository | Review head | Work completed |
 | --- | --- | --- |
-| `isomdl-elevenid` | `784a52943469622873c7ae3200dbc11e89d6bd8e` | versioned single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, strict public-point-only certificate decoding without curve private-key codecs, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
+| `isomdl-elevenid` | reviewed `784a52943469622873c7ae3200dbc11e89d6bd8e`; merged `8915a0357c78dc91ee15a41ccc0103a8b5afe97a` | versioned single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, strict public-point-only certificate decoding without curve private-key codecs, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
 | `sd-jwt-rust` | `82143d688355315f22297b40ca18050a94cd2525` | versioned cryptographically bound opaque remote completion, backend-free issuer planning, standalone signing-free verification provider, signing-free issuer-completion/holder/verifier graphs, holder/verifier confirmation-key policy across every serialization, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier, and locked interop generator; this permanent rebase-merge revision is tree-equivalent to reviewed head `200ad57a276d28c7108255235b34afea67f07d06` |
-| `longfellow-zk` | `9284d4c410f0b6754255f81f6744b5df1be64909` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; executable sanitizer, unwind, allocation, vendor-parity, and production-random retry-verification regressions with complete public-statement binding |
-| `marty-core` | `b9465b37bba343526a7dee451a7cab27eb044911` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, synchronized 0.2 release metadata, isolated lockfile updates, and final fork pins |
+| `longfellow-zk` | `58f6259c631a374a526b80f99222d03654883655` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; non-elidable OpenSSL PRF-wrapper teardown; executable sanitizer, unwind, allocation, vendor-parity, and production-random retry-verification regressions with complete public-statement binding |
+| `marty-core` | `bb4c17d` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity including the non-elidable PRF teardown, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, synchronized 0.2 release metadata, isolated lockfile updates, and permanent integrated fork pins |
 
 These are review heads, not final integrated or merged revisions. Update this
 section after every correction round and after ElevenID merge-queue CI.
+
+The Marty branch was rebased onto Marty PR #317 by dropping the duplicated PR
+commits and replaying only the later audit series. The PR #317 merge tree was
+verified byte-for-byte equal to the dropped head, and the final feature-tree was
+verified unchanged across the rebase. The permanent SD-JWT rebase-merge revision
+is likewise byte-for-byte equal to its reviewed PR head.
 
 ## Implemented security properties
 
@@ -124,6 +132,27 @@ verification, but test/authority compatibility paths still require separate
 dependency removal or migration. Do not describe the whole Marty workspace as
 free of this advisory until its remaining graph is resolved.
 
+### Code-scanning triage
+
+Marty PR #318's Rust CodeQL analysis initially reported 15 new alerts. Every
+location was inspected before triage; the language analyses themselves remained
+enabled and passing, and no test was deleted, ignored, or excluded:
+
+- nine hard-coded-value alerts were deterministic test vectors or cleanup
+  fixtures compiled only under `cfg(test)`;
+- three zero-IV alerts were the public, mandatory initial chaining value for
+  ISO 9797-1 Algorithm 3 Retail MAC;
+- two apparent HKDF salts were public EAC domain-separation labels whose
+  distinct values prevent MAC/encryption key reuse; and
+- one weak-algorithm alert was test coverage of deliberately feature-scoped
+  3DES retained for required eMRTD/BAC interoperability, not new general-purpose
+  encryption, signing, or key storage.
+
+Each alert was dismissed individually through GitHub's auditable code-scanning
+triage with its own reason and location-specific comment. The PR subsequently
+reported zero open alerts and a passing aggregate CodeQL check. Future alerts at
+different locations require fresh review rather than relying on this triage.
+
 ## Validation evidence before final review
 
 - isomdl unit/feature tests, strict linting, and offline advisory audit pass.
@@ -144,9 +173,12 @@ free of this advisory until its remaining graph is resolved.
   Ligero, runtime-ZK, mdoc-ZK unit and end-to-end proof vectors and current and
   legacy proof flows, with no ignored tests. The changed C++ translation unit
   passes syntax compilation in both verifier and prover configurations; its
-  utility has direct object/vector/scope-exit wipe tests. The full local native
-  link is unavailable on this Windows host because OpenSSL and zstd development
-  headers are absent, so ElevenID CI must run that required lane before merge.
+  utility has direct object/vector/scope-exit wipe tests. A fresh isolated Linux
+  GCC build ran all 243 native tests successfully, including exactly one selected
+  complete-public-statement retry regression and exactly one selected PRF
+  teardown regression, with no ignored tests. The corresponding GitHub GCC lane
+  also passes. The complete GitHub matrix passes, including the 24-minute
+  ASan+UBSan lane and 24-minute release-mode production Rust workspace.
 - Marty KMS/credential, bindings, ZK unit and conformance, ISO 18013 unit/CBOR/
   COSE/mdoc/selective-disclosure, no-render QR profile, and authenticated signer
   tests pass. The full ISO all-feature matrix runs 123 tests/doctests, including
