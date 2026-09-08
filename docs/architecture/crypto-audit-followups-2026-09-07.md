@@ -17,10 +17,10 @@ The exact implementation heads entering final review are:
 
 | Repository | Review head | Work completed |
 | --- | --- | --- |
-| `isomdl-elevenid` | `aefcab7ce18f5fab58249a1ecbe47e7f3287785a` | single-owner and zeroizing session secrets, redacted diagnostics, verification-only default, removal of production local mdoc signing, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
-| `sd-jwt-rust` | `edef0328327caeacc7139d025238d3156b16172d` | cryptographically bound opaque remote completion, backend-free issuer planning, holder/verifier confirmation-key policy across every serialization, holder/issuer/tooling feature isolation, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
-| `longfellow-zk` | `1f822278396b8d6ba7084cab983efa8b80d680d0` | verifier-only default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; executable sanitizer, unwind, allocation, and vendor-parity regressions |
-| `marty-core` | `4659adf9bcb8a48f4c827a2726211ea44bbba9a6` | exact KMS-signature binding for all supported credential formats, native and browser VDS signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, and final fork pins |
+| `isomdl-elevenid` | `737eef8a0d25aed465b26bb29a7d14d0fa89a6cd` | single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
+| `sd-jwt-rust` | `154a6acbf2ada536a5670e9c932f5cf4d0a9a92c` | cryptographically bound opaque remote completion, backend-free issuer planning, holder/verifier confirmation-key policy across every serialization, holder/issuer/tooling feature isolation, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
+| `longfellow-zk` | `757d1de25d0b78b6e70f7b2c91eedd4a8de401d1` | verifier-only default; zeroizing Rust prover APIs by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; executable sanitizer, unwind, allocation, and vendor-parity regressions |
+| `marty-core` | `9f24cfd10a175f27954411af50b1aec73efe5fce` | exact KMS-signature binding for all supported credential formats, native and browser VDS signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, and final fork pins |
 
 These are review heads, not final integrated or merged revisions. Update this
 section after every correction round and after ElevenID merge-queue CI.
@@ -48,7 +48,9 @@ to generate or rotate that key. Requests also
 bind the version, random nonce, timestamp, algorithm, key ID, and exact signing
 input; stale and replayed requests fail closed. The implemented signer agent is
 the only component that can contact its operator-configured HTTPS KMS endpoint.
-Neither wallet nor agent handles a private key.
+The agent, rather than the wallet request, owns the permitted ES256 algorithm
+and single KMS key identifier. A mismatch is rejected before any outbound
+request. Neither wallet nor agent handles a private key.
 
 On Windows, every pipe instance has a protected DACL granting access only to
 the exact current-user SID, is non-inheritable, rejects remote clients, and uses
@@ -125,6 +127,9 @@ free of this advisory until its remaining graph is resolved.
 ## Validation evidence before final review
 
 - isomdl unit/feature tests, strict linting, and offline advisory audit pass.
+- isomdl's issuer-planning production-only graph compiles without dev-feature
+  unification, its curve-feature guard excludes signing, and the selected ES384
+  and ES512 remote-completion test verifies both certificate-bound signatures.
 - isomdl's dependency audit records GHASH/POLYVAL as intentional feature
   carriers for AES-GCM schedule zeroization; `cargo machete`, strict linting,
   and all four selected session-crypto cleanup/known-answer tests pass.
@@ -148,11 +153,18 @@ free of this advisory until its remaining graph is resolved.
   the permanent Python-module/session-conformance feature-interaction test, with
   no ignored cases. The full verification matrix runs 425 library and 65
   integration tests; the new public-only mdoc signer JWK test is included. The
-  previously ignored wrong-witness ZK test now runs in mock mode and passes.
+  wrong-witness ZK regression is explicitly selected beside the real native
+  round trip in required Linux CI; broad local Rust coverage uses the mock only
+  because this Windows host lacks the native OpenSSL/zstd headers. The KMS-only
+  issuer matrix now selects and runs the ZK mdoc external-signer regression, so
+  its public-key metadata contract cannot silently drift again.
   Signer-agent tests exercise real Windows named-pipe success and wrong-key
   rejection plus missing MAC, stale nonce, replay, response binding, and key
-  validation, with no ignored tests. Native and browser crypto cleanup tests,
-  affected-crate strict linting, formatting, and vendored-source parity pass.
+  validation, with no ignored tests. The signer policy regression proves that
+  wrong key and algorithm requests cause exactly zero network calls. Native and
+  browser crypto cleanup tests, two browser provider-policy tests, three browser
+  KDF/MAC tests, affected-crate strict linting, formatting, and vendored-source
+  parity pass.
 
 Every behavior or security gap discovered in this round has a selected,
 executable regression test. Ignored, compile-only, or zero-selected runs are not
