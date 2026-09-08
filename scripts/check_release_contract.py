@@ -166,7 +166,8 @@ def _step_uses_action(step: str, action: str) -> bool:
         re.MULTILINE,
     )
     has_run = re.search(r"^(?:      - |        )run:\s*", step, re.MULTILINE)
-    return uses_action is not None and has_run is None
+    has_condition = re.search(r"^(?:      - |        )if:\s*", step, re.MULTILINE)
+    return uses_action is not None and has_run is None and has_condition is None
 
 
 def _step_runs_cargo(step: str) -> bool:
