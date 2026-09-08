@@ -131,7 +131,9 @@ async fn main() {
     let authentication_key = SignerAuthenticationKey::from_base64url(&encoded_authentication_key)
         .expect("signer IPC authentication key must encode exactly 32 bytes");
     let remote_kms = RemoteKms::from_env().expect("remote KMS configuration is required");
-    let mut listener = LocalListener::bind(&endpoint).expect("failed to bind signer IPC endpoint");
+    let listener = LocalListener::bind(&endpoint).expect("failed to bind signer IPC endpoint");
+    #[cfg(windows)]
+    let mut listener = listener;
     let mut replay_cache = ReplayCache::default();
 
     loop {
