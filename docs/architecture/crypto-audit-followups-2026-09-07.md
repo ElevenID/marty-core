@@ -206,15 +206,15 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  59-test release-contract suite exact-allowlists the workflow preamble, each
+  62-test release-contract suite exact-allowlists the workflow preamble, each
   audited Ubuntu job and its full top-level mapping, every action configuration,
-  the full environment, and each complete test step, including scripts, selectors,
-  runner pins, and checkout
-  behavior. It rejects duplicate or noncanonical root and audited-job mappings,
-  token-permission escalation, shell injection, execution overrides, hidden or
-  replacement actions,
-  folded-comment suppression, control flow, pipelines, nonexecuting flags, and
-  zero-selection filter substitutions while ignoring inert literal comments or
+  the full environment, each complete test step, and the final CI gate, including
+  scripts, selectors, runner pins, checkout, gate needs, result bindings, and
+  success assertions. It rejects duplicate or noncanonical root and audited-job
+  mappings, token-permission escalation, shell injection, execution overrides,
+  hidden or replacement actions, folded-comment suppression, control flow,
+  pipelines, nonexecuting flags, and zero-selection filter substitutions while
+  ignoring inert literal comments or
   echoed Cargo text. The real Linux ZKP build also detected an incomplete
   Longfellow algebra sync:
   `fp24.h` and `fp_generic.h` used the audited base-aware `digit` API while
