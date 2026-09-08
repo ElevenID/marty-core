@@ -98,6 +98,27 @@ class StableTagGateContractTests(unittest.TestCase):
 
 
 class NativeBuildCacheContractTests(unittest.TestCase):
+    @staticmethod
+    def wasm_security_workflow(crypto_steps: str) -> str:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        return f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: >-
+          cargo test --locked -p marty-oid4vci
+          --target wasm32-unknown-unknown
+          --no-default-features --features verifier
+          --test wasm_crypto_provider
+          -- --nocapture
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+{crypto_steps}"""
+
     def test_checked_in_ci_uses_an_approved_native_build_cache(self) -> None:
         self.assertEqual(check_release_contract.check_native_build_cache_scope(), [])
 
@@ -370,6 +391,54 @@ class NativeBuildCacheContractTests(unittest.TestCase):
                     any("directly enforce their exit status" in error for error in errors)
                 )
 
+    def test_rejects_multiline_failure_masking(self) -> None:
+        workflow = self.wasm_security_workflow(
+            """      - run: |
+          set +e
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture
+          true
+"""
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("exact approved Cargo test script" in error for error in errors))
+
+    def test_rejects_shell_conditional_cargo_test(self) -> None:
+        workflow = self.wasm_security_workflow(
+            """      - run: |
+          if false; then
+            cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture
+          fi
+"""
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("exact approved Cargo test script" in error for error in errors))
+
+    def test_rejects_continued_nonexecuting_cargo_test_flag(self) -> None:
+        workflow = self.wasm_security_workflow(
+            """      - run: |
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown \\
+            --no-run
+"""
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("exact approved Cargo test script" in error for error in errors))
+
+    def test_rejects_unapproved_cargo_test_filter(self) -> None:
+        workflow = self.wasm_security_workflow(
+            """      - run: cargo test definitely_no_such_test
+"""
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("exact approved Cargo test script" in error for error in errors))
+
+    def test_rejects_cargo_test_pipeline(self) -> None:
+        workflow = self.wasm_security_workflow(
+            """      - run: cargo test --locked -p marty-crypto | true
+"""
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("exact approved Cargo test script" in error for error in errors))
+
     def test_rejects_custom_cargo_test_shell(self) -> None:
         pinned = (
             "mozilla-actions/sccache-action@"
@@ -478,13 +547,20 @@ class NativeBuildCacheContractTests(unittest.TestCase):
   oid4vci-wasm-security:
     steps:
       - uses: {pinned}
-      - run: cargo test --target wasm32-unknown-unknown
+      - run: >-
+          cargo test --locked -p marty-oid4vci
+          --target wasm32-unknown-unknown
+          --no-default-features --features verifier
+          --test wasm_crypto_provider
+          -- --nocapture
   crypto-wasm-security:
     steps:
       - run: |
           # cargo test is documentation, not an executed command
       - uses: {pinned}
-      - run: cargo test --target wasm32-unknown-unknown
+      - run: |
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --lib wasm_hmac_and_hkdf_match_kats_and_wipe_returned_error_state -- --nocapture
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture
 """
         self.assertEqual(
             check_release_contract.check_wasm_security_cache_setup(workflow), []

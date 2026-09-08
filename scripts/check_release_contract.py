@@ -252,6 +252,23 @@ def _cargo_test_commands(step: str) -> list[str]:
     ]
 
 
+WASM_SECURITY_TEST_COMMANDS = {
+    "oid4vci-wasm-security": (
+        "cargo test --locked -p marty-oid4vci --target wasm32-unknown-unknown "
+        "--no-default-features --features verifier --test wasm_crypto_provider "
+        "-- --nocapture",
+    ),
+    "crypto-wasm-security": (
+        "cargo test --locked -p marty-crypto --target wasm32-unknown-unknown "
+        "--no-default-features --features kdf,symmetric --lib "
+        "wasm_hmac_and_hkdf_match_kats_and_wipe_returned_error_state -- --nocapture",
+        "cargo test --locked -p marty-crypto --target wasm32-unknown-unknown "
+        "--no-default-features --features kdf,symmetric --test wasm_key_derivation "
+        "-- --nocapture",
+    ),
+}
+
+
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
     contents = (
         workflow_text
@@ -303,6 +320,14 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                 f".github/workflows/ci.yml: {job} must not override its default shell"
             )
         steps = _workflow_step_blocks(block)
+        observed_run_commands = tuple(
+            command for step in steps for command in _step_run_commands(step)
+        )
+        if observed_run_commands != WASM_SECURITY_TEST_COMMANDS[job]:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use its exact approved "
+                "Cargo test script"
+            )
         cache_index = next(
             (
                 index
