@@ -587,6 +587,33 @@ class NativeBuildCacheContractTests(unittest.TestCase):
             any("workflow shell-injection variable BASH_ENV" in error for error in workflow_errors)
         )
 
+    def test_rejects_equivalent_root_shell_injection_keys(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(workflow.count("\nenv:\n"), 1)
+        for injected_key in (
+            "  BASH_ENV : .github/noop-cargo.sh\n",
+            '  "BASH_ENV": .github/noop-cargo.sh\n',
+        ):
+            with self.subTest(injected_key=injected_key):
+                mutated = workflow.replace("\nenv:\n", "\nenv:\n" + injected_key, 1)
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    mutated
+                )
+                self.assertTrue(
+                    any("exact approved workflow environment" in error for error in errors)
+                )
+        for env_header in ("env :", '"env" :'):
+            with self.subTest(env_header=env_header):
+                mutated = workflow.replace("\nenv:\n", f"\n{env_header}\n", 1)
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    mutated
+                )
+                self.assertTrue(
+                    any("exact approved workflow environment" in error for error in errors)
+                )
+
     def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

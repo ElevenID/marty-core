@@ -355,6 +355,30 @@ WASM_SECURITY_TEST_STEPS = {
           cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture""",
     ),
 }
+WASM_SECURITY_WORKFLOW_ENV = """env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTUP_TOOLCHAIN: 1.97.1
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  # Merge-queue and Dependabot refs create large, short-lived cache namespaces.
+  # They still read the default/PR cache but do not duplicate compiler objects.
+  SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}"""
+
+
+def _workflow_env_block(contents: str) -> str | None:
+    env_header = re.search(r"^env:\s*$", contents, re.MULTILINE)
+    if env_header is None:
+        return None
+    next_root_key = re.search(
+        r"^[A-Za-z0-9_-]+:\s*", contents[env_header.end() :], re.MULTILINE
+    )
+    env_end = (
+        env_header.end() + next_root_key.start()
+        if next_root_key is not None
+        else len(contents)
+    )
+    return _normalized_step(contents[env_header.start() : env_end])
 
 
 def _workflow_shell_injection_env(contents: str) -> str | None:
@@ -396,6 +420,11 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba"
     )
     errors: list[str] = []
+    if _workflow_env_block(contents) != WASM_SECURITY_WORKFLOW_ENV:
+        errors.append(
+            ".github/workflows/ci.yml: WASM security jobs require the exact "
+            "approved workflow environment"
+        )
     shell_injection_env = _workflow_shell_injection_env(contents)
     if shell_injection_env is not None:
         errors.append(
