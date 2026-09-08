@@ -135,4 +135,4 @@ ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0
 # Exact history is retained on a dedicated dependency ref in the existing SSI fork.
 linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
 # ElevenID-maintained security/interoperability fork, synchronized from upstream by reviewed monthly PRs.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "aefcab7ce18f5fab58249a1ecbe47e7f3287785a" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "737eef8a0d25aed465b26bb29a7d14d0fa89a6cd" }
