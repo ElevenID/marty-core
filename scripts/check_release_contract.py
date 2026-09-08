@@ -164,6 +164,28 @@ def _yaml_step_key_pattern(key: str) -> str:
     return rf'(?:{escaped}|"{escaped}"|\'{escaped}\')\s*:'
 
 
+def _has_escaped_yaml_mapping_key(block: str) -> bool:
+    return re.search(
+        r'^(?:    |      - |        )"[^"\r\n]*\\[^"\r\n]*"\s*:',
+        block,
+        re.MULTILINE,
+    ) is not None
+
+
+def _step_has_key(step: str, key: str) -> bool:
+    return re.search(
+        rf"^(?:      - |        ){_yaml_step_key_pattern(key)}\s*",
+        step,
+        re.MULTILINE,
+    ) is not None
+
+
+def _job_has_key(job: str, key: str) -> bool:
+    return re.search(
+        rf"^    {_yaml_step_key_pattern(key)}\s*", job, re.MULTILINE
+    ) is not None
+
+
 def _step_uses_action(step: str, action: str) -> bool:
     uses_action = re.search(
         rf"^(?:      - |        ){_yaml_step_key_pattern('uses')}"
@@ -171,20 +193,14 @@ def _step_uses_action(step: str, action: str) -> bool:
         step,
         re.MULTILINE,
     )
-    has_run = re.search(
-        rf"^(?:      - |        ){_yaml_step_key_pattern('run')}\s*",
-        step,
-        re.MULTILINE,
+    return (
+        uses_action is not None
+        and not _step_has_key(step, "run")
+        and not _step_has_key(step, "if")
     )
-    has_condition = re.search(
-        rf"^(?:      - |        ){_yaml_step_key_pattern('if')}\s*",
-        step,
-        re.MULTILINE,
-    )
-    return uses_action is not None and has_run is None and has_condition is None
 
 
-def _step_runs_cargo(step: str) -> bool:
+def _step_run_matches(step: str, command_pattern: re.Pattern[str]) -> bool:
     lines = step.splitlines()
     for index, line in enumerate(lines):
         run = re.match(
@@ -195,18 +211,31 @@ def _step_runs_cargo(step: str) -> bool:
             continue
         value = run.group(1).strip()
         if value and value[0] not in "|>" and not value.startswith("#"):
-            return re.search(r"\bcargo(?:\s|\+)", value) is not None
+            return command_pattern.match(value) is not None
         if not value or value[0] not in "|>":
             continue
         for command in lines[index + 1 :]:
             stripped = command.strip()
             if stripped and len(command) - len(command.lstrip()) <= 8:
                 break
-            if stripped and not stripped.startswith("#") and re.search(
-                r"\bcargo(?:\s|\+)", stripped
+            if (
+                stripped
+                and not stripped.startswith("#")
+                and command_pattern.match(stripped)
             ):
                 return True
     return False
+
+
+def _step_runs_cargo(step: str) -> bool:
+    return _step_run_matches(step, re.compile(r"\bcargo(?:\s|\+)"))
+
+
+def _step_runs_cargo_test(step: str) -> bool:
+    return _step_run_matches(
+        step,
+        re.compile(r"\bcargo(?:\+\S+|\s+\+\S+)?\s+test\b"),
+    )
 
 
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
@@ -234,6 +263,20 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         if block is None:
             errors.append(f".github/workflows/ci.yml: missing required {job} job")
             continue
+        if _has_escaped_yaml_mapping_key(block):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must not use escaped YAML "
+                "mapping keys"
+            )
+            continue
+        if _job_has_key(block, "if"):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must run unconditionally"
+            )
+        if _job_has_key(block, "continue-on-error"):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must not tolerate test failures"
+            )
         steps = _workflow_step_blocks(block)
         cache_index = next(
             (
@@ -247,6 +290,10 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             (index for index, step in enumerate(steps) if _step_runs_cargo(step)),
             None,
         )
+        cargo_test_index = next(
+            (index for index, step in enumerate(steps) if _step_runs_cargo_test(step)),
+            None,
+        )
         if cache_index is None:
             errors.append(
                 f".github/workflows/ci.yml: {job} inherits RUSTC_WRAPPER=sccache "
@@ -256,6 +303,20 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             errors.append(
                 f".github/workflows/ci.yml: {job} must install pinned sccache "
                 "before its first cargo command"
+            )
+        if cargo_test_index is None:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must execute a cargo test command"
+            )
+        elif _step_has_key(steps[cargo_test_index], "if"):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must execute its cargo test "
+                "step unconditionally"
+            )
+        elif _step_has_key(steps[cargo_test_index], "continue-on-error"):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must not tolerate cargo test "
+                "failures"
             )
     return errors
 

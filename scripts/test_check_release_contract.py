@@ -178,6 +178,7 @@ class NativeBuildCacheContractTests(unittest.TestCase):
   oid4vci-wasm-security:
     steps:
       - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
   crypto-wasm-security:
     steps:
       - run: |
@@ -246,6 +247,135 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_wasm_security_cache_setup(workflow)
         self.assertTrue(any("before its first cargo command" in error for error in errors))
 
+    def test_rejects_conditional_wasm_security_job(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    if: false
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("must run unconditionally" in error for error in errors))
+
+    def test_rejects_conditional_wasm_security_cargo_test(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+        if: false
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(
+            any("cargo test step unconditionally" in error for error in errors)
+        )
+
+    def test_rejects_wasm_security_job_without_cargo_test(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo check --target wasm32-unknown-unknown
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("must execute a cargo test" in error for error in errors))
+
+    def test_rejects_cargo_test_text_without_direct_execution(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: echo cargo test --target wasm32-unknown-unknown
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("must execute a cargo test" in error for error in errors))
+
+    def test_rejects_tolerated_wasm_security_test_failures(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        for job_option, step_option in (
+            ("    continue-on-error: true\n", ""),
+            ("", "        continue-on-error: true\n"),
+        ):
+            with self.subTest(job_option=job_option, step_option=step_option):
+                workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+{job_option}    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+{step_option}"""
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow
+                )
+                self.assertTrue(any("must not tolerate" in error for error in errors))
+
+    def test_rejects_escaped_yaml_mapping_keys(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        for escaped_property in (
+            '      - "r\\u0075n": cargo test --target wasm32-unknown-unknown',
+            '        "i\\u0066": false',
+        ):
+            with self.subTest(escaped_property=escaped_property):
+                workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
+  crypto-wasm-security:
+    steps:
+      - uses: {pinned}
+{escaped_property}
+      - run: cargo test --target wasm32-unknown-unknown
+"""
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow
+                )
+                self.assertTrue(
+                    any("escaped YAML mapping keys" in error for error in errors)
+                )
+
     def test_ignores_commented_cargo_before_wasm_security_cache(self) -> None:
         pinned = (
             "mozilla-actions/sccache-action@"
@@ -255,6 +385,7 @@ class NativeBuildCacheContractTests(unittest.TestCase):
   oid4vci-wasm-security:
     steps:
       - uses: {pinned}
+      - run: cargo test --target wasm32-unknown-unknown
   crypto-wasm-security:
     steps:
       - run: |
