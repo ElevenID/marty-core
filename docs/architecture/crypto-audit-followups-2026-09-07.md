@@ -206,15 +206,16 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  41-test release-contract suite rejects missing, conditional, commented, late, or
+  43-test release-contract suite rejects missing, conditional, commented, late, or
   shell-block cache-action lookalikes; rejects conditional jobs/tests and escaped
-  YAML keys; and exact-allowlists every audited action sequence, Cargo test script,
-  selector, pinned browser runner, and test-step runner binding under the default
-  failure-enforcing shell. This rejects replacement installers, folded-comment
-  suppression, control flow, continuations, pipelines, status suppression,
-  nonexecuting flags, and zero-selection filter
-  substitutions while ignoring inert literal comments or echoed Cargo text. The
-  real Linux ZKP build also detected an incomplete Longfellow algebra sync:
+  YAML keys; and exact-allowlists every audited action configuration, Cargo test
+  script, selector, pinned browser runner, checkout behavior, and test-step runner
+  binding under the default failure-enforcing shell. This rejects flow-style or
+  replacement actions, checkout ref overrides, folded-comment suppression,
+  control flow, continuations, pipelines, status suppression, nonexecuting flags,
+  and zero-selection filter substitutions while ignoring inert literal comments
+  or echoed Cargo text. The real Linux ZKP build also detected an incomplete
+  Longfellow algebra sync:
   `fp24.h` and `fp_generic.h` used the audited base-aware `digit` API while
   `nat.h` and `nat.cc` retained the old signature. The exact audited `nat` pair is
   now synchronized and covered by the executable source-parity manifest. A fresh
