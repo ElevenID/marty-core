@@ -392,7 +392,7 @@ bool cbor_validate(const uint8_t* in, size_t len) {
     return false;
   }
 
-  switch (doc.t_) {
+  switch (doc.variant()) {
     case TEXT:
     case BYTES:
     case UNSIGNED:
@@ -400,23 +400,17 @@ bool cbor_validate(const uint8_t* in, size_t len) {
       return true;
 
     case PRIMITIVE:
-      return (doc.u_.p == CTRUE || doc.u_.p == CFALSE);
+      return (doc.as_primitive() == CTRUE || doc.as_primitive() == CFALSE);
 
     case TAG: {
-      // items.n is the tag value
-      size_t tag = doc.u_.items.n;
+      size_t tag = doc.as_tag();
       if (tag == 1004) {  // Fulldate
         if (len != 14) return false;
-        // Check inner type is TEXT? CborDoc handles valid children decode.
-        // host_decoder.h: case 6 (TAG) ... decode_items ...
-        // We know it has 1 child.
-        if (doc.children_.empty() || doc.children_[0].t_ != TEXT) return false;
-        return true;
+        return doc.tagged_value().is_variant(TEXT);
       }
       if (tag == 0) {  // Tdate
         if (len != 22) return false;
-        if (doc.children_.empty() || doc.children_[0].t_ != TEXT) return false;
-        return true;
+        return doc.tagged_value().is_variant(TEXT);
       }
       return false;
     }

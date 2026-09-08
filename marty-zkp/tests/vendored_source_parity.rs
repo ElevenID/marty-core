@@ -29,12 +29,16 @@ const AUDITED_FILES: &[(&str, &str)] = &[
         "ba1d5af734eb2d574a0b4fcc86ce6a70045a9daaa06363874c7f75e023e5495a",
     ),
     (
+        "lib/cbor/host_decoder.h",
+        "3f3a5ec5a9f330c0c0086204be1d1395dc093474624dffe9b53c267c100dcae1",
+    ),
+    (
         "lib/circuits/ecdsa/verify_witness.h",
         "8ef0dbd017487fafa78a79cf5ac4a50f6da3be8e6be72bc77cf9bfb287bd32eb",
     ),
     (
         "lib/circuits/mdoc/mdoc_zk.cc",
-        "41ef5eda0c323beb2d6d2bbcfbce9a01d422d262aca3e4d4b57816ca38795086",
+        "fc7031d8fcee391b81a787067b83a6bc0c3564e582a0f9df5697992ed1e99dad",
     ),
     (
         "lib/circuits/mac/mac_witness.h",
