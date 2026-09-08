@@ -203,12 +203,29 @@ different locations require fresh review rather than relying on this triage.
   browser crypto cleanup tests, two browser provider-policy tests, three browser
   KDF/MAC tests, affected-crate strict linting, formatting, and vendored-source
   parity pass.
+- Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
+  skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
+  installing the wrapper; both jobs now install the pinned cache action, and a
+  15-test release-contract suite rejects recurrence. The real Linux ZKP build
+  also detected an incomplete Longfellow algebra sync: `fp24.h` and
+  `fp_generic.h` used the audited base-aware `digit` API while `nat.h` and
+  `nat.cc` retained the old signature. The exact audited `nat` pair is now
+  synchronized and covered by the executable source-parity manifest. A fresh
+  Rust 1.97.1 Linux verifier build passes all three selected circuit-identity
+  tests; the browser lanes pass one cleanup/KAT unit test, two KDF integration
+  tests, and two provider-policy tests with no ignored or filtered cases.
+- The dependency-health checkpoint was re-run on 2026-09-08. RustCrypto's
+  certificate/signature/elliptic-curve majors are stable but compatible RSA
+  0.10 remains a release candidate; Affinidi DIDComm 0.15.8 requires the new
+  curve/Ed25519 stack and Rust 1.95. Both migrations remain coordinated behind
+  the existing issue rather than introducing duplicate production crypto
+  stacks, with the next mandatory review on 2026-10-08.
 
 Every behavior or security gap discovered in this round has a selected,
 executable regression test. Ignored, compile-only, or zero-selected runs are not
 accepted as evidence for those gaps.
 
-Final acceptance still requires both independent reviewers to report no
+Final acceptance still requires all independent reviewers to report no
 corrections, full post-pin tests, ElevenID-only pull requests, successful
 protected CI, self-review, and merge. The fork pins and ElevenID feature branches
 are current. No upstream repository will receive a branch, issue, or pull request.
