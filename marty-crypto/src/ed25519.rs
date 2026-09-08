@@ -13,7 +13,7 @@
 //! - Fast verification (~15,000 ops/sec)
 //! - Small signatures (64 bytes) and keys (32 bytes)
 
-use ed25519_dalek::{Signature, Verifier, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 #[cfg(test)]
 use ed25519_dalek::{Signer, SigningKey, SECRET_KEY_LENGTH};
 #[cfg(test)]
@@ -141,7 +141,7 @@ impl Ed25519VerifyingKey {
 
         let signature = Signature::from_bytes(&sig_bytes);
 
-        self.key.verify(message, &signature).map_err(|e| {
+        self.key.verify_strict(message, &signature).map_err(|e| {
             CryptoError::internal(format!("Ed25519 signature verification failed: {}", e))
         })
     }
@@ -234,22 +234,7 @@ pub fn verify_ed25519_spki(
 
         let spki = SubjectPublicKeyInfoOwned::from_der(public_key_der)
             .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 SPKI public key: {e}")))?;
-        if spki.algorithm.oid != const_oid::db::rfc8410::ID_ED_25519
-            || spki.algorithm.parameters.is_some()
-        {
-            return Err(CryptoError::internal(
-                "Invalid Ed25519 SPKI algorithm identifier".to_string(),
-            ));
-        }
-        let bytes_array: [u8; PUBLIC_KEY_LENGTH] = spki
-            .subject_public_key
-            .raw_bytes()
-            .try_into()
-            .map_err(|_| {
-            CryptoError::internal("Invalid Ed25519 public key length".to_string())
-        })?;
-        VerifyingKey::from_bytes(&bytes_array)
-            .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 public key: {e}")))?
+        verifying_key_from_spki(&spki)?
     };
 
     if signature.len() != SIGNATURE_LENGTH {
@@ -266,10 +251,34 @@ pub fn verify_ed25519_spki(
 
     let sig = Signature::from_bytes(&sig_bytes);
 
-    match verifying_key.verify(message, &sig) {
+    match verifying_key.verify_strict(message, &sig) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
+}
+
+fn verifying_key_from_spki(
+    spki: &x509_cert::spki::SubjectPublicKeyInfoOwned,
+) -> CryptoResult<VerifyingKey> {
+    if spki.algorithm.oid != const_oid::db::rfc8410::ID_ED_25519
+        || spki.algorithm.parameters.is_some()
+    {
+        return Err(CryptoError::internal(
+            "Invalid Ed25519 SPKI algorithm identifier".to_string(),
+        ));
+    }
+    if spki.subject_public_key.unused_bits() != 0 {
+        return Err(CryptoError::internal(
+            "Invalid Ed25519 SPKI public key bit string".to_string(),
+        ));
+    }
+    let bytes: [u8; PUBLIC_KEY_LENGTH] = spki
+        .subject_public_key
+        .raw_bytes()
+        .try_into()
+        .map_err(|_| CryptoError::internal("Invalid Ed25519 public key length".to_string()))?;
+    VerifyingKey::from_bytes(&bytes)
+        .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 public key: {e}")))
 }
 
 // ============================================================================
@@ -324,39 +333,26 @@ pub fn parse_private_key_der(der: &[u8]) -> CryptoResult<Ed25519KeyPair> {
 
 /// Parse a PEM-encoded Ed25519 public key.
 pub fn parse_public_key_pem(pem: &str) -> CryptoResult<Ed25519VerifyingKey> {
-    let lines: Vec<&str> = pem
-        .lines()
-        .filter(|line| !line.starts_with("-----"))
-        .collect();
-    let base64_data = lines.join("");
+    use der::DecodePem;
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
 
-    use base64::Engine;
-    let der = base64::engine::general_purpose::STANDARD
-        .decode(&base64_data)
-        .map_err(|e| CryptoError::internal(format!("Invalid PEM base64: {}", e)))?;
-
-    parse_public_key_der(&der)
+    let spki = SubjectPublicKeyInfoOwned::from_pem(pem)
+        .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 public-key PEM: {e}")))?;
+    Ok(Ed25519VerifyingKey {
+        key: verifying_key_from_spki(&spki)?,
+    })
 }
 
 /// Parse a DER-encoded Ed25519 public key (SubjectPublicKeyInfo format).
 pub fn parse_public_key_der(der: &[u8]) -> CryptoResult<Ed25519VerifyingKey> {
-    // SPKI for Ed25519:
-    // SEQUENCE {
-    //   SEQUENCE { OID 1.3.101.112 }
-    //   BIT STRING { 32 bytes }
-    // }
-    // The key is typically the last 32 bytes
+    use der::Decode;
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
 
-    if der.len() < 44 {
-        return Err(CryptoError::internal(
-            "DER data too short for SPKI Ed25519 key".to_string(),
-        ));
-    }
-
-    let key_start = der.len() - 32;
-    let public = &der[key_start..];
-
-    Ed25519VerifyingKey::from_bytes(public)
+    let spki = SubjectPublicKeyInfoOwned::from_der(der)
+        .map_err(|e| CryptoError::internal(format!("Invalid Ed25519 public-key DER: {e}")))?;
+    Ok(Ed25519VerifyingKey {
+        key: verifying_key_from_spki(&spki)?,
+    })
 }
 
 // ============================================================================

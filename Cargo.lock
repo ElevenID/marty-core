@@ -1527,7 +1527,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.119",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2885,7 +2885,7 @@ dependencies = [
 [[package]]
 name = "isomdl"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=3be9a784dc793684fd7f48f8db09c531ee56b5b5#3be9a784dc793684fd7f48f8db09c531ee56b5b5"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=0e8f90cf9737132bbb7a00234f86e059c694e7a4#0e8f90cf9737132bbb7a00234f86e059c694e7a4"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2933,7 +2933,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=3be9a784dc793684fd7f48f8db09c531ee56b5b5#3be9a784dc793684fd7f48f8db09c531ee56b5b5"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=0e8f90cf9737132bbb7a00234f86e059c694e7a4#0e8f90cf9737132bbb7a00234f86e059c694e7a4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5915,7 +5915,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=3f4e283d0e1319eb78d77ad390eb4273ae8fef2d#3f4e283d0e1319eb78d77ad390eb4273ae8fef2d"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=50872b92e44da6aa9351c4a32078983d79f17fc1#50872b92e44da6aa9351c4a32078983d79f17fc1"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",

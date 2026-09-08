@@ -1,9 +1,8 @@
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
-const AUDITED_COMMIT: &str = "2b93fccf7bad84a46b7d268a633c4df46ba02d9e";
-const LOCAL_SECURITY_ADAPTATIONS: &str =
-    "lib/arrays/dense.h,lib/circuits/ecdsa/verify_witness.h,lib/circuits/mdoc/mdoc_zk.cc";
+const AUDITED_COMMIT: &str = "ef505d0edd19422e24d9bc76bb81ff1bc1be0ab8";
+const LOCAL_SECURITY_ADAPTATIONS: &str = "lib/arrays/dense.h,lib/circuits/mdoc/mdoc_zk.cc";
 const AUDITED_FILES: &[(&str, &str)] = &[
     (
         "lib/arrays/dense.h",
@@ -51,7 +50,7 @@ const AUDITED_FILES: &[(&str, &str)] = &[
     ),
     (
         "lib/ligero/ligero_test.cc",
-        "5189285938126a4f84d0fd1d0c3bab6528932175f994ce4a920be7c480129df3",
+        "010deec68fe62cb9399a1ca7b4ca5376dd67ffa01f8a48a1d1ed4e0c8124509f",
     ),
     (
         "lib/merkle/merkle_commitment.h",

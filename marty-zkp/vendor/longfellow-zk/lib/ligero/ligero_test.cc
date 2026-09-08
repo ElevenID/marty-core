@@ -358,14 +358,14 @@ TEST(Ligero, RejectsQuadraticIndicesBeforeWitnessAccess) {
     if (invalid_member == 1) constraint.y = nw;
     if (invalid_member == 2) constraint.z = nw;
     EXPECT_DEATH(
-        {
+        ([&] {
           SecureRandomEngine rng;
           Transcript transcript(reinterpret_cast<const uint8_t*>("bounds"), 6);
           LigeroCommitment<Field> commitment;
           LigeroProver<Field, ReedSolomonFactory> prover(param);
           prover.commit(commitment, transcript, witness.data(), 0, &constraint,
                         rs_factory, rng, F);
-        },
+        }()),
         "l->(x|y|z) < p_.nw");
   }
 }

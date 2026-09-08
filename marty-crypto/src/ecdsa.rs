@@ -327,15 +327,33 @@ pub fn verify_p521_sha512(
     }
 }
 
-/// Extract the raw public key bytes from a SubjectPublicKeyInfo structure.
+/// Extract a named-curve EC public point from SubjectPublicKeyInfo.
 ///
-/// This is useful when you need just the EC point for other operations.
+/// The algorithm identifier and named-curve parameters are validated before
+/// the public BIT STRING is returned. The caller remains responsible for
+/// interpreting the point using the declared curve.
 pub fn extract_ec_point_from_spki(spki_der: &[u8]) -> CryptoResult<Vec<u8>> {
     use der::Decode;
     use x509_cert::spki::SubjectPublicKeyInfoOwned;
 
     let spki = SubjectPublicKeyInfoOwned::from_der(spki_der)
         .map_err(|e| CryptoError::der_error(format!("Failed to parse SPKI: {}", e)))?;
+    if spki.algorithm.oid != const_oid::db::rfc5912::ID_EC_PUBLIC_KEY {
+        return Err(CryptoError::invalid_signature(
+            "SPKI algorithm is not id-ecPublicKey",
+        ));
+    }
+    spki.algorithm
+        .parameters
+        .as_ref()
+        .ok_or_else(|| CryptoError::invalid_signature("EC named-curve parameters are missing"))?
+        .decode_as::<const_oid::ObjectIdentifier>()
+        .map_err(|_| CryptoError::invalid_signature("EC named-curve parameters are invalid"))?;
+    if spki.subject_public_key.unused_bits() != 0 {
+        return Err(CryptoError::invalid_signature(
+            "EC public key BIT STRING has unused bits",
+        ));
+    }
 
     Ok(spki.subject_public_key.raw_bytes().to_vec())
 }

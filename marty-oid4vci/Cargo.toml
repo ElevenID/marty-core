@@ -42,11 +42,11 @@ serde_json = { workspace = true }
 
 # Crypto and signing
 ssi-jwk = { version = "0.4.0", default-features = false }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "3f4e283d0e1319eb78d77ad390eb4273ae8fef2d", default-features = false }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "50872b92e44da6aa9351c4a32078983d79f17fc1", default-features = false }
 jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "3be9a784dc793684fd7f48f8db09c531ee56b5b5", default-features = false, optional = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "0e8f90cf9737132bbb7a00234f86e059c694e7a4", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -81,8 +81,8 @@ reqwest = { version = "0.13", default-features = false, features = ["form", "jso
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "3be9a784dc793684fd7f48f8db09c531ee56b5b5" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "3f4e283d0e1319eb78d77ad390eb4273ae8fef2d" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "0e8f90cf9737132bbb7a00234f86e059c694e7a4" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "50872b92e44da6aa9351c4a32078983d79f17fc1" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "sha256"] }

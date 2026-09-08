@@ -276,3 +276,146 @@ fn public_spki_rejects_invalid_algorithm_identifiers() {
         .to_string()
         .contains("Invalid Ed25519 SPKI algorithm identifier"));
 }
+
+#[test]
+fn strict_ed25519_verification_rejects_identity_key_forgery() {
+    use der::{asn1::BitString, Decode, Encode};
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let mut forged_signature = [0x66u8; 64];
+    forged_signature[0] = 0x58;
+    forged_signature[32..].fill(0);
+    forged_signature[32] = 1;
+
+    let key = ed25519::Ed25519VerifyingKey::from_bytes(&identity)
+        .expect("dalek parses the small-order identity encoding");
+    assert!(key.verify(b"any message", &forged_signature).is_err());
+    assert!(!key.verify_strict(b"a different message", &forged_signature));
+    assert!(ed25519::verify(&identity, b"any message", &forged_signature).is_err());
+
+    let template_key = ed25519_dalek::SigningKey::from_bytes(&[14; 32]);
+    let template_spki = template_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("Ed25519 SPKI");
+    let mut identity_spki =
+        SubjectPublicKeyInfoOwned::from_der(template_spki.as_bytes()).expect("decode SPKI");
+    identity_spki.subject_public_key =
+        BitString::from_bytes(&identity).expect("identity public-key bit string");
+    let identity_spki = identity_spki.to_der().expect("encode identity SPKI");
+    assert!(
+        !ed25519::verify_ed25519_spki(&identity_spki, b"any message", &forged_signature)
+            .expect("well-formed identity SPKI must reach strict verification")
+    );
+}
+
+#[test]
+fn public_ed25519_parsers_bind_the_complete_spki_metadata() {
+    use base64::Engine as _;
+    use der::{asn1::BitString, Decode, Encode};
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[15; 32]);
+    let expected = signing_key.verifying_key().to_bytes();
+    let document = signing_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("Ed25519 SPKI");
+    assert_eq!(
+        ed25519::parse_public_key_der(document.as_bytes())
+            .expect("valid DER")
+            .to_bytes(),
+        expected
+    );
+
+    let body = base64::engine::general_purpose::STANDARD.encode(document.as_bytes());
+    let pem = format!("-----BEGIN PUBLIC KEY-----\n{body}\n-----END PUBLIC KEY-----\n");
+    assert_eq!(
+        ed25519::parse_public_key_pem(&pem)
+            .expect("valid public-key PEM")
+            .to_bytes(),
+        expected
+    );
+    let wrong_label = format!("-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\n");
+    assert!(ed25519::parse_public_key_pem(&wrong_label).is_err());
+
+    let mut wrong_oid =
+        SubjectPublicKeyInfoOwned::from_der(document.as_bytes()).expect("decode SPKI");
+    wrong_oid.algorithm.oid = const_oid::db::rfc5912::ID_EC_PUBLIC_KEY;
+    wrong_oid.algorithm.parameters = None;
+    assert!(ed25519::parse_public_key_der(&wrong_oid.to_der().expect("wrong OID DER")).is_err());
+
+    let mut parameters_present =
+        SubjectPublicKeyInfoOwned::from_der(document.as_bytes()).expect("decode SPKI");
+    parameters_present.algorithm.parameters =
+        Some(der::Any::from_der(&[0x05, 0x00]).expect("DER NULL"));
+    assert!(ed25519::parse_public_key_der(
+        &parameters_present.to_der().expect("parameterized DER")
+    )
+    .is_err());
+
+    let mut unused_bits =
+        SubjectPublicKeyInfoOwned::from_der(document.as_bytes()).expect("decode SPKI");
+    let mut padded_key = expected;
+    padded_key[31] &= 0xfe;
+    unused_bits.subject_public_key =
+        BitString::new(1, padded_key).expect("bit string with one unused bit");
+    assert!(ed25519::parse_public_key_der(&unused_bits.to_der().expect("unused-bit DER")).is_err());
+
+    let mut trailing = document.as_bytes().to_vec();
+    trailing.extend_from_slice(&[0x05, 0x00]);
+    assert!(ed25519::parse_public_key_der(&trailing).is_err());
+}
+
+#[test]
+fn ec_point_extractor_requires_named_curve_spki_metadata() {
+    use der::{asn1::BitString, Decode, Encode};
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let p256_key = p256::ecdsa::SigningKey::from_slice(&[16; 32]).expect("valid P-256 scalar");
+    let expected = p256_key.verifying_key().to_encoded_point(false);
+    let document = p256_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("P-256 SPKI");
+    assert_eq!(
+        ecdsa::extract_ec_point_from_spki(document.as_bytes()).expect("named-curve EC SPKI"),
+        expected.as_bytes()
+    );
+
+    let mut missing_curve =
+        SubjectPublicKeyInfoOwned::from_der(document.as_bytes()).expect("decode P-256 SPKI");
+    missing_curve.algorithm.parameters = None;
+    assert!(
+        ecdsa::extract_ec_point_from_spki(&missing_curve.to_der().expect("missing-curve DER"))
+            .is_err()
+    );
+
+    let mut invalid_curve =
+        SubjectPublicKeyInfoOwned::from_der(document.as_bytes()).expect("decode P-256 SPKI");
+    invalid_curve.algorithm.parameters = Some(der::Any::from_der(&[0x05, 0x00]).expect("DER NULL"));
+    assert!(
+        ecdsa::extract_ec_point_from_spki(&invalid_curve.to_der().expect("invalid-curve DER"))
+            .is_err()
+    );
+
+    let mut unused_bits =
+        SubjectPublicKeyInfoOwned::from_der(document.as_bytes()).expect("decode P-256 SPKI");
+    let mut padded_point = expected.as_bytes().to_vec();
+    let final_byte = padded_point.last_mut().expect("non-empty EC point");
+    *final_byte &= 0xfe;
+    unused_bits.subject_public_key =
+        BitString::new(1, padded_point).expect("EC point with one unused bit");
+    assert!(
+        ecdsa::extract_ec_point_from_spki(&unused_bits.to_der().expect("unused-bit DER")).is_err()
+    );
+
+    let ed25519_key = ed25519_dalek::SigningKey::from_bytes(&[17; 32]);
+    let ed25519_document = ed25519_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("Ed25519 SPKI");
+    assert!(ecdsa::extract_ec_point_from_spki(ed25519_document.as_bytes()).is_err());
+}
