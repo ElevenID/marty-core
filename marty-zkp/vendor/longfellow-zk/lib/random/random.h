@@ -15,6 +15,7 @@
 #ifndef PRIVACY_PROOFS_ZK_LIB_RANDOM_RANDOM_H_
 #define PRIVACY_PROOFS_ZK_LIB_RANDOM_RANDOM_H_
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include "util/panic.h"
+#include "util/secure_wipe.h"
 
 namespace proofs {
 
@@ -55,6 +57,18 @@ class RandomEngine {
 
   // random size_t < n
   size_t nat(size_t n) {
+    std::array<uint8_t, sizeof(size_t)> buf{};
+    size_t candidate = 0;
+    return nat_with_scratch(n, buf, candidate);
+  }
+
+  // Scratch-aware rejection-sampling seam used to verify cleanup on success
+  // and exceptions. Normal callers should use nat.
+  size_t nat_with_scratch(size_t n,
+                          std::array<uint8_t, sizeof(size_t)>& buf,
+                          size_t& candidate) {
+    SecureObjectWipeGuard<std::array<uint8_t, sizeof(size_t)>> wipe_buf(buf);
+    SecureObjectWipeGuard<size_t> wipe_candidate(candidate);
     check(n > 0, "nat(0)");
 
     // compute the minimum number of random bytes needed
@@ -67,25 +81,23 @@ class RandomEngine {
     check(l <= sizeof(size_t), "l <= sizeof(size_t)");
 
     size_t msk = mask(n);
-    size_t r;
-    uint8_t buf[sizeof(size_t)];
-
     // rejection sampling
     do {
+      secure_wipe_object(buf);
+      secure_wipe_object(candidate);
       // consume L random bytes
-      bytes(buf, l);
+      bytes(buf.data(), l);
 
       // little-endian read
-      r = 0;
       for (size_t i = l; i-- > 0;) {
-        r = (r << 8) | buf[i];
+        candidate = (candidate << 8) | buf[i];
       }
 
       // mask off high bits
-      r &= msk;
-    } while (r >= n);
+      candidate &= msk;
+    } while (candidate >= n);
 
-    return r;
+    return candidate;
   }
 
   // Choose K distinct random naturals in [0..N).

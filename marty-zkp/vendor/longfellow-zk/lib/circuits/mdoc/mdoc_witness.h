@@ -384,35 +384,59 @@ class ParsedMdoc {
 // Transform from u8 be (i.e., be[31] is the most significant byte) into
 // nat form, which requires first converting to le byte order.
 template <class Nat>
-Nat nat_from_be(const uint8_t be[/* Nat::kBytes */]) {
-  uint8_t tmp[Nat::kBytes];
+Nat nat_from_be_with_scratch(
+    const uint8_t be[/* Nat::kBytes */],
+    std::array<uint8_t, Nat::kBytes>& tmp) {
+  SecureObjectWipeGuard<std::array<uint8_t, Nat::kBytes>> wipe_tmp(tmp);
   // Transform into byte-wise le representation.
   for (size_t i = 0; i < Nat::kBytes; ++i) {
     tmp[i] = be[Nat::kBytes - i - 1];
   }
-  return Nat::of_bytes(tmp);
+  return Nat::of_bytes(tmp.data());
+}
+
+template <class Nat>
+Nat nat_from_be(const uint8_t be[/* Nat::kBytes */]) {
+  std::array<uint8_t, Nat::kBytes> tmp{};
+  return nat_from_be_with_scratch<Nat>(be, tmp);
 }
 
 // Transform from u32 be (i.e., be[0] is the most significant nibble)
 // into nat form, which requires first converting to le byte order.
 template <class Nat>
-Nat nat_from_u32(const uint32_t be[]) {
-  uint8_t tmp[Nat::kBytes];
+Nat nat_from_u32_with_scratch(const uint32_t be[],
+                              std::array<uint8_t, Nat::kBytes>& tmp) {
+  SecureObjectWipeGuard<std::array<uint8_t, Nat::kBytes>> wipe_tmp(tmp);
   const size_t top = Nat::kBytes / 4;
   for (size_t i = 0; i < Nat::kBytes; ++i) {
     tmp[i] = (be[top - i / 4 - 1] >> ((i % 4) * 8)) & 0xff;
   }
-  return Nat::of_bytes(tmp);
+  return Nat::of_bytes(tmp.data());
+}
+
+template <class Nat>
+Nat nat_from_u32(const uint32_t be[]) {
+  std::array<uint8_t, Nat::kBytes> tmp{};
+  return nat_from_u32_with_scratch<Nat>(be, tmp);
+}
+
+template <typename Nat, typename Convert>
+Nat nat_from_hash_with_scratch(
+    const uint8_t data[], size_t len,
+    std::array<uint8_t, kSHA256DigestSize>& hash, Convert&& convert) {
+  SecureObjectWipeGuard<std::array<uint8_t, kSHA256DigestSize>> wipe_hash(hash);
+  SHA256 sha;
+  sha.Update(data, len);
+  sha.DigestData(hash.data());
+  return convert(hash.data());
 }
 
 template <typename Nat>
 Nat nat_from_hash(const uint8_t data[], size_t len) {
-  uint8_t hash[kSHA256DigestSize];
-  SHA256 sha;
-  sha.Update(data, len);
-  sha.DigestData(hash);
-  Nat ne = nat_from_be<Nat>(hash);
-  return ne;
+  std::array<uint8_t, kSHA256DigestSize> hash{};
+  return nat_from_hash_with_scratch<Nat>(
+      data, len, hash,
+      [](const uint8_t* digest) { return nat_from_be<Nat>(digest); });
 }
 
 // Append the cbor encoding of the length of a bytestring to buf.
@@ -442,6 +466,32 @@ static inline void append_text_len(std::vector<uint8_t>& buf, size_t len) {
   }
 }
 
+static inline void append_bytes_len(
+    FixedCapacitySecureWipeGuard<uint8_t>& buf, size_t len) {
+  check(len < 65536, "Bytestring length too large");
+  if (len < 24) {
+    buf.push_back(0x40 + len);
+  } else if (len < 256) {
+    const uint8_t encoded[] = {0x58, static_cast<uint8_t>(len & 0xff)};
+    buf.append(encoded, sizeof(encoded));
+  } else {
+    const uint8_t encoded[] = {0x59, static_cast<uint8_t>((len >> 8) & 0xff),
+                               static_cast<uint8_t>(len & 0xff)};
+    buf.append(encoded, sizeof(encoded));
+  }
+}
+
+static inline void append_text_len(
+    FixedCapacitySecureWipeGuard<uint8_t>& buf, size_t len) {
+  check(len < 256, "Text length too large");
+  if (len < 24) {
+    buf.push_back(0x60 + len);
+  } else {
+    buf.push_back(0x78);
+    buf.push_back(len);
+  }
+}
+
 // Form the COSE1 encoding of the DeviceAuthenticationBytes,
 // then compute its SHA-256 hash, and cast into a Nat.
 // The original form follows S9.1.3.4 of the mdoc spec and
@@ -451,10 +501,22 @@ static inline void append_text_len(std::vector<uint8_t>& buf, size_t len) {
 // specified in the spec. As a result, this function is a hack
 // that mimics the bytes produced by the Android com.android.identity.wallet
 // library.
-template <class Nat>
-static Nat compute_transcript_hash(
+struct TranscriptHashScratch {
+  std::vector<uint8_t> doc_type;
+  std::vector<uint8_t> device_authentication;
+  std::vector<uint8_t> cose_sign1;
+};
+
+static inline size_t encoded_bytes_len_size(size_t len) {
+  check(len < 65536, "Bytestring length too large");
+  return len < 24 ? 1 : (len < 256 ? 2 : 3);
+}
+
+template <class Nat, class AfterCopy>
+static Nat compute_transcript_hash_with_scratch(
     const uint8_t transcript[], size_t len,
-    const std::vector<uint8_t>* docType = nullptr) {
+    const std::vector<uint8_t>* docType, TranscriptHashScratch& scratch,
+    AfterCopy&& after_copy) {
   // The DeviceAuthenticationBytes is defined in 9.1.3.4 as:
   // DeviceAuthentication = [
   //    "DeviceAuthentication",
@@ -462,43 +524,84 @@ static Nat compute_transcript_hash(
   //    DocType, ; Same as in mdoc response
   //    DeviceNameSpacesBytes ; Same as in mdoc response
   // ]
-  std::vector<uint8_t> deviceAuthentication = {
+  constexpr uint8_t kDeviceAuthentication[] = {
       0x84, 0x74, 'D', 'e', 'v', 'i', 'c', 'e', 'A', 'u', 't',
       'h',  'e',  'n', 't', 'i', 'c', 'a', 't', 'i', 'o', 'n',
   };
-  std::vector<uint8_t> docTypeBytes = {
+  constexpr uint8_t kDefaultDocType[] = {
       0x75, 'o', 'r', 'g', '.', 'i', 's', 'o', '.', '1', '8',
       '0',  '1', '3', '.', '5', '.', '1', '.', 'm', 'D', 'L',
   };
-  std::vector<uint8_t> deviceNameSpacesBytes = {0xD8, 0x18, 0x41, 0xA0};
+  constexpr uint8_t kDeviceNameSpaces[] = {0xD8, 0x18, 0x41, 0xA0};
+  constexpr uint8_t kCoseSign1[] = {0x84, 0x6A, 0x53, 0x69, 0x67, 0x6E,
+                                    0x61, 0x74, 0x75, 0x72, 0x65, 0x31,
+                                    0x43, 0xA1, 0x01, 0x26, 0x40};
+  constexpr uint8_t kTaggedArray[] = {0xD8, 0x18};
+
+  secure_wipe_vector(scratch.doc_type);
+  scratch.doc_type.clear();
+  const size_t doc_type_size =
+      docType != nullptr && docType->size() < 256
+          ? (docType->size() < 24 ? 1 : 2) + docType->size()
+          : sizeof(kDefaultDocType);
+  scratch.doc_type.reserve(doc_type_size);
+  FixedCapacitySecureWipeGuard<uint8_t> wipe_doc_type(scratch.doc_type);
 
   if (docType != nullptr && docType->size() < 256) {
-    docTypeBytes.clear();
-    append_text_len(docTypeBytes, docType->size());
-    docTypeBytes.insert(docTypeBytes.end(), docType->begin(), docType->end());
+    append_text_len(wipe_doc_type, docType->size());
+    wipe_doc_type.append(docType->data(), docType->size());
+  } else {
+    wipe_doc_type.append(kDefaultDocType, sizeof(kDefaultDocType));
   }
 
-  // Provide the DeviceAuthentication bytes
-  std::vector<uint8_t> da(deviceAuthentication);
-  da.insert(da.end(), transcript, transcript + len);
-  da.insert(da.end(), docTypeBytes.begin(), docTypeBytes.end());
-  da.insert(da.end(), deviceNameSpacesBytes.begin(),
-            deviceNameSpacesBytes.end());
+  check(len <= 65535 - sizeof(kDeviceAuthentication) - doc_type_size -
+                   sizeof(kDeviceNameSpaces),
+        "Session transcript too large");
+  const size_t l1 = sizeof(kDeviceAuthentication) + len + doc_type_size +
+                    sizeof(kDeviceNameSpaces);
+  const size_t l2 = l1 + (l1 < 256 ? 4 : 5);
+  const size_t cose_size = sizeof(kCoseSign1) + encoded_bytes_len_size(l2) +
+                           sizeof(kTaggedArray) + encoded_bytes_len_size(l1) +
+                           l1;
+
+  // Reserve every heap allocation before copying the session transcript.
+  secure_wipe_vector(scratch.device_authentication);
+  scratch.device_authentication.clear();
+  scratch.device_authentication.reserve(l1);
+  secure_wipe_vector(scratch.cose_sign1);
+  scratch.cose_sign1.clear();
+  scratch.cose_sign1.reserve(cose_size);
+  FixedCapacitySecureWipeGuard<uint8_t> wipe_da(
+      scratch.device_authentication);
+  FixedCapacitySecureWipeGuard<uint8_t> wipe_cose(scratch.cose_sign1);
+
+  wipe_da.append(kDeviceAuthentication, sizeof(kDeviceAuthentication));
+  wipe_da.append(transcript, len);
+  wipe_da.append(scratch.doc_type.data(), scratch.doc_type.size());
+  wipe_da.append(kDeviceNameSpaces, sizeof(kDeviceNameSpaces));
 
   // Form the COSE1 encoding of the DeviceAuthenticationBytes.
-  std::vector<uint8_t> cose1{0x84, 0x6A, 0x53, 0x69, 0x67, 0x6E,
-                             0x61, 0x74, 0x75, 0x72, 0x65, 0x31,
-                             0x43, 0xA1, 0x01, 0x26, 0x40};
-  uint8_t tag[] = {0xD8, 0x18};
+  wipe_cose.append(kCoseSign1, sizeof(kCoseSign1));
+  append_bytes_len(wipe_cose, l2);
+  wipe_cose.append(kTaggedArray, sizeof(kTaggedArray));
+  append_bytes_len(wipe_cose, l1);
+  wipe_cose.append(scratch.device_authentication.data(),
+                   scratch.device_authentication.size());
+  check(scratch.cose_sign1.size() == cose_size,
+        "DeviceAuthentication encoding length mismatch");
 
-  size_t l1 = da.size();
-  size_t l2 = l1 + (l1 < 256 ? 4 : 5); /* Tagged array length. */
-  append_bytes_len(cose1, l2);
-  cose1.insert(cose1.end(), tag, tag + 2);
-  append_bytes_len(cose1, l1);
-  cose1.insert(cose1.end(), da.begin(), da.end());
+  after_copy();
+  return nat_from_hash<Nat>(scratch.cose_sign1.data(),
+                            scratch.cose_sign1.size());
+}
 
-  return nat_from_hash<Nat>(cose1.data(), cose1.size());
+template <class Nat>
+static Nat compute_transcript_hash(
+    const uint8_t transcript[], size_t len,
+    const std::vector<uint8_t>* docType = nullptr) {
+  TranscriptHashScratch scratch;
+  return compute_transcript_hash_with_scratch<Nat>(
+      transcript, len, docType, scratch, [] {});
 }
 
 // Interpret input s as an len*8-bit string, and use it to fill max*8 bits
@@ -548,8 +651,8 @@ MdocProverErrorCode fill_attribute(DenseFiller<Field>& filler,
     const size_t encoded_id_len = (attr.id_len < 24 ? 1 : 2) + attr.id_len;
     vbuf.reserve(encoded_id_len);
     FixedCapacitySecureWipeGuard<uint8_t> wipe_vbuf(vbuf);
-    append_text_len(vbuf, attr.id_len);
-    vbuf.insert(vbuf.end(), attr.id, attr.id + attr.id_len);
+    append_text_len(wipe_vbuf, attr.id_len);
+    wipe_vbuf.append(attr.id, attr.id_len);
     for (size_t j = 0; j < vbuf.size() && j < 32; ++j) {
       fill_byte(v, vbuf[j], j, F);
     }
@@ -584,14 +687,13 @@ MdocProverErrorCode fill_attribute(DenseFiller<Field>& filler,
     std::vector<uint8_t> vbuf;
     vbuf.reserve(encoded_len);
     FixedCapacitySecureWipeGuard<uint8_t> wipe_vbuf(vbuf);
-    append_text_len(vbuf, attr.id_len);
-    vbuf.insert(vbuf.end(), attr.id, attr.id + attr.id_len);
-    append_text_len(vbuf, 12);  // len of "elementValue"
+    append_text_len(wipe_vbuf, attr.id_len);
+    wipe_vbuf.append(attr.id, attr.id_len);
+    append_text_len(wipe_vbuf, 12);  // len of "elementValue"
     const char* ev = "elementValue";
-    vbuf.insert(vbuf.end(), ev, ev + 12);
+    wipe_vbuf.append(ev, 12);
 
-    vbuf.insert(vbuf.end(), attr.cbor_value,
-                attr.cbor_value + attr.cbor_value_len);
+    wipe_vbuf.append(attr.cbor_value, attr.cbor_value_len);
 
     check(vbuf.size() == encoded_len, "attribute encoded length mismatch");
     size_t len = 0;
@@ -844,13 +946,11 @@ class MdocHashWitness {
     buf.reserve(kCose1PrefixLen + 2 + pm_.t_mso_.len);
     FixedCapacitySecureWipeGuard<uint8_t> wipe_buf(buf);
 
-    buf.assign(std::begin(kCose1Prefix), std::end(kCose1Prefix));
+    wipe_buf.append(std::begin(kCose1Prefix), kCose1PrefixLen);
     // Add 2-byte length
-    buf.push_back((pm_.t_mso_.len >> 8) & 0xff);
-    buf.push_back(pm_.t_mso_.len & 0xff);
-    for (size_t i = 0; i < pm_.t_mso_.len; ++i) {
-      buf.push_back(mdoc[pm_.t_mso_.pos + i]);
-    }
+    wipe_buf.push_back((pm_.t_mso_.len >> 8) & 0xff);
+    wipe_buf.push_back(pm_.t_mso_.len & 0xff);
+    wipe_buf.append(mdoc + pm_.t_mso_.pos, pm_.t_mso_.len);
 
     FlatSHA256Witness::transform_and_witness_message(buf.size(), buf.data(),
                                                      max_shablocks(version),

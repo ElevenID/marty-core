@@ -85,6 +85,19 @@ class ZkProver : public ProverLayers<Field> {
               RandomEngine& rng) {
     log(INFO, "ZK Commit start");
 
+    // A new attempt invalidates every earlier commitment attempt. Do not keep
+    // an old tableau usable while replacing its witness and pad.
+    lp_.reset();
+    secure_wipe_vector(pad_.l);
+    secure_wipe_vector(lqc_);
+
+    // A prior commit leaves only wiped storage behind. Restore the logical
+    // witness length before copying private values so retries cannot grow the
+    // vector and release a newly populated allocation.
+    secure_wipe_vector(witness_);
+    witness_.resize(n_witness_);
+    SecureVectorResetGuard<Elt> wipe_and_reset_witness(witness_, n_witness_);
+
     // Copy witnesses for commitment
     // Layout of the com: 0 ...<witnesses>... start_pad <pad> len
     // Only commit the private witnesses, which begin at index c_.npub_in.
@@ -99,15 +112,25 @@ class ZkProver : public ProverLayers<Field> {
       subfield_boundary = c_.subfield_boundary - c_.npub_in;
     }
 
-    // Fill pad with random values, add pad to witness, record lqc.
-    fill_pad(rng);
-    ZkCommon<Field>::setup_lqc(c_, lqc_, n_witness_ /* = start_pad */);
+    try {
+      // Fill pad with random values, add pad to witness, record lqc.
+      fill_pad(rng);
+      ZkCommon<Field>::setup_lqc(c_, lqc_, n_witness_ /* = start_pad */);
 
-    // Commit to witness and pad.
-    lp_ = std::make_unique<LigeroProver<Field, ReedSolomonFactory>>(zkp.param);
-    lp_->commit(zkp.com, tp, &witness_[0], subfield_boundary, &lqc_[0], rsf_,
-                rng, f_);
-    secure_wipe_vector(witness_);
+      // Keep the new tableau and commitment local until construction succeeds.
+      auto next_lp =
+          std::make_unique<LigeroProver<Field, ReedSolomonFactory>>(zkp.param);
+      LigeroCommitment<Field> next_commitment{};
+      next_lp->commit(next_commitment, tp, &witness_[0], subfield_boundary,
+                      &lqc_[0], rsf_, rng, f_);
+      zkp.com = next_commitment;
+      lp_ = std::move(next_lp);
+    } catch (...) {
+      secure_wipe_vector(pad_.l);
+      secure_wipe_vector(lqc_);
+      lp_.reset();
+      throw;
+    }
 
     log(INFO, "ZK Commitment done");
   }
@@ -175,7 +198,7 @@ class ZkProver : public ProverLayers<Field> {
           if (k != 1) {  // P(1) optimization
             Elt r = rng.elt(f_);
             pad_.l[i].cp[j].t_[k] = r;
-            witness_.push_back(r);
+            append_witness(r);
           } else {
             pad_.l[i].cp[j].t_[k] = f_.zero();
           }
@@ -187,7 +210,7 @@ class ZkProver : public ProverLayers<Field> {
             if (k != 1) {  // P(1) optimization
               Elt r = rng.elt(f_);
               pad_.l[i].hp[h][j].t_[k] = r;
-              witness_.push_back(r);
+              append_witness(r);
             } else {
               pad_.l[i].hp[h][j].t_[k] = f_.zero();
             }
@@ -197,13 +220,19 @@ class ZkProver : public ProverLayers<Field> {
       for (size_t k = 0; k < 2; ++k) {
         Elt r = rng.elt(f_);
         pad_.l[i].wc[k] = r;
-        witness_.push_back(r);
+        append_witness(r);
       }
 
       // Commit to product of pads for product proof.
       Elt rr = f_.mulf(pad_.l[i].wc[0], pad_.l[i].wc[1]);
-      witness_.push_back(rr);
+      append_witness(rr);
     }
+  }
+
+  void append_witness(const Elt& value) {
+    check(witness_.size() < witness_.capacity(),
+          "ZK witness capacity exceeded before mutation");
+    witness_.push_back(value);
   }
 
   const Circuit<Field>& c_;

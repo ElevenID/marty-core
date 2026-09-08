@@ -18,7 +18,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory>
+#include <array>
+#include <optional>
 
 #include "random/random.h"
 #include "util/crypto.h"
@@ -34,6 +35,11 @@ class FSPRF  {
  public:
   explicit FSPRF(const uint8_t key[kPRFKeySize])
       : prf_(key), nblock_(0), rdptr_(kPRFOutputSize) {}
+  ~FSPRF() {
+    secure_wipe_object(nblock_);
+    secure_wipe_object(rdptr_);
+    secure_wipe_object(saved_);
+  }
 
   // Disable copy for good measure.
   explicit FSPRF(const FSPRF&) = delete;
@@ -56,6 +62,7 @@ class FSPRF  {
   void refill() {
     check(nblock_ < kMaxBlocks, "too many blocks");
     uint8_t in[kPRFInputSize] = {};
+    SecureObjectWipeGuard<uint8_t[kPRFInputSize]> wipe_in(in);
     u64_to_le(in, nblock_++);
     prf_.Eval(saved_, in);
     rdptr_ = 0;
@@ -67,6 +74,15 @@ class FSPRF  {
   uint8_t saved_[kPRFOutputSize];  // saved pseudo-random bytes
 };
 
+template <typename Derive, typename Factory>
+void derive_fsprf_with_wiped_key(
+    std::array<uint8_t, kPRFKeySize>& key, Derive&& derive,
+    Factory&& factory) {
+  SecureObjectWipeGuard<std::array<uint8_t, kPRFKeySize>> wipe_key(key);
+  derive(key.data());
+  factory(key.data());
+}
+
 class Transcript : public RandomEngine {
   enum { TAG_BSTR = 0, TAG_FIELD_ELEM = 1, TAG_ARRAY = 2 };
 
@@ -77,6 +93,7 @@ class Transcript : public RandomEngine {
       : sha_(), prf_(), version_(version) {
     write(init, init_len);
   }
+  ~Transcript() override { prf_.reset(); }
 
   // Remove default copy and move implementations.
   Transcript(const Transcript&) = delete;
@@ -88,9 +105,10 @@ class Transcript : public RandomEngine {
   // Generate bytes by via the current FSPRF object.
   void bytes(uint8_t buf[/*n*/], size_t n) override {
     if (!prf_) {
-      uint8_t key[kPRFKeySize];
-      get(key);
-      prf_ = std::make_unique<FSPRF>(key);
+      std::array<uint8_t, kPRFKeySize> key{};
+      derive_fsprf_with_wiped_key(
+          key, [this](uint8_t* derived) { get(derived); },
+          [this](const uint8_t* derived) { prf_.emplace(derived); });
     }
     prf_->bytes(buf, n);
   }
@@ -179,13 +197,14 @@ class Transcript : public RandomEngine {
 
   template <class Field>
   void write_untyped(const typename Field::Elt& e, const Field& F) {
-    uint8_t buf[Field::kBytes];
+    uint8_t buf[Field::kBytes] = {};
+    SecureObjectWipeGuard<uint8_t[Field::kBytes]> wipe_buf(buf);
     F.to_bytes_field(buf, e);
     write_untyped(buf, sizeof(buf));
   }
 
   SHA256 sha_;
-  std::unique_ptr<FSPRF> prf_;
+  std::optional<FSPRF> prf_;
   const size_t version_;  // version 4+ fixes the TAG_ARRAY typo.
 };
 }  // namespace proofs

@@ -63,6 +63,34 @@ class SecureWipeGuard {
   std::vector<T>* values_;
 };
 
+// Wipe a sensitive vector and restore its original logical length on every
+// exit path. The retained length must not exceed the vector's size while the
+// guard is alive.
+template <typename T>
+class SecureVectorResetGuard {
+ public:
+  SecureVectorResetGuard(std::vector<T>& values, size_t retained_size) noexcept
+      : values_(&values), retained_size_(retained_size) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (retained_size_ > values_->size()) {
+      std::abort();
+    }
+  }
+  SecureVectorResetGuard(const SecureVectorResetGuard&) = delete;
+  SecureVectorResetGuard& operator=(const SecureVectorResetGuard&) = delete;
+  ~SecureVectorResetGuard() {
+    secure_wipe_vector(*values_);
+    if (retained_size_ > values_->size()) {
+      std::abort();
+    }
+    values_->resize(retained_size_);
+  }
+
+ private:
+  std::vector<T>* values_;
+  size_t retained_size_;
+};
+
 template <typename T>
 class SecureObjectWipeGuard {
  public:
@@ -84,9 +112,9 @@ void with_secure_scratch(T& scratch, Operation&& operation) {
   std::forward<Operation>(operation)(scratch);
 }
 
-// Use after reserving the complete sensitive payload. Growing a guarded
-// vector could free an earlier allocation without wiping it, so fail closed
-// if either its allocation or capacity changes.
+// Use after reserving the complete sensitive payload. All mutation of the
+// guarded vector must go through this guard so capacity is checked before a
+// mutation can free an earlier secret allocation.
 template <typename T>
 class FixedCapacitySecureWipeGuard {
  public:
@@ -97,6 +125,25 @@ class FixedCapacitySecureWipeGuard {
   FixedCapacitySecureWipeGuard(const FixedCapacitySecureWipeGuard&) = delete;
   FixedCapacitySecureWipeGuard& operator=(
       const FixedCapacitySecureWipeGuard&) = delete;
+
+  bool can_append(size_t count) const noexcept {
+    return values_->data() == data_ && values_->capacity() == capacity_ &&
+           values_->size() <= capacity_ && count <= capacity_ - values_->size();
+  }
+
+  void push_back(const T& value) {
+    require_remaining(1);
+    values_->push_back(value);
+  }
+
+  template <typename U>
+  void append(const U* values, size_t count) {
+    require_remaining(count);
+    for (size_t i = 0; i < count; ++i) {
+      values_->push_back(static_cast<T>(values[i]));
+    }
+  }
+
   ~FixedCapacitySecureWipeGuard() {
     if (values_->data() != data_ || values_->capacity() != capacity_) {
       std::abort();
@@ -105,6 +152,12 @@ class FixedCapacitySecureWipeGuard {
   }
 
  private:
+  void require_remaining(size_t count) const {
+    if (!can_append(count)) {
+      std::abort();
+    }
+  }
+
   std::vector<T>* values_;
   T* data_;
   size_t capacity_;
