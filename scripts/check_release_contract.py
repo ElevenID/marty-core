@@ -180,6 +180,23 @@ def _step_has_key(step: str, key: str) -> bool:
     ) is not None
 
 
+def _step_mapping_has_exact_value(
+    step: str, mapping: str, key: str, value: str
+) -> bool:
+    lines = step.splitlines()
+    mapping_line = f"        {mapping}:"
+    expected = f"          {key}: {value}"
+    for index, line in enumerate(lines):
+        if line != mapping_line:
+            continue
+        for nested in lines[index + 1 :]:
+            if nested.strip() and len(nested) - len(nested.lstrip()) <= 8:
+                break
+            if nested == expected:
+                return True
+    return False
+
+
 def _job_has_key(job: str, key: str) -> bool:
     return re.search(
         rf"^    {_yaml_step_key_pattern(key)}\s*", job, re.MULTILINE
@@ -219,7 +236,7 @@ def _step_run_commands(step: str) -> list[str]:
             stripped = command.strip()
             if stripped and len(command) - len(command.lstrip()) <= 8:
                 break
-            if stripped and not stripped.startswith("#"):
+            if stripped and (value[0] == ">" or not stripped.startswith("#")):
                 commands.append(stripped)
         return [" ".join(commands)] if value[0] == ">" and commands else commands
     return []
@@ -267,6 +284,12 @@ WASM_SECURITY_TEST_COMMANDS = {
         "-- --nocapture",
     ),
 }
+WASM_BINDGEN_INSTALLER_ACTION = (
+    "taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7"
+)
+WASM_BINDGEN_TOOL = "wasm-bindgen-cli@0.2.126"
+WASM_TEST_RUNNER_ENV = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER"
+WASM_TEST_RUNNER = "wasm-bindgen-test-runner"
 
 
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
@@ -343,6 +366,17 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         cargo_test_indices = [
             index for index, step in enumerate(steps) if _step_runs_cargo_test(step)
         ]
+        installer_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if _step_uses_action(step, WASM_BINDGEN_INSTALLER_ACTION)
+                and _step_mapping_has_exact_value(
+                    step, "with", "tool", WASM_BINDGEN_TOOL
+                )
+            ),
+            None,
+        )
         if cache_index is None:
             errors.append(
                 f".github/workflows/ci.yml: {job} inherits RUSTC_WRAPPER=sccache "
@@ -356,6 +390,16 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         if not cargo_test_indices:
             errors.append(
                 f".github/workflows/ci.yml: {job} must execute a cargo test command"
+            )
+        if installer_index is None:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must install the pinned "
+                "wasm-bindgen test runner"
+            )
+        elif cargo_test_indices and installer_index > min(cargo_test_indices):
+            errors.append(
+                f".github/workflows/ci.yml: {job} must install wasm-bindgen "
+                "before its first cargo test"
             )
         for cargo_test_index in cargo_test_indices:
             cargo_test_step = steps[cargo_test_index]
@@ -373,6 +417,13 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                 errors.append(
                     f".github/workflows/ci.yml: {job} cargo test steps must use "
                     "the failure-enforcing default shell"
+                )
+            if not _step_mapping_has_exact_value(
+                cargo_test_step, "env", WASM_TEST_RUNNER_ENV, WASM_TEST_RUNNER
+            ):
+                errors.append(
+                    f".github/workflows/ci.yml: {job} cargo test steps must use "
+                    "the exact wasm-bindgen test runner"
                 )
             for command in _cargo_test_commands(cargo_test_step):
                 if re.search(r"(?:^|\s)(?:--no-run|--help|--list|-h)(?:\s|=|$)", command):

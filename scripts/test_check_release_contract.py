@@ -439,6 +439,49 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_wasm_security_cache_setup(workflow)
         self.assertTrue(any("exact approved Cargo test script" in error for error in errors))
 
+    def test_rejects_folded_comment_that_suppresses_wasm_test(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        original = "        run: >-\n          cargo test --locked -p marty-oid4vci"
+        replacement = (
+            "        run: >-\n          # suppress the folded command\n"
+            "          cargo test --locked -p marty-oid4vci"
+        )
+        self.assertEqual(workflow.count(original), 1)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(original, replacement)
+        )
+        self.assertTrue(any("exact approved Cargo test script" in error for error in errors))
+
+    def test_rejects_noop_wasm_test_runner(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        original = (
+            "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner"
+        )
+        self.assertEqual(workflow.count(original), 2)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(original, "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: true")
+        )
+        self.assertEqual(
+            sum("exact wasm-bindgen test runner" in error for error in errors), 2
+        )
+
+    def test_rejects_unpinned_wasm_test_runner_installer(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        original = "tool: wasm-bindgen-cli@0.2.126"
+        self.assertEqual(workflow.count(original), 2)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(original, "tool: wasm-bindgen-cli@0.2.125")
+        )
+        self.assertEqual(
+            sum("must install the pinned wasm-bindgen" in error for error in errors), 2
+        )
+
     def test_rejects_custom_cargo_test_shell(self) -> None:
         pinned = (
             "mozilla-actions/sccache-action@"
@@ -539,29 +582,17 @@ class NativeBuildCacheContractTests(unittest.TestCase):
                 )
 
     def test_ignores_commented_cargo_before_wasm_security_cache(self) -> None:
-        pinned = (
-            "mozilla-actions/sccache-action@"
-            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
         )
-        workflow = f"""jobs:
-  oid4vci-wasm-security:
-    steps:
-      - uses: {pinned}
-      - run: >-
-          cargo test --locked -p marty-oid4vci
-          --target wasm32-unknown-unknown
-          --no-default-features --features verifier
-          --test wasm_crypto_provider
-          -- --nocapture
-  crypto-wasm-security:
-    steps:
-      - run: |
+        job_start = workflow.index("  crypto-wasm-security:")
+        cache_start = workflow.index(
+            "      - name: Enable compiler cache", job_start
+        )
+        comment_step = """      - run: |
           # cargo test is documentation, not an executed command
-      - uses: {pinned}
-      - run: |
-          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --lib wasm_hmac_and_hkdf_match_kats_and_wipe_returned_error_state -- --nocapture
-          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture
 """
+        workflow = workflow[:cache_start] + comment_step + workflow[cache_start:]
         self.assertEqual(
             check_release_contract.check_wasm_security_cache_setup(workflow), []
         )
