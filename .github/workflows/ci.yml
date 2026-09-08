@@ -162,7 +162,7 @@ jobs:
       - name: Exercise private-key and session security boundaries
         if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-crypto') || contains(steps.affected.outputs.packages, 'marty-verification') || contains(steps.affected.outputs.packages, 'marty-iso18013') || contains(steps.affected.outputs.packages, 'marty-bindings') || contains(steps.affected.outputs.packages, 'marty-didcomm')
         run: |
-          cargo test --locked -p marty-crypto --no-default-features --features bbs-verification,ecdh,signature-verification,jwk,kdf,ocsp,crl,public-key-codec,symmetric
+          cargo test --locked -p marty-crypto --no-default-features --features bbs-verification,ecdh,signature-verification,jwk,kdf,ocsp,crl,public-key-codec,symmetric,emrtd-compat
           cargo test --locked -p marty-crypto-test-support
           cargo test --locked -p marty-verification --no-default-features --features csca,ephemeral-session-keys --lib
           cargo test --locked -p marty-iso18013 --no-default-features --features session-protocol
@@ -215,7 +215,9 @@ jobs:
             exit 1
           fi
       - name: Exercise a real prove and verify round trip
-        run: cargo test --locked -p marty-zkp --no-default-features --features prover --test conformance round_trip_age_over_18
+        run: |
+          cargo test --locked -p marty-zkp --no-default-features --features prover --test conformance round_trip_age_over_18
+          cargo test --locked -p marty-zkp --no-default-features --features prover --test conformance prove_rejects_wrong_birth_date_witness
       - name: Reject mock cryptography in release builds
         shell: bash
         run: |
@@ -365,6 +367,7 @@ jobs:
           cargo check --locked -p marty-verification --no-default-features --features kms-only,python,iaca,csca,eudi
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
+          USE_ZK_MOCK=1 cargo test --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,mso_mdoc,zk_mdoc --lib formats::zk_mdoc::tests::test_sign_zk_mdoc_with_signer_produces_zk_mdoc -- --exact
           USE_ZK_MOCK=1 cargo test --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib
           USE_ZK_MOCK=1 cargo clippy --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib -- -D warnings
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk

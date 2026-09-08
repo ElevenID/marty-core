@@ -17,8 +17,10 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include "algebra/fp_p128.h"
@@ -459,6 +461,88 @@ TEST(mdoc, mdoc_hash_test_fp128_2) {
   mdoc_hash_run<Fp128<>>(
       Fg.of_string("164956748514267535023998284330560247862"), 1ull << 32, Fg,
       oa);
+}
+
+template <typename T, size_t N>
+bool array_is_zero(const std::array<T, N>& values) {
+  for (const auto& value : values) {
+    if (value != 0) return false;
+  }
+  return true;
+}
+
+bool vector_is_zero(const std::vector<uint8_t>& values) {
+  return std::all_of(values.begin(), values.end(),
+                     [](uint8_t value) { return value == 0; });
+}
+
+TEST(mdoc, SensitiveTranscriptAndNatScratchIsWipedOnReturnAndUnwind) {
+  using Nat = Fp256Base::N;
+  std::array<uint8_t, Nat::kBytes> source{};
+  for (size_t i = 0; i < source.size(); ++i) {
+    source[i] = static_cast<uint8_t>(i + 1);
+  }
+
+  std::array<uint8_t, Nat::kBytes> conversion_scratch{};
+  (void)nat_from_be_with_scratch<Nat>(source.data(), conversion_scratch);
+  EXPECT_TRUE(array_is_zero(conversion_scratch));
+
+  uint32_t words[Nat::kBytes / sizeof(uint32_t)] = {};
+  words[0] = 0xa5a5a5a5u;
+  (void)nat_from_u32_with_scratch<Nat>(words, conversion_scratch);
+  EXPECT_TRUE(array_is_zero(conversion_scratch));
+
+  std::array<uint8_t, kSHA256DigestSize> hash_scratch{};
+  (void)nat_from_hash_with_scratch<Nat>(
+      source.data(), source.size(), hash_scratch,
+      [](const uint8_t* digest) { return nat_from_be<Nat>(digest); });
+  EXPECT_TRUE(array_is_zero(hash_scratch));
+  EXPECT_THROW(
+      nat_from_hash_with_scratch<Nat>(
+          source.data(), source.size(), hash_scratch,
+          [](const uint8_t*) -> Nat {
+            throw std::runtime_error("injected conversion failure");
+          }),
+      std::runtime_error);
+  EXPECT_TRUE(array_is_zero(hash_scratch));
+
+  const std::vector<uint8_t> doc_type = {'o', 'r', 'g', '.', 't', 'e', 's', 't'};
+  TranscriptHashScratch scratch;
+  const uint8_t* da_allocation = nullptr;
+  const uint8_t* cose_allocation = nullptr;
+  size_t da_capacity = 0;
+  size_t cose_capacity = 0;
+  auto record_allocations = [&] {
+    da_allocation = scratch.device_authentication.data();
+    cose_allocation = scratch.cose_sign1.data();
+    da_capacity = scratch.device_authentication.capacity();
+    cose_capacity = scratch.cose_sign1.capacity();
+  };
+
+  (void)compute_transcript_hash_with_scratch<Nat>(
+      source.data(), source.size(), &doc_type, scratch, record_allocations);
+  EXPECT_EQ(scratch.device_authentication.data(), da_allocation);
+  EXPECT_EQ(scratch.cose_sign1.data(), cose_allocation);
+  EXPECT_EQ(scratch.device_authentication.capacity(), da_capacity);
+  EXPECT_EQ(scratch.cose_sign1.capacity(), cose_capacity);
+  EXPECT_TRUE(vector_is_zero(scratch.doc_type));
+  EXPECT_TRUE(vector_is_zero(scratch.device_authentication));
+  EXPECT_TRUE(vector_is_zero(scratch.cose_sign1));
+
+  EXPECT_THROW(
+      compute_transcript_hash_with_scratch<Nat>(
+          source.data(), source.size(), &doc_type, scratch, [&] {
+            record_allocations();
+            throw std::runtime_error("injected transcript hash failure");
+          }),
+      std::runtime_error);
+  EXPECT_EQ(scratch.device_authentication.data(), da_allocation);
+  EXPECT_EQ(scratch.cose_sign1.data(), cose_allocation);
+  EXPECT_EQ(scratch.device_authentication.capacity(), da_capacity);
+  EXPECT_EQ(scratch.cose_sign1.capacity(), cose_capacity);
+  EXPECT_TRUE(vector_is_zero(scratch.doc_type));
+  EXPECT_TRUE(vector_is_zero(scratch.device_authentication));
+  EXPECT_TRUE(vector_is_zero(scratch.cose_sign1));
 }
 
 TEST(mdoc, oversized_legacy_attribute_fails_before_buffer_growth) {

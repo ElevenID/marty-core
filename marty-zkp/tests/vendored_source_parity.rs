@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
-const AUDITED_COMMIT: &str = "1f822278396b8d6ba7084cab983efa8b80d680d0";
+const AUDITED_COMMIT: &str = "757d1de25d0b78b6e70f7b2c91eedd4a8de401d1";
 const LOCAL_SECURITY_ADAPTATIONS: &str =
     "lib/arrays/dense.h,lib/circuits/ecdsa/verify_witness.h,lib/circuits/mdoc/mdoc_zk.cc";
 const AUDITED_FILES: &[(&str, &str)] = &[
@@ -35,7 +35,7 @@ const AUDITED_FILES: &[(&str, &str)] = &[
     ),
     (
         "lib/circuits/mdoc/mdoc_signature_test.cc",
-        "0f2b062653af853e2b463b504a5283008cf079372448fbfdec35cda1bc6c231c",
+        "eb5eba3e670fa426082f1f4cbfedae7ba7f253ff3c568fb37b5b967b6b1aadba",
     ),
     (
         "lib/circuits/mdoc/mdoc_witness.h",
