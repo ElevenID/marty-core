@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 const MAX_KMS_RESPONSE_BYTES: usize = 16 * 1024;
+const ALLOWED_KMS_ALGORITHM: &str = "ES256";
 
 #[derive(Serialize)]
 struct KmsSignRequest<'a> {
@@ -28,6 +29,7 @@ struct RemoteKms {
     client: reqwest::Client,
     endpoint: reqwest::Url,
     bearer_token: Option<Zeroizing<String>>,
+    allowed_key_id: Zeroizing<String>,
 }
 
 impl RemoteKms {
@@ -48,19 +50,34 @@ impl RemoteKms {
             .ok()
             .filter(|value| !value.trim().is_empty())
             .map(Zeroizing::new);
+        let allowed_key_id =
+            Zeroizing::new(required_env("MARTY_TEST_SIGNER_AGENT_ALLOWED_KEY_ID")?);
         Ok(Self {
             client,
             endpoint,
             bearer_token,
+            allowed_key_id,
         })
     }
 
     async fn sign(&self, request: &VerifiedSignRequest) -> Result<Vec<u8>, String> {
+        self.sign_bound(&request.algorithm, &request.key_id, &request.signing_input)
+            .await
+    }
+
+    async fn sign_bound(
+        &self,
+        algorithm: &str,
+        key_id: &str,
+        signing_input: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        if algorithm != ALLOWED_KMS_ALGORITHM || key_id != self.allowed_key_id.as_str() {
+            return Err("signing request does not match the agent KMS policy".into());
+        }
         let body = KmsSignRequest {
-            algorithm: &request.algorithm,
-            key_id: &request.key_id,
-            signing_input: base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(&*request.signing_input),
+            algorithm: ALLOWED_KMS_ALGORITHM,
+            key_id: self.allowed_key_id.as_str(),
+            signing_input: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signing_input),
         };
         let mut builder = self.client.post(self.endpoint.clone()).json(&body);
         if let Some(token) = self.bearer_token.as_ref() {
@@ -154,5 +171,60 @@ async fn main() {
         {
             tracing::warn!(%error, "signer IPC response failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use super::*;
+    use axum::{extract::State, routing::post, Router};
+    use tokio::net::TcpListener;
+
+    async fn count_request(State(requests): State<Arc<AtomicUsize>>) -> &'static str {
+        requests.fetch_add(1, Ordering::SeqCst);
+        r#"{"signature":"unused"}"#
+    }
+
+    #[tokio::test]
+    async fn mismatched_agent_policy_makes_zero_outbound_requests() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/", post(count_request))
+            .with_state(Arc::clone(&requests));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let kms = RemoteKms {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            endpoint: format!("http://{address}/").parse().unwrap(),
+            bearer_token: None,
+            allowed_key_id: Zeroizing::new("agent-owned-holder-key".to_owned()),
+        };
+        assert!(kms
+            .sign_bound(
+                ALLOWED_KMS_ALGORITHM,
+                "different-key",
+                b"attacker-selected input",
+            )
+            .await
+            .is_err());
+        assert!(kms
+            .sign_bound(
+                "ES384",
+                "agent-owned-holder-key",
+                b"attacker-selected input",
+            )
+            .await
+            .is_err());
+        tokio::task::yield_now().await;
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        server.abort();
     }
 }

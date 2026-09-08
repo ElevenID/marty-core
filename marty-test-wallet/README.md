@@ -32,9 +32,13 @@ replayed, missing-MAC, and wrong-MAC requests. Its response MAC binds the raw
 ES256 signature to that request nonce.
 
 The signer agent additionally requires `MARTY_TEST_SIGNER_AGENT_KMS_URL`, which
-must use HTTPS. `MARTY_TEST_SIGNER_AGENT_KMS_BEARER_TOKEN` is optional for KMSs
-that use bearer authentication; workload identity may be used instead. The KMS
-endpoint receives `{ algorithm, key_id, signing_input }` and returns
+must use HTTPS, and `MARTY_TEST_SIGNER_AGENT_ALLOWED_KEY_ID`, which independently
+pins the only KMS key the agent may use. That value must match the wallet's
+holder key identifier; authenticated requests for any other key or any algorithm
+other than ES256 are rejected before a network request. The optional
+`MARTY_TEST_SIGNER_AGENT_KMS_BEARER_TOKEN` supports KMSs that use bearer
+authentication; workload identity may be used instead. The KMS endpoint receives
+the agent-owned `{ algorithm, key_id }` policy plus `signing_input` and returns
 `{ "signature": "<base64url raw ES256>" }`. Neither Marty process loads a
 private key: the agent is only a policy and transport bridge to the KMS.
 
