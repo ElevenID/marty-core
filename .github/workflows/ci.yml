@@ -208,7 +208,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install native cryptography dependencies
-        run: sudo apt-get update && sudo apt-get install --yes binutils cmake libbenchmark-dev libgtest-dev libssl-dev libzstd-dev
+        run: sudo apt-get update && sudo apt-get install --yes binutils cmake libbenchmark-dev libgtest-dev libssl-dev libzstd-dev zlib1g-dev
       - name: Test vendored Longfellow security regressions
         run: |
           cmake -S marty-zkp/vendor/longfellow-zk/lib -B target/longfellow-parser-test -DCMAKE_BUILD_TYPE=Release
