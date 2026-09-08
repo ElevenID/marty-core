@@ -139,6 +139,31 @@ class NativeBuildCacheContractTests(unittest.TestCase):
     def test_checked_in_wasm_security_jobs_provide_sccache(self) -> None:
         self.assertEqual(check_release_contract.check_wasm_security_cache_setup(), [])
 
+    def test_checked_in_ci_executes_every_native_zkp_security_binary(self) -> None:
+        self.assertEqual(check_release_contract.check_zkp_native_security_tests(), [])
+
+    def test_rejects_missing_native_zkp_security_binary(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        workflow = workflow.replace(
+            "          target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test --gtest_color=no\n",
+            "",
+        )
+        errors = check_release_contract.check_zkp_native_security_tests(workflow)
+        self.assertTrue(any("exact approved Longfellow" in error for error in errors))
+
+    def test_rejects_filtered_native_zkp_security_binary(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        workflow = workflow.replace(
+            "mdoc_zk_test --gtest_color=no",
+            "mdoc_zk_test --gtest_color=no --gtest_filter=MdocZKTest.one_claim",
+        )
+        errors = check_release_contract.check_zkp_native_security_tests(workflow)
+        self.assertTrue(any("exact approved Longfellow" in error for error in errors))
+
     def test_rejects_wasm_security_job_with_missing_rust_wrapper(self) -> None:
         pinned = (
             "mozilla-actions/sccache-action@"

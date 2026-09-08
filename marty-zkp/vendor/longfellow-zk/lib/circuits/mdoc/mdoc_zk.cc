@@ -124,23 +124,54 @@ static constexpr bool enforce_circuit_id_in_verifier = false;
 
 // =========== Helper methods for the main exported C functions.
 
-bool is_canonical_utc_time(const char* now) {
-  if (strlen(now) != 20 || now[4] != '-' || now[7] != '-' || now[10] != 'T' ||
-      now[13] != ':' || now[16] != ':' || now[19] != 'Z') {
+bool valid_calendar_date(const uint8_t* value, size_t len) {
+  if (len != 10 || value[4] != '-' || value[7] != '-') {
     return false;
   }
-  constexpr size_t kDigitIndexes[] = {0, 1, 2, 3, 5, 6, 8,
-                                      9, 11, 12, 14, 15, 17, 18};
+  constexpr size_t kDigitIndexes[] = {0, 1, 2, 3, 5, 6, 8, 9};
   for (size_t index : kDigitIndexes) {
-    if (now[index] < '0' || now[index] > '9') {
+    if (value[index] < '0' || value[index] > '9') {
       return false;
     }
   }
-  auto pair = [now](size_t index) {
-    return static_cast<unsigned>((now[index] - '0') * 10 + now[index + 1] - '0');
+  auto pair = [value](size_t index) {
+    return static_cast<unsigned>((value[index] - '0') * 10 +
+                                 value[index + 1] - '0');
   };
-  return pair(5) >= 1 && pair(5) <= 12 && pair(8) >= 1 && pair(8) <= 31 &&
-         pair(11) <= 23 && pair(14) <= 59 && pair(17) <= 59;
+  const unsigned year =
+      (value[0] - '0') * 1000 + (value[1] - '0') * 100 +
+      (value[2] - '0') * 10 + value[3] - '0';
+  const unsigned month = pair(5);
+  const unsigned day = pair(8);
+  if (month < 1 || month > 12 || day < 1) return false;
+  constexpr unsigned kDaysPerMonth[] = {31, 28, 31, 30, 31, 30,
+                                        31, 31, 30, 31, 30, 31};
+  unsigned max_day = kDaysPerMonth[month - 1];
+  const bool leap_year =
+      (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+  if (month == 2 && leap_year) ++max_day;
+  return day <= max_day;
+}
+
+bool is_canonical_utc_time_bytes(const uint8_t* value, size_t len) {
+  if (len != 20 || !valid_calendar_date(value, 10) || value[10] != 'T' ||
+      value[13] != ':' || value[16] != ':' || value[19] != 'Z') {
+    return false;
+  }
+  constexpr size_t kDigitIndexes[] = {11, 12, 14, 15, 17, 18};
+  for (size_t index : kDigitIndexes) {
+    if (value[index] < '0' || value[index] > '9') return false;
+  }
+  auto pair = [value](size_t index) {
+    return static_cast<unsigned>((value[index] - '0') * 10 +
+                                 value[index + 1] - '0');
+  };
+  return pair(11) <= 23 && pair(14) <= 59 && pair(17) <= 59;
+}
+
+bool is_canonical_utc_time(const char* now) {
+  return is_canonical_utc_time_bytes(
+      reinterpret_cast<const uint8_t*>(now), strlen(now));
 }
 
 // Specialization for filling the mac when using f_128.
@@ -378,8 +409,8 @@ bool sameNamespace(const RequestedAttribute attrs[/*n*/], size_t n) {
 // - Fulldate (TAG 1004) -> must be 14 bytes total
 // - Tdate (TAG 0) -> must be 22 bytes total
 bool cbor_validate(const uint8_t* in, size_t len) {
-  uint8_t dummy[1];  // For 0-length checks if needed, though len > 0 usually
-  const uint8_t* buf = in ? in : dummy;
+  if (in == nullptr) return false;
+  const uint8_t* buf = in;
   size_t pos = 0;
   CborDoc doc;
 
@@ -399,20 +430,25 @@ bool cbor_validate(const uint8_t* in, size_t len) {
     case NEGATIVE:
       return true;
 
-    case PRIMITIVE:
-      return (doc.as_primitive() == CTRUE || doc.as_primitive() == CFALSE);
+    case PRIMITIVE: {
+      CborPrimitive p = doc.as_primitive();
+      return (p == CTRUE || p == CFALSE);
+    }
 
     case TAG: {
       size_t tag = doc.as_tag();
-      if (tag == 1004) {  // Fulldate
-        if (len != 14) return false;
-        return doc.tagged_value().is_variant(TEXT);
+      const CborDoc& inner = doc.tagged_value();
+      if (!inner.is_variant(TEXT)) return false;
+      const CborDoc::CborString text = inner.as_text();
+      switch (tag) {
+        case 1004:  // Fulldate
+          return len == 14 && valid_calendar_date(buf + text.pos, text.len);
+        case 0:  // Tdate
+          return len == 22 &&
+                 is_canonical_utc_time_bytes(buf + text.pos, text.len);
+        default:
+          return false;
       }
-      if (tag == 0) {  // Tdate
-        if (len != 22) return false;
-        return doc.tagged_value().is_variant(TEXT);
-      }
-      return false;
     }
 
     default:
@@ -447,6 +483,13 @@ MdocProverErrorCode run_mdoc_prover(
   }
   if (!is_canonical_utc_time(now)) {
     return MDOC_PROVER_INVALID_INPUT;
+  }
+
+  for (size_t i = 0; i < attrs_len; ++i) {
+    if (attrs[i].namespace_len > 64 || attrs[i].id_len > 32 ||
+        attrs[i].cbor_value_len > 64) {
+      return MDOC_PROVER_INVALID_INPUT;
+    }
   }
 
   Elt pkX, pkY;
@@ -606,6 +649,13 @@ MdocVerifierErrorCode run_mdoc_verifier(
   }
   if (!is_canonical_utc_time(now)) {
     return MDOC_VERIFIER_INVALID_INPUT;
+  }
+
+  for (size_t i = 0; i < attrs_len; ++i) {
+    if (attrs[i].namespace_len > 64 || attrs[i].id_len > 32 ||
+        attrs[i].cbor_value_len > 64) {
+      return MDOC_VERIFIER_INVALID_INPUT;
+    }
   }
 
   Elt pkX, pkY;

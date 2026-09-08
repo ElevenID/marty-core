@@ -57,9 +57,9 @@ fn verify_with_attribute_cbor(cbor_value: Vec<u8>) -> Result<bool, ZkError> {
 #[test]
 fn cbor_validation_preserves_supported_mdoc_value_types() {
     let mut full_date = vec![0xd9, 0x03, 0xec, 0x6a];
-    full_date.extend_from_slice(b"1971-09-01");
+    full_date.extend_from_slice(b"2024-02-29");
     let mut date_time = vec![0xc0, 0x74];
-    date_time.extend_from_slice(b"2023-11-02T09:00:00Z");
+    date_time.extend_from_slice(b"2024-02-29T23:59:59Z");
 
     for value in [
         vec![0x00],
@@ -89,6 +89,10 @@ fn cbor_validation_rejects_unsupported_or_malformed_values() {
     short_full_date.extend_from_slice(b"1971-09-0");
     let mut short_date_time = vec![0xc0, 0x73];
     short_date_time.extend_from_slice(b"2023-11-02T09:00:00");
+    let mut impossible_date = vec![0xd9, 0x03, 0xec, 0x6a];
+    impossible_date.extend_from_slice(b"2023-02-29");
+    let mut impossible_time = vec![0xc0, 0x74];
+    impossible_time.extend_from_slice(b"2024-01-01T24:00:00Z");
 
     for value in [
         vec![],
@@ -96,12 +100,21 @@ fn cbor_validation_rejects_unsupported_or_malformed_values() {
         vec![0x80],
         vec![0xa0],
         vec![0x61],
+        vec![0x62, 0xc0, 0x80],
         vec![0xf5, 0xf5],
+        vec![0x18, 0x17],
+        vec![0x38, 0x17],
+        vec![0xf8, 0x14],
+        vec![0x78, 0x01, b'a'],
+        vec![0x58, 0x01, 0x42],
+        vec![0x7a, 0xff, 0xff, 0xff, 0xff],
         vec![0xc2, 0x40],
         vec![0xd9, 0x03, 0xec, 0x00],
         vec![0xc0, 0x00],
         short_full_date,
         short_date_time,
+        impossible_date,
+        impossible_time,
     ] {
         assert!(
             matches!(verify_with_attribute_cbor(value.clone()), Ok(false)),

@@ -320,6 +320,7 @@ class GF2_128 {
     }
     return CElt{r};
   }
+  CElt negf(const CElt& a) const { return CElt{invertf(a.e)}; }
   Elt counter_beta(size_t i) const {
     check(i < kSubFieldBits, "i < kSubFieldBits");
     return counter_beta_[i];

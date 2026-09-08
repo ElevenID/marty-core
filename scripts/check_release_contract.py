@@ -705,6 +705,63 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
     return errors
 
 
+def check_zkp_native_security_tests(workflow_text: str | None = None) -> list[str]:
+    """Require the complete native Longfellow regression suite in Marty CI."""
+    contents = (
+        workflow_text
+        if workflow_text is not None
+        else (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    job_matches = list(
+        re.finditer(r"^  zkp-native-security:\s*$", contents, re.MULTILINE)
+    )
+    if len(job_matches) != 1:
+        return [
+            ".github/workflows/ci.yml: zkp-native-security must appear exactly once"
+        ]
+
+    start = job_matches[0].start()
+    next_job = re.search(
+        r"^  [A-Za-z0-9_-]+:\s*$", contents[job_matches[0].end() :], re.MULTILINE
+    )
+    end = (
+        job_matches[0].end() + next_job.start()
+        if next_job is not None
+        else len(contents)
+    )
+    block = contents[start:end].replace("\r\n", "\n")
+    approved_test_step = """      - name: Test vendored Longfellow security regressions
+        run: |
+          cmake -S marty-zkp/vendor/longfellow-zk/lib -B target/longfellow-parser-test -DCMAKE_BUILD_TYPE=Release
+          cmake --build target/longfellow-parser-test --target host_decoder_test mdoc_parser_test mdoc_zk_test mso2_test --parallel 2
+          target/longfellow-parser-test/cbor/host_decoder_test --gtest_color=no
+          target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test --gtest_color=no
+          target/longfellow-parser-test/circuits/mdoc/mdoc_zk_test --gtest_color=no
+          target/longfellow-parser-test/circuits/cbor_parser/mso2_test --gtest_color=no
+"""
+    errors: list[str] = []
+    if block.count(approved_test_step) != 1:
+        errors.append(
+            ".github/workflows/ci.yml: zkp-native-security must build and directly "
+            "execute the exact approved Longfellow decoder, parser, proof, and MSO tests"
+        )
+    if "continue-on-error:" in block or re.search(r"^    if:", block, re.MULTILINE):
+        errors.append(
+            ".github/workflows/ci.yml: zkp-native-security must unconditionally enforce "
+            "native regression test failures"
+        )
+    required_gate_fragments = (
+        "      - zkp-native-security\n",
+        "      ZKP_NATIVE_SECURITY: ${{ needs.zkp-native-security.result }}\n",
+    )
+    normalized_contents = contents.replace("\r\n", "\n")
+    if any(fragment not in normalized_contents for fragment in required_gate_fragments):
+        errors.append(
+            ".github/workflows/ci.yml: CI Gate must require zkp-native-security"
+        )
+    return errors
+
+
 def check_release_checksum_policy(workflow_text: str | None = None) -> list[str]:
     contents = (
         workflow_text
@@ -906,6 +963,7 @@ def main() -> int:
         *check_release_asset_policy(),
         *check_native_build_cache_scope(),
         *check_wasm_security_cache_setup(),
+        *check_zkp_native_security_tests(),
         *check_release_checksum_policy(),
         *check_stable_tag_gate(),
         *check_capability_lifecycle(),
@@ -922,6 +980,7 @@ def main() -> int:
     print("release-contract: workflows contain no release-asset deletion operations")
     print("release-contract: Cargo target caches are platform and toolchain scoped")
     print("release-contract: WASM security jobs provide their configured Rust wrapper")
+    print("release-contract: native ZKP security suite executes every approved binary")
     print(
         "release-contract: checksum manifest excludes itself and verifies listed assets"
     )

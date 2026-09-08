@@ -208,7 +208,15 @@ jobs:
         with:
           version: v0.16.0
       - name: Install native cryptography dependencies
-        run: sudo apt-get update && sudo apt-get install --yes binutils libssl-dev libzstd-dev
+        run: sudo apt-get update && sudo apt-get install --yes binutils cmake libbenchmark-dev libgtest-dev libssl-dev libzstd-dev
+      - name: Test vendored Longfellow security regressions
+        run: |
+          cmake -S marty-zkp/vendor/longfellow-zk/lib -B target/longfellow-parser-test -DCMAKE_BUILD_TYPE=Release
+          cmake --build target/longfellow-parser-test --target host_decoder_test mdoc_parser_test mdoc_zk_test mso2_test --parallel 2
+          target/longfellow-parser-test/cbor/host_decoder_test --gtest_color=no
+          target/longfellow-parser-test/circuits/mdoc/mdoc_parser_test --gtest_color=no
+          target/longfellow-parser-test/circuits/mdoc/mdoc_zk_test --gtest_color=no
+          target/longfellow-parser-test/circuits/cbor_parser/mso2_test --gtest_color=no
       - name: Test the real verifier and registered circuit identity
         run: cargo test --locked -p marty-zkp --no-default-features --features verifier --test circuit_identity
       - name: Document the verifier-only API without prover links

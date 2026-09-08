@@ -1,4 +1,4 @@
 repository=https://github.com/ElevenID/longfellow-zk.git
-base_commit=58f6259c631a374a526b80f99222d03654883655
-local_security_adaptations=lib/arrays/dense.h,lib/circuits/mdoc/mdoc_zk.cc
+base_commit=c4004b5edee8cbc4e2a76588c531f07994e3e7ab
+local_security_adaptations=lib/arrays/dense.h,lib/circuits/mdoc/mdoc_zk.cc,lib/gf2k/gf2_128.h
 adaptation_manifest=tests/vendored_source_parity.rs
