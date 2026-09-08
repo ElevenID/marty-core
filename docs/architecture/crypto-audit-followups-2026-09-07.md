@@ -219,10 +219,22 @@ different locations require fresh review rather than relying on this triage.
   Longfellow algebra sync:
   `fp24.h` and `fp_generic.h` used the audited base-aware `digit` API while
   `nat.h` and `nat.cc` retained the old signature. The exact audited `nat` pair is
-  now synchronized and covered by the executable source-parity manifest. A fresh
-  Rust 1.97.1 Linux verifier build passes all three selected circuit-identity
-  tests; the browser lanes pass one cleanup/KAT unit test, two KDF integration
-  tests, and two provider-policy tests with no ignored or filtered cases.
+  now synchronized and covered by the executable source-parity manifest. The
+  following exact-head Linux run exposed the same class of omission at the CBOR
+  boundary: audited `mdoc_witness.h` expected Longfellow's current
+  `CborDoc` API, while the parity manifest had not pinned its header-only
+  `cbor/host_decoder.h` dependency. The decoder is now synchronized from
+  Longfellow commit `58f6259` and included in executable source parity.
+  Marty's local CBOR allowlist uses the decoder's checked public accessors, and
+  two end-to-end verifier regressions exercise all supported scalar/date forms
+  plus malformed, trailing, container, null, and unsupported-tag rejection. A
+  fresh Rust 1.97.1 Linux verifier build passes all five selected tests (the
+  original three circuit-identity checks and both CBOR behavior regressions)
+  with no ignored or filtered cases. The complete real-backend verifier-only
+  package also passes five library tests, those five integration tests, one
+  vendor-parity test, and two compile-fail documentation contracts. The browser
+  lanes pass one cleanup/KAT unit test, two KDF integration tests, and two
+  provider-policy tests with no ignored or filtered cases.
 - Linux strict lint also found that the signer agent's listener is mutable only
   for the Windows named-pipe implementation. The binding is now immutable on
   Unix and explicitly shadowed as mutable on Windows. The exact full-workspace
