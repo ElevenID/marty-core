@@ -451,6 +451,13 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             ".github/workflows/ci.yml: WASM security jobs require the exact "
             "approved workflow preamble"
         )
+    if jobs_header is not None and re.search(
+        r"^(?![ \t#\r\n])\S[^\r\n]*:\s*", contents[jobs_header.end() :], re.MULTILINE
+    ):
+        errors.append(
+            ".github/workflows/ci.yml: WASM security jobs forbid root mappings "
+            "after the canonical jobs key"
+        )
     if _workflow_env_block(contents) != WASM_SECURITY_WORKFLOW_ENV:
         errors.append(
             ".github/workflows/ci.yml: WASM security jobs require the exact "
