@@ -1,8 +1,8 @@
 # Cryptography audit follow-ups
 
 Status: implementation and executable regression matrix pass; isomdl and
-SD-JWT integrated with green post-merge CI; Longfellow reviewed with fully green
-protected CI; Longfellow and Marty integration pending
+SD-JWT integrated with green post-merge CI; Longfellow reviewed at `c4004b5`
+with ElevenID integration pending; Marty correction review and integration pending
 
 Recorded: 2026-09-07
 
@@ -21,8 +21,8 @@ The exact implementation heads entering final review are:
 | --- | --- | --- |
 | `isomdl-elevenid` | reviewed `784a52943469622873c7ae3200dbc11e89d6bd8e`; merged `8915a0357c78dc91ee15a41ccc0103a8b5afe97a` | versioned single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, strict public-point-only certificate decoding without curve private-key codecs, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
 | `sd-jwt-rust` | `82143d688355315f22297b40ca18050a94cd2525` | versioned cryptographically bound opaque remote completion, backend-free issuer planning, standalone signing-free verification provider, signing-free issuer-completion/holder/verifier graphs, holder/verifier confirmation-key policy across every serialization, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier, and locked interop generator; this permanent rebase-merge revision is tree-equivalent to reviewed head `200ad57a276d28c7108255235b34afea67f07d06` |
-| `longfellow-zk` | `58f6259c631a374a526b80f99222d03654883655` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; non-elidable OpenSSL PRF-wrapper teardown; executable sanitizer, unwind, allocation, vendor-parity, and production-random retry-verification regressions with complete public-statement binding |
-| `marty-core` | `fcbb6be90cf1a833e708667be2eadfe66ca4d090` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity including the non-elidable PRF teardown and current header-only CBOR decoder, checked-accessor CBOR validation with end-to-end accepted/rejected-value regressions, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, synchronized 0.2 release metadata, isolated lockfile updates, and permanent integrated fork pins |
+| `longfellow-zk` | `c4004b5edee8cbc4e2a76588c531f07994e3e7ab` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; non-elidable OpenSSL PRF-wrapper teardown; strict UTF-8, canonical CBOR lengths/scalars/wrappers, unambiguous map lookup, exact input consumption, semantic dates, overflow-safe lengths, and null rejection; executable sanitizer, unwind, allocation, vendor-parity, parser, real-proof, and production-random retry-verification regressions with complete public-statement binding |
+| `marty-core` | code checkpoint `3369d5b9d4aede9624a3e47a79217a810016992e` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity through `c4004b5`, direct native decoder/parser/proof/MSO tests, Cargo vendor-change invalidation, checked-accessor CBOR validation with end-to-end accepted/rejected-value regressions, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, synchronized 0.2 release metadata, isolated lockfile updates, and permanent integrated fork pins |
 
 The table records reviewed implementation heads and, where integration has
 completed, final ElevenID main revisions. Longfellow and Marty remain
@@ -206,7 +206,7 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  62-test release-contract suite exact-allowlists the workflow preamble, each
+  65-test release-contract suite exact-allowlists the workflow preamble, each
   audited Ubuntu job and its full top-level mapping, every action configuration,
   the full environment, each complete test step, and the final CI gate, including
   scripts, selectors, runner pins, checkout, gate needs, result bindings, and
@@ -224,7 +224,7 @@ different locations require fresh review rather than relying on this triage.
   boundary: audited `mdoc_witness.h` expected Longfellow's current
   `CborDoc` API, while the parity manifest had not pinned its header-only
   `cbor/host_decoder.h` dependency. The decoder is now synchronized from
-  Longfellow commit `58f6259` and included in executable source parity.
+  Longfellow commit `c4004b5` and included in executable source parity.
   Marty's local CBOR allowlist uses the decoder's checked public accessors, and
   two end-to-end verifier regressions exercise all supported scalar/date forms
   plus malformed, trailing, container, null, and unsupported-tag rejection. A
@@ -235,6 +235,16 @@ different locations require fresh review rather than relying on this triage.
   vendor-parity test, and two compile-fail documentation contracts. The browser
   lanes pass one cleanup/KAT unit test, two KDF integration tests, and two
   provider-policy tests with no ignored or filtered cases.
+- Synchronizing Marty's vendored Longfellow boundary exposed a build-cache gap:
+  Cargo watched only Marty's wrapper sources, so a changed vendored C++ parser
+  could reuse a stale native object. `build.rs` now watches the complete vendor
+  source directory and revision marker, and the parity test enforces that watch.
+  Marty's required CI builds and directly executes all four native binaries; the
+  release contract fails if any binary is removed or filtered. An isolated Linux
+  run passes all 36 native tests (12 decoder, 9 parser, 11 real ZK, 4 MSO), the
+  complete verifier package (5 library, 5 circuit/CBOR identity, 1 parity, and 2
+  compile-fail tests), and all 27 real-prover conformance tests with zero ignored
+  or filtered cases. Strict verifier linting passes with warnings denied.
 - Linux strict lint also found that the signer agent's listener is mutable only
   for the Windows named-pipe implementation. The binding is now immutable on
   Unix and explicitly shadowed as mutable on Windows. The exact full-workspace
