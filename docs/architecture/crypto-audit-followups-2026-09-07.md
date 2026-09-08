@@ -254,6 +254,19 @@ different locations require fresh review rather than relying on this triage.
   still requires the opaque session export. The complete bindings suite passes
   both configurations: 59 tests with the feature and 56 without it, with zero
   ignored or filtered cases.
+- The next exact-head affected test run rejected stale benchmark fixtures after
+  remote-signature verification became mandatory: mdoc correctness preflights
+  still supplied arbitrary 64-byte placeholders. All mdoc benchmark fixtures
+  now use a deterministic benchmark-only ES256 signer whose public JWK is bound
+  by a direct verification test. Mixed-format assembly benchmarks generate the
+  matching signatures during unmeasured setup, preserving stage isolation. A
+  functional assembly regression and exact call-site contract require every
+  opt-in mdoc evidence binary to use the tested signing helper. The mixed-format
+  stage uses an opaque signed-preparation wrapper, and its exact payload/sign/
+  assembly route is independently pinned. The seven
+  benchmark-support tests, the default and selected mdoc
+  payload matrices, and the default and selected JWT/SD-JWT/mdoc signing matrices
+  pass with no ignored, filtered, or zero-selected tests.
 - Linux strict lint also found that the signer agent's listener is mutable only
   for the Windows named-pipe implementation. The binding is now immutable on
   Unix and explicitly shadowed as mutable on Windows. The exact full-workspace

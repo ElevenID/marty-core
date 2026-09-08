@@ -3,6 +3,10 @@ mod selectors;
 use selectors::selector_values;
 #[path = "../src/benchmark_support/mdoc_payload.rs"]
 mod mdoc_payload;
+#[path = "support/remote_signature.rs"]
+mod remote_signature;
+#[path = "support/signed_preparation.rs"]
+mod signed_preparation;
 use mdoc_payload::{
     expected_cbor_value as matrix_expected_cbor_value, json_value as matrix_json_value,
     PayloadClass as MatrixPayloadClass, LARGE_PORTRAIT_BYTES,
@@ -17,7 +21,7 @@ use base64::Engine;
 use ciborium::Value as CborValue;
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use marty_oid4vci::{
-    formats::mdoc::{assemble_mdoc, PreparedMdoc},
+    formats::mdoc::PreparedMdoc,
     remote_credential::{
         prepare_remote_mdoc, prepare_remote_mdoc_batch, RemoteMdocBatchItem, RemoteMdocRequest,
     },
@@ -158,7 +162,7 @@ fn fixture_with_credential_id(item_count: usize, credential_id: &str) -> RemoteM
         issuer_id: "did:example:issuer".into(),
         verification_method_id: "did:example:issuer#key-1".into(),
         algorithm: "ES256".into(),
-        issuer_public_jwk: r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into(),
+        issuer_public_jwk: remote_signature::issuer_public_jwk().into(),
         credential_type: DOC_TYPE.into(),
         namespace: NAMESPACE.into(),
         claims,
@@ -195,7 +199,8 @@ fn assert_prepared(
     use isomdl::definitions::IssuerSigned;
 
     assert_eq!(prepared.credential_id(), credential_id);
-    let credential = assemble_mdoc(prepared, &[0xa5; 64]).expect("fixture must assemble");
+    let credential =
+        remote_signature::assemble_es256_mdoc(prepared).expect("fixture must assemble");
     let SignedCredential::MsoMdoc {
         issuer_signed_b64,
         credential_id,
@@ -394,7 +399,7 @@ fn matrix_request(
         verification_method_id: format!("{issuer_id}#key-1"),
         issuer_id,
         algorithm: "ES256".into(),
-        issuer_public_jwk: r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into(),
+        issuer_public_jwk: remote_signature::issuer_public_jwk().into(),
         credential_type: DOC_TYPE.into(),
         namespace: NAMESPACE.into(),
         claims,
@@ -467,7 +472,8 @@ fn assert_matrix_prepared(
     use isomdl::definitions::IssuerSigned;
 
     assert_eq!(prepared.credential_id(), expected_credential_id);
-    let credential = assemble_mdoc(prepared, &[0xa5; 64]).expect("matrix fixture must assemble");
+    let credential =
+        remote_signature::assemble_es256_mdoc(prepared).expect("matrix fixture must assemble");
     let SignedCredential::MsoMdoc {
         issuer_signed_b64,
         credential_id,

@@ -1,4 +1,6 @@
 mod es256_signing_matrix;
+#[path = "support/signed_preparation.rs"]
+mod signed_preparation;
 
 use std::{
     collections::HashMap,
@@ -37,6 +39,7 @@ use es256_signing_matrix::{
     expected_claim_names, expected_payload_value, matrix_claims, matrix_enabled, MatrixFormat,
     MatrixSelection, PayloadClass,
 };
+use signed_preparation::{PreparedAssembly, SignedPreparation};
 
 const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
 const WORKER_LIMIT: usize = 8;
@@ -312,6 +315,18 @@ impl BenchmarkPrepared {
             Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature).unwrap(),
             Self::Mdoc(prepared) => assemble_mdoc(*prepared, signature).unwrap(),
         }
+    }
+}
+
+impl PreparedAssembly for BenchmarkPrepared {
+    type Output = SignedCredential;
+
+    fn signing_payload(&self) -> &[u8] {
+        BenchmarkPrepared::signing_payload(self)
+    }
+
+    fn assemble(self, signature: &[u8]) -> Self::Output {
+        BenchmarkPrepared::assemble(self, signature)
     }
 }
 
@@ -901,12 +916,20 @@ fn benchmark_stages(c: &mut Criterion, group_name: &str, composition: BenchmarkC
                                 composition,
                                 claims_batch(composition, batch_size),
                             )
+                            .into_iter()
+                            .map(|prepared| {
+                                SignedPreparation::try_sign(prepared, |payload| {
+                                    signer.sign(payload)
+                                })
+                                .unwrap()
+                            })
+                            .collect::<Vec<_>>()
                         },
-                        |prepared| {
+                        |prepared_and_signatures| {
                             black_box(
-                                prepared
+                                prepared_and_signatures
                                     .into_iter()
-                                    .map(|prepared| prepared.assemble(&[0x5a; 64]))
+                                    .map(SignedPreparation::assemble)
                                     .collect::<Vec<_>>(),
                             )
                         },

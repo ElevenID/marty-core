@@ -8,8 +8,14 @@
 #[path = "../src/benchmark_support/mdoc_payload.rs"]
 mod mdoc_payload;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "support/remote_signature.rs"]
+mod remote_signature;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "../src/benchmark_support/selectors.rs"]
 mod selectors;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "support/signed_preparation.rs"]
+mod signed_preparation;
 #[cfg(not(target_family = "wasm"))]
 #[global_allocator]
 static ALLOCATOR: native::CountingAllocator = native::CountingAllocator;
@@ -30,6 +36,7 @@ mod native {
         expected_cbor_value as matrix_expected_cbor_value, json_value as matrix_json_value,
         PayloadClass, LARGE_PORTRAIT_BYTES,
     };
+    use crate::remote_signature;
     use crate::selectors::selector_values;
     use std::{
         alloc::{GlobalAlloc, Layout, System},
@@ -42,7 +49,7 @@ mod native {
     use base64::Engine;
     use ciborium::Value as CborValue;
     use marty_oid4vci::{
-        formats::mdoc::{assemble_mdoc, PreparedMdoc},
+        formats::mdoc::PreparedMdoc,
         remote_credential::{
             prepare_remote_mdoc, prepare_remote_mdoc_batch, RemoteMdocBatchItem, RemoteMdocRequest,
         },
@@ -441,7 +448,7 @@ mod native {
             verification_method_id: format!("{issuer_id}#key-1"),
             issuer_id,
             algorithm: "ES256".into(),
-            issuer_public_jwk: r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into(),
+            issuer_public_jwk: remote_signature::issuer_public_jwk().into(),
             credential_type: DOC_TYPE.into(),
             namespace: NAMESPACE.into(),
             claims,
@@ -521,7 +528,7 @@ mod native {
         use isomdl::definitions::IssuerSigned;
 
         assert_eq!(prepared.credential_id(), expected_credential_id);
-        let credential = assemble_mdoc(prepared, &[0xa5; 64])
+        let credential = remote_signature::assemble_es256_mdoc(prepared)
             .expect("allocation evidence fixture must assemble");
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,

@@ -2,13 +2,20 @@
 #[path = "../src/benchmark_support/mdoc_payload.rs"]
 mod mdoc_payload;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "support/remote_signature.rs"]
+mod remote_signature;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "../src/benchmark_support/selectors.rs"]
 mod selectors;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "support/signed_preparation.rs"]
+mod signed_preparation;
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use crate::mdoc_payload::{
         expected_cbor_value, json_value, PayloadClass, LARGE_PORTRAIT_BYTES,
     };
+    use crate::remote_signature;
     use crate::selectors::try_selector_values as selector_values;
     use std::{
         collections::{HashMap, HashSet},
@@ -21,7 +28,7 @@ mod native {
     use ciborium::Value as CborValue;
     use isomdl::definitions::IssuerSigned;
     use marty_oid4vci::{
-        formats::mdoc::{assemble_mdoc, PreparedMdoc},
+        formats::mdoc::PreparedMdoc,
         remote_credential::{prepare_remote_mdoc_batch, RemoteMdocBatchItem, RemoteMdocRequest},
         types::SignedCredential,
     };
@@ -267,7 +274,7 @@ mod native {
             verification_method_id: format!("{issuer_id}#key-1"),
             issuer_id,
             algorithm: "ES256".into(),
-            issuer_public_jwk: r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into(),
+            issuer_public_jwk: remote_signature::issuer_public_jwk().into(),
             credential_type: DOC_TYPE.into(),
             namespace: NAMESPACE.into(),
             claims,
@@ -333,7 +340,7 @@ mod native {
         prepared: PreparedMdoc,
     ) {
         assert_eq!(prepared.credential_id(), expected_credential_id);
-        let credential = assemble_mdoc(prepared, &[0xa5; 64])
+        let credential = remote_signature::assemble_es256_mdoc(prepared)
             .expect("tail-evidence fixture must assemble for preflight");
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
