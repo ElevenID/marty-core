@@ -334,6 +334,46 @@ WASM_SECURITY_JOB_PREAMBLES = {
     name: Crypto WASM Security
     runs-on: ubuntu-latest""",
 }
+WASM_SECURITY_TEST_STEPS = {
+    "oid4vci-wasm-security": (
+        """      - name: Test browser cryptographic provider policy
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: >-
+          cargo test --locked -p marty-oid4vci
+          --target wasm32-unknown-unknown
+          --no-default-features --features verifier
+          --test wasm_crypto_provider
+          -- --nocapture""",
+    ),
+    "crypto-wasm-security": (
+        """      - name: Test browser key derivation and cleanup
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: |
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --lib wasm_hmac_and_hkdf_match_kats_and_wipe_returned_error_state -- --nocapture
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture""",
+    ),
+}
+
+
+def _workflow_shell_injection_env(contents: str) -> str | None:
+    env_header = re.search(r"^env:\s*$", contents, re.MULTILINE)
+    if env_header is None:
+        return None
+    next_root_key = re.search(r"^[A-Za-z0-9_-]+:\s*", contents[env_header.end() :], re.MULTILINE)
+    env_end = (
+        env_header.end() + next_root_key.start()
+        if next_root_key is not None
+        else len(contents)
+    )
+    env_block = contents[env_header.end() : env_end]
+    dangerous = re.search(
+        r"^  (BASH_ENV|ENV|PATH|CARGO|RUSTC|RUSTUP_HOME|CARGO_HOME|SHELLOPTS):",
+        env_block,
+        re.MULTILINE,
+    )
+    return dangerous.group(1) if dangerous is not None else None
 
 
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
@@ -356,6 +396,12 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba"
     )
     errors: list[str] = []
+    shell_injection_env = _workflow_shell_injection_env(contents)
+    if shell_injection_env is not None:
+        errors.append(
+            ".github/workflows/ci.yml: WASM security jobs must not inherit "
+            f"workflow shell-injection variable {shell_injection_env}"
+        )
     if re.search(
         rf"^{_yaml_step_key_pattern('defaults')}\s*", contents, re.MULTILINE
     ):
@@ -452,6 +498,14 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         cargo_test_indices = [
             index for index, step in enumerate(steps) if _step_runs_cargo_test(step)
         ]
+        observed_test_steps = tuple(
+            _normalized_step(steps[index]) for index in cargo_test_indices
+        )
+        if observed_test_steps != WASM_SECURITY_TEST_STEPS[job]:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use its exact approved "
+                "test-step configuration"
+            )
         installer_index = next(
             (
                 index

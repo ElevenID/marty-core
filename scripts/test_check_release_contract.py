@@ -557,6 +557,36 @@ class NativeBuildCacheContractTests(unittest.TestCase):
                     any("exact approved job configuration" in error for error in errors)
                 )
 
+    def test_rejects_shell_injection_environment_overrides(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        runner = (
+            "          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: "
+            "wasm-bindgen-test-runner\n"
+        )
+        self.assertEqual(workflow.count(runner), 2)
+        step_override = workflow.replace(
+            runner, runner + "          BASH_ENV: .github/noop-cargo.sh\n", 1
+        )
+        step_errors = check_release_contract.check_wasm_security_cache_setup(
+            step_override
+        )
+        self.assertTrue(
+            any("exact approved test-step configuration" in error for error in step_errors)
+        )
+
+        self.assertEqual(workflow.count("\nenv:\n"), 1)
+        workflow_override = workflow.replace(
+            "\nenv:\n", "\nenv:\n  BASH_ENV: .github/noop-cargo.sh\n", 1
+        )
+        workflow_errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow_override
+        )
+        self.assertTrue(
+            any("workflow shell-injection variable BASH_ENV" in error for error in workflow_errors)
+        )
+
     def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
