@@ -147,6 +147,38 @@ def check_native_build_cache_scope(workflow_text: str | None = None) -> list[str
     return []
 
 
+def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
+    contents = (
+        workflow_text
+        if workflow_text is not None
+        else (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    job_header = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.MULTILINE)
+    matches = list(job_header.finditer(contents))
+    blocks = {
+        match.group(1): contents[
+            match.start() : matches[index + 1].start()
+            if index + 1 < len(matches)
+            else len(contents)
+        ]
+        for index, match in enumerate(matches)
+    }
+    pinned_sccache = (
+        "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba"
+    )
+    errors: list[str] = []
+    for job in ("oid4vci-wasm-security", "crypto-wasm-security"):
+        block = blocks.get(job)
+        if block is None:
+            errors.append(f".github/workflows/ci.yml: missing required {job} job")
+        elif pinned_sccache not in block:
+            errors.append(
+                f".github/workflows/ci.yml: {job} inherits RUSTC_WRAPPER=sccache "
+                "without installing pinned sccache"
+            )
+    return errors
+
+
 def check_release_checksum_policy(workflow_text: str | None = None) -> list[str]:
     contents = (
         workflow_text
@@ -347,6 +379,7 @@ def main() -> int:
         *check_python_versions(),
         *check_release_asset_policy(),
         *check_native_build_cache_scope(),
+        *check_wasm_security_cache_setup(),
         *check_release_checksum_policy(),
         *check_stable_tag_gate(),
         *check_capability_lifecycle(),
@@ -362,6 +395,7 @@ def main() -> int:
     print(f"release-contract: Cargo-derived Python versions verified ({resolved})")
     print("release-contract: workflows contain no release-asset deletion operations")
     print("release-contract: Cargo target caches are platform and toolchain scoped")
+    print("release-contract: WASM security jobs provide their configured Rust wrapper")
     print(
         "release-contract: checksum manifest excludes itself and verifies listed assets"
     )

@@ -115,6 +115,25 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_native_build_cache_scope(workflow)
         self.assertTrue(any("missing a pinned sccache" in error for error in errors))
 
+    def test_checked_in_wasm_security_jobs_provide_sccache(self) -> None:
+        self.assertEqual(check_release_contract.check_wasm_security_cache_setup(), [])
+
+    def test_rejects_wasm_security_job_with_missing_rust_wrapper(self) -> None:
+        pinned = (
+            "mozilla-actions/sccache-action@"
+            "fc920bf0ec8de6ee65d409111f7ec508035751ba"
+        )
+        workflow = f"""jobs:
+  oid4vci-wasm-security:
+    steps:
+      - uses: {pinned}
+  crypto-wasm-security:
+    steps:
+      - run: cargo test --target wasm32-unknown-unknown
+"""
+        errors = check_release_contract.check_wasm_security_cache_setup(workflow)
+        self.assertTrue(any("crypto-wasm-security inherits" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()
