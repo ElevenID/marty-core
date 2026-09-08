@@ -739,6 +739,48 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_wasm_security_cache_setup(mutated)
         self.assertTrue(any("exact top-level job mapping" in error for error in errors))
 
+    def test_rejects_missing_wasm_gate_assertions(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        assertions = (
+            '          test "$OID4VCI_WASM_SECURITY" = success\n'
+            '          test "$CRYPTO_WASM_SECURITY" = success\n'
+        )
+        self.assertEqual(workflow.count(assertions), 1)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(assertions, "", 1)
+        )
+        self.assertTrue(any("ci-gate must use its exact approved" in error for error in errors))
+
+    def test_rejects_missing_wasm_gate_needs(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        needs = (
+            "      - oid4vci-wasm-security\n"
+            "      - crypto-wasm-security\n"
+        )
+        self.assertEqual(workflow.count(needs), 1)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(needs, "", 1)
+        )
+        self.assertTrue(any("ci-gate must use its exact approved" in error for error in errors))
+
+    def test_rejects_missing_wasm_gate_result_bindings(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        bindings = (
+            "      OID4VCI_WASM_SECURITY: ${{ needs.oid4vci-wasm-security.result }}\n"
+            "      CRYPTO_WASM_SECURITY: ${{ needs.crypto-wasm-security.result }}\n"
+        )
+        self.assertEqual(workflow.count(bindings), 1)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(bindings, "", 1)
+        )
+        self.assertTrue(any("ci-gate must use its exact approved" in error for error in errors))
+
     def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -367,6 +368,7 @@ WASM_SECURITY_TEST_STEPS = {
           cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture""",
     ),
 }
+CI_GATE_SHA256 = "b27d57803fcafb19cf4171fb39101a8fd4cc27bd34de9d57c225b02b4bd46895"
 WASM_SECURITY_WORKFLOW_ENV = """env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -686,6 +688,20 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                         f".github/workflows/ci.yml: {job} cargo test commands "
                         "must directly enforce their exit status"
                     )
+    if sum(match.group(1) == "ci-gate" for match in matches) != 1:
+        errors.append(".github/workflows/ci.yml: ci-gate must appear exactly once")
+    ci_gate = blocks.get("ci-gate")
+    if ci_gate is None:
+        errors.append(".github/workflows/ci.yml: missing required ci-gate job")
+    else:
+        gate_digest = hashlib.sha256(
+            _normalized_step(ci_gate).encode("utf-8")
+        ).hexdigest()
+        if gate_digest != CI_GATE_SHA256:
+            errors.append(
+                ".github/workflows/ci.yml: ci-gate must use its exact approved "
+                "needs, result bindings, permissions, and assertions"
+            )
     return errors
 
 
