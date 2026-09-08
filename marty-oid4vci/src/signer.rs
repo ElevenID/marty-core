@@ -95,12 +95,12 @@ fn validate_public_key_for_algorithm(algorithm: SigningAlgorithm, jwk: &JWK) -> 
         (SigningAlgorithm::ES256, Params::EC(params))
             if params.curve.as_deref() == Some("P-256") =>
         {
-            p256::ecdsa::VerifyingKey::from_sec1_bytes(&ec_public_key(params, 32)?).is_ok()
+            p256::PublicKey::from_sec1_bytes(&ec_public_key(params, 32)?).is_ok()
         }
         (SigningAlgorithm::ES384, Params::EC(params))
             if params.curve.as_deref() == Some("P-384") =>
         {
-            p384::ecdsa::VerifyingKey::from_sec1_bytes(&ec_public_key(params, 48)?).is_ok()
+            p384::PublicKey::from_sec1_bytes(&ec_public_key(params, 48)?).is_ok()
         }
         (SigningAlgorithm::ES256K, Params::EC(params))
             if params.curve.as_deref() == Some("secp256k1") =>
@@ -141,26 +141,46 @@ pub(crate) fn verify_remote_signature(
         (SigningAlgorithm::ES256, Params::EC(params))
             if params.curve.as_deref() == Some("P-256") =>
         {
-            let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(&ec_public_key(params, 32)?)
-                .map_err(|error| {
+            use sha2::Digest as _;
+
+            let key =
+                p256::PublicKey::from_sec1_bytes(&ec_public_key(params, 32)?).map_err(|error| {
                     Oid4vciError::KeyError(format!("Invalid P-256 issuer public key: {error}"))
                 })?;
             let signature = p256::ecdsa::Signature::from_slice(signature).map_err(|error| {
                 Oid4vciError::SigningError(format!("Invalid ES256 signature: {error}"))
             })?;
-            p256::ecdsa::signature::Verifier::verify(&key, message, &signature).is_ok()
+            let digest = sha2::Sha256::digest(message);
+            let z = ecdsa_core::hazmat::bits2field::<p256::NistP256>(&digest).map_err(|error| {
+                Oid4vciError::SigningError(format!(
+                    "Could not prepare ES256 signature digest: {error}"
+                ))
+            })?;
+            let public_point = p256::ProjectivePoint::from(*key.as_affine());
+            ecdsa_core::hazmat::verify_prehashed::<p256::NistP256>(&public_point, &z, &signature)
+                .is_ok()
         }
         (SigningAlgorithm::ES384, Params::EC(params))
             if params.curve.as_deref() == Some("P-384") =>
         {
-            let key = p384::ecdsa::VerifyingKey::from_sec1_bytes(&ec_public_key(params, 48)?)
-                .map_err(|error| {
+            use sha2::Digest as _;
+
+            let key =
+                p384::PublicKey::from_sec1_bytes(&ec_public_key(params, 48)?).map_err(|error| {
                     Oid4vciError::KeyError(format!("Invalid P-384 issuer public key: {error}"))
                 })?;
             let signature = p384::ecdsa::Signature::from_slice(signature).map_err(|error| {
                 Oid4vciError::SigningError(format!("Invalid ES384 signature: {error}"))
             })?;
-            p384::ecdsa::signature::Verifier::verify(&key, message, &signature).is_ok()
+            let digest = sha2::Sha384::digest(message);
+            let z = ecdsa_core::hazmat::bits2field::<p384::NistP384>(&digest).map_err(|error| {
+                Oid4vciError::SigningError(format!(
+                    "Could not prepare ES384 signature digest: {error}"
+                ))
+            })?;
+            let public_point = p384::ProjectivePoint::from(*key.as_affine());
+            ecdsa_core::hazmat::verify_prehashed::<p384::NistP384>(&public_point, &z, &signature)
+                .is_ok()
         }
         (SigningAlgorithm::ES256K, Params::EC(params))
             if params.curve.as_deref() == Some("secp256k1") =>

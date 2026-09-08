@@ -82,8 +82,8 @@ jobs:
             printf '%s\n%s\n' "$kms_ecdsa_verification_tree" "$kms_issuer_tree"
             exit 1
           fi
-          if grep -Eq '(^| )pkcs5( |$)|pkcs5 feature "pbes2"|(p256|p384|p521) feature "(default|ecdsa|ecdh|pem|pkcs8)"|ed25519-dalek feature "(default|rand_core|pem|pkcs8)"|cms feature "builder"|x509-cert feature "builder"|pkcs8 feature "encryption"' <<<"$kms_public_tree$kms_didcomm_public_tree"; then
-            printf '%s\n%s\n' "$kms_public_tree" "$kms_didcomm_public_tree"
+          if grep -Eq '(^| )pkcs5( |$)|pkcs5 feature "pbes2"|(p256|p384|p521) feature "(default|ecdsa|ecdh|pem|pkcs8)"|ed25519-dalek feature "(default|rand_core|pem|pkcs8)"|cms feature "builder"|x509-cert feature "builder"|pkcs8 feature "encryption"' <<<"$kms_public_tree$kms_didcomm_public_tree$kms_issuer_tree"; then
+            printf '%s\n%s\n%s\n' "$kms_public_tree" "$kms_didcomm_public_tree" "$kms_issuer_tree"
             exit 1
           fi
       - name: Run clippy
@@ -387,8 +387,8 @@ jobs:
             printf '%s\n%s\n' "$kms_ecdsa_verification_tree" "$kms_issuer_tree"
             exit 1
           fi
-          if grep -Eq '(^| )pkcs5( |$)|pkcs5 feature "pbes2"|(p256|p384|p521) feature "(default|ecdsa|ecdh|pem|pkcs8)"|ed25519-dalek feature "(default|rand_core|pem|pkcs8)"|cms feature "builder"|x509-cert feature "builder"|pkcs8 feature "encryption"' <<<"$kms_public_tree$kms_didcomm_public_tree"; then
-            printf '%s\n%s\n' "$kms_public_tree" "$kms_didcomm_public_tree"
+          if grep -Eq '(^| )pkcs5( |$)|pkcs5 feature "pbes2"|(p256|p384|p521) feature "(default|ecdsa|ecdh|pem|pkcs8)"|ed25519-dalek feature "(default|rand_core|pem|pkcs8)"|cms feature "builder"|x509-cert feature "builder"|pkcs8 feature "encryption"' <<<"$kms_public_tree$kms_didcomm_public_tree$kms_issuer_tree"; then
+            printf '%s\n%s\n%s\n' "$kms_public_tree" "$kms_didcomm_public_tree" "$kms_issuer_tree"
             exit 1
           fi
           for package in marty-verification marty-bindings; do

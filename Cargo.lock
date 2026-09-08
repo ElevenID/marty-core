@@ -2885,7 +2885,7 @@ dependencies = [
 [[package]]
 name = "isomdl"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=737eef8a0d25aed465b26bb29a7d14d0fa89a6cd#737eef8a0d25aed465b26bb29a7d14d0fa89a6cd"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=3be9a784dc793684fd7f48f8db09c531ee56b5b5#3be9a784dc793684fd7f48f8db09c531ee56b5b5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2933,7 +2933,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=737eef8a0d25aed465b26bb29a7d14d0fa89a6cd#737eef8a0d25aed465b26bb29a7d14d0fa89a6cd"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=3be9a784dc793684fd7f48f8db09c531ee56b5b5#3be9a784dc793684fd7f48f8db09c531ee56b5b5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3923,6 +3923,7 @@ dependencies = [
  "coset",
  "criterion",
  "curve25519-dalek",
+ "ecdsa",
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
@@ -5914,11 +5915,12 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=154a6acbf2ada536a5670e9c932f5cf4d0a9a92c#154a6acbf2ada536a5670e9c932f5cf4d0a9a92c"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=3f4e283d0e1319eb78d77ad390eb4273ae8fef2d#3f4e283d0e1319eb78d77ad390eb4273ae8fef2d"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",
  "curve25519-dalek",
+ "ecdsa",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "jsonwebtoken",

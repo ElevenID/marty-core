@@ -1,6 +1,7 @@
 //! Fixed-vector characterization for the verifier-only feature surface.
 
 use marty_crypto::{ecdsa, ed25519};
+use pkcs8::EncodePublicKey;
 use signature::Signer;
 
 fn hex(value: &str) -> Vec<u8> {
@@ -128,4 +129,150 @@ fn verifier_rejects_cross_curve_signature_confusion() {
         !ecdsa::verify_p384_sha384(&p384_public, message, p256_signature.as_bytes())
             .unwrap_or(false)
     );
+}
+
+#[test]
+fn verification_only_build_accepts_public_spki_for_every_ec_family() {
+    let message = b"public-only SPKI verification";
+
+    let p256_key = p256::ecdsa::SigningKey::from_slice(&[7; 32]).expect("valid P-256 scalar");
+    let p256_signature: p256::ecdsa::Signature = p256_key.sign(message);
+    let p256_spki = p256_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("P-256 SPKI");
+    assert!(
+        ecdsa::verify_p256_sha256(p256_spki.as_bytes(), message, &p256_signature.to_bytes())
+            .expect("P-256 SPKI verification")
+    );
+
+    let p384_key = p384::ecdsa::SigningKey::from_slice(&[8; 48]).expect("valid P-384 scalar");
+    let p384_signature: p384::ecdsa::Signature = p384_key.sign(message);
+    let p384_spki = p384_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("P-384 SPKI");
+    assert!(
+        ecdsa::verify_p384_sha384(p384_spki.as_bytes(), message, &p384_signature.to_bytes())
+            .expect("P-384 SPKI verification")
+    );
+
+    let mut p521_scalar = [0u8; 66];
+    p521_scalar[65] = 9;
+    let p521_key = p521::ecdsa::SigningKey::from_slice(&p521_scalar).expect("valid P-521 scalar");
+    let p521_signature: p521::ecdsa::Signature = p521_key.sign(message);
+    let p521_verifying_key = p521::ecdsa::VerifyingKey::from(&p521_key);
+    let p521_point = p521_verifying_key.to_encoded_point(false);
+    let p521_spki = {
+        use der::{asn1::BitString, Decode, Encode};
+        use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
+
+        let curve_parameters = der::Any::from_der(
+            &const_oid::db::rfc5912::SECP_521_R_1
+                .to_der()
+                .expect("P-521 OID DER"),
+        )
+        .expect("P-521 OID as ANY");
+        SubjectPublicKeyInfoOwned {
+            algorithm: AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5912::ID_EC_PUBLIC_KEY,
+                parameters: Some(curve_parameters),
+            },
+            subject_public_key: BitString::from_bytes(p521_point.as_bytes())
+                .expect("P-521 point bit string"),
+        }
+        .to_der()
+        .expect("P-521 SPKI")
+    };
+    assert!(
+        ecdsa::verify_p521_sha512(&p521_spki, message, &p521_signature.to_bytes())
+            .expect("P-521 SPKI verification")
+    );
+
+    let ed25519_key = ed25519_dalek::SigningKey::from_bytes(&[10; 32]);
+    let ed25519_signature: ed25519_dalek::Signature = ed25519_key.sign(message);
+    let ed25519_spki = ed25519_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("Ed25519 SPKI");
+    assert!(ed25519::verify_ed25519_spki(
+        ed25519_spki.as_bytes(),
+        message,
+        &ed25519_signature.to_bytes(),
+    )
+    .expect("Ed25519 SPKI verification"));
+}
+
+#[test]
+fn ecdsa_spki_rejects_a_mismatched_named_curve_identifier() {
+    use der::{Decode, Encode};
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let key = p256::ecdsa::SigningKey::from_slice(&[11; 32]).expect("valid P-256 scalar");
+    let spki = key.verifying_key().to_public_key_der().expect("P-256 SPKI");
+    let mut wrong_curve =
+        SubjectPublicKeyInfoOwned::from_der(spki.as_bytes()).expect("decode test SPKI");
+    wrong_curve.algorithm.parameters = Some(
+        der::Any::from_der(
+            &const_oid::db::rfc5912::SECP_384_R_1
+                .to_der()
+                .expect("curve OID DER"),
+        )
+        .expect("curve OID as ANY"),
+    );
+    let wrong_curve = wrong_curve.to_der().expect("encode wrong-curve SPKI");
+    let signature: p256::ecdsa::Signature = key.sign(b"curve binding");
+    let error = ecdsa::verify_p256_sha256(&wrong_curve, b"curve binding", &signature.to_bytes())
+        .expect_err("mismatched named curve must fail before verification");
+    assert!(error.to_string().contains("unexpected named curve"));
+}
+
+#[test]
+fn public_spki_rejects_invalid_algorithm_identifiers() {
+    use der::{Decode, Encode};
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let p256_key = p256::ecdsa::SigningKey::from_slice(&[12; 32]).expect("valid P-256 scalar");
+    let p256_spki = p256_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("P-256 SPKI");
+    let mut wrong_algorithm =
+        SubjectPublicKeyInfoOwned::from_der(p256_spki.as_bytes()).expect("decode P-256 SPKI");
+    wrong_algorithm.algorithm.oid = const_oid::db::rfc8410::ID_ED_25519;
+    wrong_algorithm.algorithm.parameters = None;
+    let wrong_algorithm = wrong_algorithm
+        .to_der()
+        .expect("encode wrong-algorithm SPKI");
+    let p256_signature: p256::ecdsa::Signature = p256_key.sign(b"algorithm binding");
+    let p256_error = ecdsa::verify_p256_sha256(
+        &wrong_algorithm,
+        b"algorithm binding",
+        &p256_signature.to_bytes(),
+    )
+    .expect_err("non-EC algorithm identifier must be rejected");
+    assert!(p256_error.to_string().contains("not id-ecPublicKey"));
+
+    let ed25519_key = ed25519_dalek::SigningKey::from_bytes(&[13; 32]);
+    let ed25519_spki = ed25519_key
+        .verifying_key()
+        .to_public_key_der()
+        .expect("Ed25519 SPKI");
+    let mut parameters_present =
+        SubjectPublicKeyInfoOwned::from_der(ed25519_spki.as_bytes()).expect("decode Ed25519 SPKI");
+    parameters_present.algorithm.parameters =
+        Some(der::Any::from_der(&[0x05, 0x00]).expect("DER NULL"));
+    let parameters_present = parameters_present
+        .to_der()
+        .expect("encode parameterized Ed25519 SPKI");
+    let ed25519_signature: ed25519_dalek::Signature = ed25519_key.sign(b"algorithm binding");
+    let ed25519_error = ed25519::verify_ed25519_spki(
+        &parameters_present,
+        b"algorithm binding",
+        &ed25519_signature.to_bytes(),
+    )
+    .expect_err("RFC 8410 forbids Ed25519 algorithm parameters");
+    assert!(ed25519_error
+        .to_string()
+        .contains("Invalid Ed25519 SPKI algorithm identifier"));
 }

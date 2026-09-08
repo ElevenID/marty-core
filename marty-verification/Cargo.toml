@@ -119,7 +119,7 @@ quick-xml = { version = "0.41", features = ["serialize"], optional = true }
 pyo3 = { workspace = true, optional = true }
 
 # mDoc/mDL support
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "737eef8a0d25aed465b26bb29a7d14d0fa89a6cd", default-features = false, features = ["presentation-verifier"] }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "3be9a784dc793684fd7f48f8db09c531ee56b5b5", default-features = false, features = ["presentation-verifier"] }
 coset = "0.3.8"
 time = { version = "0.3", features = ["formatting"] }
 hex = "0.4"

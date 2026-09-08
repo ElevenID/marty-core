@@ -24,7 +24,7 @@ issuer = [
     "p256/ecdsa-core",
     "p384/ecdsa-core",
 ] # OID4VCI issuer preparation and remote-signature assembly support
-verifier = [] # OID4VP signature verification support; backend is verification-only and always available
+verifier = ["sd-jwt-rs/verifier"] # OID4VP signature verification support
 wallet = ["dep:reqwest", "dep:tokio", "sd_jwt", "sd-jwt-rs/holder", "verifier"]  # OID4VCI/OID4VP wallet/holder support; signing is delegated
 lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
 jwt_vc_json = []    # W3C VC-JWT credential format
@@ -42,11 +42,11 @@ serde_json = { workspace = true }
 
 # Crypto and signing
 ssi-jwk = { version = "0.4.0", default-features = false }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "154a6acbf2ada536a5670e9c932f5cf4d0a9a92c", default-features = false, features = ["verifier"] }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "3f4e283d0e1319eb78d77ad390eb4273ae8fef2d", default-features = false }
 jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "737eef8a0d25aed465b26bb29a7d14d0fa89a6cd", default-features = false, optional = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "3be9a784dc793684fd7f48f8db09c531ee56b5b5", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -56,6 +56,7 @@ base64 = { workspace = true }
 # Key management
 p256 = { workspace = true, features = ["arithmetic"] }
 p384 = { workspace = true, features = ["arithmetic"] }
+ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, features = ["verifying"] }
 k256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa-core", "sha256"] }
 curve25519-dalek = "4.1"
 ed25519-dalek = { workspace = true }
@@ -80,8 +81,8 @@ reqwest = { version = "0.13", default-features = false, features = ["form", "jso
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "737eef8a0d25aed465b26bb29a7d14d0fa89a6cd" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "154a6acbf2ada536a5670e9c932f5cf4d0a9a92c" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "3be9a784dc793684fd7f48f8db09c531ee56b5b5" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "3f4e283d0e1319eb78d77ad390eb4273ae8fef2d" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "sha256"] }

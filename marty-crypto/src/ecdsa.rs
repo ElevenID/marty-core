@@ -190,19 +190,19 @@ pub fn verify_p256_sha256(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    // Try to parse as SubjectPublicKeyInfo
-    let public_key = p256::PublicKey::from_sec1_bytes(public_key_der)
-        .or_else(|_| {
-            // Try parsing as full SPKI
-            use elliptic_curve::pkcs8::DecodePublicKey;
-            p256::PublicKey::from_public_key_der(public_key_der)
-        })
-        .map_err(|e| {
-            CryptoError::invalid_signature_with_context(
-                "ECDSA P-256",
-                format!("Invalid public key: {}", e),
-            )
-        })?;
+    let public_key = match p256::PublicKey::from_sec1_bytes(public_key_der) {
+        Ok(public_key) => public_key,
+        Err(_) => {
+            let point =
+                extract_named_curve_point(public_key_der, const_oid::db::rfc5912::SECP_256_R_1)?;
+            p256::PublicKey::from_sec1_bytes(&point).map_err(|e| {
+                CryptoError::invalid_signature_with_context(
+                    "ECDSA P-256",
+                    format!("Invalid public key: {e}"),
+                )
+            })?
+        }
+    };
 
     // Try DER-encoded signature first, then raw format
     let sig = P256Signature::from_der(signature)
@@ -241,19 +241,19 @@ pub fn verify_p384_sha384(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    // Try to parse as SEC1 bytes first
-    let public_key = p384::PublicKey::from_sec1_bytes(public_key_der)
-        .or_else(|_| {
-            // Try parsing as full SPKI
-            use elliptic_curve::pkcs8::DecodePublicKey;
-            p384::PublicKey::from_public_key_der(public_key_der)
-        })
-        .map_err(|e| {
-            CryptoError::invalid_signature_with_context(
-                "ECDSA P-384",
-                format!("Invalid public key: {}", e),
-            )
-        })?;
+    let public_key = match p384::PublicKey::from_sec1_bytes(public_key_der) {
+        Ok(public_key) => public_key,
+        Err(_) => {
+            let point =
+                extract_named_curve_point(public_key_der, const_oid::db::rfc5912::SECP_384_R_1)?;
+            p384::PublicKey::from_sec1_bytes(&point).map_err(|e| {
+                CryptoError::invalid_signature_with_context(
+                    "ECDSA P-384",
+                    format!("Invalid public key: {e}"),
+                )
+            })?
+        }
+    };
 
     // Try DER-encoded signature first, then raw format
     let sig = P384Signature::from_der(signature)
@@ -292,24 +292,19 @@ pub fn verify_p521_sha512(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    // Try to parse as SEC1 bytes first
-    let public_key = p521::PublicKey::from_sec1_bytes(public_key_der)
-        .or_else(|_| {
-            // Try parsing as full SPKI - extract the raw public key bytes
-            use der::Decode;
-            use x509_cert::spki::SubjectPublicKeyInfoOwned;
-
-            let spki = SubjectPublicKeyInfoOwned::from_der(public_key_der)
-                .map_err(|_| elliptic_curve::Error)?;
-            let raw_bytes = spki.subject_public_key.raw_bytes();
-            p521::PublicKey::from_sec1_bytes(raw_bytes)
-        })
-        .map_err(|e| {
-            CryptoError::invalid_signature_with_context(
-                "ECDSA P-521",
-                format!("Invalid public key: {}", e),
-            )
-        })?;
+    let public_key = match p521::PublicKey::from_sec1_bytes(public_key_der) {
+        Ok(public_key) => public_key,
+        Err(_) => {
+            let point =
+                extract_named_curve_point(public_key_der, const_oid::db::rfc5912::SECP_521_R_1)?;
+            p521::PublicKey::from_sec1_bytes(&point).map_err(|e| {
+                CryptoError::invalid_signature_with_context(
+                    "ECDSA P-521",
+                    format!("Invalid public key: {e}"),
+                )
+            })?
+        }
+    };
 
     // Try DER-encoded signature first, then raw format
     let sig = P521Signature::from_der(signature)
@@ -342,6 +337,35 @@ pub fn extract_ec_point_from_spki(spki_der: &[u8]) -> CryptoResult<Vec<u8>> {
     let spki = SubjectPublicKeyInfoOwned::from_der(spki_der)
         .map_err(|e| CryptoError::der_error(format!("Failed to parse SPKI: {}", e)))?;
 
+    Ok(spki.subject_public_key.raw_bytes().to_vec())
+}
+
+fn extract_named_curve_point(
+    spki_der: &[u8],
+    expected_curve: const_oid::ObjectIdentifier,
+) -> CryptoResult<Vec<u8>> {
+    use der::Decode;
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let spki = SubjectPublicKeyInfoOwned::from_der(spki_der)
+        .map_err(|e| CryptoError::der_error(format!("Failed to parse SPKI: {e}")))?;
+    if spki.algorithm.oid != const_oid::db::rfc5912::ID_EC_PUBLIC_KEY {
+        return Err(CryptoError::invalid_signature(
+            "ECDSA public key algorithm is not id-ecPublicKey",
+        ));
+    }
+    let curve = spki
+        .algorithm
+        .parameters
+        .as_ref()
+        .ok_or_else(|| CryptoError::invalid_signature("ECDSA named-curve parameters are missing"))?
+        .decode_as::<const_oid::ObjectIdentifier>()
+        .map_err(|_| CryptoError::invalid_signature("ECDSA named-curve parameters are invalid"))?;
+    if curve != expected_curve {
+        return Err(CryptoError::invalid_signature(
+            "ECDSA public key uses an unexpected named curve",
+        ));
+    }
     Ok(spki.subject_public_key.raw_bytes().to_vec())
 }
 
