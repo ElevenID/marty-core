@@ -206,9 +206,10 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  22-test release-contract suite rejects missing, conditional, commented, late, or
-  shell-block cache-action lookalikes, including equivalent quoted or spaced YAML
-  keys, while ignoring commented Cargo text. The real Linux ZKP build also
+  28-test release-contract suite rejects missing, conditional, commented, late, or
+  shell-block cache-action lookalikes; rejects conditional jobs/tests and escaped
+  YAML keys; and requires a direct, failure-enforcing Cargo test while ignoring
+  commented or echoed Cargo text. The real Linux ZKP build also
   detected an incomplete Longfellow algebra sync: `fp24.h` and
   `fp_generic.h` used the audited base-aware `digit` API while `nat.h` and
   `nat.cc` retained the old signature. The exact audited `nat` pair is now
