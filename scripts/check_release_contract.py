@@ -426,8 +426,24 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         if workflow_text is not None
         else (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
+    errors: list[str] = []
+    jobs_header = re.search(r"^jobs:\s*$", contents, re.MULTILINE)
     job_header = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.MULTILINE)
     matches = list(job_header.finditer(contents))
+    if jobs_header is not None:
+        noncanonical_job_keys = [
+            line
+            for line in contents[jobs_header.end() :].splitlines()
+            if line.startswith("  ")
+            and not line.startswith("    ")
+            and line[2:].strip()
+            and not line[2:].lstrip().startswith("#")
+            and re.fullmatch(r"[A-Za-z0-9_-]+:\s*", line[2:]) is None
+        ]
+        if noncanonical_job_keys:
+            errors.append(
+                ".github/workflows/ci.yml: jobs must use canonical plain block keys"
+            )
     blocks = {
         match.group(1): contents[
             match.start() : matches[index + 1].start()
@@ -439,8 +455,6 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
     pinned_sccache = (
         "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba"
     )
-    errors: list[str] = []
-    jobs_header = re.search(r"^jobs:\s*$", contents, re.MULTILINE)
     workflow_prefix = (
         _normalized_step(contents[: jobs_header.start()])
         if jobs_header is not None
@@ -477,6 +491,10 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             "failure-enforcing workflow default shell"
         )
     for job in ("oid4vci-wasm-security", "crypto-wasm-security"):
+        if sum(match.group(1) == job for match in matches) != 1:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must appear exactly once"
+            )
         block = blocks.get(job)
         if block is None:
             errors.append(f".github/workflows/ci.yml: missing required {job} job")

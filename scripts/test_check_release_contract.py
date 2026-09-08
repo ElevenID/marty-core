@@ -684,6 +684,33 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_wasm_security_cache_setup(mutated)
         self.assertTrue(any("forbid root mappings" in error for error in errors))
 
+    def test_rejects_quoted_duplicate_audited_job(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = workflow + "\n  \"oid4vci-wasm-security\":\n    runs-on: ubuntu-latest\n"
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("canonical plain block keys" in error for error in errors))
+
+    def test_rejects_explicit_duplicate_audited_job(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = (
+            workflow
+            + "\n  ? crypto-wasm-security\n  :\n    runs-on: ubuntu-latest\n"
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("canonical plain block keys" in error for error in errors))
+
+    def test_rejects_plain_duplicate_audited_job(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = workflow + "\n  crypto-wasm-security:\n    runs-on: ubuntu-latest\n"
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("must appear exactly once" in error for error in errors))
+
     def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
