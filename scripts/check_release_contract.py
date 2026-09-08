@@ -334,6 +334,18 @@ WASM_SECURITY_JOB_PREAMBLES = {
     name: Crypto WASM Security
     runs-on: ubuntu-latest""",
 }
+WASM_SECURITY_JOB_PROPERTIES = {
+    "oid4vci-wasm-security": (
+        "name: OID4VCI WASM Security",
+        "runs-on: ubuntu-latest",
+        "steps:",
+    ),
+    "crypto-wasm-security": (
+        "name: Crypto WASM Security",
+        "runs-on: ubuntu-latest",
+        "steps:",
+    ),
+}
 WASM_SECURITY_TEST_STEPS = {
     "oid4vci-wasm-security": (
         """      - name: Test browser cryptographic provider policy
@@ -513,6 +525,19 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             errors.append(
                 f".github/workflows/ci.yml: {job} must use its exact approved "
                 "job configuration"
+            )
+        job_properties = tuple(
+            line.strip()
+            for line in block.splitlines()
+            if line.startswith("    ")
+            and not line.startswith("     ")
+            and line.strip()
+            and not line.lstrip().startswith("#")
+        )
+        if job_properties != WASM_SECURITY_JOB_PROPERTIES[job]:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use its exact top-level "
+                "job mapping"
             )
         if _job_has_key(block, "if"):
             errors.append(

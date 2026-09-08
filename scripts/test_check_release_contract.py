@@ -711,6 +711,34 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_wasm_security_cache_setup(mutated)
         self.assertTrue(any("must appear exactly once" in error for error in errors))
 
+    def test_rejects_duplicate_job_properties(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job_start = workflow.index("  oid4vci-wasm-security:")
+        steps_start = workflow.index("    steps:\n", job_start)
+        mutated = (
+            workflow[:steps_start]
+            + "    steps:\n    runs-on: self-hosted\n    steps:\n"
+            + workflow[steps_start + len("    steps:\n") :]
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("exact top-level job mapping" in error for error in errors))
+
+    def test_rejects_duplicate_job_permission_escalation(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job_start = workflow.index("  oid4vci-wasm-security:")
+        steps_start = workflow.index("    steps:\n", job_start)
+        mutated = (
+            workflow[:steps_start]
+            + "    steps:\n    permissions: write-all\n    steps:\n"
+            + workflow[steps_start + len("    steps:\n") :]
+        )
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("exact top-level job mapping" in error for error in errors))
+
     def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
