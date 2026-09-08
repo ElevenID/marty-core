@@ -941,10 +941,9 @@ mod tests {
         // AuthzAccessCheck requires an owner. It also has no object-specific
         // generic mapping, so evaluate FILE_WRITE_DATA using the production
         // DACL's exact trustee with an equivalent concrete access bit.
-        let encoded: Vec<u16> =
-            format!("O:{same_user}D:P(A;;0x00000002;;;{allowed_logon})\0")
-                .encode_utf16()
-                .collect();
+        let encoded: Vec<u16> = format!("O:{same_user}D:P(A;;0x00000002;;;{allowed_logon})\0")
+            .encode_utf16()
+            .collect();
         let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
         // SAFETY: encoded is NUL-terminated and descriptor is a valid output pointer.
         assert_ne!(

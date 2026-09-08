@@ -263,7 +263,7 @@ different locations require fresh review rather than relying on this triage.
   functional assembly regression and exact call-site contract require every
   opt-in mdoc evidence binary to use the tested signing helper. The mixed-format
   stage uses an opaque signed-preparation wrapper, and its exact payload/sign/
-  assembly route is independently pinned. The seven
+  assembly route is independently pinned. The eight default
   benchmark-support tests, the default and selected mdoc
   payload matrices, and the default and selected JWT/SD-JWT/mdoc signing matrices
   pass with no ignored, filtered, or zero-selected tests.
