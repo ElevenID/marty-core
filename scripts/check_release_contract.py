@@ -326,6 +326,14 @@ WASM_SECURITY_ACTION_STEPS = (
         with:
           tool: wasm-bindgen-cli@0.2.126""",
 )
+WASM_SECURITY_JOB_PREAMBLES = {
+    "oid4vci-wasm-security": """  oid4vci-wasm-security:
+    name: OID4VCI WASM Security
+    runs-on: ubuntu-latest""",
+    "crypto-wasm-security": """  crypto-wasm-security:
+    name: Crypto WASM Security
+    runs-on: ubuntu-latest""",
+}
 
 
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
@@ -366,6 +374,15 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                 "mapping keys"
             )
             continue
+        steps_header = block.find("    steps:")
+        job_preamble = _normalized_step(
+            block if steps_header < 0 else block[:steps_header]
+        )
+        if job_preamble != WASM_SECURITY_JOB_PREAMBLES[job]:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use its exact approved "
+                "job configuration"
+            )
         if _job_has_key(block, "if"):
             errors.append(
                 f".github/workflows/ci.yml: {job} must run unconditionally"
@@ -378,8 +395,14 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             errors.append(
                 f".github/workflows/ci.yml: {job} must not override its default shell"
             )
+        for execution_override in ("container", "services", "env"):
+            if _job_has_key(block, execution_override):
+                errors.append(
+                    f".github/workflows/ci.yml: {job} must not use a job-level "
+                    f"{execution_override} override"
+                )
         steps = _workflow_step_blocks(block)
-        if any(
+        if re.search(r"^      -\s*$", block, re.MULTILINE) or any(
             re.match(r"^      - (?:name|uses|run):", step) is None for step in steps
         ):
             errors.append(

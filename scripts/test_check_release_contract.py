@@ -528,6 +528,52 @@ class NativeBuildCacheContractTests(unittest.TestCase):
             sum("exact approved action configuration" in error for error in errors), 2
         )
 
+    def test_rejects_wasm_job_execution_overrides(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job_start = workflow.index("  crypto-wasm-security:")
+        job_end = workflow.index("\n  ci-gate:", job_start)
+        job = workflow[job_start:job_end]
+        mutations = (
+            job.replace("    runs-on: ubuntu-latest", "    runs-on: self-hosted"),
+            job.replace(
+                "    runs-on: ubuntu-latest",
+                "    runs-on: ubuntu-latest\n    container: attacker/image:latest",
+            ),
+            job.replace(
+                "    runs-on: ubuntu-latest",
+                "    runs-on: ubuntu-latest\n    services:\n      helper:\n"
+                "        image: attacker/image:latest",
+            ),
+        )
+        for mutated_job in mutations:
+            with self.subTest(mutated_job=mutated_job.splitlines()[:6]):
+                mutated = workflow[:job_start] + mutated_job + workflow[job_end:]
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    mutated
+                )
+                self.assertTrue(
+                    any("exact approved job configuration" in error for error in errors)
+                )
+
+    def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        job_start = workflow.index("  crypto-wasm-security:")
+        test_start = workflow.index(
+            "      - name: Test browser key derivation and cleanup", job_start
+        )
+        hidden_step = """      - run: |
+          # inert literal comment
+      -
+        { uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7, with: { tool: wasm-bindgen-cli@0.2.125 } }
+"""
+        mutated = workflow[:test_start] + hidden_step + workflow[test_start:]
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("canonical block-style steps" in error for error in errors))
+
     def test_rejects_custom_cargo_test_shell(self) -> None:
         pinned = (
             "mozilla-actions/sccache-action@"
