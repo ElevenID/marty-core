@@ -5911,7 +5911,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.8.0"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=200ad57a276d28c7108255235b34afea67f07d06#200ad57a276d28c7108255235b34afea67f07d06"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=82143d688355315f22297b40ca18050a94cd2525#82143d688355315f22297b40ca18050a94cd2525"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",
