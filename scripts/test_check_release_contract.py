@@ -668,6 +668,22 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         errors = check_release_contract.check_wasm_security_cache_setup(mutated)
         self.assertTrue(any("forbid root mappings" in error for error in errors))
 
+    def test_rejects_explicit_trailing_root_environment(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = workflow + "\n? env\n:\n  BASH_ENV: .github/noop-cargo.sh\n"
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("forbid root mappings" in error for error in errors))
+
+    def test_rejects_explicit_trailing_root_jobs(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        mutated = workflow + "\n? jobs\n: {}\n"
+        errors = check_release_contract.check_wasm_security_cache_setup(mutated)
+        self.assertTrue(any("forbid root mappings" in error for error in errors))
+
     def test_rejects_bare_dash_hidden_runner_replacement(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
