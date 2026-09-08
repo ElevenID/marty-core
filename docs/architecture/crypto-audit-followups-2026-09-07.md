@@ -17,10 +17,10 @@ The exact implementation heads entering final review are:
 
 | Repository | Review head | Work completed |
 | --- | --- | --- |
-| `isomdl-elevenid` | `0e8f90cf9737132bbb7a00234f86e059c694e7a4` | single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, public-point-only certificate decoding without curve private-key codecs, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
-| `sd-jwt-rust` | `50872b92e44da6aa9351c4a32078983d79f17fc1` | cryptographically bound opaque remote completion, backend-free issuer planning, signing-free issuer-completion/holder/verifier graphs, holder/verifier confirmation-key policy across every serialization, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
-| `longfellow-zk` | `ef505d0edd19422e24d9bc76bb81ff1bc1be0ab8` | verifier-only default; zeroizing Rust prover and sumcheck APIs by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; executable sanitizer, unwind, allocation, and vendor-parity regressions |
-| `marty-core` | `1358e08b9b0acbcb577a264c5102adcd902defa0` | exact KMS-signature binding for all supported credential formats, signing-free KMS issuer dependency graphs, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, and final fork pins |
+| `isomdl-elevenid` | `784a52943469622873c7ae3200dbc11e89d6bd8e` | versioned single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, strict public-point-only certificate decoding without curve private-key codecs, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
+| `sd-jwt-rust` | `7a2663e62f7ed2b0c9b0c838e5b65ec68afc9a68` | versioned cryptographically bound opaque remote completion, backend-free issuer planning, standalone signing-free verification provider, signing-free issuer-completion/holder/verifier graphs, holder/verifier confirmation-key policy across every serialization, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
+| `longfellow-zk` | `ecb0e9acafadc7b2e597daf715136f25731348ae` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; executable sanitizer, unwind, allocation, and vendor-parity regressions |
+| `marty-core` | `120962ef0b0373e10fd59536045923adf059e3fa` | exact KMS-signature binding for all supported credential formats, signing-free KMS issuer dependency graphs, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, synchronized 0.2 release metadata, and final fork pins |
 
 These are review heads, not final integrated or merged revisions. Update this
 section after every correction round and after ElevenID merge-queue CI.
@@ -137,7 +137,7 @@ free of this advisory until its remaining graph is resolved.
   six WebAssembly runtime provider tests, strict linting, dependency-tree
   exclusion of `rsa`, and offline advisory audit pass.
 - The SD-JWT issuer-completion-only graph now explicitly enables its strict
-  EdDSA encoding dependency. Its dedicated lane runs 39 tests with no ignored
+  EdDSA encoding dependency. Its dedicated lane runs 41 tests with no ignored
   cases. The fixed-binary launch-barrier harness also ran all five normally
   environment-gated tests against the built benchmark binary; all passed.
 - Longfellow's complete Rust workspace passes, including algebra, sumcheck,
@@ -158,6 +158,10 @@ free of this advisory until its remaining graph is resolved.
   because this Windows host lacks the native OpenSSL/zstd headers. The KMS-only
   issuer matrix now selects and runs the ZK mdoc external-signer regression, so
   its public-key metadata contract cannot silently drift again.
+  The role-less OID4VCI build runs 113 library tests with no ignored cases and
+  a warnings-as-errors lint; the exact no-default Marty verification feature
+  combination runs all 382 selected tests. The public verification entry-point
+  suite runs 13 tests, including malformed ECDSA SPKI unused-bit rejection.
   Signer-agent tests exercise real Windows named-pipe success and wrong-key
   rejection plus missing MAC, stale nonce, replay, response binding, and key
   validation, with no ignored tests. The signer policy regression proves that
