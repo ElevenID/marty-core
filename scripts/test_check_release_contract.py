@@ -482,6 +482,22 @@ class NativeBuildCacheContractTests(unittest.TestCase):
             sum("must install the pinned wasm-bindgen" in error for error in errors), 2
         )
 
+    def test_rejects_later_wasm_test_runner_replacement(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        original = "          tool: wasm-bindgen-cli@0.2.126\n"
+        replacement = original + """      - name: Replace wasm-bindgen test runner
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        with:
+          tool: wasm-bindgen-cli@0.2.125
+"""
+        self.assertEqual(workflow.count(original), 2)
+        errors = check_release_contract.check_wasm_security_cache_setup(
+            workflow.replace(original, replacement, 1)
+        )
+        self.assertTrue(any("exact approved action sequence" in error for error in errors))
+
     def test_rejects_custom_cargo_test_shell(self) -> None:
         pinned = (
             "mozilla-actions/sccache-action@"

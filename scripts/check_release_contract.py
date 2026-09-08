@@ -217,6 +217,15 @@ def _step_uses_action(step: str, action: str) -> bool:
     )
 
 
+def _step_action_value(step: str) -> str | None:
+    action = re.search(
+        rf"^(?:      - |        ){_yaml_step_key_pattern('uses')}\s*([^\s#]+)\s*$",
+        step,
+        re.MULTILINE,
+    )
+    return action.group(1) if action is not None else None
+
+
 def _step_run_commands(step: str) -> list[str]:
     lines = step.splitlines()
     for index, line in enumerate(lines):
@@ -290,6 +299,12 @@ WASM_BINDGEN_INSTALLER_ACTION = (
 WASM_BINDGEN_TOOL = "wasm-bindgen-cli@0.2.126"
 WASM_TEST_RUNNER_ENV = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER"
 WASM_TEST_RUNNER = "wasm-bindgen-test-runner"
+WASM_SECURITY_ACTIONS = (
+    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4",
+    "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
+    WASM_BINDGEN_INSTALLER_ACTION,
+)
 
 
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
@@ -350,6 +365,16 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             errors.append(
                 f".github/workflows/ci.yml: {job} must use its exact approved "
                 "Cargo test script"
+            )
+        observed_actions = tuple(
+            action
+            for step in steps
+            if (action := _step_action_value(step)) is not None
+        )
+        if observed_actions != WASM_SECURITY_ACTIONS:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use its exact approved "
+                "action sequence"
             )
         cache_index = next(
             (
