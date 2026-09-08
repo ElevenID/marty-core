@@ -1527,7 +1527,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.119",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -5915,7 +5915,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.8.0"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=7a2663e62f7ed2b0c9b0c838e5b65ec68afc9a68#7a2663e62f7ed2b0c9b0c838e5b65ec68afc9a68"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=200ad57a276d28c7108255235b34afea67f07d06#200ad57a276d28c7108255235b34afea67f07d06"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",
@@ -7214,7 +7214,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
