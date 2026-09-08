@@ -228,6 +228,26 @@ fn ecdsa_spki_rejects_a_mismatched_named_curve_identifier() {
 }
 
 #[test]
+fn ecdsa_verifier_rejects_spki_public_point_with_unused_bits() {
+    use der::{asn1::BitString, Decode, Encode};
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let key = p256::ecdsa::SigningKey::from_slice(&[18; 32]).expect("valid P-256 scalar");
+    let document = key.verifying_key().to_public_key_der().expect("P-256 SPKI");
+    let mut spki =
+        SubjectPublicKeyInfoOwned::from_der(document.as_bytes()).expect("decode P-256 SPKI");
+    let mut point = spki.subject_public_key.raw_bytes().to_vec();
+    *point.last_mut().expect("non-empty SEC1 point") &= 0xfe;
+    spki.subject_public_key = BitString::new(1, point).expect("P-256 point with one unused bit");
+    let malformed = spki.to_der().expect("encode malformed SPKI");
+    let signature: p256::ecdsa::Signature = key.sign(b"unused-bit binding");
+
+    let error = ecdsa::verify_p256_sha256(&malformed, b"unused-bit binding", &signature.to_bytes())
+        .expect_err("verification entry point must reject non-canonical BIT STRING metadata");
+    assert!(error.to_string().contains("BIT STRING has unused bits"));
+}
+
+#[test]
 fn public_spki_rejects_invalid_algorithm_identifiers() {
     use der::{Decode, Encode};
     use x509_cert::spki::SubjectPublicKeyInfoOwned;

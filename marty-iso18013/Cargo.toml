@@ -14,13 +14,13 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # Internal dependencies
-marty-types = { version = "0.1.5", path = "../marty-types", optional = true }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, optional = true }
+marty-types = { version = "0.2.0", path = "../marty-types", optional = true }
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, optional = true }
 
 # CBOR and COSE
 ciborium = "0.2"
 coset = { version = "0.3", optional = true }
-isomdl = { version = "0.2", default-features = false, features = ["session-key-agreement"], optional = true }
+isomdl = { version = "0.3", default-features = false, features = ["session-key-agreement"], optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"], optional = true }
@@ -96,7 +96,7 @@ all-transports = ["ble", "nfc"]
 tempfile = "3.14"
 proptest = "1.5"
 criterion = { workspace = true }
-marty-verification = { version = "0.1.5", path = "../marty-verification" }
+marty-verification = { version = "0.2.0", path = "../marty-verification" }
 rand = "0.8"
 
 [[test]]

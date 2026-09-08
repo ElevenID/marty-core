@@ -262,7 +262,7 @@ pub(crate) fn test_es256_public_jwk_for_key(signing_key: &p256::ecdsa::SigningKe
     .to_string()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "issuer"))]
 pub(crate) fn test_public_jwk(algorithm: SigningAlgorithm) -> String {
     match algorithm {
         SigningAlgorithm::ES256 => test_es256_public_jwk(),
@@ -285,7 +285,7 @@ pub(crate) fn test_public_jwk(algorithm: SigningAlgorithm) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "issuer"))]
 pub(crate) fn test_signature(algorithm: SigningAlgorithm, message: &[u8]) -> Vec<u8> {
     match algorithm {
         SigningAlgorithm::ES256 => {

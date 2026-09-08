@@ -3,7 +3,7 @@ members = ["marty-python-adapters", "marty-types", "marty-crypto", "marty-crypto
 resolver = "2"
 
 [workspace.package]
-version = "0.1.61"
+version = "0.2.0"
 edition = "2021"
 authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
@@ -108,11 +108,11 @@ zeroize = "1.7"
 pyo3 = { version = "0.29.0", features = ["abi3-py311"] }
 
 # Internal crates
-marty-crypto = { version = "0.1.5", path = "marty-crypto" }
-marty-verification = { version = "0.1.5", path = "marty-verification" }
-marty-secure-storage = { version = "0.1.5", path = "marty-secure-storage" }
-marty-biometrics = { version = "0.1.5", path = "marty-biometrics" }
-marty-status = { version = "0.1.45", path = "marty-status" }
+marty-crypto = { version = "0.2.0", path = "marty-crypto" }
+marty-verification = { version = "0.2.0", path = "marty-verification" }
+marty-secure-storage = { version = "0.2.0", path = "marty-secure-storage" }
+marty-biometrics = { version = "0.2.0", path = "marty-biometrics" }
+marty-status = { version = "0.2.0", path = "marty-status" }
 
 # Test/dev dependencies
 rcgen = "0.14"
@@ -135,4 +135,4 @@ ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0
 # Exact history is retained on a dedicated dependency ref in the existing SSI fork.
 linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
 # ElevenID-maintained security/interoperability fork, synchronized from upstream by reviewed monthly PRs.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "0e8f90cf9737132bbb7a00234f86e059c694e7a4" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }

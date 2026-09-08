@@ -8,6 +8,6 @@ repository.workspace = true
 description = "Shared Python boundary adapters for Marty Rust libraries"
 
 [dependencies]
-marty-status = { path = "../marty-status", version = "0.1.45" }
+marty-status = { path = "../marty-status", version = "0.2.0" }
 pyo3.workspace = true
 serde_json.workspace = true

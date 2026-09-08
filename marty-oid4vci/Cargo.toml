@@ -18,23 +18,25 @@ crate-type = ["rlib"]
 [features]
 default = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
 kms-only = ["marty-crypto/kms-only"] # Reject in-process credential private-key capabilities
+jose-verification = ["sd-jwt-rs/crypto-provider"] # Verification-only JOSE backend; no local signing
 issuer = [
     "isomdl?/issuer-planning",
     "sd-jwt-rs/issuer-completion",
+    "jose-verification",
     "p256/ecdsa-core",
     "p384/ecdsa-core",
 ] # OID4VCI issuer preparation and remote-signature assembly support
-verifier = ["sd-jwt-rs/verifier"] # OID4VP signature verification support
+verifier = ["sd-jwt-rs/verifier", "jose-verification"] # OID4VP signature verification support
 wallet = ["dep:reqwest", "dep:tokio", "sd_jwt", "sd-jwt-rs/holder", "verifier"]  # OID4VCI/OID4VP wallet/holder support; signing is delegated
-lti = ["dep:reqwest", "dep:tokio"]  # Canvas LTI discovery and launch verification
+lti = ["dep:reqwest", "dep:tokio", "jose-verification"]  # Canvas LTI discovery and launch verification
 jwt_vc_json = []    # W3C VC-JWT credential format
 sd_jwt = [] # IETF SD-JWT format; role features select implementation capabilities
 mso_mdoc = ["dep:isomdl"] # ISO 18013-5 mDoc format; issuer adds planning
 zk_mdoc = ["dep:marty-zkp", "dep:marty-iso18013"]  # ZK proof verification; issuance additionally selects issuer,mso_mdoc
 
 [dependencies]
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification"] }
-marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013", default-features = false, features = ["verifier"], optional = true }
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification"] }
+marty-iso18013 = { version = "0.2.0", path = "../marty-iso18013", default-features = false, features = ["verifier"], optional = true }
 
 # Serialization
 serde = { workspace = true }
@@ -42,11 +44,11 @@ serde_json = { workspace = true }
 
 # Crypto and signing
 ssi-jwk = { version = "0.4.0", default-features = false }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "50872b92e44da6aa9351c4a32078983d79f17fc1", default-features = false }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "7a2663e62f7ed2b0c9b0c838e5b65ec68afc9a68", default-features = false }
 jsonwebtoken = { version = "10.3", default-features = false }
 
 # ISO 18013-5 mDoc
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "0e8f90cf9737132bbb7a00234f86e059c694e7a4", default-features = false, optional = true }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e", default-features = false, optional = true }
 coset = "0.3"
 ciborium = { workspace = true }
 
@@ -72,7 +74,7 @@ url = "2.5"
 regex = { version = "1", default-features = false, features = ["std"] }
 
 # ZK Proofs (optional, behind zk_mdoc feature)
-marty-zkp = { version = "0.1.5", path = "../marty-zkp", optional = true }
+marty-zkp = { version = "0.2.0", path = "../marty-zkp", optional = true }
 
 # HTTP client (optional, behind wallet feature)
 reqwest = { version = "0.13", default-features = false, features = ["form", "json", "rustls"], optional = true }
@@ -81,8 +83,8 @@ reqwest = { version = "0.13", default-features = false, features = ["form", "jso
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "0e8f90cf9737132bbb7a00234f86e059c694e7a4" }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "50872b92e44da6aa9351c4a32078983d79f17fc1" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "7a2663e62f7ed2b0c9b0c838e5b65ec68afc9a68" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "sha256"] }

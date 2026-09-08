@@ -384,6 +384,11 @@ fn extract_named_curve_point(
             "ECDSA public key uses an unexpected named curve",
         ));
     }
+    if spki.subject_public_key.unused_bits() != 0 {
+        return Err(CryptoError::invalid_signature(
+            "ECDSA public key BIT STRING has unused bits",
+        ));
+    }
     Ok(spki.subject_public_key.raw_bytes().to_vec())
 }
 

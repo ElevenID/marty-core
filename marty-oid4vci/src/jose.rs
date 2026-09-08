@@ -4,10 +4,11 @@
 //! module owns JOSE encoding, parsing, key validation, signing, and verification.
 
 use base64::Engine;
+#[cfg(any(test, feature = "jose-verification"))]
 use jsonwebtoken::{
-    crypto::verify as verify_jws_signature, decode, decode_header, jwk::Jwk, Algorithm,
-    DecodingKey, Validation,
+    crypto::verify as verify_jws_signature, decode, decode_header, DecodingKey, Validation,
 };
+use jsonwebtoken::{jwk::Jwk, Algorithm};
 use serde::de::{self, Error as DeError, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -188,8 +189,9 @@ pub(crate) fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Va
 /// Decode the protected header of a compact JWT without treating its claims as trusted.
 ///
 /// This is crate-private so protocol validators can select an externally trusted
-/// key before calling [`verify_compact_jwt_with_public_jwk`]. Callers must never
+/// key before calling `verify_compact_jwt_with_public_jwk`. Callers must never
 /// use the returned header as proof that the JWT is authentic.
+#[cfg(feature = "jose-verification")]
 pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vciResult<Value> {
     decode_unverified_compact_jwt(compact_jwt).map(|(header, _)| header)
 }
@@ -197,7 +199,7 @@ pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vci
 /// Decode unique JOSE header and claim objects for protocol-specific key selection.
 ///
 /// The values remain untrusted until a protocol validator selects an allowed key
-/// and calls [`verify_compact_jwt_with_public_jwk`].
+/// and calls `verify_compact_jwt_with_public_jwk`.
 pub(crate) fn decode_unverified_compact_jwt(compact_jwt: &str) -> Oid4vciResult<(Value, Value)> {
     let parts = split_compact_jwt(compact_jwt, JWT_LIMITS)
         .map_err(|message| Oid4vciError::JwtError(message.into()))?;
@@ -292,6 +294,7 @@ pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oi
 /// not trust an embedded key, perform network resolution, or apply claim
 /// defaults. Duplicate JOSE or claim members and private JWK material fail
 /// closed.
+#[cfg(any(test, feature = "jose-verification"))]
 pub fn verify_compact_jwt_with_public_jwk(
     compact_jwt: &str,
     public_jwk_json: &str,
@@ -345,6 +348,7 @@ pub fn verify_compact_jwt_with_public_jwk(
 /// challenges. Public-key policy is identical to compact JWT verification:
 /// private fields, algorithm confusion, non-signing use, and unexpected
 /// `key_ops` fail closed. ECDSA signatures may use JOSE raw or ASN.1 DER form.
+#[cfg(any(test, feature = "jose-verification"))]
 pub fn verify_detached_signature_with_public_jwk(
     message: &[u8],
     signature: &[u8],

@@ -15,13 +15,13 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 marty-python-adapters = { path = "../marty-python-adapters" }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "hashing", "public-key-codec", "rsa-verification"] }
-marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc", "lti"] }
-marty-didcomm = { version = "0.1.5", path = "../marty-didcomm", default-features = false, features = ["did_key", "did_web", "did_peer", "did_jwk"] }
-marty-iso18013 = { version = "0.1.5", path = "../marty-iso18013", default-features = false, features = ["verifier"] }
-marty-verification = { version = "0.1.5", path = "../marty-verification", default-features = false }
-marty-types = { version = "0.1.5", path = "../marty-types" }
-marty-status = { version = "0.1.45", path = "../marty-status" }
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "hashing", "public-key-codec", "rsa-verification"] }
+marty-oid4vci = { version = "0.2.0", path = "../marty-oid4vci", default-features = false, features = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc", "lti"] }
+marty-didcomm = { version = "0.2.0", path = "../marty-didcomm", default-features = false, features = ["did_key", "did_web", "did_peer", "did_jwk"] }
+marty-iso18013 = { version = "0.2.0", path = "../marty-iso18013", default-features = false, features = ["verifier"] }
+marty-verification = { version = "0.2.0", path = "../marty-verification", default-features = false }
+marty-types = { version = "0.2.0", path = "../marty-types" }
+marty-status = { version = "0.2.0", path = "../marty-status" }
 
 # PyO3 for Python bindings (use workspace version)
 pyo3 = { workspace = true, features = ["abi3-py311"] }
@@ -48,10 +48,10 @@ tokio = { version = "1.35", features = ["rt", "macros"] }
 [dev-dependencies]
 # Test-only dependencies retain regression coverage without re-enabling issuer
 # private-key APIs in the production dependency graph.
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "public-key-codec", "rsa-verification"] }
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification", "public-key-codec", "rsa-verification"] }
 marty-crypto-test-support = { path = "../marty-crypto-test-support" }
-marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["issuer", "verifier", "wallet", "jwt_vc_json", "sd_jwt", "mso_mdoc", "lti"] }
-marty-verification = { version = "0.1.5", path = "../marty-verification", default-features = false, features = ["ephemeral-session-keys"] }
+marty-oid4vci = { version = "0.2.0", path = "../marty-oid4vci", default-features = false, features = ["issuer", "verifier", "wallet", "jwt_vc_json", "sd_jwt", "mso_mdoc", "lti"] }
+marty-verification = { version = "0.2.0", path = "../marty-verification", default-features = false, features = ["ephemeral-session-keys"] }
 p256 = { workspace = true, features = ["ecdsa"] }
 p384 = { workspace = true, features = ["ecdsa"] }
 serde_json = "1.0"
