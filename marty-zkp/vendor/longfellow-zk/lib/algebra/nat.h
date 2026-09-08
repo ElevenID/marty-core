@@ -54,7 +54,7 @@ static limb_t inv_mod_b(limb_t a) {
 }
 
 // This function should only be called on static input known at compile time.
-unsigned digit(char c);
+unsigned digit(char c, size_t base);
 
 template <size_t W64>
 class Nat : public Limb<W64> {
@@ -86,7 +86,7 @@ class Nat : public Limb<W64> {
       base = 16u;
     }
     for (; *s; s++) {
-      T d(digit(*s));
+      T d(digit(*s, base));
       bool ok = muls(limb_, base);
       check(ok, "overflow in nat(const char *s)");
       limb_t ah = add_limb(kLimbs, limb_, d.limb_);
@@ -123,11 +123,13 @@ class Nat : public Limb<W64> {
   }
 
   static std::optional<unsigned> safe_digit(char c, limb_t base) {
-    c = tolower(c);
-    if (c >= '0' && c <= '9') {
-      return c - '0';
-    } else if (base == 16u && c >= 'a' && c <= 'f') {
-      return c - 'a' + 10;
+    if (c >= 0 && c < 128) {
+      c = tolower(c);
+      if (c >= '0' && c <= '9') {
+        return c - '0';
+      } else if (base == 16u && c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+      }
     }
     return std::nullopt;
   }
@@ -166,6 +168,11 @@ class Nat : public Limb<W64> {
     T b = *this;
     limb_t bh = sub_limb(kLimbs, b.limb_, y.limb_);
     return (bh != 0);
+  }
+
+  T& cmovnz(limb_t nz, const T& y) {
+    proofs::cmovnz(kLimbs, limb_, nz, y.limb_);
+    return *this;
   }
 
   T& add(const T& y) {

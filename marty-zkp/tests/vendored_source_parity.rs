@@ -5,6 +5,14 @@ const AUDITED_COMMIT: &str = "58f6259c631a374a526b80f99222d03654883655";
 const LOCAL_SECURITY_ADAPTATIONS: &str = "lib/arrays/dense.h,lib/circuits/mdoc/mdoc_zk.cc";
 const AUDITED_FILES: &[(&str, &str)] = &[
     (
+        "lib/algebra/nat.cc",
+        "c4090a5ee793764a2b04b39e48ad5819c3111e6acfb303e826a93a7d4b07442c",
+    ),
+    (
+        "lib/algebra/nat.h",
+        "b786c0823d014f7dca8b2c55347cb7e4cc636da2ddb20f2d5f6d7a7068e39558",
+    ),
+    (
         "lib/arrays/dense.h",
         "8ceac07906195e6749ca15a40b814f03f7a71eb67834ae120158ed9b1fc48479",
     ),
