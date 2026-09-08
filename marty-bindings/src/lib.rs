@@ -2090,11 +2090,13 @@ mod tests {
             }
 
             #[cfg(not(feature = "ephemeral-session-keys"))]
-            let session_operation = "HaipResponseDecryptionSession";
-            assert!(
-                !module.hasattr(session_operation).unwrap(),
-                "{session_operation}"
-            );
+            {
+                let session_operation = "HaipResponseDecryptionSession";
+                assert!(
+                    !module.hasattr(session_operation).unwrap(),
+                    "{session_operation}"
+                );
+            }
 
             for remote_signing_operation in [
                 "oid4vci_prepare_sd_jwt",

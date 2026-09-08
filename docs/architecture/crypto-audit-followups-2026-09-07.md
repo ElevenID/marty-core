@@ -247,6 +247,13 @@ different locations require fresh review rather than relying on this triage.
   complete verifier package (5 library, 5 circuit/CBOR identity, 1 parity, and 2
   compile-fail tests), and all 27 real-prover conformance tests with zero ignored
   or filtered cases. Strict verifier linting passes with warnings denied.
+- The final affected-feature CI run exposed a test-only conditional-compilation
+  error in `marty-bindings`: its assertion that the opaque HAIP response session
+  is absent without `ephemeral-session-keys` was scoped outside the feature guard.
+  The assertion is now wholly guarded, while the existing enabled-feature test
+  still requires the opaque session export. The complete bindings suite passes
+  both configurations: 59 tests with the feature and 56 without it, with zero
+  ignored or filtered cases.
 - Linux strict lint also found that the signer agent's listener is mutable only
   for the Windows named-pipe implementation. The binding is now immutable on
   Unix and explicitly shadowed as mutable on Windows. The exact full-workspace
