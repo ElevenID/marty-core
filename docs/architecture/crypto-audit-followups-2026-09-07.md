@@ -206,16 +206,17 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  57-test release-contract suite exact-allowlists the workflow preamble, each
-  audited Ubuntu job, every action configuration, the full environment, and each
-  complete test step, including scripts, selectors, runner pins, and checkout
+  59-test release-contract suite exact-allowlists the workflow preamble, each
+  audited Ubuntu job and its full top-level mapping, every action configuration,
+  the full environment, and each complete test step, including scripts, selectors,
+  runner pins, and checkout
   behavior. It rejects duplicate or noncanonical root and audited-job mappings,
-  shell injection, execution overrides, hidden or replacement actions,
+  token-permission escalation, shell injection, execution overrides, hidden or
+  replacement actions,
   folded-comment suppression, control flow, pipelines, nonexecuting flags, and
-  zero-selection
-  filter substitutions while ignoring inert literal comments or echoed Cargo
-  text. The real Linux ZKP build also detected an incomplete Longfellow algebra
-  sync:
+  zero-selection filter substitutions while ignoring inert literal comments or
+  echoed Cargo text. The real Linux ZKP build also detected an incomplete
+  Longfellow algebra sync:
   `fp24.h` and `fp_generic.h` used the audited base-aware `digit` API while
   `nat.h` and `nat.cc` retained the old signature. The exact audited `nat` pair is
   now synchronized and covered by the executable source-parity manifest. A fresh
