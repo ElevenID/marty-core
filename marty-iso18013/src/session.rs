@@ -5,7 +5,7 @@
 
 use crate::error::{Error, Result};
 use marty_crypto::ecdh::P256KeyPair;
-use marty_crypto::kdf::derive_mdl_session_keys;
+use marty_crypto::kdf::{derive_mdl_session_keys, SecretBytes};
 use marty_crypto::symmetric::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -37,10 +37,10 @@ impl SessionDirection {
 /// Session encryption and decryption state
 pub struct SessionEncryption {
     /// Key used for messages sent by this party.
-    send_key: Vec<u8>,
+    send_key: SecretBytes,
 
     /// Key used for messages received by this party.
-    receive_key: Vec<u8>,
+    receive_key: SecretBytes,
 
     /// Message counter for encryption
     send_counter: u32,

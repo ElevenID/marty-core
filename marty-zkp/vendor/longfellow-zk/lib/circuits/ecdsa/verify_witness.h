@@ -20,6 +20,7 @@
 #include "algebra/utility.h"
 #include "arrays/dense.h"
 #include "util/panic.h"
+#include "util/secure_wipe.h"
 
 /*
 Methods to help prepare witnesses for use in assertions about ecdsa.
@@ -49,6 +50,19 @@ class VerifyWitness3 {
   Elt int_z_[kBits];   /* z-coordinate of the intermediate points */
 
   VerifyWitness3(const ScalarField& Fn, const EC& ec) : fn_(Fn), ec_(ec) {}
+
+  ~VerifyWitness3() {
+    secure_wipe_object(rx_);
+    secure_wipe_object(ry_);
+    secure_wipe_object(rx_inv_);
+    secure_wipe_object(s_inv_);
+    secure_wipe_object(pk_inv_);
+    secure_wipe_object(pre_);
+    secure_wipe_object(bi_);
+    secure_wipe_object(int_x_);
+    secure_wipe_object(int_y_);
+    secure_wipe_object(int_z_);
+  }
 
   void fill_witness(DenseFiller<Field>& filler) const {
     filler.push_back(rx_);

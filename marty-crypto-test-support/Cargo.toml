@@ -10,7 +10,7 @@ publish = false
 description = "Non-publishable local signing fixtures for Marty tests"
 
 [dependencies]
-marty-crypto = { path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "rsa-verification"] }
+marty-crypto = { path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "jwk", "rsa-verification"] }
 der = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["pkcs8"] }
 p256 = { workspace = true, features = ["arithmetic", "ecdsa", "pkcs8", "std"] }
@@ -19,4 +19,5 @@ pem-rfc7468 = { workspace = true }
 pkcs8 = { workspace = true }
 rand = { workspace = true }
 rsa = { workspace = true, features = ["pem"] }
+serde_json = { workspace = true }
 sha2 = { workspace = true }

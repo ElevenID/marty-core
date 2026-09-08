@@ -1,11 +1,116 @@
 //! Key derivation functions (HKDF, PBKDF2).
 
-use hkdf::Hkdf;
-use pbkdf2::pbkdf2_hmac;
-use sha2::{Sha256, Sha384, Sha512};
+#[cfg(not(target_family = "wasm"))]
+use aws_lc_rs::{hkdf as aws_hkdf, pbkdf2 as aws_pbkdf2};
+use zeroize::{Zeroize, Zeroizing};
 
 use super::HashAlgorithm;
 use crate::{CryptoError, CryptoResult};
+
+/// Derived secret bytes with redacted diagnostics and automatic erasure.
+pub struct SecretBytes {
+    bytes: Vec<u8>,
+    #[cfg(all(test, not(target_family = "wasm")))]
+    cleanup_observer: Option<SecretBytesCleanupObserver>,
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[derive(Clone, Default)]
+struct SecretBytesCleanupObserver(std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>);
+
+#[cfg(all(test, not(target_family = "wasm")))]
+impl SecretBytesCleanupObserver {
+    fn snapshots(&self) -> Vec<Vec<u8>> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl SecretBytes {
+    fn from_zeroizing(mut bytes: Zeroizing<Vec<u8>>) -> Self {
+        Self {
+            bytes: std::mem::take(&mut *bytes),
+            #[cfg(all(test, not(target_family = "wasm")))]
+            cleanup_observer: None,
+        }
+    }
+
+    #[cfg(all(test, not(target_family = "wasm")))]
+    fn with_cleanup_observer(mut self, observer: SecretBytesCleanupObserver) -> Self {
+        self.cleanup_observer = Some(observer);
+        self
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+}
+
+impl Clone for SecretBytes {
+    fn clone(&self) -> Self {
+        Self {
+            bytes: self.bytes.clone(),
+            #[cfg(all(test, not(target_family = "wasm")))]
+            cleanup_observer: None,
+        }
+    }
+}
+
+impl std::ops::Deref for SecretBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl AsRef<[u8]> for SecretBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl Zeroize for SecretBytes {
+    fn zeroize(&mut self) {
+        self.bytes.resize(self.bytes.capacity(), 0);
+        self.bytes.fill(0);
+    }
+}
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(all(test, not(target_family = "wasm")))]
+        if let Some(observer) = &self.cleanup_observer {
+            observer.0.lock().unwrap().push(self.bytes.clone());
+        }
+    }
+}
+
+impl PartialEq for SecretBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for SecretBytes {}
+
+impl PartialEq<Vec<u8>> for SecretBytes {
+    fn eq(&self, other: &Vec<u8>) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl<const LENGTH: usize> PartialEq<[u8; LENGTH]> for SecretBytes {
+    fn eq(&self, other: &[u8; LENGTH]) -> bool {
+        self.as_slice() == other
+    }
+}
+
+impl std::fmt::Debug for SecretBytes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SecretBytes([REDACTED])")
+    }
+}
 
 // ============================================================================
 // HKDF (RFC 5869)
@@ -25,42 +130,103 @@ use crate::{CryptoError, CryptoResult};
 /// # Returns
 ///
 /// Derived key material.
-pub fn hkdf_sha256(ikm: &[u8], salt: &[u8], info: &[u8], length: usize) -> CryptoResult<Vec<u8>> {
-    let salt = if salt.is_empty() { None } else { Some(salt) };
-    let hkdf = Hkdf::<Sha256>::new(salt, ikm);
-
-    let mut okm = vec![0u8; length];
-    hkdf.expand(info, &mut okm).map_err(|_| {
-        CryptoError::internal("HKDF expansion failed: output length too long".to_string())
-    })?;
-
-    Ok(okm)
+pub fn hkdf_sha256(
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    length: usize,
+) -> CryptoResult<SecretBytes> {
+    hkdf_impl(HkdfAlgorithm::Sha256, ikm, salt, info, length)
 }
 
 /// Derive keys using HKDF with SHA-384.
-pub fn hkdf_sha384(ikm: &[u8], salt: &[u8], info: &[u8], length: usize) -> CryptoResult<Vec<u8>> {
-    let salt = if salt.is_empty() { None } else { Some(salt) };
-    let hkdf = Hkdf::<Sha384>::new(salt, ikm);
-
-    let mut okm = vec![0u8; length];
-    hkdf.expand(info, &mut okm).map_err(|_| {
-        CryptoError::internal("HKDF expansion failed: output length too long".to_string())
-    })?;
-
-    Ok(okm)
+pub fn hkdf_sha384(
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    length: usize,
+) -> CryptoResult<SecretBytes> {
+    hkdf_impl(HkdfAlgorithm::Sha384, ikm, salt, info, length)
 }
 
 /// Derive keys using HKDF with SHA-512.
-pub fn hkdf_sha512(ikm: &[u8], salt: &[u8], info: &[u8], length: usize) -> CryptoResult<Vec<u8>> {
-    let salt = if salt.is_empty() { None } else { Some(salt) };
-    let hkdf = Hkdf::<Sha512>::new(salt, ikm);
+pub fn hkdf_sha512(
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    length: usize,
+) -> CryptoResult<SecretBytes> {
+    hkdf_impl(HkdfAlgorithm::Sha512, ikm, salt, info, length)
+}
 
-    let mut okm = vec![0u8; length];
-    hkdf.expand(info, &mut okm).map_err(|_| {
+#[derive(Clone, Copy)]
+enum HkdfAlgorithm {
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Copy)]
+struct HkdfOutputLength(usize);
+
+#[cfg(not(target_family = "wasm"))]
+impl aws_hkdf::KeyType for HkdfOutputLength {
+    fn len(&self) -> usize {
+        self.0
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn hkdf_impl(
+    algorithm: HkdfAlgorithm,
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    length: usize,
+) -> CryptoResult<SecretBytes> {
+    let algorithm = match algorithm {
+        HkdfAlgorithm::Sha256 => aws_hkdf::HKDF_SHA256,
+        HkdfAlgorithm::Sha384 => aws_hkdf::HKDF_SHA384,
+        HkdfAlgorithm::Sha512 => aws_hkdf::HKDF_SHA512,
+    };
+    let salt = if salt.is_empty() {
+        aws_hkdf::Salt::none(algorithm)
+    } else {
+        aws_hkdf::Salt::new(algorithm, salt)
+    };
+    let prk = salt.extract(ikm);
+    let info_parts = [info];
+    let okm = prk
+        .expand(&info_parts, HkdfOutputLength(length))
+        .map_err(|_| {
+            CryptoError::internal("HKDF expansion failed: output length too long".to_string())
+        })?;
+    let mut output = Zeroizing::new(vec![0u8; length]);
+    okm.fill(&mut output).map_err(|_| {
         CryptoError::internal("HKDF expansion failed: output length too long".to_string())
     })?;
+    Ok(SecretBytes::from_zeroizing(output))
+}
 
-    Ok(okm)
+#[cfg(target_family = "wasm")]
+fn hkdf_impl(
+    algorithm: HkdfAlgorithm,
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    length: usize,
+) -> CryptoResult<SecretBytes> {
+    let mut output = Zeroizing::new(vec![0u8; length]);
+    let algorithm = match algorithm {
+        HkdfAlgorithm::Sha256 => crate::secret_hash::SecureHashAlgorithm::Sha256,
+        HkdfAlgorithm::Sha384 => crate::secret_hash::SecureHashAlgorithm::Sha384,
+        HkdfAlgorithm::Sha512 => crate::secret_hash::SecureHashAlgorithm::Sha512,
+    };
+    crate::secret_hash::hkdf(algorithm, ikm, salt, info, &mut output, || Ok(())).map_err(|_| {
+        CryptoError::internal("HKDF expansion failed: output length too long".to_string())
+    })?;
+    Ok(SecretBytes::from_zeroizing(output))
 }
 
 /// Derive keys using HKDF with specified algorithm.
@@ -71,7 +237,7 @@ pub fn hkdf(
     salt: &[u8],
     info: &[u8],
     length: usize,
-) -> CryptoResult<Vec<u8>> {
+) -> CryptoResult<SecretBytes> {
     match algorithm {
         HashAlgorithm::Sha256 => hkdf_sha256(ikm, salt, info, length),
         HashAlgorithm::Sha384 => hkdf_sha384(ikm, salt, info, length),
@@ -97,9 +263,7 @@ pub fn concat_kdf_sha256(
     party_u_info: &[u8],
     party_v_info: &[u8],
     key_data_len: usize,
-) -> CryptoResult<Vec<u8>> {
-    use sha2::Digest;
-
+) -> CryptoResult<SecretBytes> {
     if shared_secret.is_empty() {
         return Err(CryptoError::internal(
             "Concat KDF shared secret must not be empty".to_string(),
@@ -127,16 +291,25 @@ pub fn concat_kdf_sha256(
     let repetitions = key_data_len.div_ceil(32);
     let repetitions = u32::try_from(repetitions)
         .map_err(|_| CryptoError::internal("Concat KDF repetition count overflow".to_string()))?;
-    let mut derived = Vec::with_capacity(key_data_len);
+    let mut derived = Zeroizing::new(Vec::with_capacity(key_data_len));
     for counter in 1..=repetitions {
-        let mut digest = Sha256::new();
-        digest.update(counter.to_be_bytes());
-        digest.update(shared_secret);
-        digest.update(&other_info);
-        derived.extend_from_slice(&digest.finalize());
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let mut digest = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256);
+            digest.update(&counter.to_be_bytes());
+            digest.update(shared_secret);
+            digest.update(&other_info);
+            derived.extend_from_slice(digest.finish().as_ref());
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let digest =
+                crate::secret_hash::sha256(&[&counter.to_be_bytes(), shared_secret, &other_info]);
+            derived.extend_from_slice(&*digest);
+        }
     }
     derived.truncate(key_data_len);
-    Ok(derived)
+    Ok(SecretBytes::from_zeroizing(derived))
 }
 
 fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) -> CryptoResult<()> {
@@ -166,17 +339,49 @@ fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) -> CryptoResult<()
 /// # Returns
 ///
 /// Derived key material.
-pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, length: usize) -> Vec<u8> {
-    let mut output = vec![0u8; length];
-    pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut output);
-    output
+pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, length: usize) -> SecretBytes {
+    assert!(iterations != 0, "PBKDF2 iterations must be nonzero");
+    let mut output = Zeroizing::new(vec![0u8; length]);
+    #[cfg(not(target_family = "wasm"))]
+    aws_pbkdf2::derive(
+        aws_pbkdf2::PBKDF2_HMAC_SHA256,
+        std::num::NonZeroU32::new(iterations).expect("iterations were validated"),
+        salt,
+        password,
+        &mut output,
+    );
+    #[cfg(target_family = "wasm")]
+    crate::secret_hash::pbkdf2(
+        crate::secret_hash::SecureHashAlgorithm::Sha256,
+        password,
+        salt,
+        iterations,
+        &mut output,
+    );
+    SecretBytes::from_zeroizing(output)
 }
 
 /// Derive keys using PBKDF2 with SHA-512.
-pub fn pbkdf2_sha512(password: &[u8], salt: &[u8], iterations: u32, length: usize) -> Vec<u8> {
-    let mut output = vec![0u8; length];
-    pbkdf2_hmac::<Sha512>(password, salt, iterations, &mut output);
-    output
+pub fn pbkdf2_sha512(password: &[u8], salt: &[u8], iterations: u32, length: usize) -> SecretBytes {
+    assert!(iterations != 0, "PBKDF2 iterations must be nonzero");
+    let mut output = Zeroizing::new(vec![0u8; length]);
+    #[cfg(not(target_family = "wasm"))]
+    aws_pbkdf2::derive(
+        aws_pbkdf2::PBKDF2_HMAC_SHA512,
+        std::num::NonZeroU32::new(iterations).expect("iterations were validated"),
+        salt,
+        password,
+        &mut output,
+    );
+    #[cfg(target_family = "wasm")]
+    crate::secret_hash::pbkdf2(
+        crate::secret_hash::SecureHashAlgorithm::Sha512,
+        password,
+        salt,
+        iterations,
+        &mut output,
+    );
+    SecretBytes::from_zeroizing(output)
 }
 
 // ============================================================================
@@ -198,7 +403,7 @@ pub fn pbkdf2_sha512(password: &[u8], salt: &[u8], iterations: u32, length: usiz
 pub fn derive_mdl_session_keys(
     shared_secret: &[u8],
     session_transcript: &[u8],
-) -> CryptoResult<(Vec<u8>, Vec<u8>)> {
+) -> CryptoResult<(SecretBytes, SecretBytes)> {
     // Salt is session transcript hash
     let salt = super::hashing::hash_sha256(session_transcript);
 
@@ -287,6 +492,56 @@ pub struct NoProtocolKeyExportApis;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_family = "wasm"))]
+    use crate::secret_buffer::{SensitiveBuffer, SensitiveBufferCleanupObserver};
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn derived_keys_and_hkdf_error_scratch_wipe_on_drop_and_unwind() {
+        let secret_observer = SecretBytesCleanupObserver::default();
+        let derived = hkdf_sha256(b"secret input", b"salt", b"info", 32)
+            .unwrap()
+            .with_cleanup_observer(secret_observer.clone());
+        assert_eq!(format!("{derived:?}"), "SecretBytes([REDACTED])");
+        drop(derived);
+        let secret_snapshots = secret_observer.snapshots();
+        assert_eq!(secret_snapshots.len(), 1);
+        assert_eq!(secret_snapshots[0].len(), 32);
+        assert!(secret_snapshots[0].iter().all(|byte| *byte == 0));
+
+        let salt = aws_hkdf::Salt::new(aws_hkdf::HKDF_SHA256, b"salt");
+        let prk = salt.extract(b"secret input");
+        let info = [b"info".as_slice()];
+        let okm = prk.expand(&info, HkdfOutputLength(32)).unwrap();
+        let error_observer = SensitiveBufferCleanupObserver::default();
+        {
+            let mut wrong_length =
+                SensitiveBuffer::copied_from_with_observer(&[0xa5; 31], 0, error_observer.clone());
+            assert!(okm.fill(&mut wrong_length.bytes).is_err());
+        }
+        let snapshots = error_observer.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].len(), 31);
+        assert!(snapshots[0].iter().all(|byte| *byte == 0));
+
+        let unwind_observer = SensitiveBufferCleanupObserver::default();
+        let unwind = std::panic::catch_unwind({
+            let observer = unwind_observer.clone();
+            move || {
+                let salt = aws_hkdf::Salt::new(aws_hkdf::HKDF_SHA256, b"salt");
+                let _prk = salt.extract(b"second secret input");
+                let mut output =
+                    SensitiveBuffer::copied_from_with_observer(&[0x5a; 32], 0, observer);
+                output.bytes[0] ^= 0xff;
+                panic!("injected HKDF unwind after extract")
+            }
+        });
+        assert!(unwind.is_err());
+        let snapshots = unwind_observer.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].len(), 32);
+        assert!(snapshots[0].iter().all(|byte| *byte == 0));
+    }
 
     #[test]
     fn test_hkdf_sha256_basic() {
@@ -323,6 +578,11 @@ mod tests {
 
         let result = pbkdf2_sha256(password, salt, iterations, 32);
         assert_eq!(result.len(), 32);
+
+        assert_eq!(
+            hex::encode(pbkdf2_sha256(b"password", b"salt", 1, 32).as_slice()),
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
     }
 
     #[test]

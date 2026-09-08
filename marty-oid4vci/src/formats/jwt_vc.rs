@@ -18,7 +18,7 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 #[cfg(test)]
 use crate::signer::validate_issuer_key_algorithm;
 #[cfg(any(test, feature = "issuer"))]
-use crate::signer::{validate_remote_signature, CredentialSigner};
+use crate::signer::{validate_signer_public_jwk, verify_remote_signature, CredentialSigner};
 #[cfg(test)]
 use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
@@ -177,6 +177,7 @@ pub struct PreparedJwtVc {
     /// The credential ID (urn:uuid:...) assigned during preparation.
     credential_id: String,
     algorithm: crate::types::SigningAlgorithm,
+    issuer_public_jwk: String,
 }
 
 #[cfg(any(test, feature = "issuer"))]
@@ -223,6 +224,7 @@ impl PreparedJwtVc {
             signing_input,
             credential_id,
             algorithm,
+            issuer_public_jwk: crate::signer::test_es256_public_jwk(),
         })
     }
 
@@ -246,7 +248,12 @@ impl PreparedJwtVc {
 
     /// Check a remote signer's raw output without consuming prepared state.
     pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
-        validate_remote_signature(self.algorithm, signature)
+        verify_remote_signature(
+            self.algorithm,
+            &self.issuer_public_jwk,
+            self.signing_payload(),
+            signature,
+        )
     }
 }
 
@@ -708,6 +715,7 @@ pub fn prepare_jwt_vc_with_options(
         signing_input: format!("{}.{}", header_b64, payload_b64),
         credential_id,
         algorithm: signer.algorithm(),
+        issuer_public_jwk: validate_signer_public_jwk(signer)?,
     })
 }
 
@@ -787,6 +795,10 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "did:example:expiration-test-issuer#key-1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 

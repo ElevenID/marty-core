@@ -42,7 +42,7 @@ full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "s
 
 [dependencies]
 # Internal crate
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = [
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = [
     "crl",
     "ecdsa-verification",
     "eddsa-verification",
@@ -53,7 +53,7 @@ marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features =
     "public-key-codec",
     "x509",
 ] }
-marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false }
+marty-oid4vci = { version = "0.2.0", path = "../marty-oid4vci", default-features = false }
 
 # Re-export crypto types
 x509-cert = { workspace = true }
@@ -119,7 +119,7 @@ quick-xml = { version = "0.41", features = ["serialize"], optional = true }
 pyo3 = { workspace = true, optional = true }
 
 # mDoc/mDL support
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35", default-features = false, features = ["presentation-verifier"] }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e", default-features = false, features = ["presentation-verifier"] }
 coset = "0.3.8"
 time = { version = "0.3", features = ["formatting"] }
 hex = "0.4"
@@ -127,9 +127,9 @@ zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 cms = { workspace = true, features = ["builder"] }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, features = ["crl", "ecdh", "symmetric"] }
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = ["crl", "ecdh", "symmetric"] }
 marty-crypto-test-support = { path = "../marty-crypto-test-support" }
-marty-oid4vci = { version = "0.1.5", path = "../marty-oid4vci", default-features = false, features = ["issuer", "mso_mdoc", "sd_jwt"] }
+marty-oid4vci = { version = "0.2.0", path = "../marty-oid4vci", default-features = false, features = ["issuer", "mso_mdoc", "sd_jwt"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 rcgen = { workspace = true, features = ["aws_lc_rs"] }

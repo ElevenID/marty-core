@@ -58,11 +58,13 @@ pub mod holder_key;
 pub mod issuance_input;
 #[cfg(feature = "issuer")]
 pub mod issuer;
+#[cfg(any(test, feature = "jose-verification"))]
 pub mod jose;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
 pub mod offer_uri;
+#[cfg(feature = "jose-verification")]
 pub mod oidc;
 pub mod presentation_request;
 pub mod proof;
@@ -81,6 +83,7 @@ pub mod signer;
     any(test, all(feature = "mso_mdoc", feature = "sd_jwt"))
 ))]
 pub mod signing_batch;
+#[cfg(feature = "jose-verification")]
 pub mod siop;
 pub mod types;
 #[cfg(feature = "verifier")]

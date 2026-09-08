@@ -21,6 +21,7 @@
 #include "arrays/dense.h"
 #include "circuits/logic/bit_plucker_encoder.h"
 #include "gf2k/gf2_128.h"
+#include "util/secure_wipe.h"
 
 namespace proofs {
 
@@ -35,22 +36,30 @@ class MacWitness {
  public:
   explicit MacWitness(const Field& F, const f_128& GF) : f_(F), gf_(GF) {}
 
+  ~MacWitness() {
+    secure_wipe_object(ap_);
+    secure_wipe_object(x_);
+  }
+
   void fill_witness(DenseFiller<Field>& fill) const {
     packer bp(f_);
-    uint8_t tmp[f_128::kBits];
-    for (size_t i = 0; i < 2; ++i) {
-      for (size_t j = 0; j < f_128::kBits; ++j) {
-        tmp[j] = ap_[i][j];
+    uint8_t tmp[f_128::kBits] = {};
+    with_secure_scratch(tmp, [&](auto& scratch) {
+      for (size_t i = 0; i < 2; ++i) {
+        for (size_t j = 0; j < f_128::kBits; ++j) {
+          scratch[j] = ap_[i][j];
+        }
+        fill.push_back(
+            bp.template pack<packed_v128>(scratch, f_128::kBits));
       }
-      fill.push_back(bp.template pack<packed_v128>(tmp, f_128::kBits));
-    }
 
-    for (size_t i = 0; i < 2; ++i) {
-      for (size_t j = 0; j < f_128::kBits; ++j) {
-        tmp[j] = x_[i][j];
+      for (size_t i = 0; i < 2; ++i) {
+        for (size_t j = 0; j < f_128::kBits; ++j) {
+          scratch[j] = x_[i][j];
+        }
+        fill.push_back(bp.template pack<packed_v128>(scratch, 128));
       }
-      fill.push_back(bp.template pack<packed_v128>(tmp, 128));
-    }
+    });
   }
 
   // Computes a mac witness on a 32-byte message x.
@@ -73,6 +82,8 @@ class MacGF2Witness {
   using gf2k = f_128::Elt;
 
  public:
+  ~MacGF2Witness() { secure_wipe_object(ap_); }
+
   void fill_witness(DenseFiller<f_128>& fill) const {
     fill.push_back(ap_[0]);
     fill.push_back(ap_[1]);

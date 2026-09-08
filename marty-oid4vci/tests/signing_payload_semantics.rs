@@ -1,8 +1,8 @@
 //! Regression tests for the scalar credential-signing boundary.
 //!
-//! These fixtures deliberately use a recording signer instead of key material.
-//! That lets the tests lock the exact bytes crossing the signer boundary and
-//! the raw-signature assembly contract independently of a crypto backend.
+//! These fixtures use a deterministic test-only key in a recording signer.
+//! That lets the tests lock the exact bytes crossing the signer boundary while
+//! exercising the production rule that every returned signature must verify.
 
 use std::sync::Mutex;
 
@@ -19,18 +19,22 @@ use marty_oid4vci::{
 
 const REDACTED_SIGNER_DIAGNOSTIC: &str = "RecordingEs256Signer([redacted])";
 
-// Patterned r || s bytes, including a leading zero, catch accidental DER
-// conversion, normalization, truncation, or reordering during assembly.
-const RAW_ES256_SIGNATURE: [u8; 64] = [
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
-    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
-];
-
-#[derive(Default)]
 struct RecordingEs256Signer {
     signing_payloads: Mutex<Vec<Vec<u8>>>,
+    signatures: Mutex<Vec<Vec<u8>>>,
+    signing_key: p256::ecdsa::SigningKey,
+}
+
+impl Default for RecordingEs256Signer {
+    fn default() -> Self {
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        Self {
+            signing_payloads: Mutex::new(Vec::new()),
+            signatures: Mutex::new(Vec::new()),
+            signing_key: p256::ecdsa::SigningKey::from_slice(&scalar).unwrap(),
+        }
+    }
 }
 
 impl std::fmt::Debug for RecordingEs256Signer {
@@ -49,12 +53,23 @@ impl RecordingEs256Signer {
         );
         signing_payloads[0].clone()
     }
+
+    fn only_signature(&self) -> Vec<u8> {
+        let signatures = self.signatures.lock().unwrap();
+        assert_eq!(signatures.len(), 1);
+        signatures[0].clone()
+    }
 }
 
 impl CredentialSigner for RecordingEs256Signer {
     fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+        use p256::ecdsa::signature::Signer as _;
+
         self.signing_payloads.lock().unwrap().push(message.to_vec());
-        Ok(RAW_ES256_SIGNATURE.to_vec())
+        let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
+        let signature = signature.to_bytes().to_vec();
+        self.signatures.lock().unwrap().push(signature.clone());
+        Ok(signature)
     }
 
     fn algorithm(&self) -> SigningAlgorithm {
@@ -67,6 +82,18 @@ impl CredentialSigner for RecordingEs256Signer {
 
     fn kid_url(&self) -> String {
         "did:example:scalar-signing-issuer#key-1".into()
+    }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        let point = self.signing_key.verifying_key().to_encoded_point(false);
+        Ok(serde_json::json!({
+            "alg": "ES256",
+            "crv": "P-256",
+            "kty": "EC",
+            "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+            "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        })
+        .to_string())
     }
 }
 
@@ -117,6 +144,7 @@ fn scalar_es256_jwt_vc_signs_one_complete_payload_and_forwards_raw_signature() {
 
     let credential = sign_jwt_vc_with_signer(&signer, &jwt_vc_claims()).unwrap();
     let signing_payload = signer.only_signing_payload();
+    let signature = signer.only_signature();
     let signing_input = String::from_utf8(signing_payload.clone()).unwrap();
 
     let SignedCredential::JwtVcJson { jwt, credential_id } = credential else {
@@ -135,7 +163,7 @@ fn scalar_es256_jwt_vc_signs_one_complete_payload_and_forwards_raw_signature() {
     );
     assert_eq!(
         URL_SAFE_NO_PAD.decode(segments[2]).unwrap(),
-        RAW_ES256_SIGNATURE,
+        signature,
         "JWT assembly must preserve the raw 64-byte ES256 signature"
     );
 
@@ -152,6 +180,7 @@ fn scalar_es256_mdoc_signs_one_complete_payload_and_forwards_raw_signature() {
 
     let credential = sign_mdoc_with_signer(&signer, &mdoc_claims()).unwrap();
     let signing_payload = signer.only_signing_payload();
+    let signature = signer.only_signature();
 
     let SignedCredential::MsoMdoc {
         issuer_signed_b64,
@@ -171,7 +200,7 @@ fn scalar_es256_mdoc_signs_one_complete_payload_and_forwards_raw_signature() {
         "the signer must receive the complete COSE Sig_structure"
     );
     assert_eq!(
-        issuer_signed.issuer_auth.signature, RAW_ES256_SIGNATURE,
+        issuer_signed.issuer_auth.signature, signature,
         "mdoc assembly must preserve the raw 64-byte ES256 signature"
     );
 

@@ -79,6 +79,7 @@ class CborTesting {
 
     gw.invprod_decode = L.konst(gwS.invprod_decode);
     gw.cc0_counter = CTR.as_counter(gwS.cc0_counter);
+    gw.neg_cc0_counter = CTR.as_counter(gwS.neg_cc0_counter);
     gw.invprod_parse = L.konst(gwS.invprod_parse);
   }
 

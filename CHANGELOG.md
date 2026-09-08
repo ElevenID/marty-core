@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Prepare the synchronized Marty 0.2 release: credential issuer operations now
+  expose only remote KMS prepare/assemble flows, secret-returning crypto APIs
+  use zeroizing wrappers, and verification/session capabilities require their
+  explicit Cargo features. Applications that previously generated, imported,
+  serialized, or used credential private keys in Marty must move those
+  operations to their remote key manager.
+- Compile JOSE verification APIs only when `jose-verification` or a consuming
+  issuer/verifier/wallet/LTI role selects the maintained verification provider;
+  no-role protocol/type builds no longer expose a backend they do not contain.
+- Require the explicit Ed448/eMRTD capability before compiling the Ed448
+  backend; ordinary EdDSA and KMS issuer builds now contain Ed25519 verification
+  only, while CSCA/eMRTD builds retain Ed448 verification.
 - Advance the exact ElevenID `sd-jwt-rs` pin through its reviewed serial
   issuance and verification refactors and consumer-compatible WASM dependency
   resolution while keeping `parallel` and benchmark features disabled. Wallet
@@ -35,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Reject weak-key Ed25519 forgeries and non-canonical EC/Ed25519 SubjectPublicKeyInfo
+  metadata at every public verification entry point.
+- Reject small-order Ed25519 issuer keys in remote credential completion and
+  verify returned EdDSA signatures with strict Ed25519 semantics.
+- Keep Ed448 eMRTD verification while compiling only the backend's public
+  curve/scalar operations; CI rejects its combined signing, PKCS#8, serde,
+  standard-library, and default features in the production KMS+CSCA graph.
+- Remove local credential-private-key APIs from production Rust and Python
+  artifacts, enforce KMS-only dependency graphs, zeroize mdoc/ZK/session secret
+  state on success and failure, and bind every opaque remote signature to the
+  exact prepared payload and public key.
 - Remove the unsound `im` and `sized-chunks` path from linked-data traversal
   through an exact, behavior-locked ElevenID revision.
 - Reject mdoc holder P-256 and P-384 JWK coordinates that are not valid points

@@ -412,6 +412,7 @@ impl DeviceEngagement {
     }
 
     /// Generate a QR code containing the device engagement
+    #[cfg(feature = "qr-render")]
     pub fn to_qr_code(&self) -> Result<Vec<u8>> {
         use image::Luma;
         use qrcode::QrCode;
@@ -526,6 +527,13 @@ mod tests {
         assert!(
             DeviceEngagement::from_qr_uri(uri.replacen("mdoc:", "https:", 1).as_str()).is_err()
         );
+    }
+
+    #[cfg(feature = "qr-render")]
+    #[test]
+    fn qr_render_emits_png_without_enabling_other_image_codecs() {
+        let png = DeviceEngagement::new_qr().unwrap().to_qr_code().unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     }
 
     #[test]

@@ -104,6 +104,7 @@ mod signature_decode_tests {
     issuer_id,
     verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     subject_id,
     credential_type,
     claims_json,
@@ -118,6 +119,7 @@ fn oid4vci_prepare_sd_jwt(
     issuer_id: &str,
     verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     subject_id: Option<&str>,
     credential_type: &str,
     claims_json: &str,
@@ -138,6 +140,7 @@ fn oid4vci_prepare_sd_jwt(
         issuer_id: issuer_id.to_owned(),
         verification_method_id: verification_method_id.to_owned(),
         algorithm: algorithm.to_owned(),
+        issuer_public_jwk: issuer_public_jwk_json.to_owned(),
         subject_id: subject_id.map(str::to_owned),
         credential_type: credential_type.to_owned(),
         claims: parse_claims(claims_json)?,
@@ -208,6 +211,7 @@ fn assemble_sd_jwt_impl(
     issuer_id,
     verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     subject_id,
     credential_type,
     claims_json,
@@ -221,6 +225,7 @@ fn oid4vci_prepare_jwt_vc(
     issuer_id: &str,
     verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     subject_id: Option<&str>,
     credential_type: &str,
     claims_json: &str,
@@ -242,6 +247,7 @@ fn oid4vci_prepare_jwt_vc(
         issuer_id: issuer_id.to_owned(),
         verification_method_id: verification_method_id.to_owned(),
         algorithm: algorithm.to_owned(),
+        issuer_public_jwk: issuer_public_jwk_json.to_owned(),
         subject_id: subject_id.map(str::to_owned),
         credential_type: credential_type.to_owned(),
         claims: parse_claims(claims_json)?,
@@ -268,6 +274,7 @@ fn oid4vci_prepare_jwt_vc(
     issuer_id,
     verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     subject_id,
     credential_type,
     claims_json,
@@ -281,6 +288,7 @@ fn oid4vci_prepare_open_badge_v3_jwt_vc(
     issuer_id: &str,
     verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     subject_id: Option<&str>,
     credential_type: &str,
     claims_json: &str,
@@ -293,6 +301,7 @@ fn oid4vci_prepare_open_badge_v3_jwt_vc(
         issuer_id,
         verification_method_id,
         algorithm,
+        issuer_public_jwk_json,
         subject_id,
         credential_type,
         claims_json,
@@ -362,6 +371,31 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
+    fn test_signing_key() -> p256::ecdsa::SigningKey {
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        p256::ecdsa::SigningKey::from_slice(&scalar).unwrap()
+    }
+
+    fn issuer_public_jwk() -> String {
+        let point = test_signing_key().verifying_key().to_encoded_point(false);
+        serde_json::json!({
+            "alg": "ES256",
+            "crv": "P-256",
+            "kty": "EC",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        })
+        .to_string()
+    }
+
+    fn sign_payload(payload: &[u8]) -> String {
+        use p256::ecdsa::signature::Signer as _;
+
+        let signature: p256::ecdsa::Signature = test_signing_key().sign(payload);
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    }
+
     fn decode_segment(segment: &str) -> serde_json::Value {
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(segment)
@@ -375,6 +409,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -406,6 +441,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -427,6 +463,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "AccessBadge",
             r#"{"credentialStatus":{"type":"BitstringStatusListEntry"}}"#,
@@ -464,6 +501,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "open_badge",
             r#"{"achievement_name":"Member Badge","achievement_description":"Verified member","email":"holder@example.test"}"#,
@@ -494,6 +532,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "open_badge",
             r#"{"achievement_name":"Member Badge"}"#,
@@ -512,6 +551,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             None,
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -528,11 +568,11 @@ mod tests {
         assert!(assemble_sd_jwt_impl(&mut prepared, &malformed).is_err());
         assert!(prepared.inner.is_some());
 
-        let mut valid_signature = [0u8; 64];
-        valid_signature[31] = 1;
-        valid_signature[63] = 1;
-        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
-        assert!(assemble_sd_jwt_impl(&mut prepared, &valid_width).is_ok());
+        let signature = match prepared.inner.as_ref().unwrap() {
+            PreparedCredential::SdJwt(state) => sign_payload(state.signing_payload()),
+            _ => unreachable!(),
+        };
+        assert!(assemble_sd_jwt_impl(&mut prepared, &signature).is_ok());
         assert!(prepared.inner.is_none());
     }
 
@@ -542,6 +582,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             None,
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -557,11 +598,11 @@ mod tests {
         assert!(assemble_jwt_vc_impl(&mut prepared, &malformed).is_err());
         assert!(prepared.inner.is_some());
 
-        let mut valid_signature = [0u8; 64];
-        valid_signature[31] = 1;
-        valid_signature[63] = 1;
-        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
-        assert!(assemble_jwt_vc_impl(&mut prepared, &valid_width).is_ok());
+        let signature = match prepared.inner.as_ref().unwrap() {
+            PreparedCredential::JwtVc(state) => sign_payload(state.signing_payload()),
+            _ => unreachable!(),
+        };
+        assert!(assemble_jwt_vc_impl(&mut prepared, &signature).is_ok());
         assert!(prepared.inner.is_none());
     }
 }

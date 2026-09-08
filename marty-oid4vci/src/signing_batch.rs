@@ -639,6 +639,7 @@ struct FrozenSignerIdentity {
     algorithm: SigningAlgorithm,
     issuer_id: String,
     kid_url: String,
+    public_jwk: String,
 }
 
 impl FrozenSignerIdentity {
@@ -646,10 +647,14 @@ impl FrozenSignerIdentity {
         let algorithm = signer.algorithm();
         let issuer_id = signer.issuer_id().to_owned();
         let kid_url = signer.kid_url();
+        let public_jwk = signer
+            .public_jwk()
+            .map_err(|_| SigningBatchError::batch(SigningBatchErrorKind::InvalidScope))?;
         let identity = Self {
             algorithm,
             issuer_id,
             kid_url,
+            public_jwk,
         };
         identity.validate()?;
         Ok(identity)
@@ -671,6 +676,9 @@ impl FrozenSignerIdentity {
         signer.algorithm() == self.algorithm
             && signer.issuer_id() == self.issuer_id
             && signer.kid_url() == self.kid_url
+            && signer
+                .public_jwk()
+                .is_ok_and(|public_jwk| public_jwk == self.public_jwk)
     }
 
     fn preparation_signer(&self) -> FrozenPreparationSigner<'_> {
@@ -705,6 +713,10 @@ impl CredentialSigner for FrozenPreparationSigner<'_> {
 
     fn kid_url(&self) -> String {
         self.identity.kid_url.clone()
+    }
+
+    fn public_jwk(&self) -> crate::Oid4vciResult<String> {
+        Ok(self.identity.public_jwk.clone())
     }
 }
 
@@ -1191,7 +1203,6 @@ mod tests {
     use crate::formats::sd_jwt::prepare_sd_jwt_with_holder_public_jwk_and_sources;
     use crate::types::CredentialPayloadFormat;
 
-    const RAW_ES256_SIGNATURE: [u8; ES256_SIGNATURE_LENGTH] = [1; ES256_SIGNATURE_LENGTH];
     const BACKEND_SECRET: &str = "kms-tenant-secret-route-91";
     #[cfg(not(target_family = "wasm"))]
     const TEST_SIGNER_PANIC: &str = "intentional concurrent signer test panic";
@@ -1202,7 +1213,9 @@ mod tests {
     const KID_SECRET: &str = "did:example:issuer-private-canary#key-private-canary";
 
     struct RecordingSigner {
+        signing_key: p256::ecdsa::SigningKey,
         calls: Mutex<Vec<Vec<u8>>>,
+        signatures: Mutex<Vec<Vec<u8>>>,
         metadata_state: AtomicUsize,
         fail_at: Option<usize>,
         initial_algorithm: SigningAlgorithm,
@@ -1211,7 +1224,9 @@ mod tests {
     impl RecordingSigner {
         fn es256() -> Self {
             Self {
+                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
+                signatures: Mutex::new(Vec::new()),
                 metadata_state: AtomicUsize::new(0),
                 fail_at: None,
                 initial_algorithm: SigningAlgorithm::ES256,
@@ -1220,7 +1235,9 @@ mod tests {
 
         fn failing_at(ordinal: usize) -> Self {
             Self {
+                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
+                signatures: Mutex::new(Vec::new()),
                 metadata_state: AtomicUsize::new(0),
                 fail_at: Some(ordinal),
                 initial_algorithm: SigningAlgorithm::ES256,
@@ -1229,7 +1246,9 @@ mod tests {
 
         fn with_algorithm(algorithm: SigningAlgorithm) -> Self {
             Self {
+                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
+                signatures: Mutex::new(Vec::new()),
                 metadata_state: AtomicUsize::new(0),
                 fail_at: None,
                 initial_algorithm: algorithm,
@@ -1242,6 +1261,10 @@ mod tests {
 
         fn call_count(&self) -> usize {
             self.calls.lock().unwrap().len()
+        }
+
+        fn signature_at(&self, ordinal: usize) -> Vec<u8> {
+            self.signatures.lock().unwrap()[ordinal].clone()
         }
     }
 
@@ -1259,7 +1282,11 @@ mod tests {
             if self.fail_at == Some(ordinal) {
                 return Err(Oid4vciError::SigningError(BACKEND_SECRET.into()));
             }
-            Ok(RAW_ES256_SIGNATURE.to_vec())
+            use p256::ecdsa::signature::Signer as _;
+            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
+            let signature = signature.to_bytes().to_vec();
+            self.signatures.lock().unwrap().push(signature.clone());
+            Ok(signature)
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -1284,6 +1311,12 @@ mod tests {
             } else {
                 KID_SECRET.into()
             }
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk_for_key(
+                &self.signing_key,
+            ))
         }
     }
 
@@ -1338,6 +1371,12 @@ mod tests {
 
         fn kid_url(&self) -> String {
             KID_SECRET.into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk_for_key(
+                &self.signing_key,
+            ))
         }
     }
 
@@ -1567,6 +1606,12 @@ mod tests {
                 KID_SECRET.into()
             }
         }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk_for_key(
+                &self.signing_key,
+            ))
+        }
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -1696,6 +1741,12 @@ mod tests {
 
         fn kid_url(&self) -> String {
             KID_SECRET.into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk_for_key(
+                &self.signing_key,
+            ))
         }
     }
 
@@ -2256,7 +2307,7 @@ mod tests {
         );
         assert_eq!(
             URL_SAFE_NO_PAD.decode(segments[2]).unwrap(),
-            RAW_ES256_SIGNATURE
+            signer.signature_at(0)
         );
         let header: serde_json::Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[0]).unwrap()).unwrap();
@@ -2282,7 +2333,7 @@ mod tests {
         );
         assert_eq!(
             URL_SAFE_NO_PAD.decode(sd_jwt_segments[2]).unwrap(),
-            RAW_ES256_SIGNATURE
+            signer.signature_at(1)
         );
         let sd_jwt_payload: serde_json::Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(sd_jwt_segments[1]).unwrap()).unwrap();
@@ -2305,7 +2356,7 @@ mod tests {
         let issuer_signed: isomdl::definitions::IssuerSigned =
             isomdl::cbor::from_slice(&issuer_signed_bytes).unwrap();
         assert_eq!(issuer_signed.issuer_auth.tbs_data(&[]), payloads[2]);
-        assert_eq!(issuer_signed.issuer_auth.signature, RAW_ES256_SIGNATURE);
+        assert_eq!(issuer_signed.issuer_auth.signature, signer.signature_at(2));
     }
 
     #[test]

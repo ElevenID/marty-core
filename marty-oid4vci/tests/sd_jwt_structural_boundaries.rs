@@ -49,6 +49,10 @@ impl CredentialSigner for SignerSpy {
     fn kid_url(&self) -> String {
         "did:example:structural-test-issuer#key-1".into()
     }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        Ok(r#"{"alg":"ES256","crv":"P-256","kty":"EC","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into())
+    }
 }
 
 fn test_key() -> IssuerKey {
@@ -110,6 +114,12 @@ fn remote_request() -> RemoteSdJwtRequest {
         issuer_id: "did:web:issuer.example".into(),
         verification_method_id: "did:web:issuer.example#key-1".into(),
         algorithm: "ES256".into(),
+        issuer_public_jwk: serde_json::json!({
+            "kty": "EC", "crv": "P-256", "alg": "ES256",
+            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+        })
+        .to_string(),
         subject_id: Some("did:example:canonical-holder".into()),
         credential_type: "https://credentials.example/StructuralBoundary".into(),
         claims: HashMap::from([(

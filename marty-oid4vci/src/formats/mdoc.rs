@@ -22,7 +22,9 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use crate::signer::{validate_remote_signature, CredentialSigner};
+use crate::signer::{
+    validate_signer_public_jwk_for_algorithm, verify_remote_signature, CredentialSigner,
+};
 #[cfg(test)]
 use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
@@ -202,6 +204,7 @@ pub struct PreparedMdoc {
     /// The tagged CBOR IssuerSignedItem entries.
     issuer_signed_items: Vec<CborValue>,
     algorithm: crate::types::SigningAlgorithm,
+    issuer_public_jwk: String,
 }
 
 impl PreparedMdoc {
@@ -222,7 +225,12 @@ impl PreparedMdoc {
 
     /// Check a remote signer's raw output without consuming prepared state.
     pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
-        validate_remote_signature(self.algorithm, signature)
+        verify_remote_signature(
+            self.algorithm,
+            &self.issuer_public_jwk,
+            self.signing_payload(),
+            signature,
+        )
     }
 }
 
@@ -242,6 +250,7 @@ pub(crate) struct ValidatedMdocPreparation {
     validity_duration: chrono::TimeDelta,
     device_key: Option<CborValue>,
     cose_algorithm: iana::Algorithm,
+    issuer_public_jwk: String,
     issuer_claims: Vec<ValidatedMdocClaim>,
 }
 
@@ -541,12 +550,18 @@ fn prepare_mdoc_with_inputs_and_digest_executor<'a>(
     next_salt: impl FnMut() -> [u8; 32],
     digest_executor: &dyn DigestExecutor,
 ) -> Oid4vciResult<PreparedMdoc> {
-    let preparation = validate_mdoc_preparation_with_issuer_claims(
-        signer.algorithm(),
+    let algorithm = signer.algorithm();
+    let mut preparation = validate_mdoc_preparation_with_issuer_claims(
+        algorithm,
+        String::new(),
         claims,
         holder_public_jwk,
         issuer_claims,
     )?;
+    // Preserve the format-validation boundary and error precedence before
+    // consulting remote KMS metadata, then bind the validated key to the
+    // otherwise-complete prepared state.
+    preparation.issuer_public_jwk = validate_signer_public_jwk_for_algorithm(signer, algorithm)?;
     prepare_validated_mdoc_with_digest_executor(
         preparation,
         credential_id,
@@ -565,6 +580,7 @@ fn prepare_mdoc_with_inputs_and_digest_executor<'a>(
 #[cfg(any(test, feature = "issuer"))]
 pub(crate) fn validate_mdoc_preparation(
     signing_algorithm: crate::types::SigningAlgorithm,
+    issuer_public_jwk: String,
     claims: &CredentialClaims,
     holder_public_jwk: Option<&serde_json::Value>,
 ) -> Oid4vciResult<ValidatedMdocPreparation> {
@@ -575,6 +591,7 @@ pub(crate) fn validate_mdoc_preparation(
         .map(|(claim_name, claim_value)| (claim_name.as_str(), claim_value));
     validate_mdoc_preparation_with_issuer_claims(
         signing_algorithm,
+        issuer_public_jwk,
         claims,
         holder_public_jwk,
         issuer_claims,
@@ -583,6 +600,7 @@ pub(crate) fn validate_mdoc_preparation(
 
 fn validate_mdoc_preparation_with_issuer_claims<'a>(
     signing_algorithm: crate::types::SigningAlgorithm,
+    issuer_public_jwk: String,
     claims: &CredentialClaims,
     holder_public_jwk: Option<&serde_json::Value>,
     issuer_claims: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
@@ -608,6 +626,7 @@ fn validate_mdoc_preparation_with_issuer_claims<'a>(
         validity_duration,
         device_key,
         cose_algorithm,
+        issuer_public_jwk,
         issuer_claims,
     })
 }
@@ -652,6 +671,7 @@ fn finish_mdoc_preparation(
         validity_duration: _,
         device_key,
         cose_algorithm,
+        issuer_public_jwk,
         issuer_claims: _,
     } = preparation;
     let algorithm = match cose_algorithm {
@@ -696,6 +716,7 @@ fn finish_mdoc_preparation(
         namespace,
         issuer_signed_items: digest_assembly.issuer_signed_items,
         algorithm,
+        issuer_public_jwk,
     })
 }
 
@@ -1544,6 +1565,10 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:issuer#key-1".into()
         }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_public_jwk(self.0))
+        }
     }
 
     #[derive(Debug)]
@@ -1577,6 +1602,10 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "did:example:issuer#key-1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_public_jwk(self.algorithm))
         }
     }
 
@@ -1903,8 +1932,13 @@ mod tests {
 
     fn generated_batch_plan_item() -> ValidatedMdocBatchPlanItem {
         ValidatedMdocBatchPlanItem::with_generated_credential_id(
-            validate_mdoc_preparation(SigningAlgorithm::ES256, &test_mdoc_claims([]), None)
-                .unwrap(),
+            validate_mdoc_preparation(
+                SigningAlgorithm::ES256,
+                crate::signer::test_es256_public_jwk(),
+                &test_mdoc_claims([]),
+                None,
+            )
+            .unwrap(),
         )
     }
 
@@ -2018,6 +2052,7 @@ mod tests {
                     item.signed_at,
                     validate_mdoc_preparation(
                         item.signing_algorithm,
+                        crate::signer::test_public_jwk(item.signing_algorithm),
                         &item.claims,
                         item.holder_public_jwk.as_ref(),
                     )
@@ -2062,15 +2097,11 @@ mod tests {
     ) -> (u64, String, Vec<u8>, String) {
         let credential_id = prepared.credential_id.clone();
         let tbs_data = prepared.tbs_data.clone();
-        let signature_len = match prepared.algorithm() {
-            SigningAlgorithm::ES256 | SigningAlgorithm::EdDSA | SigningAlgorithm::ES256K => 64,
-            SigningAlgorithm::ES384 => 96,
-            SigningAlgorithm::RS256 => 256,
-        };
+        let signature = crate::signer::test_signature(prepared.algorithm(), &prepared.tbs_data);
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id: assembled_id,
-        } = assemble_mdoc(prepared, &vec![0xa5; signature_len]).unwrap()
+        } = assemble_mdoc(prepared, &signature).unwrap()
         else {
             panic!("batch fixture must assemble an mdoc")
         };
@@ -2564,7 +2595,11 @@ mod tests {
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id,
-        } = assemble_mdoc(prepared, &[0xa5; 64]).unwrap()
+        } = ({
+            let signature =
+                crate::signer::test_signature(prepared.algorithm(), prepared.signing_payload());
+            assemble_mdoc(prepared, &signature).unwrap()
+        })
         else {
             panic!("nested fixture must assemble an mdoc");
         };
@@ -2647,7 +2682,11 @@ mod tests {
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id,
-        } = assemble_mdoc(prepared, &[0xa5; 64]).unwrap()
+        } = ({
+            let signature =
+                crate::signer::test_signature(prepared.algorithm(), prepared.signing_payload());
+            assemble_mdoc(prepared, &signature).unwrap()
+        })
         else {
             panic!("public nested fixture must assemble an mdoc");
         };
@@ -3414,7 +3453,8 @@ mod tests {
             "COSE Sig_structure bytes must remain stable for remote signing",
         );
 
-        let signed = assemble_mdoc(prepared, &[0xa5; 64]).unwrap();
+        let signature = key.sign(prepared.signing_payload()).unwrap();
+        let signed = assemble_mdoc(prepared, &signature).unwrap();
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id,
@@ -3423,11 +3463,30 @@ mod tests {
             panic!("Expected MsoMdoc");
         };
 
+        let assembled = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            &issuer_signed_b64,
+        )
+        .unwrap();
+        let CborValue::Map(issuer_signed) =
+            ciborium::from_reader::<CborValue, _>(&assembled[..]).unwrap()
+        else {
+            panic!("IssuerSigned must be a map");
+        };
+        let CborValue::Map(namespaces) = map_value(&issuer_signed, "nameSpaces") else {
+            panic!("nameSpaces must be a map");
+        };
+        let (_, CborValue::Array(items)) = &namespaces[0] else {
+            panic!("namespace must contain IssuerSignedItems");
+        };
         assert_eq!(
-            issuer_signed_b64,
-            "ompuYW1lU3BhY2VzoXFvcmcuaXNvLjE4MDEzLjUuMYPYGFhkpGhkaWdlc3RJRABmcmFuZG9tWCAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eH3FlbGVtZW50SWRlbnRpZmllcmpnaXZlbl9uYW1lbGVsZW1lbnRWYWx1ZWVBbGljZdgYWGykaGRpZ2VzdElEAWZyYW5kb21YIICBgoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6fcWVsZW1lbnRJZGVudGlmaWVyamJpcnRoX2RhdGVsZWxlbWVudFZhbHVl2QPsajE5OTAtMDEtMTXYGFhlpGhkaWdlc3RJRAJmcmFuZG9tWCD__v38-_r5-Pf29fTz8vHw7-7t7Ovq6ejn5uXk4-Lh4HFlbGVtZW50SWRlbnRpZmllcmtmYW1pbHlfbmFtZWxlbGVtZW50VmFsdWVlU21pdGhqaXNzdWVyQXV0aIRDoQEmoRghRDCCAQpZAaLYGFkBnaZndmVyc2lvbmMxLjBvZGlnZXN0QWxnb3JpdGhtZ1NIQS0yNTZsdmFsdWVEaWdlc3RzoXFvcmcuaXNvLjE4MDEzLjUuMaMAWCAKt32OOsYVqUvbMFQA3zh2_suXsV7pBIoIeh7F4whVGAFYINZoqxbU3lwEoz1b9qT1HODLgtjJxigDer8CvDDb7nkgAlggX4lKjQYTT9BbwJaEYSvGmQMN3i3O3Nf764yGqVH-_TtnZG9jVHlwZXVvcmcuaXNvLjE4MDEzLjUuMS5tRExsdmFsaWRpdHlJbmZvo2ZzaWduZWTAdDIwMjYtMDgtMjlUMTI6MzQ6NTZaaXZhbGlkRnJvbcB0MjAyNi0wOC0yOVQxMjozNDo1NlpqdmFsaWRVbnRpbMB0MjAyNy0wOC0yOVQxMjozNDo1NlptZGV2aWNlS2V5SW5mb6FpZGV2aWNlS2V5pAECIAEhWCBrF9Hy4SxCR_i85uVjpEDydwN9gS3rM6D0oTlF2JjCliJYIE_jQuL-Gn-bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1WEClpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWl",
-            "IssuerSigned assembly must preserve the planned item order",
+            items, &expected_items,
+            "assembly must preserve planned item order"
         );
+        let CborValue::Array(issuer_auth) = map_value(&issuer_signed, "issuerAuth") else {
+            panic!("issuerAuth must be a COSE_Sign1 array");
+        };
+        assert_eq!(issuer_auth.get(3), Some(&CborValue::Bytes(signature)));
         assert_eq!(
             credential_id,
             "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"

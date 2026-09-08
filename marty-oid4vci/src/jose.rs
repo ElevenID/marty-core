@@ -4,10 +4,11 @@
 //! module owns JOSE encoding, parsing, key validation, signing, and verification.
 
 use base64::Engine;
+#[cfg(any(test, feature = "jose-verification"))]
 use jsonwebtoken::{
-    crypto::verify as verify_jws_signature, decode, decode_header, jwk::Jwk, Algorithm,
-    DecodingKey, Validation,
+    crypto::verify as verify_jws_signature, decode, decode_header, DecodingKey, Validation,
 };
+use jsonwebtoken::{jwk::Jwk, Algorithm};
 use serde::de::{self, Error as DeError, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -45,6 +46,25 @@ pub fn sign_compact_jwt(
     let signature_b64 = B64.encode(&signature);
 
     Ok(format!("{}.{}", message, signature_b64))
+}
+
+/// Construct an ES256 compact JWS fixture without installing a production
+/// local-signing provider.
+#[cfg(test)]
+pub(crate) fn sign_test_compact_es256(
+    secret: &p256::SecretKey,
+    header: &serde_json::Value,
+    payload: &serde_json::Value,
+) -> String {
+    use p256::ecdsa::signature::Signer as _;
+
+    let protected = B64.encode(serde_json::to_vec(header).expect("test header JSON"));
+    let payload = B64.encode(serde_json::to_vec(payload).expect("test payload JSON"));
+    let signing_input = format!("{protected}.{payload}");
+    let signing_key = p256::ecdsa::SigningKey::from_slice(secret.to_bytes().as_slice())
+        .expect("valid P-256 test key");
+    let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
+    format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
 }
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -169,8 +189,9 @@ pub(crate) fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Va
 /// Decode the protected header of a compact JWT without treating its claims as trusted.
 ///
 /// This is crate-private so protocol validators can select an externally trusted
-/// key before calling [`verify_compact_jwt_with_public_jwk`]. Callers must never
+/// key before calling `verify_compact_jwt_with_public_jwk`. Callers must never
 /// use the returned header as proof that the JWT is authentic.
+#[cfg(feature = "jose-verification")]
 pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vciResult<Value> {
     decode_unverified_compact_jwt(compact_jwt).map(|(header, _)| header)
 }
@@ -178,7 +199,7 @@ pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vci
 /// Decode unique JOSE header and claim objects for protocol-specific key selection.
 ///
 /// The values remain untrusted until a protocol validator selects an allowed key
-/// and calls [`verify_compact_jwt_with_public_jwk`].
+/// and calls `verify_compact_jwt_with_public_jwk`.
 pub(crate) fn decode_unverified_compact_jwt(compact_jwt: &str) -> Oid4vciResult<(Value, Value)> {
     let parts = split_compact_jwt(compact_jwt, JWT_LIMITS)
         .map_err(|message| Oid4vciError::JwtError(message.into()))?;
@@ -218,6 +239,8 @@ fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
         "RS384" => Ok(Algorithm::RS384),
         "RS512" => Ok(Algorithm::RS512),
         "PS256" => Ok(Algorithm::PS256),
+        "PS384" => Ok(Algorithm::PS384),
+        "PS512" => Ok(Algorithm::PS512),
         _ => Err(Oid4vciError::JwtError(format!(
             "Unsupported JWT signature algorithm: {name}"
         ))),
@@ -271,11 +294,15 @@ pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oi
 /// not trust an embedded key, perform network resolution, or apply claim
 /// defaults. Duplicate JOSE or claim members and private JWK material fail
 /// closed.
+#[cfg(any(test, feature = "jose-verification"))]
 pub fn verify_compact_jwt_with_public_jwk(
     compact_jwt: &str,
     public_jwk_json: &str,
     expected_algorithm: &str,
 ) -> Oid4vciResult<VerifiedCompactJwt> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let (header_value, claims) = decode_unverified_compact_jwt(compact_jwt)?;
 
     let expected = algorithm(expected_algorithm)?;
@@ -321,12 +348,16 @@ pub fn verify_compact_jwt_with_public_jwk(
 /// challenges. Public-key policy is identical to compact JWT verification:
 /// private fields, algorithm confusion, non-signing use, and unexpected
 /// `key_ops` fail closed. ECDSA signatures may use JOSE raw or ASN.1 DER form.
+#[cfg(any(test, feature = "jose-verification"))]
 pub fn verify_detached_signature_with_public_jwk(
     message: &[u8],
     signature: &[u8],
     public_jwk_json: &str,
     expected_algorithm: &str,
 ) -> Oid4vciResult<bool> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let expected = algorithm(expected_algorithm)?;
     if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
         return Err(Oid4vciError::KeyError(
@@ -369,9 +400,7 @@ pub fn normalize_ecdsa_signature(
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::pkcs8::EncodePrivateKey;
     use p256::SecretKey;
     use serde_json::json;
 
@@ -381,13 +410,11 @@ mod tests {
         let x = URL_SAFE_NO_PAD.encode(public.x().expect("x coordinate"));
         let y = URL_SAFE_NO_PAD.encode(public.y().expect("y coordinate"));
         let jwk = json!({"kty":"EC","crv":"P-256","alg":"ES256","x":x,"y":y});
-        let der = secret.to_pkcs8_der().expect("PKCS#8 key");
-        let token = encode(
-            &Header::new(Algorithm::ES256),
+        let token = sign_test_compact_es256(
+            &secret,
+            &json!({"alg":"ES256","typ":"JWT"}),
             &json!({"sub":"wallet","jti":"assertion-1"}),
-            &EncodingKey::from_ec_der(der.as_bytes()),
-        )
-        .expect("signed JWT");
+        );
         (token, jwk.to_string())
     }
 

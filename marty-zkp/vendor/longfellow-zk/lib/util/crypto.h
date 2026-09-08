@@ -21,11 +21,13 @@
 // Finally, this library provides a method to generate random bytes using the
 // openssl library.
 
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 #include "util/panic.h"
+#include "util/secure_wipe.h"
 #include "openssl/sha.h"
 #include "openssl/evp.h"
 #include "openssl/aes.h"
@@ -40,19 +42,25 @@ constexpr size_t kPRFOutputSize = 16;
 class SHA256 {
  public:
   SHA256() { SHA256_Init(&sha_); }
+  ~SHA256() { secure_wipe_object(sha_); }
 
   // Disable copy for good measure.
   SHA256(const SHA256&) = delete;
   SHA256& operator=(const SHA256&) = delete;
 
-  void Update(const uint8_t bytes[/*n*/], size_t n) { SHA256_Update(&sha_, bytes, n); }
+  void Update(const uint8_t bytes[/*n*/], size_t n) {
+    check(n < INT_MAX, "n < INT_MAX");
+    SHA256_Update(&sha_, bytes, n);
+  }
+
   void DigestData(uint8_t digest[/* kSHA256DigestSize */]) {
     SHA256_Final(digest, &sha_);
   }
   void CopyState(const SHA256& src) { sha_ = src.sha_; }
 
   void Update8(uint64_t x) {
-    uint8_t buf[8];
+    uint8_t buf[8] = {};
+    SecureObjectWipeGuard<uint8_t[8]> wipe_buf(buf);
     for (size_t i = 0; i < 8; ++i) {
       buf[i] = x & 0xff;
       x >>= 8;
@@ -75,7 +83,10 @@ class PRF {
     check(ret == 1, "EVP_EncryptInit_ex failed");
   }
 
-  ~PRF() { EVP_CIPHER_CTX_free(ctx_); }
+  ~PRF() {
+    EVP_CIPHER_CTX_free(ctx_);
+    secure_wipe_object(ctx_);
+  }
 
   // Disable copy for good measure.
   PRF(const PRF&) = delete;

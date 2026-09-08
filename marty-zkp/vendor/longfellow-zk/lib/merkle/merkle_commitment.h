@@ -25,6 +25,7 @@
 #include "merkle/merkle_tree.h"
 #include "random/random.h"
 #include "util/crypto.h"
+#include "util/secure_wipe.h"
 
 namespace proofs {
 
@@ -46,18 +47,29 @@ inline size_t merkle_commitment_len(size_t n) { return merkle_tree_len(n); }
 class MerkleCommitment {
  public:
   explicit MerkleCommitment(size_t n) : n_(n), mt_(n), nonce_(n) {}
+  ~MerkleCommitment() { clear_sensitive_nonces(); }
+
+  // Erase prover-only salts after the final opening if this object remains
+  // allocated. Subsequent openings return zero nonces and are invalid.
+  void clear_sensitive_nonces() { secure_wipe_vector(nonce_); }
 
   Digest commit(const std::function<void(size_t, SHA256 &)> &updhash,
                 RandomEngine &rng) {
-    for (size_t i = 0; i < n_; ++i) {
-      SHA256 sha;
-      rng.bytes(nonce_[i].bytes, MerkleNonce::kLength);
-      sha.Update(nonce_[i].bytes, MerkleNonce::kLength);
-      updhash(i, sha);
+    clear_sensitive_nonces();
+    try {
+      for (size_t i = 0; i < n_; ++i) {
+        SHA256 sha;
+        rng.bytes(nonce_[i].bytes, MerkleNonce::kLength);
+        sha.Update(nonce_[i].bytes, MerkleNonce::kLength);
+        updhash(i, sha);
 
-      Digest dig;
-      sha.DigestData(dig.data);
-      mt_.set_leaf(i, dig);
+        Digest dig;
+        sha.DigestData(dig.data);
+        mt_.set_leaf(i, dig);
+      }
+    } catch (...) {
+      clear_sensitive_nonces();
+      throw;
     }
 
     return mt_.build_tree();

@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/ElevenID/marty-core"
 
 [dependencies]
-marty-types = { version = "0.1.5", path = "../marty-types" }
+marty-types = { version = "0.2.0", path = "../marty-types" }
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 libc = "0.2"
@@ -17,6 +17,9 @@ zeroize = "1.7"
 cc = "1.0"
 cmake = "0.1"
 bindgen = "0.72" # In a real scenario, we'd use this to generate bindings
+
+[dev-dependencies]
+sha2.workspace = true
 
 [features]
 default = ["verifier"]

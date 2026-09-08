@@ -35,27 +35,24 @@ ecdsa-verification = [
     "p256/ecdsa-core",
     "p256/arithmetic",
     "p256/sha256",
-    "p256/pkcs8",
     "p256/std",
     "p384/ecdsa-core",
     "p384/arithmetic",
     "p384/sha384",
-    "p384/pkcs8",
     "p384/std",
     "p521/ecdsa-core",
     "p521/arithmetic",
     "p521/sha512",
     "p521/std",
 ]
-eddsa-verification = [
-    "dep:ed25519-dalek",
-    "dep:ed448-goldilocks-plus",
-    "ed25519-dalek/pkcs8",
-]
+eddsa-verification = ["dep:ed25519-dalek"]
+# Ed448 is an eMRTD algorithm. Marty uses only the backend's public
+# curve/scalar types and does not enable its combined signing module.
+ed448-verification = ["dep:ed448-goldilocks-plus"]
 rsa-verification = ["dep:rsa", "dep:sha2"]
 # Legacy ICAO algorithms stay first-class for eMRTD artifacts, but are absent
 # from unrelated verifier/session builds unless this capability is selected.
-emrtd-compat = ["rsa-verification", "dep:sha1", "dep:des", "dep:cbc", "dep:cipher"]
+emrtd-compat = ["rsa-verification", "ed448-verification", "dep:aws-lc-rs", "dep:sha1", "dep:des", "dep:cbc", "dep:cipher", "dep:zeroize"]
 jwk = [
     "dep:elliptic-curve",
     "dep:p256",
@@ -84,8 +81,8 @@ x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
 crl = ["x509", "dep:pem-rfc7468"]
 ocsp = ["x509", "dep:x509-ocsp"]
-symmetric = ["dep:aes", "dep:aes-gcm", "dep:cbc", "dep:cipher", "dep:cmac", "dep:hmac", "dep:sha2"]
-kdf = ["hashing", "dep:hkdf", "dep:pbkdf2"]
+symmetric = ["dep:aes", "dep:aes-gcm", "dep:aws-lc-rs", "dep:cbc", "dep:cipher", "dep:cmac", "dep:ghash", "dep:polyval", "dep:sha2", "dep:zeroize"]
+kdf = ["hashing", "dep:aws-lc-rs", "dep:zeroize"]
 public-key-codec = [
     "dep:ed25519-dalek",
     "dep:elliptic-curve",
@@ -129,13 +126,12 @@ x509-ocsp = { workspace = true, optional = true }
 # Symmetric encryption
 aes-gcm = { workspace = true, optional = true }
 aes = { workspace = true, optional = true }
+ghash = { workspace = true, optional = true }
+polyval = { workspace = true, optional = true }
 cbc = { workspace = true, optional = true }
 des = { workspace = true, optional = true }
 
-# Key derivation
-hkdf = { workspace = true, optional = true }
-pbkdf2 = { workspace = true, optional = true }
-hmac = { workspace = true, optional = true }
+# Key derivation and MAC
 cmac = { workspace = true, optional = true }
 cipher = { workspace = true, optional = true }
 
@@ -163,11 +159,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true, optional = true }
 
-# Hex encoding (for fingerprints)
+# Hex encoding (for fingerprints and vectors)
 hex = "0.4"
 zkryptium = { workspace = true, optional = true }
 
-[dev-dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+aws-lc-rs = { workspace = true, optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 cms = { workspace = true, features = ["builder"] }
 ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, features = ["signing"] }
 ed25519-dalek = { workspace = true, features = ["pem", "pkcs8", "rand_core"] }
@@ -184,6 +183,9 @@ signature = { workspace = true }
 tempfile = { workspace = true }
 rcgen = { workspace = true }
 x509-cert = { workspace = true, features = ["builder"] }
+
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.76"
 
 [[test]]
 name = "cavp_aes_gcm"
@@ -208,3 +210,7 @@ required-features = ["signature-verification"]
 [[test]]
 name = "rfc5869_hkdf"
 required-features = ["kdf"]
+
+[[test]]
+name = "wasm_key_derivation"
+required-features = ["kdf", "symmetric"]

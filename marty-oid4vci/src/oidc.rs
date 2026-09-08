@@ -365,9 +365,7 @@ fn access_token_hash(access_token: &str, algorithm: &str) -> OidcValidationResul
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::pkcs8::EncodePrivateKey;
     use p256::SecretKey;
     use serde_json::json;
 
@@ -394,11 +392,11 @@ mod tests {
         for (name, value) in claim_overrides.as_object().expect("claim overrides") {
             claims[name] = value.clone();
         }
-        let mut header = Header::new(Algorithm::ES256);
-        header.kid = Some(kid.into());
-        let der = secret.to_pkcs8_der().expect("PKCS#8 key");
-        let token = encode(&header, &claims, &EncodingKey::from_ec_der(der.as_bytes()))
-            .expect("signed ID token");
+        let token = crate::jose::sign_test_compact_es256(
+            &secret,
+            &json!({"alg":"ES256","typ":"JWT","kid":kid}),
+            &claims,
+        );
         (token, json!({"keys":[jwk]}).to_string(), claims.to_string())
     }
 

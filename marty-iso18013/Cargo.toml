@@ -14,13 +14,13 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # Internal dependencies
-marty-types = { version = "0.1.5", path = "../marty-types", optional = true }
-marty-crypto = { version = "0.1.5", path = "../marty-crypto", default-features = false, optional = true }
+marty-types = { version = "0.2.0", path = "../marty-types", optional = true }
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, optional = true }
 
 # CBOR and COSE
 ciborium = "0.2"
 coset = { version = "0.3", optional = true }
-isomdl = { version = "0.2", default-features = false, features = ["session-key-agreement"], optional = true }
+isomdl = { version = "0.3", default-features = false, features = ["session-key-agreement"], optional = true }
 
 # Async runtime
 tokio = { version = "1", features = ["full"], optional = true }
@@ -40,8 +40,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # QR code generation
-qrcode = { version = "0.14", optional = true }
-image = { version = "0.25", optional = true }
+qrcode = { version = "0.14", default-features = false, features = ["image"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 # HTTP client
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
@@ -61,20 +61,20 @@ uuid = { version = "1.0", optional = true }
 pcsc = { version = "2.8", optional = true }
 
 [features]
-default = ["session-protocol"]
+# Preserve the existing default API. Resource-constrained consumers can select
+# `session-protocol` alone to omit QR rasterization and all image codecs.
+default = ["session-protocol", "qr-render"]
 # Passive OpenID4VP transcript binding and diagnostics. This capability does
 # not create, import, or retain a device/session private key.
 verifier = []
-# Holder/reader engagement, ephemeral ECDH, secure messaging, QR, and HTTPS.
+# Holder/reader engagement, ephemeral ECDH, secure messaging, QR payloads, and HTTPS.
 session-protocol = [
     "verifier",
     "dep:async-trait",
     "dep:coset",
-    "dep:image",
     "dep:isomdl",
     "dep:marty-crypto",
     "dep:marty-types",
-    "dep:qrcode",
     "dep:rand",
     "dep:reqwest",
     "dep:tokio",
@@ -85,7 +85,9 @@ session-protocol = [
     "marty-crypto/kdf",
     "marty-crypto/symmetric",
 ]
-python = ["session-protocol", "pyo3", "marty-types/python"]
+# Optional PNG rendering. URI generation and parsing remain in `session-protocol`.
+qr-render = ["session-protocol", "dep:image", "dep:qrcode"]
+python = ["session-protocol", "qr-render", "pyo3", "marty-types/python"]
 ble = ["session-protocol", "btleplug"]
 nfc = ["session-protocol", "pcsc"]
 all-transports = ["ble", "nfc"]
@@ -94,7 +96,7 @@ all-transports = ["ble", "nfc"]
 tempfile = "3.14"
 proptest = "1.5"
 criterion = { workspace = true }
-marty-verification = { version = "0.1.5", path = "../marty-verification" }
+marty-verification = { version = "0.2.0", path = "../marty-verification" }
 rand = "0.8"
 
 [[test]]
@@ -107,7 +109,7 @@ required-features = ["session-protocol"]
 
 [[test]]
 name = "mdoc_structure"
-required-features = ["session-protocol"]
+required-features = ["session-protocol", "qr-render"]
 
 [[test]]
 name = "selective_disclosure"

@@ -18,6 +18,17 @@ pub struct RequestedAttribute {
     pub cbor_value_len: size_t,
 }
 
+impl zeroize::Zeroize for RequestedAttribute {
+    fn zeroize(&mut self) {
+        self.namespace_id.zeroize();
+        self.id.zeroize();
+        self.cbor_value.zeroize();
+        self.namespace_len.zeroize();
+        self.id_len.zeroize();
+        self.cbor_value_len.zeroize();
+    }
+}
+
 // ── Error codes ───────────────────────────────────────────────────────
 
 #[cfg(feature = "prover")]

@@ -1,4 +1,6 @@
 mod es256_signing_matrix;
+#[path = "support/signed_preparation.rs"]
+mod signed_preparation;
 
 use std::{
     collections::HashMap,
@@ -37,6 +39,7 @@ use es256_signing_matrix::{
     expected_claim_names, expected_payload_value, matrix_claims, matrix_enabled, MatrixFormat,
     MatrixSelection, PayloadClass,
 };
+use signed_preparation::{PreparedAssembly, SignedPreparation};
 
 const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
 const WORKER_LIMIT: usize = 8;
@@ -128,6 +131,18 @@ impl CredentialSigner for BenchmarkSigner {
 
     fn kid_url(&self) -> String {
         "did:example:benchmark-issuer#key-1".into()
+    }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        let point = self.signing_key.verifying_key().to_encoded_point(false);
+        Ok(serde_json::json!({
+            "alg": "ES256",
+            "crv": "P-256",
+            "kty": "EC",
+            "x": URL_SAFE_NO_PAD.encode(point.x().expect("uncompressed P-256 x coordinate")),
+            "y": URL_SAFE_NO_PAD.encode(point.y().expect("uncompressed P-256 y coordinate")),
+        })
+        .to_string())
     }
 }
 
@@ -300,6 +315,18 @@ impl BenchmarkPrepared {
             Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature).unwrap(),
             Self::Mdoc(prepared) => assemble_mdoc(*prepared, signature).unwrap(),
         }
+    }
+}
+
+impl PreparedAssembly for BenchmarkPrepared {
+    type Output = SignedCredential;
+
+    fn signing_payload(&self) -> &[u8] {
+        BenchmarkPrepared::signing_payload(self)
+    }
+
+    fn assemble(self, signature: &[u8]) -> Self::Output {
+        BenchmarkPrepared::assemble(self, signature)
     }
 }
 
@@ -889,12 +916,20 @@ fn benchmark_stages(c: &mut Criterion, group_name: &str, composition: BenchmarkC
                                 composition,
                                 claims_batch(composition, batch_size),
                             )
+                            .into_iter()
+                            .map(|prepared| {
+                                SignedPreparation::try_sign(prepared, |payload| {
+                                    signer.sign(payload)
+                                })
+                                .unwrap()
+                            })
+                            .collect::<Vec<_>>()
                         },
-                        |prepared| {
+                        |prepared_and_signatures| {
                             black_box(
-                                prepared
+                                prepared_and_signatures
                                     .into_iter()
-                                    .map(|prepared| prepared.assemble(&[0x5a; 64]))
+                                    .map(SignedPreparation::assemble)
                                     .collect::<Vec<_>>(),
                             )
                         },

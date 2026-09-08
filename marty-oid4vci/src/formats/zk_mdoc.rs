@@ -302,6 +302,10 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:kms-issuer#key-1".into()
         }
+
+        fn public_jwk(&self) -> crate::error::Oid4vciResult<String> {
+            serde_json::to_string(&self.jwk.to_public()).map_err(Into::into)
+        }
     }
 
     #[test]

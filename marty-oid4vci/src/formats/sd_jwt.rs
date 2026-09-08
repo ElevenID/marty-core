@@ -24,7 +24,7 @@ use ssi_jwk::JWK;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 #[cfg(any(test, feature = "issuer"))]
-use crate::signer::{validate_remote_signature, CredentialSigner};
+use crate::signer::{validate_signer_public_jwk, verify_remote_signature, CredentialSigner};
 #[cfg(test)]
 use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
@@ -318,6 +318,7 @@ pub struct PreparedSdJwt {
     /// The credential ID (urn:uuid:...) assigned during preparation.
     credential_id: String,
     algorithm: crate::types::SigningAlgorithm,
+    issuer_public_jwk: String,
 }
 
 #[cfg(any(test, feature = "issuer"))]
@@ -345,7 +346,12 @@ impl PreparedSdJwt {
 
     /// Check a remote signer's raw output without consuming prepared state.
     pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
-        validate_remote_signature(self.algorithm, signature)
+        verify_remote_signature(
+            self.algorithm,
+            &self.issuer_public_jwk,
+            self.signing_payload(),
+            signature,
+        )
     }
 }
 
@@ -744,6 +750,7 @@ fn assemble_sd_jwt_preparation(
         disclosures_suffix,
         credential_id,
         algorithm: signer.algorithm(),
+        issuer_public_jwk: validate_signer_public_jwk(signer)?,
     })
 }
 
@@ -1336,6 +1343,10 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:expiration-test-issuer#key-1".into()
         }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
+        }
     }
 
     #[derive(Debug)]
@@ -1356,6 +1367,10 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "https://issuer.example/keys/1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 
@@ -2447,11 +2462,9 @@ mod tests {
         assert_eq!(payload["credentialSubject"]["name"], "Alice");
         assert!(payload.get("_sd").is_none(), "no _sd without disclosures");
 
-        // Assemble with a dummy signature
-        let mut dummy_sig = vec![0u8; 64];
-        dummy_sig[31] = 1;
-        dummy_sig[63] = 1;
-        let result = assemble_sd_jwt(prepared, &dummy_sig).unwrap();
+        // Assembly accepts only a signature over the exact prepared bytes.
+        let signature = key.sign(prepared.signing_payload()).unwrap();
+        let result = assemble_sd_jwt(prepared, &signature).unwrap();
         match result {
             SignedCredential::SdJwt {
                 compact,

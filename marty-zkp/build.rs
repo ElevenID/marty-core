@@ -61,6 +61,11 @@ fn compile_mock() {
 
 fn compile_libzk(lib_dir: &std::path::Path) {
     let lib_src = lib_dir.join("lib");
+    println!("cargo:rerun-if-changed={}", lib_src.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        lib_dir.join("VENDORED_REVISION").display()
+    );
 
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();

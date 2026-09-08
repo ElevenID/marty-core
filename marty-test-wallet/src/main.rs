@@ -10,9 +10,11 @@ use base64::Engine as _;
 use marty_oid4vci::types::{CredentialFormat, SigningAlgorithm};
 use marty_oid4vci::wallet::{DcqlCredentialQuery, WalletEngine};
 use marty_oid4vci::{Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver};
+use marty_test_wallet::signer_ipc::{request_signature, SignerAuthenticationKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
+use zeroize::Zeroizing;
 
 #[derive(Clone)]
 struct AppState {
@@ -26,27 +28,11 @@ struct WalletData {
     credentials: Vec<StoredCredential>,
 }
 
-#[derive(Clone)]
 struct RemoteHolderSigner {
-    client: reqwest::Client,
+    endpoint: String,
     key_id: String,
     public_jwk_json: String,
-}
-
-// Keep the browser-facing test wallet unable to initiate requests to arbitrary
-// network locations. A local signer agent owns KMS connectivity and policy.
-const HOLDER_SIGNER_SIDECAR_URL: &str = "http://127.0.0.1:8788/sign";
-
-#[derive(Serialize)]
-struct RemoteSignRequest<'a> {
-    algorithm: &'static str,
-    key_id: &'a str,
-    signing_input: String,
-}
-
-#[derive(Deserialize)]
-struct RemoteSignResponse {
-    signature: String,
+    authentication_key: SignerAuthenticationKey,
 }
 
 #[derive(Deserialize)]
@@ -127,18 +113,19 @@ fn validate_public_jwk_json(value: &str, label: &str) -> Result<(), String> {
 }
 
 impl RemoteHolderSigner {
-    fn http_client() -> Result<reqwest::Client, String> {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| "failed to configure opaque holder signer client".to_string())
-    }
-
     fn from_env() -> Result<Self, String> {
+        let endpoint = required_env("MARTY_TEST_WALLET_HOLDER_SIGNER_ENDPOINT")?;
         let key_id = required_env("MARTY_TEST_WALLET_HOLDER_KID")?;
         let public_jwk_json = required_env("MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK")?;
+        let encoded_authentication_key = Zeroizing::new(required_env(
+            "MARTY_TEST_WALLET_HOLDER_SIGNER_AUTHENTICATION_KEY",
+        )?);
+        let authentication_key = SignerAuthenticationKey::from_base64url(
+            &encoded_authentication_key,
+        )
+        .map_err(|_| {
+            "MARTY_TEST_WALLET_HOLDER_SIGNER_AUTHENTICATION_KEY must be canonical base64url for exactly 32 bytes".to_string()
+        })?;
         validate_public_jwk_json(&public_jwk_json, "holder public JWK")?;
         let jwk: Value = serde_json::from_str(&public_jwk_json).unwrap();
         if jwk.get("kty").and_then(Value::as_str) != Some("EC")
@@ -147,53 +134,23 @@ impl RemoteHolderSigner {
             return Err("holder public JWK must be an EC P-256 key".into());
         }
         Ok(Self {
-            client: Self::http_client()?,
+            endpoint,
             key_id,
             public_jwk_json,
+            authentication_key,
         })
     }
 
     async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
-        let request = self.client.post(HOLDER_SIGNER_SIDECAR_URL);
-        let mut response = request
-            .json(&RemoteSignRequest {
-                algorithm: "ES256",
-                key_id: &self.key_id,
-                signing_input: base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(signing_input),
-            })
-            .send()
-            .await
-            .map_err(|_| AppError::unprocessable("Opaque holder signer is unavailable"))?
-            .error_for_status()
-            .map_err(|_| AppError::unprocessable("Opaque holder signer rejected the request"))?;
-        const MAX_SIGNER_RESPONSE_BYTES: usize = 16 * 1024;
-        let mut response_body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| AppError::unprocessable("Opaque holder signer returned invalid data"))?
-        {
-            if response_body.len().saturating_add(chunk.len()) > MAX_SIGNER_RESPONSE_BYTES {
-                return Err(AppError::unprocessable(
-                    "Opaque holder signer response exceeds its size limit",
-                ));
-            }
-            response_body.extend_from_slice(&chunk);
-        }
-        let response: RemoteSignResponse = serde_json::from_slice(&response_body)
-            .map_err(|_| AppError::unprocessable("Opaque holder signer returned invalid JSON"))?;
-        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(response.signature)
-            .map_err(|_| {
-                AppError::unprocessable("Opaque holder signer returned invalid base64url")
-            })?;
-        if signature.len() != 64 {
-            return Err(AppError::unprocessable(
-                "Opaque holder signer returned an invalid ES256 signature",
-            ));
-        }
-        Ok(signature)
+        request_signature(
+            &self.endpoint,
+            &self.authentication_key,
+            "ES256",
+            &self.key_id,
+            signing_input,
+        )
+        .await
+        .map_err(|_| AppError::unprocessable("Opaque holder signer rejected the request"))
     }
 }
 
@@ -730,66 +687,6 @@ fn disclosed_claim_names(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn signer_endpoint_is_a_fixed_loopback_sidecar() {
-        let endpoint = reqwest::Url::parse(HOLDER_SIGNER_SIDECAR_URL).unwrap();
-        assert_eq!(endpoint.scheme(), "http");
-        assert_eq!(endpoint.host_str(), Some("127.0.0.1"));
-        assert_eq!(endpoint.port(), Some(8788));
-        assert_eq!(endpoint.path(), "/sign");
-    }
-
-    #[tokio::test]
-    async fn opaque_signer_does_not_follow_post_redirects() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let requests = Arc::new(AtomicUsize::new(0));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let redirect_target = format!("http://{address}/followed");
-        let app = Router::new()
-            .route(
-                "/sign",
-                post({
-                    let requests = requests.clone();
-                    move || {
-                        let requests = requests.clone();
-                        async move {
-                            requests.fetch_add(1, Ordering::SeqCst);
-                            (
-                                StatusCode::TEMPORARY_REDIRECT,
-                                [(axum::http::header::LOCATION, redirect_target.clone())],
-                            )
-                        }
-                    }
-                }),
-            )
-            .route(
-                "/followed",
-                post({
-                    let requests = requests.clone();
-                    move || {
-                        let requests = requests.clone();
-                        async move {
-                            requests.fetch_add(1, Ordering::SeqCst);
-                            Json(serde_json::json!({"signature": "invalid"}))
-                        }
-                    }
-                }),
-            );
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let response = RemoteHolderSigner::http_client()
-            .unwrap()
-            .post(format!("http://{address}/sign"))
-            .send()
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
-        server.abort();
-    }
 
     #[test]
     fn credential_value_accepts_canonical_single_and_batch_values() {

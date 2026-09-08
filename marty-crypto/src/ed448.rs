@@ -1,116 +1,45 @@
 //! Ed448 (Edwards curve over 448-bit field) verification operations.
 //!
 //! Production builds expose Ed448 verification for eMRTD Active Authentication.
-//! Key generation and signing exist only in crate-internal regression tests.
+//! Key generation and signing are absent; regression tests use fixed RFC 8032
+//! public verification vectors.
 //!
 //! Ed448 provides 224-bit security (vs 128-bit for Ed25519) and is used
 //! in newer ePassports with higher security requirements.
 //!
 //! Verification accepts only public-key bytes, a message, and a signature.
 
-#[cfg(test)]
-use ed448_goldilocks_plus::rand_core::OsRng;
-use ed448_goldilocks_plus::{Signature, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-#[cfg(test)]
-use ed448_goldilocks_plus::{SigningKey, SECRET_KEY_LENGTH};
+use der::Decode;
+use ed448_goldilocks_plus::elliptic_curve::Group;
+use ed448_goldilocks_plus::sha3::{
+    digest::{ExtendableOutput, Update, XofReader},
+    Shake256,
+};
+use ed448_goldilocks_plus::{
+    CompressedEdwardsY, EdwardsPoint, Scalar, ScalarBytes, WideScalarBytes,
+};
 
 use crate::{CryptoError, CryptoResult};
 
-/// Ed448 private key size in bytes (57 bytes).
-#[cfg(test)]
-pub const ED448_PRIVATE_KEY_SIZE: usize = SECRET_KEY_LENGTH;
+const HASH_HEAD: [u8; 8] = *b"SigEd448";
+
+fn decompress_canonical_point(encoded: [u8; ED448_PUBLIC_KEY_SIZE]) -> Option<EdwardsPoint> {
+    // RFC 8032 reserves every bit except the high sign bit in the final octet.
+    if encoded[ED448_PUBLIC_KEY_SIZE - 1] & 0x7f != 0 {
+        return None;
+    }
+    let compressed = CompressedEdwardsY(encoded);
+    let point = Option::<EdwardsPoint>::from(compressed.decompress())?;
+    // The backend field parser reduces modulo p, so round-trip the point to
+    // reject y >= p aliases as required by RFC 8032 and RFC 8410.
+    (point.compress().0 == encoded).then_some(point)
+}
 
 /// Ed448 public key size in bytes (57 bytes).
-pub const ED448_PUBLIC_KEY_SIZE: usize = PUBLIC_KEY_LENGTH;
+pub const ED448_PUBLIC_KEY_SIZE: usize = 57;
 
 /// Ed448 signature size in bytes (114 bytes).
-pub const ED448_SIGNATURE_SIZE: usize = SIGNATURE_LENGTH;
-
-/// Generate a new Ed448 key pair.
-///
-/// # Returns
-/// A tuple of (private_key, public_key) as byte vectors.
-#[cfg(test)]
-pub fn ed448_generate() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-
-    Ok((
-        signing_key.to_bytes().to_vec(),
-        verifying_key.to_bytes().to_vec(),
-    ))
-}
-
-/// Sign a message using Ed448 (pure EdDSA, no prehashing).
-///
-/// # Arguments
-/// * `private_key` - 57-byte private key seed
-/// * `message` - Message to sign
-///
-/// # Returns
-/// 114-byte signature
-#[cfg(test)]
-pub fn ed448_sign(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
-    if private_key.len() != ED448_PRIVATE_KEY_SIZE {
-        return Err(CryptoError::crypto_error(format!(
-            "Invalid Ed448 private key size: expected {}, got {}",
-            ED448_PRIVATE_KEY_SIZE,
-            private_key.len()
-        )));
-    }
-
-    // Convert bytes to SigningKey
-    let signing_key = SigningKey::try_from(private_key)
-        .map_err(|e| CryptoError::crypto_error(format!("Invalid private key: {}", e)))?;
-
-    // Sign without context (pure Ed448)
-    let signature = signing_key.sign_raw(message);
-
-    Ok(signature.to_bytes().to_vec())
-}
-
-/// Sign a message using Ed448 with a context string.
-///
-/// This implements RFC 8032 Ed448 signing with an optional context.
-///
-/// # Arguments
-/// * `private_key` - 57-byte private key seed
-/// * `message` - Message to sign  
-/// * `context` - Context string (max 255 bytes)
-///
-/// # Returns
-/// 114-byte signature
-#[cfg(test)]
-pub fn ed448_sign_with_context(
-    private_key: &[u8],
-    message: &[u8],
-    context: &[u8],
-) -> CryptoResult<Vec<u8>> {
-    if private_key.len() != ED448_PRIVATE_KEY_SIZE {
-        return Err(CryptoError::crypto_error(format!(
-            "Invalid Ed448 private key size: expected {}, got {}",
-            ED448_PRIVATE_KEY_SIZE,
-            private_key.len()
-        )));
-    }
-
-    if context.len() > 255 {
-        return Err(CryptoError::crypto_error(
-            "Ed448 context must be at most 255 bytes",
-        ));
-    }
-
-    // Convert bytes to SigningKey
-    let signing_key = SigningKey::try_from(private_key)
-        .map_err(|e| CryptoError::crypto_error(format!("Invalid private key: {}", e)))?;
-
-    // Sign with context
-    let signature = signing_key
-        .sign_ctx(context, message)
-        .map_err(|e| CryptoError::crypto_error(format!("Signing failed: {:?}", e)))?;
-
-    Ok(signature.to_bytes().to_vec())
-}
+pub const ED448_SIGNATURE_SIZE: usize = 114;
 
 /// Verify an Ed448 signature.
 ///
@@ -122,46 +51,7 @@ pub fn ed448_sign_with_context(
 /// # Returns
 /// `true` if signature is valid
 pub fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> CryptoResult<bool> {
-    if public_key.len() != ED448_PUBLIC_KEY_SIZE {
-        return Err(CryptoError::crypto_error(format!(
-            "Invalid Ed448 public key size: expected {}, got {}",
-            ED448_PUBLIC_KEY_SIZE,
-            public_key.len()
-        )));
-    }
-
-    if signature.len() != ED448_SIGNATURE_SIZE {
-        return Err(CryptoError::crypto_error(format!(
-            "Invalid Ed448 signature size: expected {}, got {}",
-            ED448_SIGNATURE_SIZE,
-            signature.len()
-        )));
-    }
-
-    // Convert slice to array for VerifyingKey::from_bytes
-    let pk_array: [u8; 57] = public_key
-        .try_into()
-        .map_err(|_| CryptoError::crypto_error("Invalid public key length"))?;
-
-    // Parse public key using from_bytes (not TryFrom)
-    let verifying_key = match VerifyingKey::from_bytes(&pk_array) {
-        Ok(vk) => vk,
-        Err(_) => return Ok(false), // Invalid public key format
-    };
-
-    // Convert signature slice to array
-    let sig_array: [u8; 114] = signature
-        .try_into()
-        .map_err(|_| CryptoError::crypto_error("Invalid signature length"))?;
-
-    // Parse signature using from_bytes (returns Result)
-    let sig = match Signature::from_bytes(&sig_array) {
-        Ok(s) => s,
-        Err(_) => return Ok(false), // Invalid signature format
-    };
-
-    // Verify using verify_raw (no context)
-    Ok(verifying_key.verify_raw(&sig, message).is_ok())
+    verify_ed448_inner(public_key, message, signature, &[])
 }
 
 /// Verify an Ed448 signature with a context string.
@@ -175,6 +65,18 @@ pub fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Cryp
 /// # Returns
 /// `true` if signature is valid
 pub fn ed448_verify_with_context(
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+    context: &[u8],
+) -> CryptoResult<bool> {
+    verify_ed448_inner(public_key, message, signature, context)
+}
+
+// Adapted from the verification-only half of ed448-goldilocks-plus 0.16's
+// RFC 8032 implementation. The dependency's public curve/scalar operations are
+// used directly so its combined SigningKey/VerifyingKey module stays disabled.
+fn verify_ed448_inner(
     public_key: &[u8],
     message: &[u8],
     signature: &[u8],
@@ -202,30 +104,58 @@ pub fn ed448_verify_with_context(
         ));
     }
 
-    // Convert slice to array for VerifyingKey::from_bytes
-    let pk_array: [u8; 57] = public_key
+    let public_key: [u8; ED448_PUBLIC_KEY_SIZE] = public_key
         .try_into()
         .map_err(|_| CryptoError::crypto_error("Invalid public key length"))?;
-
-    // Parse public key using from_bytes
-    let verifying_key = match VerifyingKey::from_bytes(&pk_array) {
-        Ok(vk) => vk,
-        Err(_) => return Ok(false), // Invalid public key format
+    let Some(public_point) = decompress_canonical_point(public_key) else {
+        return Ok(false);
     };
+    if bool::from(public_point.is_identity()) {
+        return Ok(false);
+    }
 
-    // Convert signature slice to array
-    let sig_array: [u8; 114] = signature
+    let signature: [u8; ED448_SIGNATURE_SIZE] = signature
         .try_into()
         .map_err(|_| CryptoError::crypto_error("Invalid signature length"))?;
-
-    // Parse signature using from_bytes (returns Result)
-    let sig = match Signature::from_bytes(&sig_array) {
-        Ok(s) => s,
-        Err(_) => return Ok(false), // Invalid signature format
+    let mut r_bytes = [0u8; ED448_PUBLIC_KEY_SIZE];
+    r_bytes.copy_from_slice(&signature[..ED448_PUBLIC_KEY_SIZE]);
+    let Some(r) = decompress_canonical_point(r_bytes) else {
+        return Ok(false);
     };
+    if bool::from(r.is_identity()) {
+        return Ok(false);
+    }
 
-    // Verify with context using verify_ctx(self, sig, ctx, message)
-    Ok(verifying_key.verify_ctx(&sig, context, message).is_ok())
+    let mut s_bytes = [0u8; ED448_PUBLIC_KEY_SIZE];
+    s_bytes.copy_from_slice(&signature[ED448_PUBLIC_KEY_SIZE..]);
+    if s_bytes[56] != 0 {
+        return Ok(false);
+    }
+    let Some(s) = Option::<Scalar>::from(Scalar::from_canonical_bytes(ScalarBytes::from_slice(
+        &s_bytes,
+    ))) else {
+        return Ok(false);
+    };
+    if bool::from(s.is_zero()) {
+        return Ok(false);
+    }
+
+    // SHAKE256(dom4(F, C) || R || A || PH(M), 114) -> scalar k.
+    let mut hash_output = WideScalarBytes::default();
+    let mut reader = Shake256::default()
+        .chain(HASH_HEAD)
+        .chain([0])
+        .chain([context.len() as u8])
+        .chain(context)
+        .chain(r_bytes)
+        .chain(public_key)
+        .chain(message)
+        .finalize_xof();
+    reader.read(&mut hash_output);
+    let k = Scalar::from_bytes_mod_order_wide(&hash_output);
+
+    // RFC 8032 verification equation: [S]B = R + [k]A.
+    Ok(EdwardsPoint::GENERATOR * s == r + (public_point * k))
 }
 
 /// Verify an Ed448 signature using a SPKI-encoded public key.
@@ -247,115 +177,143 @@ pub fn verify_ed448_spki(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    // Extract the public key from SPKI or use raw bytes
-    let pk_bytes = if public_key_der.len() == ED448_PUBLIC_KEY_SIZE {
-        // Raw 57-byte public key
+    let public_key: [u8; ED448_PUBLIC_KEY_SIZE] = if public_key_der.len() == ED448_PUBLIC_KEY_SIZE {
         public_key_der
-    } else if public_key_der.len() >= ED448_PUBLIC_KEY_SIZE + 12 {
-        // SPKI format: the key is typically the last 57 bytes
-        // SPKI structure for Ed448:
-        // SEQUENCE {
-        //   SEQUENCE { OID 1.3.101.113 }
-        //   BIT STRING { 57 bytes }
-        // }
-        &public_key_der[public_key_der.len() - ED448_PUBLIC_KEY_SIZE..]
+            .try_into()
+            .map_err(|_| CryptoError::invalid_key("Invalid raw Ed448 public key length"))?
     } else {
-        return Err(CryptoError::crypto_error(format!(
-            "Invalid Ed448 public key size: expected {} or SPKI format, got {}",
-            ED448_PUBLIC_KEY_SIZE,
-            public_key_der.len()
-        )));
+        let spki = x509_cert::spki::SubjectPublicKeyInfoOwned::from_der(public_key_der)
+            .map_err(|error| CryptoError::der_error(format!("Invalid Ed448 SPKI: {error}")))?;
+        if spki.algorithm.oid != const_oid::db::rfc8410::ID_ED_448
+            || spki.algorithm.parameters.is_some()
+        {
+            return Err(CryptoError::invalid_key(
+                "Invalid Ed448 SPKI algorithm identifier",
+            ));
+        }
+        if spki.subject_public_key.unused_bits() != 0 {
+            return Err(CryptoError::invalid_key(
+                "Invalid Ed448 SPKI public key bit string",
+            ));
+        }
+        spki.subject_public_key
+            .raw_bytes()
+            .try_into()
+            .map_err(|_| CryptoError::invalid_key("Invalid Ed448 SPKI public key length"))?
     };
 
-    if signature.len() != ED448_SIGNATURE_SIZE {
-        return Err(CryptoError::crypto_error(format!(
-            "Invalid Ed448 signature size: expected {}, got {}",
-            ED448_SIGNATURE_SIZE,
-            signature.len()
-        )));
-    }
-
-    // Convert slice to array for VerifyingKey::from_bytes
-    let pk_array: [u8; 57] = pk_bytes
-        .try_into()
-        .map_err(|_| CryptoError::crypto_error("Invalid public key length"))?;
-
-    // Parse public key using from_bytes
-    let verifying_key = match VerifyingKey::from_bytes(&pk_array) {
-        Ok(vk) => vk,
-        Err(_) => return Ok(false), // Invalid public key format
-    };
-
-    // Convert signature slice to array
-    let sig_array: [u8; 114] = signature
-        .try_into()
-        .map_err(|_| CryptoError::crypto_error("Invalid signature length"))?;
-
-    // Parse signature using from_bytes (returns Result)
-    let sig = match Signature::from_bytes(&sig_array) {
-        Ok(s) => s,
-        Err(_) => return Ok(false), // Invalid signature format
-    };
-
-    // Verify using verify_raw (no context) - pure Ed448
-    Ok(verifying_key.verify_raw(&sig, message).is_ok())
+    ed448_verify(&public_key, message, signature)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_ed448_roundtrip() {
-        let (private_key, public_key) = ed448_generate().unwrap();
+    fn decode<const N: usize>(value: &str) -> [u8; N] {
+        hex::decode(value).unwrap().try_into().unwrap()
+    }
 
-        assert_eq!(private_key.len(), ED448_PRIVATE_KEY_SIZE);
-        assert_eq!(public_key.len(), ED448_PUBLIC_KEY_SIZE);
-
-        let message = b"Test message for Ed448 signature";
-        let signature = ed448_sign(&private_key, message).unwrap();
-
-        assert_eq!(signature.len(), ED448_SIGNATURE_SIZE);
-        assert!(ed448_verify(&public_key, message, &signature).unwrap());
+    fn empty_message_vector() -> ([u8; 57], [u8; 114]) {
+        (
+            decode("5fd7449b59b461fd2ce787ec616ad46a1da1342485a70e1f8a0ea75d80e96778edf124769b46c7061bd6783df1e50f6cd1fa1abeafe8256180"),
+            decode("533a37f6bbe457251f023c0d88f976ae2dfb504a843e34d2074fd823d41a591f2b233f034f628281f2fd7a22ddd47d7828c59bd0a21bfd3980ff0d2028d4b18a9df63e006c5d1c2d345b925d8dc00b4104852db99ac5c7cdda8530a113a0f4dbb61149f05a7363268c71d95808ff2e652600"),
+        )
     }
 
     #[test]
-    fn test_ed448_wrong_message() {
-        let (private_key, public_key) = ed448_generate().unwrap();
-
-        let message = b"Original message";
-        let signature = ed448_sign(&private_key, message).unwrap();
-
-        let wrong_message = b"Wrong message";
-        assert!(!ed448_verify(&public_key, wrong_message, &signature).unwrap());
+    fn verifies_rfc8032_empty_message_vector() {
+        let (public_key, signature) = empty_message_vector();
+        assert!(ed448_verify(&public_key, b"", &signature).unwrap());
     }
 
     #[test]
-    fn test_ed448_with_context() {
-        let (private_key, public_key) = ed448_generate().unwrap();
-
-        let message = b"Test message";
-        let context = b"test-context";
-
-        let signature = ed448_sign_with_context(&private_key, message, context).unwrap();
-
-        // Correct context verifies
-        assert!(ed448_verify_with_context(&public_key, message, &signature, context).unwrap());
-
-        // Wrong context fails
-        assert!(!ed448_verify_with_context(&public_key, message, &signature, b"wrong").unwrap());
-
-        // No context fails (different signature scheme)
-        assert!(!ed448_verify(&public_key, message, &signature).unwrap());
+    fn rejects_wrong_message_for_rfc8032_vector() {
+        let (public_key, signature) = empty_message_vector();
+        assert!(!ed448_verify(&public_key, b"not empty", &signature).unwrap());
     }
 
     #[test]
-    fn test_ed448_invalid_sizes() {
-        let result = ed448_sign(&[0u8; 32], b"message");
-        assert!(result.is_err());
+    fn verifies_rfc8032_context_vector() {
+        let public_key = decode::<57>("43ba28f430cdff456ae531545f7ecd0ac834a55d9358c0372bfa0c6c6798c0866aea01eb00742802b8438ea4cb82169c235160627b4c3a9480");
+        let signature = decode::<114>("d4f8f6131770dd46f40867d6fd5d5055de43541f8c5e35abbcd001b32a89f7d2151f7647f11d8ca2ae279fb842d607217fce6e042f6815ea000c85741de5c8da1144a6a1aba7f96de42505d7a7298524fda538fccbbb754f578c1cad10d54d0d5428407e85dcbc98a49155c13764e66c3c00");
 
-        let (_, public_key) = ed448_generate().unwrap();
-        let result = ed448_verify(&public_key, b"message", &[0u8; 64]);
-        assert!(result.is_err());
+        assert!(ed448_verify_with_context(&public_key, &[3], &signature, b"foo").unwrap());
+        assert!(!ed448_verify_with_context(&public_key, &[3], &signature, b"bar").unwrap());
+        assert!(!ed448_verify(&public_key, &[3], &signature).unwrap());
+    }
+
+    #[test]
+    fn rejects_invalid_sizes_and_identity_components() {
+        assert!(ed448_verify(&[0u8; 32], b"message", &[0u8; 114]).is_err());
+        assert!(ed448_verify(&[0u8; 57], b"message", &[0u8; 64]).is_err());
+
+        let mut identity = [0u8; 57];
+        identity[0] = 1;
+        let (_, valid_signature) = empty_message_vector();
+        assert!(!ed448_verify(&identity, b"", &valid_signature).unwrap());
+
+        let (public_key, mut identity_r_signature) = empty_message_vector();
+        identity_r_signature[..57].fill(0);
+        identity_r_signature[0] = 1;
+        assert!(!ed448_verify(&public_key, b"", &identity_r_signature).unwrap());
+    }
+
+    #[test]
+    fn rejects_noncanonical_public_key_and_r_encodings() {
+        let (public_key, signature) = empty_message_vector();
+
+        let mut reserved_public_key = public_key;
+        reserved_public_key[56] |= 1;
+        assert!(
+            Option::<EdwardsPoint>::from(CompressedEdwardsY(reserved_public_key).decompress())
+                .is_some()
+        );
+        assert!(decompress_canonical_point(reserved_public_key).is_none());
+        assert!(!ed448_verify(&reserved_public_key, b"", &signature).unwrap());
+
+        let mut reserved_r_signature = signature;
+        reserved_r_signature[56] |= 1;
+        let reserved_r: [u8; 57] = reserved_r_signature[..57].try_into().unwrap();
+        assert!(
+            Option::<EdwardsPoint>::from(CompressedEdwardsY(reserved_r).decompress()).is_some()
+        );
+        assert!(decompress_canonical_point(reserved_r).is_none());
+        assert!(!ed448_verify(&public_key, b"", &reserved_r_signature).unwrap());
+
+        // p + 1 reduces to the identity's y-coordinate in the backend parser.
+        let mut p_plus_one = [0u8; 57];
+        p_plus_one[28..56].fill(0xff);
+        assert!(
+            Option::<EdwardsPoint>::from(CompressedEdwardsY(p_plus_one).decompress()).is_some()
+        );
+        assert!(decompress_canonical_point(p_plus_one).is_none());
+    }
+
+    #[test]
+    fn spki_requires_exact_ed448_algorithm_metadata() {
+        let (public_key, signature) = empty_message_vector();
+        let mut spki = hex::decode("3043300506032b6571033a00").unwrap();
+        spki.extend_from_slice(&public_key);
+        assert!(verify_ed448_spki(&spki, b"", &signature).unwrap());
+
+        let mut arbitrary_suffix_container = vec![0u8; 12];
+        arbitrary_suffix_container.extend_from_slice(&public_key);
+        assert!(verify_ed448_spki(&arbitrary_suffix_container, b"", &signature).is_err());
+
+        let mut wrong_oid = spki.clone();
+        wrong_oid[8] = 0x70;
+        assert!(verify_ed448_spki(&wrong_oid, b"", &signature).is_err());
+
+        let mut null_parameters = hex::decode("3045300706032b65710500033a00").unwrap();
+        null_parameters.extend_from_slice(&public_key);
+        assert!(verify_ed448_spki(&null_parameters, b"", &signature).is_err());
+
+        let mut unused_bit = spki;
+        unused_bit[11] = 1;
+        let error = verify_ed448_spki(&unused_bit, b"", &signature)
+            .expect_err("SPKI with unused public-key bits must be rejected");
+        assert!(error
+            .to_string()
+            .contains("Invalid Ed448 SPKI public key bit string"));
     }
 }

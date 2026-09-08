@@ -3,7 +3,7 @@ members = ["marty-python-adapters", "marty-types", "marty-crypto", "marty-crypto
 resolver = "2"
 
 [workspace.package]
-version = "0.1.61"
+version = "0.2.0"
 edition = "2021"
 authors = ["Marty Team"]
 license = "MIT OR Apache-2.0"
@@ -16,7 +16,7 @@ x509-cert = { version = "0.2", default-features = false, features = ["pem", "std
 der = { version = "0.7", features = ["pem", "derive"] }
 const-oid = "0.9"
 sha1 = { version = "0.10", features = ["oid"] }
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["compress"] }
 p256 = { version = "0.13", default-features = false }
 p384 = { version = "0.13", default-features = false }
 p521 = { version = "0.13", default-features = false }
@@ -37,10 +37,13 @@ cms = { version = "0.2", features = ["std"] }
 x509-ocsp = "0.2"
 
 # Symmetric encryption
-aes-gcm = "0.10"
-aes = "0.8"
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc", "zeroize"] }
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "legacy-des"] }
+aes = { version = "0.8", features = ["zeroize"] }
+ghash = { version = "0.5", features = ["zeroize"] }
+polyval = { version = "0.6", features = ["zeroize"] }
 cbc = { version = "0.1", features = ["alloc"] }
-des = "0.8"
+des = { version = "0.8", features = ["zeroize"] }
 
 # Key derivation
 hkdf = "0.12"
@@ -48,7 +51,7 @@ pbkdf2 = { version = "0.12", features = ["hmac"] }
 
 # Additional crypto
 hmac = "0.12"
-cmac = "0.7"
+cmac = { version = "0.7", features = ["zeroize"] }
 cipher = { version = "0.4", features = ["block-padding"] }
 
 # Ed25519 and X25519
@@ -56,7 +59,9 @@ ed25519-dalek = { version = "2.1", default-features = false, features = ["std", 
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 
 # Ed448 (for eMRTD Active Authentication)
-ed448-goldilocks-plus = "0.16"
+# Marty implements the public verification equation over the backend's public
+# curve/scalar types. Do not select its combined signing/verification module.
+ed448-goldilocks-plus = { version = "0.16", default-features = false }
 
 # BBS+ signatures (BLS12-381)
 zkryptium = { version = "0.6", default-features = false, features = ["bbsplus"] }
@@ -105,11 +110,11 @@ zeroize = "1.7"
 pyo3 = { version = "0.29.0", features = ["abi3-py311"] }
 
 # Internal crates
-marty-crypto = { version = "0.1.5", path = "marty-crypto" }
-marty-verification = { version = "0.1.5", path = "marty-verification" }
-marty-secure-storage = { version = "0.1.5", path = "marty-secure-storage" }
-marty-biometrics = { version = "0.1.5", path = "marty-biometrics" }
-marty-status = { version = "0.1.45", path = "marty-status" }
+marty-crypto = { version = "0.2.0", path = "marty-crypto" }
+marty-verification = { version = "0.2.0", path = "marty-verification" }
+marty-secure-storage = { version = "0.2.0", path = "marty-secure-storage" }
+marty-biometrics = { version = "0.2.0", path = "marty-biometrics" }
+marty-status = { version = "0.2.0", path = "marty-status" }
 
 # Test/dev dependencies
 rcgen = "0.14"
@@ -132,4 +137,4 @@ ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0
 # Exact history is retained on a dedicated dependency ref in the existing SSI fork.
 linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
 # ElevenID-maintained security/interoperability fork, synchronized from upstream by reviewed monthly PRs.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "d1161a32bbe0aaaead3903ad3349c45e32636c35" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }

@@ -398,21 +398,21 @@ TEST(MSO, MapLookup) {
   bool ret = croot.decode(mso_example, mso_nbytes, pos, offset);
   EXPECT_TRUE(ret);
   EXPECT_EQ(pos, mso_nbytes);
-  EXPECT_EQ(croot.header_pos_, offset);
+  EXPECT_EQ(croot.header_pos(), offset);
 
   size_t vdndx;
-  const CborDoc* vd =
+  auto vd =
       croot.lookup(mso_example, sizeof(svalueDigests), svalueDigests, vdndx);
-  EXPECT_NE(vd, nullptr);
+  EXPECT_NE(vd.key, nullptr);
   size_t orgndx;
-  const CborDoc* org = vd[1].lookup(mso_example, sizeof(sorgBlahBlahBlah),
-                                    sorgBlahBlahBlah, orgndx);
-  EXPECT_NE(org, nullptr);
+  auto org = vd.val->lookup(mso_example, sizeof(sorgBlahBlahBlah),
+                            sorgBlahBlahBlah, orgndx);
+  EXPECT_NE(org.key, nullptr);
 
   size_t org_lookup_tag = 4;
   size_t hashndx;
-  const CborDoc* hash = org[1].lookup_unsigned(org_lookup_tag, hashndx);
-  EXPECT_NE(hash, nullptr);
+  auto hash = org.val->lookup_unsigned(org_lookup_tag, hashndx);
+  EXPECT_NE(hash.key, nullptr);
 
   // circuit-time
   std::vector<Cbor::decode> ds(n);
@@ -435,8 +435,8 @@ TEST(MSO, MapLookup) {
   // "Position JROOT starts a map of level 0.  (JVDK, JVDV) are headers
   // representing the VDNDX-th pair in that map.  The key at JVDK is
   // correct."
-  auto jvdk = CT.index(vd[0].header_pos_);
-  auto jvdv = CT.index(vd[1].header_pos_);
+  auto jvdk = CT.index(vd.key->header_pos());
+  auto jvdv = CT.index(vd.val->header_pos());
   CBOR.assert_map_entry(n, jroot, 0, jvdk, jvdv, CT.index(vdndx), ds.data(),
                         ps.data());
   CBOR.assert_text_at(n, jvdk, sizeof(svalueDigests), svalueDigests, ds.data());
@@ -444,8 +444,8 @@ TEST(MSO, MapLookup) {
   // "Position JVDV starts a map of level 1.
   // (JORGK, JORGV) are headers representing the ORGNDX-th pair in
   // that map. The key at JORGK is correct."
-  auto jorgk = CT.index(org[0].header_pos_);
-  auto jorgv = CT.index(org[1].header_pos_);
+  auto jorgk = CT.index(org.key->header_pos());
+  auto jorgv = CT.index(org.val->header_pos());
   CBOR.assert_map_entry(n, jvdv, 1, jorgk, jorgv, CT.index(orgndx), ds.data(),
                         ps.data());
   CBOR.assert_text_at(n, jorgk, sizeof(sorgBlahBlahBlah), sorgBlahBlahBlah,
@@ -454,8 +454,8 @@ TEST(MSO, MapLookup) {
   // Position JORGV starts a map of level 2.
   // (JHASHK, JHASHV) are headers representing the HASHNDX-th pair in
   // that map. The key at JHASHK is correct."
-  auto jhashk = CT.index(hash[0].header_pos_);
-  auto jhashv = CT.index(hash[1].header_pos_);
+  auto jhashk = CT.index(hash.key->header_pos());
+  auto jhashv = CT.index(hash.val->header_pos());
   CBOR.assert_map_entry(n, jorgv, 2, jhashk, jhashv, CT.index(hashndx),
                         ds.data(), ps.data());
   CBOR.assert_unsigned_at(n, jhashk, org_lookup_tag, ds.data());
@@ -513,6 +513,7 @@ TEST(MSO, Example2Real) {
     }
     gwC.invprod_decode = LC.eltw_input();
     gwC.cc0_counter = CTRC.input();
+    gwC.neg_cc0_counter = CTRC.input();
     gwC.invprod_parse = LC.eltw_input();
 
     std::vector<CborC::decode> dsC(n);
@@ -594,21 +595,21 @@ TEST(MSO, Example2Real) {
   bool ret = croot.decode(mso_example, mso_nbytes, pos, offset);
   EXPECT_TRUE(ret);
   EXPECT_EQ(pos, mso_nbytes);
-  EXPECT_EQ(croot.header_pos_, offset);
+  EXPECT_EQ(croot.header_pos(), offset);
 
   size_t vdndx;
-  const CborDoc* vd =
+  auto vd =
       croot.lookup(mso_example, sizeof(svalueDigests), svalueDigests, vdndx);
-  EXPECT_NE(vd, nullptr);
+  EXPECT_NE(vd.key, nullptr);
 
   size_t orgndx;
-  const CborDoc* org = vd[1].lookup(mso_example, sizeof(sorgBlahBlahBlah),
-                                    sorgBlahBlahBlah, orgndx);
-  EXPECT_NE(org, nullptr);
+  auto org = vd.val->lookup(mso_example, sizeof(sorgBlahBlahBlah),
+                            sorgBlahBlahBlah, orgndx);
+  EXPECT_NE(org.key, nullptr);
 
   size_t hashndx;
-  const CborDoc* hash = org[1].lookup_unsigned(org_lookup_tag, hashndx);
-  EXPECT_NE(hash, nullptr);
+  auto hash = org.val->lookup_unsigned(org_lookup_tag, hashndx);
+  EXPECT_NE(hash.key, nullptr);
 
   /*------------------------------------------------------------*/
   // Fill inputs
@@ -623,25 +624,26 @@ TEST(MSO, Example2Real) {
     filler.push_back(pwS[i].encoded_sel_header);
   }
   filler.push_back(gwS.invprod_decode);
-  filler.push_back(gwS.cc0_counter.e);
+  filler.push_back(gwS.cc0_counter);
+  filler.push_back(gwS.neg_cc0_counter);
   filler.push_back(gwS.invprod_parse);
 
   // jroot
   filler.push_back(CW.index(offset));
 
   // jvdk, jvdv, vdndx
-  filler.push_back(CW.index(vd[0].header_pos_));
-  filler.push_back(CW.index(vd[1].header_pos_));
+  filler.push_back(CW.index(vd.key->header_pos()));
+  filler.push_back(CW.index(vd.val->header_pos()));
   filler.push_back(CW.index(vdndx));
 
   // jorgk, jorgv, orgndx
-  filler.push_back(CW.index(org[0].header_pos_));
-  filler.push_back(CW.index(org[1].header_pos_));
+  filler.push_back(CW.index(org.key->header_pos()));
+  filler.push_back(CW.index(org.val->header_pos()));
   filler.push_back(CW.index(orgndx));
 
   // jhashk, jhashv, hashndx
-  filler.push_back(CW.index(hash[0].header_pos_));
-  filler.push_back(CW.index(hash[1].header_pos_));
+  filler.push_back(CW.index(hash.key->header_pos()));
+  filler.push_back(CW.index(hash.val->header_pos()));
   filler.push_back(CW.index(hashndx));
 
   log(INFO, "Witness filled");

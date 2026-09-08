@@ -1049,7 +1049,9 @@ impl PreparedMdocForRemoteSigning {
 #[allow(clippy::too_many_arguments)]
 #[pyo3(signature = (
     issuer_id,
+    verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     credential_type,
     namespace,
     claims_json,
@@ -1059,7 +1061,9 @@ impl PreparedMdocForRemoteSigning {
 ))]
 fn oid4vci_prepare_mdoc(
     issuer_id: &str,
+    verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     credential_type: &str,
     namespace: &str,
     claims_json: &str,
@@ -1081,7 +1085,9 @@ fn oid4vci_prepare_mdoc(
     let prepared = marty_oid4vci::remote_credential::prepare_remote_mdoc(
         marty_oid4vci::remote_credential::RemoteMdocRequest {
             issuer_id: issuer_id.to_owned(),
+            verification_method_id: verification_method_id.to_owned(),
             algorithm: algorithm.to_owned(),
+            issuer_public_jwk: issuer_public_jwk_json.to_owned(),
             credential_type: credential_type.to_owned(),
             namespace: namespace.to_owned(),
             claims,
@@ -1101,7 +1107,9 @@ fn oid4vci_prepare_mdoc(
 struct RemoteMdocBatchInput {
     batch_id: u64,
     issuer_id: String,
+    verification_method_id: String,
     algorithm: String,
+    issuer_public_jwk: String,
     credential_type: String,
     namespace: String,
     claims: std::collections::HashMap<String, serde_json::Value>,
@@ -1130,7 +1138,9 @@ fn oid4vci_prepare_mdoc_batch(
                 item.batch_id,
                 marty_oid4vci::remote_credential::RemoteMdocRequest {
                     issuer_id: item.issuer_id,
+                    verification_method_id: item.verification_method_id,
                     algorithm: item.algorithm,
+                    issuer_public_jwk: item.issuer_public_jwk,
                     credential_type: item.credential_type,
                     namespace: item.namespace,
                     claims: item.claims,
@@ -1659,10 +1669,18 @@ fn vds_nc_sign_profile(
         w3c_context: vec![],
         w3c_types: vec![],
     };
+    let public_key_der =
+        marty_crypto_test_support::serialization::extract_public_key(&private_key_der)
+            .map_err(vds_nc_error)?;
+    let public_jwk = serde_json::to_string(
+        &marty_crypto::jwk::public_key_der_to_jwk(&public_key_der).map_err(vds_nc_error)?,
+    )
+    .map_err(vds_nc_error)?;
     let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc_profile(
         signer_id,
         certificate_reference,
         algorithm,
+        &public_jwk,
         &credential_claims,
     )
     .map_err(vds_nc_error)?;
@@ -2072,7 +2090,8 @@ mod tests {
             }
 
             #[cfg(not(feature = "ephemeral-session-keys"))]
-            for session_operation in ["HaipResponseDecryptionSession"] {
+            {
+                let session_operation = "HaipResponseDecryptionSession";
                 assert!(
                     !module.hasattr(session_operation).unwrap(),
                     "{session_operation}"
@@ -2227,6 +2246,38 @@ mod tests {
         });
     }
 
+    fn remote_issuer_public_jwk(algorithm: &str) -> String {
+        use base64::Engine as _;
+
+        if algorithm == "ES384" {
+            let mut scalar = [0u8; 48];
+            scalar[47] = 1;
+            let key = p384::ecdsa::SigningKey::from_slice(&scalar).unwrap();
+            let point = key.verifying_key().to_encoded_point(false);
+            serde_json::json!({
+                "alg": algorithm,
+                "crv": "P-384",
+                "kty": "EC",
+                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+            })
+            .to_string()
+        } else {
+            let mut scalar = [0u8; 32];
+            scalar[31] = 1;
+            let key = p256::ecdsa::SigningKey::from_slice(&scalar).unwrap();
+            let point = key.verifying_key().to_encoded_point(false);
+            serde_json::json!({
+                "alg": algorithm,
+                "crv": "P-256",
+                "kty": "EC",
+                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+            })
+            .to_string()
+        }
+    }
+
     fn remote_mdoc_batch_input(
         batch_id: u64,
         credential_id: &str,
@@ -2235,7 +2286,9 @@ mod tests {
         serde_json::json!({
             "batch_id": batch_id,
             "issuer_id": "did:web:issuer.example",
+            "verification_method_id": "did:web:issuer.example#key-1",
             "algorithm": algorithm,
+            "issuer_public_jwk": remote_issuer_public_jwk(algorithm),
             "credential_type": "org.iso.18013.5.1.mDL",
             "namespace": "org.iso.18013.5.1",
             "claims": {
@@ -2416,13 +2469,12 @@ mod tests {
         assert!(oid4vci_assemble_mdoc(&mut prepared, vec![0; 63]).is_err());
         assert!(prepared.tbs_data().is_ok());
         assert!(prepared.credential_id().is_ok());
-        let (secret_key, _) = marty_crypto_test_support::ecdsa::generate_p256_keypair()
-            .expect("P-256 key generation");
-        let der_signature =
-            marty_crypto_test_support::ecdsa::sign_p256_sha256(&secret_key, &tbs_data)
-                .expect("remote signing");
-        let signature = marty_oid4vci::jose::normalize_ecdsa_signature(&der_signature, "ES256")
-            .expect("COSE signature normalization");
+        use p256::ecdsa::signature::Signer as _;
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        let signing_key = p256::ecdsa::SigningKey::from_slice(&scalar).unwrap();
+        let signature: p256::ecdsa::Signature = signing_key.sign(&tbs_data);
+        let signature = signature.to_bytes().to_vec();
 
         let (issuer_signed, assembled_credential_id) =
             oid4vci_assemble_mdoc(&mut prepared, signature).expect("native mDoc assembly");
@@ -2682,6 +2734,10 @@ mod tests {
 
             fn kid_url(&self) -> String {
                 "https://issuer.example.test#signing-key".to_string()
+            }
+
+            fn public_jwk(&self) -> marty_oid4vci::Oid4vciResult<String> {
+                Ok(r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#.into())
             }
         }
 
@@ -3034,6 +3090,38 @@ mod tests {
         assert_eq!(verified["field_consistency_valid"], true);
         assert_eq!(verified["signer_id"], "TESTSGN");
 
+        let tampered = signed["barcode_data"]
+            .as_str()
+            .unwrap()
+            .replace("X123456", "X123457");
+        assert_ne!(tampered, signed["barcode_data"].as_str().unwrap());
+        let tampered_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(&tampered, &public_pem, "2027-01-01", None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tampered_result["signature_valid"], false);
+        assert_eq!(tampered_result["is_valid"], false);
+
+        let (_, wrong_public_key) =
+            marty_crypto_test_support::ecdsa::generate_p256_keypair().unwrap();
+        let wrong_public_der =
+            marty_crypto::serialization::raw_public_key_to_spki(&wrong_public_key, "EC_P256")
+                .unwrap();
+        let wrong_public_pem =
+            marty_crypto::serialization::save_public_key_pem(&wrong_public_der).unwrap();
+        let wrong_key_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(
+                signed["barcode_data"].as_str().unwrap(),
+                &wrong_public_pem,
+                "2027-01-01",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(wrong_key_result["signature_valid"], false);
+        assert_eq!(wrong_key_result["is_valid"], false);
+
         let policy: serde_json::Value = serde_json::from_str(
             &vds_nc_validate_profile(
                 signed["barcode_data"].as_str().unwrap(),
@@ -3083,6 +3171,35 @@ mod tests {
         .unwrap();
         assert_eq!(rsa_verified["is_valid"], true);
         assert_eq!(rsa_verified["algorithm"], "PS256");
+
+        let rsa_tampered = rsa_signed["barcode_data"]
+            .as_str()
+            .unwrap()
+            .replace("X123456", "X123457");
+        assert_ne!(rsa_tampered, rsa_signed["barcode_data"].as_str().unwrap());
+        let rsa_tampered_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(&rsa_tampered, &rsa_public_pem, "2027-01-01", None).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rsa_tampered_result["signature_valid"], false);
+        assert_eq!(rsa_tampered_result["is_valid"], false);
+
+        let (_, wrong_rsa_public_der) =
+            marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
+        let wrong_rsa_public_pem =
+            marty_crypto::serialization::save_public_key_pem(&wrong_rsa_public_der).unwrap();
+        let rsa_wrong_key_result: serde_json::Value = serde_json::from_str(
+            &vds_nc_verify_profile(
+                rsa_signed["barcode_data"].as_str().unwrap(),
+                &wrong_rsa_public_pem,
+                "2027-01-01",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rsa_wrong_key_result["signature_valid"], false);
+        assert_eq!(rsa_wrong_key_result["is_valid"], false);
 
         assert_eq!(
             vds_nc_select_barcode_format(2_000, "L", Some("QR")).unwrap(),

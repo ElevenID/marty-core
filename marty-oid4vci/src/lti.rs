@@ -629,6 +629,9 @@ pub fn verify_lti_launch_jwt(
     expected_nonce: Option<&str>,
     leeway_seconds: u64,
 ) -> Oid4vciResult<VerifiedLtiLaunch> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let header = decode_header(id_token)
         .map_err(|e| Oid4vciError::JwtError(format!("Failed to decode LTI JWT header: {e}")))?;
     let kid = header

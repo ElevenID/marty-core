@@ -2066,8 +2066,14 @@ mod tests {
             )
             .unwrap();
         let issuer_signature: p256::ecdsa::Signature = issuer_key.sign(prepared.signing_input());
+        let issuer_point = issuer_key.verifying_key().to_encoded_point(false);
+        let issuer_verification_key =
+            jsonwebtoken::DecodingKey::from_ec_der(issuer_point.as_bytes());
         let credential = prepared
-            .complete(issuer_signature.to_bytes().as_slice())
+            .complete(
+                issuer_signature.to_bytes().as_slice(),
+                &issuer_verification_key,
+            )
             .unwrap();
 
         let presentation = WalletEngine::new()
@@ -2128,13 +2134,11 @@ mod tests {
         let invalid_issuer_jws = format!("{protected}.{payload}.AA");
         let credential = format!("{invalid_issuer_jws}~");
 
-        // The deliberately invalid issuer signature and deliberately different
-        // `cnf` key characterize the method's pre-existing contract: issuer
-        // authentication and holder-key binding belong to the caller, while
-        // this method selects disclosures and creates the KB-JWT.
+        // Even the compatibility method must not assemble a key-binding JWT
+        // for a key different from the issuer-signed `cnf.jwk`.
         assert_ne!(private_jwk["x"], issuer_payload["cnf"]["jwk"]["x"]);
         let nonce = uuid::Uuid::new_v4().to_string();
-        let presentation = WalletEngine::new()
+        let error = WalletEngine::new()
             .create_sd_jwt_presentation(
                 &credential,
                 &[],
@@ -2142,12 +2146,7 @@ mod tests {
                 "https://verifier.example",
                 &private_jwk.to_string(),
             )
-            .unwrap();
-
-        assert!(presentation.starts_with(&format!("{invalid_issuer_jws}~")));
-        assert!(presentation
-            .split('~')
-            .rfind(|part| !part.is_empty())
-            .is_some_and(|part| part.split('.').count() == 3));
+            .unwrap_err();
+        assert!(matches!(error, crate::error::Oid4vciError::SigningError(_)));
     }
 }
