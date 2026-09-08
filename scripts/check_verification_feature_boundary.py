@@ -203,12 +203,20 @@ def check_repository(root: Path = ROOT) -> None:
         and not oid4vci["dependencies"]["jsonwebtoken"].get("features", []),
         "jsonwebtoken crypto providers must be role-selected rather than globally enabled",
     )
+    issuer_features = set(oid4vci["features"]["issuer"])
+    verifier_features = set(oid4vci["features"]["verifier"])
     require(
-        "jsonwebtoken/rust_crypto" not in oid4vci["features"]["issuer"]
-        and "jsonwebtoken/rust_crypto" in oid4vci["features"]["verifier"]
+        oid4vci["features"]["jose-verification"]
+        == ["sd-jwt-rs/crypto-provider"]
+        and "jose-verification" in issuer_features
+        and "sd-jwt-rs/issuer-completion" in issuer_features
+        and "jose-verification" in verifier_features
+        and "sd-jwt-rs/verifier" in verifier_features
+        and "jsonwebtoken/rust_crypto"
+        not in (issuer_features | verifier_features)
         and "holder-key-operations" not in oid4vci["features"]
         and "verifier" in oid4vci["features"]["wallet"],
-        "JWT crypto must be absent from issuer planning and available to opaque-signer wallets only through verification",
+        "JWT verification must use the signing-free SD-JWT crypto provider for remote completion and verifier roles",
     )
 
     bindings_crypto = bindings["dependencies"]["marty-crypto"]
@@ -300,8 +308,9 @@ def check_repository(root: Path = ROOT) -> None:
         "ISO 18013 session cryptography must require an explicit capability",
     )
     require(
-        iso18013["features"]["default"] == ["session-protocol"],
-        "the historical ISO 18013 API must remain available in default builds",
+        set(iso18013["features"]["default"])
+        == {"session-protocol", "qr-render"},
+        "the historical ISO 18013 session and QR APIs must remain available in default builds",
     )
     require(
         bindings["dependencies"]["marty-iso18013"].get("default-features") is False
