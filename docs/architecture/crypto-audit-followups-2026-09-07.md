@@ -1,8 +1,8 @@
 # Cryptography audit follow-ups
 
-Status: implementation and executable regression matrix pass; isomdl and
-SD-JWT integrated with green post-merge CI; Longfellow reviewed at `c4004b5`
-with ElevenID integration pending; Marty correction review and integration pending
+Status: implementation and executable regression matrix pass; isomdl, SD-JWT,
+and Longfellow integrated with green post-merge CI; Marty correction review and
+integration pending
 
 Recorded: 2026-09-07
 
@@ -21,13 +21,12 @@ The exact implementation heads entering final review are:
 | --- | --- | --- |
 | `isomdl-elevenid` | reviewed `784a52943469622873c7ae3200dbc11e89d6bd8e`; merged `8915a0357c78dc91ee15a41ccc0103a8b5afe97a` | versioned single-owner and zeroizing session secrets, redacted diagnostics and prepared credentials, verification-only default, authenticated KMS completion against the exact payload and certificate key, strict public-point-only certificate decoding without curve private-key codecs, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
 | `sd-jwt-rust` | `82143d688355315f22297b40ca18050a94cd2525` | versioned cryptographically bound opaque remote completion, backend-free issuer planning, standalone signing-free verification provider, signing-free issuer-completion/holder/verifier graphs, holder/verifier confirmation-key policy across every serialization, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier, and locked interop generator; this permanent rebase-merge revision is tree-equivalent to reviewed head `200ad57a276d28c7108255235b34afea67f07d06` |
-| `longfellow-zk` | `c4004b5edee8cbc4e2a76588c531f07994e3e7ab` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; non-elidable OpenSSL PRF-wrapper teardown; strict UTF-8, canonical CBOR lengths/scalars/wrappers, unambiguous map lookup, exact input consumption, semantic dates, overflow-safe lengths, and null rejection; executable sanitizer, unwind, allocation, vendor-parity, parser, real-proof, and production-random retry-verification regressions with complete public-statement binding |
-| `marty-core` | code checkpoint `3369d5b9d4aede9624a3e47a79217a810016992e` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity through `c4004b5`, direct native decoder/parser/proof/MSO tests, Cargo vendor-change invalidation, checked-accessor CBOR validation with end-to-end accepted/rejected-value regressions, zeroizing native/browser KDF and MAC state, exact-user authenticated OS-IPC signer agent, synchronized 0.2 release metadata, isolated lockfile updates, and permanent integrated fork pins |
+| `longfellow-zk` | reviewed `c4004b5edee8cbc4e2a76588c531f07994e3e7ab`; merged `2a329725e2dc7b41652621c0204cc47724fdfc59` | verifier-only default; zeroizing Rust prover, derived sumcheck state, and accumulators by default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; non-elidable OpenSSL PRF-wrapper teardown; strict UTF-8, canonical CBOR lengths/scalars/wrappers, unambiguous map lookup, exact input consumption, semantic dates, overflow-safe lengths, and null rejection; executable sanitizer, unwind, allocation, vendor-parity, parser, real-proof, and production-random retry-verification regressions with complete public-statement binding |
+| `marty-core` | code checkpoint `e1ebaf0e704aa6ded75892176b5eed48c6ef3511` | exact KMS-signature binding for all supported credential formats, strict rejection of small-order remote Ed25519 issuer keys and low-order-R signatures with a nonweak C2SP vector, signing-free KMS issuer dependency graphs with an executable current JOSE/ISO feature-route gate, verification-only Ed448 with explicit eMRTD selection and executable KMS+CSCA graph gates, canonical Ed448 public-key/R enforcement with reserved-bit and y-at-or-above-p negatives, strict Ed448 RFC 8032/SPKI metadata and unused-bit regressions, role-less JOSE removal, strict public-only EC and Ed25519 SPKI decoding, strict Ed25519 verification, native and browser signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity through `c4004b5`, direct native decoder/parser/proof/MSO tests, Cargo vendor-change invalidation, checked-accessor CBOR validation with end-to-end accepted/rejected-value regressions, zeroizing native/browser KDF and MAC state, exact-logon-session authenticated OS-IPC signer agent with Windows Authz cross-session denial and atomic Unix 0700 fixture coverage, CRLF-stable benchmark contracts, executable reduced issuer/mdoc/ZK feature coverage, synchronized 0.2 release metadata, isolated lockfile updates, and permanent integrated fork pins |
 
 The table records reviewed implementation heads and, where integration has
-completed, final ElevenID main revisions. Longfellow and Marty remain
-pre-integration. Update this section after every correction round and after
-ElevenID merge-queue CI.
+completed, final ElevenID main revisions. Marty remains pre-integration. Update
+this section after every correction round and after ElevenID merge-queue CI.
 
 The Marty branch was rebased onto Marty PR #317 by dropping the duplicated PR
 commits and replaying only the later audit series. The PR #317 merge tree was
@@ -63,10 +62,11 @@ and single KMS key identifier. A mismatch is rejected before any outbound
 request. Neither wallet nor agent handles a private key.
 
 On Windows, every pipe instance has a protected DACL granting access only to
-the exact current-user SID, is non-inheritable, rejects remote clients, and uses
-anonymous client security QoS because the signer never needs to identify or
-impersonate the wallet. Runtime tests exercise the actual protected pipe rather
-than substituting an in-memory transport.
+the exact logon-session SID, is non-inheritable, rejects remote clients, and
+uses anonymous client security QoS because the signer never needs to identify
+or impersonate the wallet. Runtime tests exercise the actual protected pipe
+rather than substituting an in-memory transport, and Windows Authz coverage
+proves the same account in a different logon session receives no write access.
 
 ### Secret and witness lifetime
 
@@ -281,12 +281,16 @@ different locations require fresh review rather than relying on this triage.
   bound. The reduced `issuer,mso_mdoc,zk_mdoc` combination no longer imports the
   SD-JWT-dependent remote-credential API, while its seven applicable benchmark
   tests still run. The real Windows pipe test also revealed that an exact user
-  SID alone can reject a filtered token; the protected DACL now grants access
-  only to that user SID and the current token's exact logon-session SID. A
+  SID alone can reject a filtered token. Because multiple allow entries are
+  additive, the protected DACL instead grants access only to the current
+  token's exact logon-session SID. A
   Windows-only regression rejects broad Everyone, Authenticated Users, Users,
-  and Administrators principals and verifies the live logon SID authority. The
-  authenticated and wrong-key named-pipe tests both exercise the resulting real
-  transport with no ignored or filtered cases.
+  and Administrators principals, verifies the live logon SID authority, and
+  uses the Windows authorization engine to prove that the same account in a
+  different logon session receives no pipe-write access. The authenticated and
+  wrong-key named-pipe tests both exercise the resulting real transport with no
+  ignored or filtered cases. Unix test directories are created atomically with
+  mode 0700, and the portable-path regression also asserts that exact mode.
 - The dependency-health checkpoint was re-run on 2026-09-08. RustCrypto's
   certificate/signature/elliptic-curve majors are stable but compatible RSA
   0.10 remains a release candidate; Affinidi DIDComm 0.15.8 requires the new
