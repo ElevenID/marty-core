@@ -197,6 +197,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_master_list_signature, m)?)?;
 
     // Crypto Operations - Ed448
+    #[cfg(feature = "csca")]
     m.add_function(wrap_pyfunction!(ed448_verify, m)?)?;
 
     // Crypto Operations - PKCS#12

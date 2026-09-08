@@ -369,6 +369,7 @@ pub(super) fn rsa_pss_sha512_verify(
 ///
 /// Returns:
 ///     True if signature is valid
+#[cfg(feature = "csca")]
 #[pyfunction]
 pub(super) fn ed448_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
     marty_crypto::ed448::ed448_verify(public_key, message, signature).map_err(to_pyerr)

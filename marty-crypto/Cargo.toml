@@ -45,14 +45,14 @@ ecdsa-verification = [
     "p521/sha512",
     "p521/std",
 ]
-eddsa-verification = [
-    "dep:ed25519-dalek",
-    "dep:ed448-goldilocks-plus",
-]
+eddsa-verification = ["dep:ed25519-dalek"]
+# Ed448 is an eMRTD algorithm. Marty uses only the backend's public
+# curve/scalar types and does not enable its combined signing module.
+ed448-verification = ["dep:ed448-goldilocks-plus"]
 rsa-verification = ["dep:rsa", "dep:sha2"]
 # Legacy ICAO algorithms stay first-class for eMRTD artifacts, but are absent
 # from unrelated verifier/session builds unless this capability is selected.
-emrtd-compat = ["rsa-verification", "dep:aws-lc-rs", "dep:sha1", "dep:des", "dep:cbc", "dep:cipher", "dep:zeroize"]
+emrtd-compat = ["rsa-verification", "ed448-verification", "dep:aws-lc-rs", "dep:sha1", "dep:des", "dep:cbc", "dep:cipher", "dep:zeroize"]
 jwk = [
     "dep:elliptic-curve",
     "dep:p256",

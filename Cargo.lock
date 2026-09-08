@@ -1886,7 +1886,7 @@ dependencies = [
  "digest 0.10.7",
  "elliptic-curve",
  "rfc6979",
- "serdect 0.2.0",
+ "serdect",
  "signature",
  "spki",
 ]
@@ -1924,13 +1924,9 @@ checksum = "3689f7a47d1a75cd7483b8df8c4a0d5bea3bfc2ec41ef6e02e75123ef980bdf6"
 dependencies = [
  "crypto-bigint",
  "elliptic-curve",
- "pkcs8",
  "rand_core 0.6.4",
- "serdect 0.3.0",
  "sha3",
- "signature",
  "subtle",
- "zeroize",
 ]
 
 [[package]]
@@ -1994,7 +1990,7 @@ dependencies = [
  "rand_core 0.6.4",
  "sec1",
  "serde_json",
- "serdect 0.2.0",
+ "serdect",
  "subtle",
  "tap",
  "zeroize",
@@ -4694,7 +4690,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "serdect 0.2.0",
+ "serdect",
  "sha2 0.10.9",
 ]
 
@@ -4707,7 +4703,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "serdect 0.2.0",
+ "serdect",
  "sha2 0.10.9",
 ]
 
@@ -5081,7 +5077,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "353e1ca18966c16d9deb1c69278edbc5f194139612772bd9537af60ac231e1e6"
 dependencies = [
  "elliptic-curve",
- "serdect 0.2.0",
+ "serdect",
 ]
 
 [[package]]
@@ -5944,7 +5940,7 @@ dependencies = [
  "der 0.7.10",
  "generic-array",
  "pkcs8",
- "serdect 0.2.0",
+ "serdect",
  "subtle",
  "zeroize",
 ]
@@ -6175,16 +6171,6 @@ name = "serdect"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
-dependencies = [
- "base16ct",
- "serde",
-]
-
-[[package]]
-name = "serdect"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f42f67da2385b51a5f9652db9c93d78aeaf7610bf5ec366080b6de810604af53"
 dependencies = [
  "base16ct",
  "serde",

@@ -59,7 +59,9 @@ ed25519-dalek = { version = "2.1", default-features = false, features = ["std", 
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 
 # Ed448 (for eMRTD Active Authentication)
-ed448-goldilocks-plus = "0.16"
+# Marty implements the public verification equation over the backend's public
+# curve/scalar types. Do not select its combined signing/verification module.
+ed448-goldilocks-plus = { version = "0.16", default-features = false }
 
 # BBS+ signatures (BLS12-381)
 zkryptium = { version = "0.6", default-features = false, features = ["bbsplus"] }

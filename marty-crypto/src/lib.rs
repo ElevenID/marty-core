@@ -51,7 +51,7 @@ pub mod ecdh;
 pub mod ecdsa;
 #[cfg(feature = "eddsa-verification")]
 pub mod ed25519;
-#[cfg(feature = "eddsa-verification")]
+#[cfg(feature = "ed448-verification")]
 pub mod ed448;
 pub mod error;
 #[cfg(feature = "hashing")]
@@ -351,7 +351,16 @@ pub fn verify_signature(
         SignatureAlgorithm::Ed25519 => {
             ed25519::verify_ed25519_spki(public_key_der, message, signature)
         }
-        SignatureAlgorithm::Ed448 => ed448::verify_ed448_spki(public_key_der, message, signature),
+        SignatureAlgorithm::Ed448 => {
+            #[cfg(feature = "ed448-verification")]
+            {
+                ed448::verify_ed448_spki(public_key_der, message, signature)
+            }
+            #[cfg(not(feature = "ed448-verification"))]
+            Err(CryptoError::unsupported_algorithm(
+                "Ed448 requires the ed448-verification feature".to_string(),
+            ))
+        }
         SignatureAlgorithm::RsaPkcs1Sha1 => {
             #[cfg(feature = "emrtd-compat")]
             {
@@ -386,5 +395,22 @@ pub fn verify_signature(
                 "BBS+ signatures use multi-message API; use bbs module directly".to_string(),
             ))
         }
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "signature-verification",
+    not(feature = "ed448-verification")
+))]
+mod feature_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn ed448_requires_explicit_verification_capability() {
+        let error = verify_signature(SignatureAlgorithm::Ed448, &[], &[], &[])
+            .expect_err("ordinary signature verification must not compile in Ed448 support");
+        assert!(matches!(error, CryptoError::UnsupportedAlgorithm(message)
+            if message == "Ed448 requires the ed448-verification feature"));
     }
 }
