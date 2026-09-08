@@ -309,7 +309,11 @@ mod tests {
         assert!(verify_ed448_spki(&null_parameters, b"", &signature).is_err());
 
         let mut unused_bit = spki;
-        unused_bit[10] = 1;
-        assert!(verify_ed448_spki(&unused_bit, b"", &signature).is_err());
+        unused_bit[11] = 1;
+        let error = verify_ed448_spki(&unused_bit, b"", &signature)
+            .expect_err("SPKI with unused public-key bits must be rejected");
+        assert!(error
+            .to_string()
+            .contains("Invalid Ed448 SPKI public key bit string"));
     }
 }
