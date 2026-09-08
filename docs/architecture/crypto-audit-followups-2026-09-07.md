@@ -206,11 +206,12 @@ different locations require fresh review rather than relying on this triage.
 - Marty PR #318's first post-rebase CI run exposed two evidence gaps rather than
   skipped tests. The new WASM jobs inherited `RUSTC_WRAPPER=sccache` without
   installing the wrapper; both jobs now install the pinned cache action, and a
-  43-test release-contract suite rejects missing, conditional, commented, late, or
+  45-test release-contract suite rejects missing, conditional, commented, late, or
   shell-block cache-action lookalikes; rejects conditional jobs/tests and escaped
-  YAML keys; and exact-allowlists every audited action configuration, Cargo test
-  script, selector, pinned browser runner, checkout behavior, and test-step runner
-  binding under the default failure-enforcing shell. This rejects flow-style or
+  YAML keys; and exact-allowlists every audited Ubuntu job and action configuration,
+  Cargo test script, selector, pinned browser runner, checkout behavior, and
+  test-step runner binding under the default failure-enforcing shell. This rejects
+  self-hosted/container/service overrides, flow-style, bare-dash-hidden, or
   replacement actions, checkout ref overrides, folded-comment suppression,
   control flow, continuations, pipelines, status suppression, nonexecuting flags,
   and zero-selection filter substitutions while ignoring inert literal comments
