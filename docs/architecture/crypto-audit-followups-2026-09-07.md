@@ -1,6 +1,6 @@
 # Cryptography audit follow-ups
 
-Status: first review corrections implemented; clean re-review and integration pending
+Status: implementation and executable regression matrix pass; clean independent re-review and integration CI pending
 
 Recorded: 2026-09-07
 
@@ -17,9 +17,9 @@ The exact implementation heads entering final review are:
 
 | Repository | Review head | Work completed |
 | --- | --- | --- |
-| `isomdl-elevenid` | `135df12ac4257e212b96ca632c2f609d6b98f876` | single-owner and zeroizing session secrets, redacted diagnostics, verification-only default, removal of production local mdoc signing, transactional authenticated-decryption counters |
-| `sd-jwt-rust` | `c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9` | cryptographically bound opaque remote completion, backend-free issuer planning, holder/issuer/tooling feature isolation, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
-| `longfellow-zk` | `f19b357440ceb704c521678cf7bbe144eeab5f49` | verifier-only default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; executable sanitizer, unwind, allocation, and vendor-parity regressions |
+| `isomdl-elevenid` | `aefcab7ce18f5fab58249a1ecbe47e7f3287785a` | single-owner and zeroizing session secrets, redacted diagnostics, verification-only default, removal of production local mdoc signing, transactional authenticated-decryption counters, cleanup-safe native/browser AEAD and HMAC state |
+| `sd-jwt-rust` | `edef0328327caeacc7139d025238d3156b16172d` | cryptographically bound opaque remote completion, backend-free issuer planning, holder/verifier confirmation-key policy across every serialization, holder/issuer/tooling feature isolation, secure nonce generation, maintained native RSA backend, restricted WebAssembly verifier, publishable package carrier |
+| `longfellow-zk` | `1f822278396b8d6ba7084cab983efa8b80d680d0` | verifier-only default; guarded Rust and C++ prover secrets; bounded quadratic-constraint indices; fixed-capacity witness buffers; transactional commits; cleanup-safe transcript, sampling, Merkle, and witness state; executable sanitizer, unwind, allocation, and vendor-parity regressions |
 | `marty-core` | `bdcdb62b4149eebc91beffc93b5d6ba69d79d22c` | exact KMS-signature binding for all supported credential formats, native and browser VDS signature-binding regressions, bounded native proving, zeroizing ZK inputs, audited Longfellow source parity, QR/PNG isolation, authenticated OS-IPC signer agent, and final fork pins |
 
 These are review heads, not final integrated or merged revisions. Update this
@@ -41,11 +41,20 @@ payload, from another key, or using an incompatible algorithm fails closed.
 
 The test-wallet holder signer uses only OS-local IPC: a Windows named pipe that
 rejects remote clients or a Unix socket in a private directory. Every request
-and response is HMAC-bound to a fresh 32-byte authentication key. Requests also
+and response is HMAC-bound to an operator-provisioned, canonical 32-byte
+authentication key. The launcher must generate a new random value for each
+agent/wallet launch; this crate validates encoding and length but does not claim
+to generate or rotate that key. Requests also
 bind the version, random nonce, timestamp, algorithm, key ID, and exact signing
 input; stale and replayed requests fail closed. The implemented signer agent is
 the only component that can contact its operator-configured HTTPS KMS endpoint.
 Neither wallet nor agent handles a private key.
+
+On Windows, every pipe instance has a protected DACL granting access only to
+the exact current-user SID, is non-inheritable, rejects remote clients, and uses
+anonymous client security QoS because the signer never needs to identify or
+impersonate the wallet. Runtime tests exercise the actual protected pipe rather
+than substituting an in-memory transport.
 
 ### Secret and witness lifetime
 
@@ -56,6 +65,12 @@ paths covered by their owning scopes. Diagnostic representations no longer
 reveal mdoc session-key material. Marty FFI inputs that can contain requested
 claims or witness data also clear on drop. This is a targeted lifetime claim,
 not a claim that every allocation in either repository has been proven erased.
+
+Browser HKDF, PBKDF2, HMAC, and Concat-KDF use an owned SHA-2 implementation
+whose compression state, partial blocks, HMAC pads, PRK, and iteration buffers
+are explicitly erased. Real `wasm-bindgen-test-runner` tests cover known answers,
+multi-block output, maximum-length rejection, cleanup on returned errors, and
+the public KDF/MAC APIs. Native keyed operations continue to use AWS-LC.
 
 ### Native prover resource bound
 
@@ -88,9 +103,11 @@ AWS-LC. This retains native verification of the RSA PKCS#1 v1.5 (`RS256`,
 WebAssembly deliberately uses a restricted provider and supports `ES256`,
 `ES384`, and `EdDSA` verification. It rejects all `RS*` and `PS*` algorithms.
 Consequently, a browser cannot directly verify an RSA-signed issuer SD-JWT/JWT
-or RSA-signed holder-binding JWT. This is an explicit compatibility restriction
-for ElevenID's curve-only browser profile; browser-local private signing was
-already outside the architecture.
+or RSA-signed holder-binding JWT. VDS-NC signature validation uses the same
+provider, so browser builds also cannot assemble or verify RSA-PSS-signed VDS-NC
+credentials. This is an explicit compatibility restriction for ElevenID's
+curve-only browser profile; browser-local private signing was already outside
+the architecture.
 
 If product requirements later demand browser RSA verification, add a separately
 reviewed WebCrypto-backed provider with exact algorithm/key binding and runtime
@@ -108,9 +125,16 @@ free of this advisory until its remaining graph is resolved.
 ## Validation evidence before final review
 
 - isomdl unit/feature tests, strict linting, and offline advisory audit pass.
+- isomdl's dependency audit records GHASH/POLYVAL as intentional feature
+  carriers for AES-GCM schedule zeroization; `cargo machete`, strict linting,
+  and all four selected session-crypto cleanup/known-answer tests pass.
 - SD-JWT native all-feature tests, role/feature checks, WebAssembly compilation,
   three WebAssembly runtime provider tests, strict linting, dependency-tree
   exclusion of `rsa`, and offline advisory audit pass.
+- The SD-JWT issuer-completion-only graph now explicitly enables its strict
+  EdDSA encoding dependency. Its dedicated lane runs 39 tests with no ignored
+  cases. The fixed-binary launch-barrier harness also ran all five normally
+  environment-gated tests against the built benchmark binary; all passed.
 - Longfellow's complete Rust workspace passes, including algebra, sumcheck,
   Ligero, runtime-ZK, mdoc-ZK unit and end-to-end proof vectors and current and
   legacy proof flows, with no ignored tests. The changed C++ translation unit
@@ -120,12 +144,19 @@ free of this advisory until its remaining graph is resolved.
   headers are absent, so ElevenID CI must run that required lane before merge.
 - Marty KMS/credential, bindings, ZK unit and conformance, ISO 18013 unit/CBOR/
   COSE/mdoc/selective-disclosure, no-render QR profile, and authenticated signer
-  tests pass. The previously ignored wrong-witness ZK test now runs in mock mode
-  and passes. Signer-agent tests exercise real Windows named-pipe success and
-  wrong-key rejection plus missing MAC, stale nonce, replay, response binding,
-  and key validation, with no ignored tests. A strict all-features lint failure
-  is confined to pre-existing generated PyO3 deprecations outside this work's
-  files.
+  tests pass. The full ISO all-feature matrix runs 123 tests/doctests, including
+  the permanent Python-module/session-conformance feature-interaction test, with
+  no ignored cases. The full verification matrix runs 425 library and 65
+  integration tests; the new public-only mdoc signer JWK test is included. The
+  previously ignored wrong-witness ZK test now runs in mock mode and passes.
+  Signer-agent tests exercise real Windows named-pipe success and wrong-key
+  rejection plus missing MAC, stale nonce, replay, response binding, and key
+  validation, with no ignored tests. Native and browser crypto cleanup tests,
+  affected-crate strict linting, formatting, and vendored-source parity pass.
+
+Every behavior or security gap discovered in this round has a selected,
+executable regression test. Ignored, compile-only, or zero-selected runs are not
+accepted as evidence for those gaps.
 
 Final acceptance still requires both independent reviewers to report no
 corrections, full post-pin tests, ElevenID-only pull requests, successful

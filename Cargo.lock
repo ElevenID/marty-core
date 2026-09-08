@@ -46,6 +46,7 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures 0.2.17",
+ "zeroize",
 ]
 
 [[package]]
@@ -60,6 +61,7 @@ dependencies = [
  "ctr",
  "ghash",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -440,9 +442,9 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.17.3"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00bdb5da18dac48ca2cc7cd4a98e533e8635a58e2361d13a1a4ee3888e0d72f1"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
  "aws-lc-sys",
  "untrusted 0.7.1",
@@ -451,9 +453,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.43.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43103168cc76fe62678a375e722fc9cb3a0146159ac5828bc4f0dfd755c2224c"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
 dependencies = [
  "cc",
  "cmake",
@@ -1079,6 +1081,7 @@ checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
  "crypto-common",
  "inout",
+ "zeroize",
 ]
 
 [[package]]
@@ -2396,6 +2399,7 @@ checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
 dependencies = [
  "opaque-debug",
  "polyval",
+ "zeroize",
 ]
 
 [[package]]
@@ -2881,12 +2885,13 @@ dependencies = [
 [[package]]
 name = "isomdl"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=135df12ac4257e212b96ca632c2f609d6b98f876#135df12ac4257e212b96ca632c2f609d6b98f876"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=aefcab7ce18f5fab58249a1ecbe47e7f3287785a#aefcab7ce18f5fab58249a1ecbe47e7f3287785a"
 dependencies = [
  "aes",
  "aes-gcm",
  "anyhow",
  "asn1-rs 0.5.2",
+ "aws-lc-rs",
  "base64 0.13.1",
  "ciborium",
  "const-oid",
@@ -2896,6 +2901,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "getrandom 0.2.17",
+ "ghash",
  "hex",
  "hkdf",
  "hmac",
@@ -2904,6 +2910,7 @@ dependencies = [
  "p384",
  "p521",
  "pem-rfc7468 0.7.0",
+ "polyval",
  "rand 0.8.7",
  "sec1",
  "serde",
@@ -2914,6 +2921,7 @@ dependencies = [
  "signature",
  "strum 0.24.1",
  "strum_macros 0.24.3",
+ "subtle",
  "thiserror 1.0.69",
  "time",
  "tracing",
@@ -2925,7 +2933,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=135df12ac4257e212b96ca632c2f609d6b98f876#135df12ac4257e212b96ca632c2f609d6b98f876"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=aefcab7ce18f5fab58249a1ecbe47e7f3287785a#aefcab7ce18f5fab58249a1ecbe47e7f3287785a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3789,6 +3797,7 @@ version = "0.1.61"
 dependencies = [
  "aes",
  "aes-gcm",
+ "aws-lc-rs",
  "base64 0.22.1",
  "cbc",
  "chrono",
@@ -3802,16 +3811,16 @@ dependencies = [
  "ed25519-dalek",
  "ed448-goldilocks-plus",
  "elliptic-curve",
+ "ghash",
  "hex",
- "hkdf",
  "hmac",
  "p12",
  "p256",
  "p384",
  "p521",
- "pbkdf2",
  "pem-rfc7468 0.7.0",
  "pkcs8",
+ "polyval",
  "rand 0.8.7",
  "rcgen",
  "rsa",
@@ -3823,6 +3832,7 @@ dependencies = [
  "spki",
  "tempfile",
  "thiserror 2.0.20",
+ "wasm-bindgen-test",
  "x25519-dalek",
  "x509-cert",
  "x509-ocsp",
@@ -3998,10 +4008,11 @@ dependencies = [
 name = "marty-test-wallet"
 version = "0.1.61"
 dependencies = [
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "chrono",
- "hmac",
+ "hex",
  "marty-oid4vci",
  "reqwest",
  "serde",
@@ -4012,6 +4023,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
@@ -4761,16 +4773,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pbkdf2"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
-dependencies = [
- "digest 0.10.7",
- "hmac",
-]
-
-[[package]]
 name = "pcsc"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4993,6 +4995,7 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -5911,7 +5914,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9#c1a59ae8a4f1eb986cfe08d019eaa7fd4c3c18b9"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=edef0328327caeacc7139d025238d3156b16172d#edef0328327caeacc7139d025238d3156b16172d"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",

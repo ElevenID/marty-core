@@ -4,10 +4,9 @@ use std::collections::HashMap;
 use std::io;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aws_lc_rs::hmac;
 use base64::Engine as _;
-use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
@@ -20,7 +19,6 @@ const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 const MAX_REPLAY_ENTRIES: usize = 4096;
 const REQUEST_DOMAIN: &[u8] = b"marty-test-wallet/signer-request/v1\0";
 const RESPONSE_DOMAIN: &[u8] = b"marty-test-wallet/signer-response/v1\0";
-type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignerIpcError {
@@ -48,7 +46,22 @@ pub enum SignerIpcError {
     Connection(io::Error),
 }
 
-pub struct SignerAuthenticationKey(Zeroizing<[u8; 32]>);
+pub struct SignerAuthenticationKey {
+    key: Option<hmac::Key>,
+    #[cfg(test)]
+    cleanup_observer: Option<AuthenticationKeyCleanupObserver>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct AuthenticationKeyCleanupObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(test)]
+impl AuthenticationKeyCleanupObserver {
+    fn cleanup_count(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
 
 impl SignerAuthenticationKey {
     pub fn from_base64url(encoded: &str) -> Result<Self, SignerIpcError> {
@@ -62,25 +75,59 @@ impl SignerAuthenticationKey {
         {
             return Err(SignerIpcError::InvalidAuthenticationKey);
         }
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&decoded);
-        Ok(Self(Zeroizing::new(key)))
+        Ok(Self {
+            key: Some(hmac::Key::new(hmac::HMAC_SHA256, &decoded)),
+            #[cfg(test)]
+            cleanup_observer: None,
+        })
     }
 
     #[cfg(test)]
     fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
+        Self {
+            key: Some(hmac::Key::new(hmac::HMAC_SHA256, &bytes)),
+            cleanup_observer: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_bytes_with_cleanup_observer(
+        bytes: [u8; 32],
+        observer: AuthenticationKeyCleanupObserver,
+    ) -> Self {
+        Self {
+            key: Some(hmac::Key::new(hmac::HMAC_SHA256, &bytes)),
+            cleanup_observer: Some(observer),
+        }
+    }
+
+    fn backend_key(&self) -> &hmac::Key {
+        self.key
+            .as_ref()
+            .expect("signer authentication key must exist before drop")
+    }
+
+    fn framed_message(domain: &[u8], fields: &[&[u8]]) -> Zeroizing<Vec<u8>> {
+        let capacity = domain.len()
+            + fields
+                .iter()
+                .map(|field| 8usize.saturating_add(field.len()))
+                .sum::<usize>();
+        let mut message = Zeroizing::new(Vec::with_capacity(capacity));
+        message.extend_from_slice(domain);
+        for field in fields {
+            message.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            message.extend_from_slice(field);
+        }
+        message
     }
 
     fn mac(&self, domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
-        let mut mac =
-            HmacSha256::new_from_slice(self.0.as_ref()).expect("HMAC accepts every 256-bit key");
-        mac.update(domain);
-        for field in fields {
-            mac.update(&(field.len() as u64).to_be_bytes());
-            mac.update(field);
-        }
-        mac.finalize().into_bytes().into()
+        let message = Self::framed_message(domain, fields);
+        hmac::sign(self.backend_key(), &message)
+            .as_ref()
+            .try_into()
+            .expect("HMAC-SHA-256 produces a 32-byte tag")
     }
 
     fn verify(
@@ -89,14 +136,8 @@ impl SignerAuthenticationKey {
         fields: &[&[u8]],
         supplied: &[u8],
     ) -> Result<(), SignerIpcError> {
-        let mut mac =
-            HmacSha256::new_from_slice(self.0.as_ref()).expect("HMAC accepts every 256-bit key");
-        mac.update(domain);
-        for field in fields {
-            mac.update(&(field.len() as u64).to_be_bytes());
-            mac.update(field);
-        }
-        mac.verify_slice(supplied)
+        let message = Self::framed_message(domain, fields);
+        hmac::verify(self.backend_key(), &message, supplied)
             .map_err(|_| SignerIpcError::AuthenticationFailed)
     }
 }
@@ -109,7 +150,11 @@ impl std::fmt::Debug for SignerAuthenticationKey {
 
 impl Drop for SignerAuthenticationKey {
     fn drop(&mut self) {
-        self.0.zeroize();
+        self.key = None;
+        #[cfg(test)]
+        if let Some(observer) = &self.cleanup_observer {
+            observer.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
@@ -378,6 +423,8 @@ async fn connect(endpoint: &str) -> Result<LocalStream, SignerIpcError> {
         return Err(SignerIpcError::InvalidEndpoint);
     }
     tokio::net::windows::named_pipe::ClientOptions::new()
+        // The signer never needs to identify or impersonate the wallet client.
+        .security_qos_flags(0) // SECURITY_ANONYMOUS
         .open(endpoint)
         .map_err(SignerIpcError::Connection)
 }
@@ -461,15 +508,148 @@ pub struct LocalListener {
 }
 
 #[cfg(windows)]
+fn current_windows_user_sid() -> std::io::Result<String> {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    struct OwnedHandle(HANDLE);
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: this owns the real token handle returned by
+                // OpenProcessToken, not the current-process pseudo handle.
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    let mut token = ptr::null_mut();
+    // SAFETY: `token` is a valid output pointer and GetCurrentProcess returns
+    // a process pseudo handle valid for the duration of this call.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let token = OwnedHandle(token);
+
+    let mut required = 0u32;
+    // The first call obtains the required size and is expected to fail with an
+    // insufficient-buffer error.
+    unsafe {
+        GetTokenInformation(token.0, TokenUser, ptr::null_mut(), 0, &mut required);
+    }
+    if required < u32::try_from(std::mem::size_of::<TOKEN_USER>()).unwrap() {
+        return Err(std::io::Error::last_os_error());
+    }
+    let words = usize::try_from(required)
+        .expect("Windows token information length fits usize")
+        .div_ceil(std::mem::size_of::<usize>());
+    let mut token_information = vec![0usize; words];
+    // SAFETY: the word buffer is aligned for TOKEN_USER and has `required`
+    // writable bytes. The returned SID points into that live buffer.
+    if unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenUser,
+            token_information.as_mut_ptr().cast(),
+            required,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: GetTokenInformation initialized the buffer as TOKEN_USER.
+    let user = unsafe { &*token_information.as_ptr().cast::<TOKEN_USER>() };
+
+    let mut string_sid = ptr::null_mut();
+    // SAFETY: `user.User.Sid` remains valid while `token_information` lives,
+    // and `string_sid` is a valid output pointer.
+    if unsafe { ConvertSidToStringSidW(user.User.Sid, &mut string_sid) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut length = 0usize;
+    // SAFETY: ConvertSidToStringSidW returns a NUL-terminated LocalAlloc string.
+    unsafe {
+        while *string_sid.add(length) != 0 {
+            length += 1;
+        }
+    }
+    // SAFETY: the scan above established exactly `length` initialized units.
+    let sid = String::from_utf16(unsafe { std::slice::from_raw_parts(string_sid, length) })
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid user SID"));
+    // SAFETY: the string was allocated by ConvertSidToStringSidW with LocalAlloc.
+    unsafe {
+        LocalFree(string_sid.cast());
+    }
+    sid
+}
+
+#[cfg(windows)]
+fn create_current_owner_pipe(
+    endpoint: &str,
+    first_instance: bool,
+) -> std::io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    use std::ffi::c_void;
+    use std::ptr;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+
+    // A protected DACL grants full control only to the current user's exact
+    // SID. The pipe remains local-only and cannot inherit a permissive DACL
+    // from the launching process or service account.
+    let user_sid = current_windows_user_sid()?;
+    let sddl: Vec<u16> = format!("D:P(A;;GA;;;{user_sid})\0")
+        .encode_utf16()
+        .collect();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            ptr::null_mut(),
+        )
+    };
+    if converted == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let mut attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())
+            .expect("SECURITY_ATTRIBUTES size fits u32"),
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    let result = unsafe {
+        tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(first_instance)
+            .reject_remote_clients(true)
+            .create_with_security_attributes_raw(
+                endpoint,
+                (&mut attributes as *mut SECURITY_ATTRIBUTES).cast::<c_void>(),
+            )
+    };
+    unsafe {
+        LocalFree(descriptor);
+    }
+    result
+}
+
+#[cfg(windows)]
 impl LocalListener {
     pub fn bind(endpoint: &str) -> Result<Self, SignerIpcError> {
         if !endpoint.starts_with(r"\\.\pipe\marty-test-wallet-") {
             return Err(SignerIpcError::InvalidEndpoint);
         }
-        let pending = tokio::net::windows::named_pipe::ServerOptions::new()
-            .first_pipe_instance(true)
-            .reject_remote_clients(true)
-            .create(endpoint)?;
+        let pending = create_current_owner_pipe(endpoint, true)?;
         Ok(Self {
             endpoint: endpoint.to_owned(),
             pending: Some(pending),
@@ -481,9 +661,7 @@ impl LocalListener {
     ) -> Result<tokio::net::windows::named_pipe::NamedPipeServer, SignerIpcError> {
         let server = self.pending.take().ok_or(SignerIpcError::InvalidEndpoint)?;
         server.connect().await?;
-        let next = tokio::net::windows::named_pipe::ServerOptions::new()
-            .reject_remote_clients(true)
-            .create(&self.endpoint)?;
+        let next = create_current_owner_pipe(&self.endpoint, false)?;
         self.pending = Some(next);
         Ok(server)
     }
@@ -511,6 +689,37 @@ pub async fn send_response<S: AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authentication_hmac_matches_kat_rejects_bad_tag_and_drops_backend_key() {
+        let observer = AuthenticationKeyCleanupObserver::default();
+        let key =
+            SignerAuthenticationKey::from_bytes_with_cleanup_observer([0x0b; 32], observer.clone());
+        let tag = hmac::sign(key.backend_key(), b"Hi There");
+        assert_eq!(
+            hex::encode(tag.as_ref()),
+            "198a607eb44bfbc69903a0f1cf2bbdc5ba0aa3f3d9ae3c1c7a3b1696a0b68cf7"
+        );
+        assert!(hmac::verify(key.backend_key(), b"Hi There", tag.as_ref()).is_ok());
+        let mut forged = tag.as_ref().to_vec();
+        forged[0] ^= 1;
+        assert!(hmac::verify(key.backend_key(), b"Hi There", &forged).is_err());
+        drop(key);
+        assert_eq!(observer.cleanup_count(), 1);
+
+        let unwind_observer = AuthenticationKeyCleanupObserver::default();
+        let unwind = std::panic::catch_unwind({
+            let observer = unwind_observer.clone();
+            move || {
+                let key =
+                    SignerAuthenticationKey::from_bytes_with_cleanup_observer([0xa5; 32], observer);
+                assert_eq!(key.mac(b"test-domain", &[b"test-field"]).len(), 32);
+                panic!("injected signer HMAC unwind")
+            }
+        });
+        assert!(unwind.is_err());
+        assert_eq!(unwind_observer.cleanup_count(), 1);
+    }
 
     fn endpoint() -> (String, Option<std::path::PathBuf>) {
         #[cfg(windows)]

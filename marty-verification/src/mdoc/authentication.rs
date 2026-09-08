@@ -612,6 +612,33 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:mdoc-issuer#signing-key".to_string()
         }
+
+        fn public_jwk(&self) -> marty_oid4vci::Oid4vciResult<String> {
+            let point = self.0.verifying_key().to_encoded_point(false);
+            Ok(serde_json::json!({
+                "kty": "EC",
+                "crv": "P-256",
+                "x": general_purpose::URL_SAFE_NO_PAD.encode(
+                    point.x().expect("uncompressed P-256 point has an x coordinate")
+                ),
+                "y": general_purpose::URL_SAFE_NO_PAD.encode(
+                    point.y().expect("uncompressed P-256 point has a y coordinate")
+                )
+            })
+            .to_string())
+        }
+    }
+
+    #[test]
+    fn mdoc_test_signer_exports_public_only_jwk() {
+        let signer = TestMdocSigner(SigningKey::from_slice(&[7; 32]).unwrap());
+        let jwk: JsonValue = serde_json::from_str(&signer.public_jwk().unwrap()).unwrap();
+
+        assert_eq!(jwk["kty"], "EC");
+        assert_eq!(jwk["crv"], "P-256");
+        assert!(jwk["x"].as_str().is_some_and(|value| !value.is_empty()));
+        assert!(jwk["y"].as_str().is_some_and(|value| !value.is_empty()));
+        assert!(jwk.get("d").is_none());
     }
 
     #[test]

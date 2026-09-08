@@ -86,6 +86,17 @@ pub mod ocsp;
 mod pkcs12;
 #[cfg(feature = "rsa-verification")]
 pub mod rsa;
+#[cfg(any(
+    feature = "symmetric",
+    feature = "emrtd-compat",
+    all(test, feature = "kdf")
+))]
+mod secret_buffer;
+#[cfg(all(
+    any(feature = "kdf", feature = "symmetric"),
+    any(target_family = "wasm", test)
+))]
+mod secret_hash;
 #[cfg(feature = "public-key-codec")]
 pub mod serialization;
 #[cfg(all(

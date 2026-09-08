@@ -498,13 +498,8 @@ pub fn jwe_encrypt_direct(
     let shared_secret = zeroize::Zeroizing::new(shared_secret);
 
     // RFC 7518 section 4.6.2: direct ECDH-ES uses `enc` as AlgorithmID.
-    let cek = zeroize::Zeroizing::new(marty_crypto::kdf::concat_kdf_sha256(
-        &shared_secret,
-        enc.as_bytes(),
-        &[],
-        &[],
-        key_len,
-    )?);
+    let cek =
+        marty_crypto::kdf::concat_kdf_sha256(&shared_secret, enc.as_bytes(), &[], &[], key_len)?;
 
     // Generate IV
     use rand::RngCore;
@@ -884,13 +879,13 @@ fn decrypt_parsed_direct_jwe(
 ) -> VerificationResult<Vec<u8>> {
     let party_u_info = decode_party_info(parsed.header.apu.as_deref())?;
     let party_v_info = decode_party_info(parsed.header.apv.as_deref())?;
-    let cek = zeroize::Zeroizing::new(marty_crypto::kdf::concat_kdf_sha256(
+    let cek = marty_crypto::kdf::concat_kdf_sha256(
         shared_secret,
         parsed.header.enc.as_bytes(),
         &party_u_info,
         &party_v_info,
         parsed.key_len,
-    )?);
+    )?;
 
     // Combine ciphertext and tag for decryption
     let mut ciphertext_with_tag = parsed.ciphertext;

@@ -377,7 +377,7 @@ pub fn ecies_encrypt(
 
     // Derive encryption key using HKDF
     let info = b"ECIES-X25519-AES256GCM";
-    let key = Zeroizing::new(hkdf_sha256(shared_secret.as_ref(), &[], info, 32)?);
+    let key = hkdf_sha256(shared_secret.as_ref(), &[], info, 32)?;
 
     // Generate random nonce
     let mut nonce = [0u8; 12];

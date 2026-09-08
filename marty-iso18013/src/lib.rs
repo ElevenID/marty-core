@@ -105,8 +105,8 @@ extern crate self as marty_iso18013;
 mod session_conformance;
 
 #[cfg(feature = "python")]
-#[pymodule]
-fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pymodule(name = "marty_iso18013")]
+fn marty_iso18013_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     // Core types
@@ -132,4 +132,30 @@ fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&transport_module)?;
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "python"))]
+mod python_feature_tests {
+    use super::*;
+
+    #[test]
+    fn python_module_name_coexists_with_session_conformance_alias() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = pyo3::wrap_pymodule!(marty_iso18013_module)(py);
+            let module_name: String = module
+                .getattr(py, "__name__")
+                .expect("Python module exposes __name__")
+                .extract(py)
+                .expect("Python module name is a string");
+            assert_eq!(module_name, "marty_iso18013");
+
+            let version: String = module
+                .getattr(py, "__version__")
+                .expect("Python module exposes __version__")
+                .extract(py)
+                .expect("Python module version is a string");
+            assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        });
+    }
 }

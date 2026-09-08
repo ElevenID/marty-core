@@ -389,12 +389,12 @@ impl EacSecureMessaging {
                 marty_crypto::kdf::hkdf_sha256(shared_secret, domain_separator, info, 32)
             }
         };
-        let mac_key = zeroize::Zeroizing::new(derive(b"EAC_MAC_KEY", b"MAC_DERIVATION")?);
+        let mac_key = derive(b"EAC_MAC_KEY", b"MAC_DERIVATION")?;
         let mac_key: [u8; 32] = mac_key
             .as_slice()
             .try_into()
             .expect("HKDF requested 32 bytes");
-        let encryption_key = zeroize::Zeroizing::new(derive(b"EAC_ENC_KEY", b"ENC_DERIVATION")?);
+        let encryption_key = derive(b"EAC_ENC_KEY", b"ENC_DERIVATION")?;
         let encryption_key: [u8; 32] = encryption_key
             .as_slice()
             .try_into()

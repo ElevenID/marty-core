@@ -166,6 +166,7 @@ jobs:
           cargo test --locked -p marty-crypto-test-support
           cargo test --locked -p marty-verification --no-default-features --features csca,ephemeral-session-keys --lib
           cargo test --locked -p marty-iso18013 --no-default-features --features session-protocol
+          cargo test --locked -p marty-iso18013 --no-default-features --features python --lib python_module_name_coexists_with_session_conformance_alias
           cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys
           cargo test --locked -p marty-bindings --no-default-features --features didcomm-encrypted-envelope encrypted_envelope_module_exposes_anoncrypt_only
           cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
@@ -584,6 +585,53 @@ jobs:
           wasm-pack build --target nodejs --features wasm
           wasm-pack build --target bundler --features wasm
 
+  oid4vci-wasm-security:
+    name: OID4VCI WASM Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-bindgen test runner
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        with:
+          tool: wasm-bindgen-cli@0.2.126
+      - name: Test browser cryptographic provider policy
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: >-
+          cargo test --locked -p marty-oid4vci
+          --target wasm32-unknown-unknown
+          --no-default-features --features verifier
+          --test wasm_crypto_provider
+          -- --nocapture
+
+  crypto-wasm-security:
+    name: Crypto WASM Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-bindgen test runner
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        with:
+          tool: wasm-bindgen-cli@0.2.126
+      - name: Test browser key derivation and cleanup
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: |
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --lib wasm_hmac_and_hkdf_match_kats_and_wipe_returned_error_state -- --nocapture
+          cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture
+
   ci-gate:
     name: CI Gate
     if: always()
@@ -598,6 +646,8 @@ jobs:
       - python-tests
       - python-conformance
       - wasm-tests
+      - oid4vci-wasm-security
+      - crypto-wasm-security
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -614,6 +664,8 @@ jobs:
       PYTHON_TESTS: ${{ needs.python-tests.result }}
       PYTHON_CONFORMANCE: ${{ needs.python-conformance.result }}
       WASM_TESTS: ${{ needs.wasm-tests.result }}
+      OID4VCI_WASM_SECURITY: ${{ needs.oid4vci-wasm-security.result }}
+      CRYPTO_WASM_SECURITY: ${{ needs.crypto-wasm-security.result }}
     steps:
       - name: Require every applicable quality lane
         shell: bash
@@ -621,6 +673,8 @@ jobs:
           set -euo pipefail
           test "$PREFLIGHT" = success
           test "$ZKP_NATIVE_SECURITY" = success
+          test "$OID4VCI_WASM_SECURITY" = success
+          test "$CRYPTO_WASM_SECURITY" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$AFFECTED_TESTS" = success
             for result in "$PLATFORM_TESTS" "$SECURITY" "$FEATURE_MATRIX" \
