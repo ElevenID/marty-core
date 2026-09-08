@@ -147,6 +147,50 @@ def check_native_build_cache_scope(workflow_text: str | None = None) -> list[str
     return []
 
 
+def _workflow_step_blocks(job_block: str) -> list[str]:
+    starts = list(re.finditer(r"^      - \S", job_block, re.MULTILINE))
+    return [
+        job_block[
+            match.start() : starts[index + 1].start()
+            if index + 1 < len(starts)
+            else len(job_block)
+        ]
+        for index, match in enumerate(starts)
+    ]
+
+
+def _step_uses_action(step: str, action: str) -> bool:
+    uses_action = re.search(
+        rf"^(?:      - |        )uses:\s*{re.escape(action)}\s*$",
+        step,
+        re.MULTILINE,
+    )
+    has_run = re.search(r"^(?:      - |        )run:\s*", step, re.MULTILINE)
+    return uses_action is not None and has_run is None
+
+
+def _step_runs_cargo(step: str) -> bool:
+    lines = step.splitlines()
+    for index, line in enumerate(lines):
+        run = re.match(r"^(?:      - |        )run:\s*(.*)$", line)
+        if run is None:
+            continue
+        value = run.group(1).strip()
+        if value and value[0] not in "|>" and not value.startswith("#"):
+            return re.search(r"\bcargo(?:\s|\+)", value) is not None
+        if not value or value[0] not in "|>":
+            continue
+        for command in lines[index + 1 :]:
+            stripped = command.strip()
+            if stripped and len(command) - len(command.lstrip()) <= 8:
+                break
+            if stripped and not stripped.startswith("#") and re.search(
+                r"\bcargo(?:\s|\+)", stripped
+            ):
+                return True
+    return False
+
+
 def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[str]:
     contents = (
         workflow_text
@@ -172,20 +216,25 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         if block is None:
             errors.append(f".github/workflows/ci.yml: missing required {job} job")
             continue
-        cache_action = re.search(
-            rf"^\s+(?:-\s+)?uses:\s*{re.escape(pinned_sccache)}\s*$",
-            block,
-            re.MULTILINE,
+        steps = _workflow_step_blocks(block)
+        cache_index = next(
+            (
+                index
+                for index, step in enumerate(steps)
+                if _step_uses_action(step, pinned_sccache)
+            ),
+            None,
         )
-        rust_command = re.search(
-            r"^\s+(?!#)(?:run:\s*)?.*\bcargo(?:\s|\+)", block, re.MULTILINE
+        cargo_index = next(
+            (index for index, step in enumerate(steps) if _step_runs_cargo(step)),
+            None,
         )
-        if cache_action is None:
+        if cache_index is None:
             errors.append(
                 f".github/workflows/ci.yml: {job} inherits RUSTC_WRAPPER=sccache "
                 "without installing pinned sccache"
             )
-        elif rust_command is not None and cache_action.start() > rust_command.start():
+        elif cargo_index is not None and cache_index > cargo_index:
             errors.append(
                 f".github/workflows/ci.yml: {job} must install pinned sccache "
                 "before its first cargo command"
