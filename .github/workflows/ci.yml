@@ -48,7 +48,7 @@ jobs:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
       - name: Install cargo-deny
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063
         with:
           tool: cargo-deny@0.20.2
       - name: Cache Cargo inputs
@@ -278,7 +278,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063
         with:
           tool: cargo-nextest@0.9.143
       - name: Require reproducible release sources
@@ -636,7 +636,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install wasm-bindgen test runner
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063
         with:
           tool: wasm-bindgen-cli@0.2.126
       - name: Test browser cryptographic provider policy
@@ -665,7 +665,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install wasm-bindgen test runner
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063
         with:
           tool: wasm-bindgen-cli@0.2.126
       - name: Test browser key derivation and cleanup
