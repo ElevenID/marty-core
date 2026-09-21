@@ -8,6 +8,12 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "*/Cargo.toml"
+      - "*/pyproject.toml"
+      - "marty-bindings/src/**"
+      - "marty-biometrics/src/**"
+      - "marty-iso18013/src/**"
+      - "marty-verification/src/**"
+      - "scripts/check_python_wheel_import.py"
 
 concurrency:
   group: release-wheel-preflight-${{ github.event.pull_request.number }}
@@ -21,10 +27,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [marty-bindings, marty-verification, marty-iso18013]
+        package: [marty-bindings, marty-biometrics, marty-verification, marty-iso18013]
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
           maturin-version: v1.14.1
@@ -53,3 +62,12 @@ jobs:
               exit 1
             fi
             perl -MIPC::Cmd -MTime::Piece -e 1
+      - name: Verify native wheel imports its Rust extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheels=("${{ matrix.package }}"/dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          python -m pip install --disable-pip-version-check \
+            --force-reinstall --no-deps "${wheels[0]}"
+          python scripts/check_python_wheel_import.py "${{ matrix.package }}"
