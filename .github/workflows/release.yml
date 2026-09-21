@@ -197,6 +197,9 @@ jobs:
     runs-on: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64' && 'ubuntu-24.04-arm' || matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
           # Keep release builds independent of GitHub's latest-release API.
@@ -228,6 +231,18 @@ jobs:
               exit 1
             fi
             perl -MIPC::Cmd -MTime::Piece -e 1
+      - name: Verify native wheel public API and Rust extension
+        if: >-
+          (runner.arch == 'X64' && matrix.target == 'x86_64') ||
+          (runner.arch == 'ARM64' && matrix.target == 'aarch64')
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheels=("${{ matrix.package }}"/dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          python -m pip install --disable-pip-version-check \
+            --force-reinstall --no-deps "${wheels[0]}"
+          python scripts/check_python_wheel_import.py "${{ matrix.package }}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}-${{ matrix.target }}

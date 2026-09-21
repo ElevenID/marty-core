@@ -331,10 +331,14 @@ def check_repository(root: Path = ROOT) -> None:
 
     bindings_wheel = load_toml(root / "marty-bindings" / "pyproject.toml")
     bindings_wheel_config = bindings_wheel["tool"]["maturin"]
+    bindings_wheel_features = set(bindings_wheel_config["features"])
     require(
         bindings_wheel_config.get("no-default-features") is True
-        and "kms-only" in bindings_wheel_config["features"],
-        "the released aggregate wheel must use an explicit KMS-only feature set",
+        and bindings_wheel_features == {"extension-module", "kms-only"}
+        and bindings["features"].get("extension-module")
+        == ["pyo3/extension-module"],
+        "the released aggregate wheel must select its crate-level extension-module "
+        "alias and the explicit KMS-only feature set",
     )
 
     bindings_source = (root / "marty-bindings" / "src" / "lib.rs").read_text(

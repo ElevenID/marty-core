@@ -84,6 +84,72 @@ class ReleaseChecksumPolicyTests(unittest.TestCase):
         self.assertTrue(any("must verify" in error for error in errors))
 
 
+class ReleaseWheelImportPolicyTests(unittest.TestCase):
+    def test_checked_in_workflows_import_every_native_wheel(self) -> None:
+        self.assertEqual(check_release_contract.check_release_wheel_import_policy(), [])
+
+    def test_release_rejects_a_missing_import_check(self) -> None:
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        release = release.replace(
+            '          python scripts/check_python_wheel_import.py "${{ matrix.package }}"\n',
+            "",
+        )
+        errors = check_release_contract.check_release_wheel_import_policy(
+            release_text=release
+        )
+        self.assertTrue(
+            any("must be installed and import-checked" in error for error in errors)
+        )
+
+    def test_preflight_rejects_an_omitted_wheel(self) -> None:
+        preflight = (
+            ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
+        ).read_text(encoding="utf-8")
+        preflight = preflight.replace(
+            "package: [marty-bindings, marty-biometrics, marty-verification, "
+            "marty-iso18013]",
+            "package: [marty-bindings, marty-verification, marty-iso18013]",
+        )
+        errors = check_release_contract.check_release_wheel_import_policy(
+            preflight_text=preflight
+        )
+        self.assertTrue(any("every released Python wheel" in error for error in errors))
+
+    def test_preflight_paths_cover_wheel_configuration(self) -> None:
+        preflight = (
+            ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
+        ).read_text(encoding="utf-8")
+        preflight = preflight.replace('      - "*/pyproject.toml"\n', "")
+        errors = check_release_contract.check_release_wheel_import_policy(
+            preflight_text=preflight
+        )
+        self.assertTrue(any("must trigger preflight" in error for error in errors))
+
+    def test_preflight_paths_cover_each_public_python_wrapper(self) -> None:
+        checked_in = (
+            ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
+        ).read_text(encoding="utf-8")
+        for wrapper_path in (
+            "marty-bindings/python/**",
+            "marty-biometrics/python/**",
+            "marty-iso18013/python/**",
+            "marty-verification/python/**",
+        ):
+            with self.subTest(wrapper_path=wrapper_path):
+                preflight = checked_in.replace(
+                    f'      - "{wrapper_path}"\n',
+                    "",
+                )
+                errors = check_release_contract.check_release_wheel_import_policy(
+                    preflight_text=preflight
+                )
+                self.assertTrue(
+                    any("must trigger preflight" in error for error in errors)
+                )
+
+
 class StableTagGateContractTests(unittest.TestCase):
     def test_checked_in_stable_tag_gate_is_complete(self) -> None:
         self.assertEqual(check_release_contract.check_stable_tag_gate(), [])

@@ -34,8 +34,8 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2022-0040, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-09-20
-    rationale: Re-reviewed 2026-09-06. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification; spruceid/ssi#706 remains open. Upstream main still declares serde_cbor 0.11.2 directly in ssi-data-integrity-suites, so a consumer-only version bump cannot remove it. The parser is not called directly by Marty, cargo-deny reports no unignored vulnerability advisory, and issue 26 remains the replacement gate. The exact ElevenID ssi-jwt revision remains necessary, and the lock contains only serde_with 3.x.
+    review-after: 2026-10-20
+    rationale: Re-reviewed 2026-09-20. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification. spruceid/ssi#706 closed unmerged on 2026-08-25 without maintainer review after remaining CLA-pending, so the exact ElevenID ssi-jwt revision remains necessary. Upstream main still declares serde_with 2.3.2 in ssi-jwt and serde_cbor 0.11.2 directly in ssi-data-integrity-suites, so a consumer-only version bump cannot remove either exception. The lock contains only patched serde_with 3.22.0, owning_ref is absent, cargo-deny reports no unignored SSI exception advisory after the rustls 0.23.45 lock repair, and issue 26 remains the replacement gate.
   - package: serde_cbor
     ecosystem: rust
     owner: SpruceID SSI
@@ -44,10 +44,10 @@ dependencies:
     target: ciborium-in-maintained-ssi-release
     status: temporary-exception
     decision: replace
-    advisories: []
+    advisories: [RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-09-20
-    rationale: Re-reviewed against SpruceID SSI main on 2026-09-06; the same 0.4.0 suite still declares serde_cbor 0.11.2. Marty has no direct serde_cbor calls, cargo-deny reports no unignored vulnerability advisory, and locally patching one serialization backend inside the standards suite without upstream vectors would create a higher interoperability risk. Retain only through the narrow SSI data-integrity feature graph until a maintained SpruceID release migrates to ciborium; do not add new direct uses.
+    review-after: 2026-10-20
+    rationale: Re-reviewed against SpruceID SSI main on 2026-09-20; the current suite still declares serde_cbor 0.11.2 unconditionally and uses it for ECDSA-SD-2023 and BBS-2023 proof encoding and decoding. Marty has no direct serde_cbor calls, but this is an active transitive parser path and RUSTSEC-2021-0127 records that the crate is unmaintained with no patched version. No upstream issue or pull request currently replaces it with ciborium. A local backend substitution without upstream-equivalent proof vectors would create a higher interoperability risk, so retain it only through the narrow SSI data-integrity graph, prohibit new direct uses, and replace it as soon as a maintained compatible upstream release is qualified.
   - package: linked-data
     ecosystem: rust
     owner: ElevenID

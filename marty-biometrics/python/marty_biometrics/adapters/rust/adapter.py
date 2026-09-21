@@ -5,35 +5,19 @@ This adapter wraps the _marty_biometrics Rust module and converts
 between Python types and Rust types.
 """
 
-from typing import List, Optional
-
+from marty_biometrics._native import get_rust_bindings as _get_rust_module
 from marty_biometrics.ports.types import (
     FaceBounds,
-    FaceVerificationRequest,
-    FaceVerificationResult,
     FaceQualityAssessment,
     FaceQualityFactors,
+    FaceVerificationRequest,
+    FaceVerificationResult,
     LivenessResult,
-    LivenessScores,
     ProviderCapabilities,
 )
 
 
-def _get_rust_module():
-    """Lazy import of Rust bindings."""
-    try:
-        import _marty_biometrics
-
-        return _marty_biometrics
-    except ImportError:
-        raise RuntimeError(
-            "marty-biometrics Rust bindings not available. "
-            "Install with: pip install marty-biometrics[ffi] "
-            "or build with: cd marty-biometrics && maturin develop --features python"
-        )
-
-
-def _convert_face_bounds(rust_bounds) -> Optional[FaceBounds]:
+def _convert_face_bounds(rust_bounds) -> FaceBounds | None:
     """Convert Rust FaceBounds to Python FaceBounds."""
     if rust_bounds is None:
         return None
@@ -45,7 +29,7 @@ def _convert_face_bounds(rust_bounds) -> Optional[FaceBounds]:
     )
 
 
-def _convert_liveness(rust_liveness) -> Optional[LivenessResult]:
+def _convert_liveness(rust_liveness) -> LivenessResult | None:
     """Convert Rust LivenessResult to Python LivenessResult."""
     if rust_liveness is None:
         return None
@@ -125,8 +109,7 @@ class RustFaceVerifier:
         rust = _get_rust_module()
         if not hasattr(rust.FaceVerifier, "onnx"):
             raise RuntimeError(
-                "ONNX support not available. "
-                "Rebuild with: maturin develop --features python,onnx"
+                "ONNX support not available. Rebuild with: maturin develop --features python,onnx"
             )
         inner = rust.FaceVerifier.onnx(models_dir)
         return cls(inner)
@@ -227,7 +210,7 @@ class RustFaceVerifier:
         """Estimate the age of the subject in the image."""
         return self._inner.estimate_age(image)
 
-    def detect_passive_liveness(self, frames: List[str]):
+    def detect_passive_liveness(self, frames: list[str]):
         """Passive liveness detection from multiple frames."""
         return self._inner.detect_passive_liveness(frames)
 

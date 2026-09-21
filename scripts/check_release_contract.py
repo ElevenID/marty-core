@@ -33,6 +33,9 @@ RELEASE_DELETION_PATTERNS = (
 )
 CAPABILITY_LIFECYCLE = ROOT / "capability-lifecycle.json"
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
+RELEASE_WHEEL_PREFLIGHT = (
+    ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
+)
 PREPARE_STABLE_WORKFLOW = ROOT / ".github" / "workflows" / "prepare-stable-tag.yml"
 STABLE_TAG_POLICY = ROOT / ".github" / "stable-tag-policy.json"
 
@@ -809,6 +812,73 @@ def check_release_checksum_policy(workflow_text: str | None = None) -> list[str]
     return errors
 
 
+def check_release_wheel_import_policy(
+    release_text: str | None = None,
+    preflight_text: str | None = None,
+) -> list[str]:
+    """Require native import checks for every wheel before release publication."""
+    release = (
+        release_text
+        if release_text is not None
+        else RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    )
+    preflight = (
+        preflight_text
+        if preflight_text is not None
+        else RELEASE_WHEEL_PREFLIGHT.read_text(encoding="utf-8")
+    )
+    errors: list[str] = []
+    common_markers = (
+        "Verify native wheel public API and Rust extension",
+        "--force-reinstall --no-deps",
+        'python scripts/check_python_wheel_import.py "${{ matrix.package }}"',
+    )
+    for path, contents in (
+        (".github/workflows/release.yml", release),
+        (".github/workflows/release-wheel-preflight.yml", preflight),
+    ):
+        missing = [marker for marker in common_markers if marker not in contents]
+        if missing:
+            errors.append(
+                f"{path}: every built native wheel must be installed and import-checked"
+            )
+    for marker in (
+        "runner.arch == 'X64' && matrix.target == 'x86_64'",
+        "runner.arch == 'ARM64' && matrix.target == 'aarch64'",
+    ):
+        if marker not in release:
+            errors.append(
+                ".github/workflows/release.yml: wheel imports must run for each "
+                "native runner architecture"
+            )
+            break
+    expected_matrix = (
+        "package: [marty-bindings, marty-biometrics, marty-verification, "
+        "marty-iso18013]"
+    )
+    if expected_matrix not in preflight:
+        errors.append(
+            ".github/workflows/release-wheel-preflight.yml: preflight must build and "
+            "import every released Python wheel"
+        )
+    for path_filter in (
+        '      - "*/pyproject.toml"',
+        '      - "marty-bindings/python/**"',
+        '      - "marty-biometrics/python/**"',
+        '      - "marty-iso18013/python/**"',
+        '      - "marty-verification/python/**"',
+        '      - "scripts/check_python_wheel_import.py"',
+        '      - "scripts/test_check_python_wheel_import.py"',
+    ):
+        if path_filter not in preflight:
+            errors.append(
+                ".github/workflows/release-wheel-preflight.yml: wheel configuration "
+                "and import-check changes must trigger preflight"
+            )
+            break
+    return errors
+
+
 def check_stable_tag_policy(policy: dict[str, object]) -> list[str]:
     errors: list[str] = []
     required_paths = {
@@ -983,6 +1053,7 @@ def main() -> int:
         *check_wasm_security_cache_setup(),
         *check_zkp_native_security_tests(),
         *check_release_checksum_policy(),
+        *check_release_wheel_import_policy(),
         *check_stable_tag_gate(),
         *check_capability_lifecycle(),
     ]
@@ -1002,6 +1073,7 @@ def main() -> int:
     print(
         "release-contract: checksum manifest excludes itself and verifies listed assets"
     )
+    print("release-contract: every native Python wheel is import-checked")
     print("release-contract: stable tags require exact-main preparation evidence")
     print("release-contract: temporary capability lifecycle policy is current")
     return 0

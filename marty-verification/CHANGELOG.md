@@ -7,8 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-21
+
+### Added
+
+- Add typed Open Badge verification requests and shared public-key conversion,
+  CMS validation, registry, document, and trust-synchronization boundaries.
+- Add opaque BAC, PACE, EAC, and HAIP response-decryption session objects that
+  retain and zeroize their short-lived secrets instead of returning raw keys.
+
+### Changed
+
+- Remove production authority-issuance, DTC local-signing, private-key codec,
+  and raw session-key APIs. Passive verification remains the default, while
+  short-lived passport/session cryptography requires the explicit
+  `ephemeral-session-keys` capability.
+- Split the Python verification adapter by domain without changing its retained
+  verification entry points.
+
+### Fixed
+
+- Report the installed Python wheel version from distribution metadata instead
+  of retaining the pre-0.2 package constant.
+
 ### Security
 
+- Reject private JWK material at verification boundaries and bound compact JWS,
+  compact JWE, proof, attestation, status-token, and APDU inputs before parsing
+  or allocation.
 - Bound EUDI LoTL and member-state trusted-list downloads to 16 MiB before
   XML parsing, including streamed responses without a declared length.
 - Upgrade `quick-xml` to 0.41.0 to fix quadratic duplicate-attribute checks

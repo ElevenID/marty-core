@@ -19,12 +19,15 @@ Usage:
     print(f"Verified: {result.verified}, Similarity: {result.similarity}")
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
+from marty_biometrics._native import get_rust_bindings
 from marty_biometrics.ports import (
+    FaceQualityAssessment,
     FaceVerificationRequest,
     FaceVerificationResult,
-    FaceQualityAssessment,
-    ProviderCapabilities,
     IFaceVerifier,
+    ProviderCapabilities,
 )
 
 __all__ = [
@@ -35,28 +38,10 @@ __all__ = [
     "ProviderCapabilities",
     # Interfaces
     "IFaceVerifier",
+    "get_rust_bindings",
 ]
 
-__version__ = "0.1.0"
-
-
-def get_rust_bindings():
-    """
-    Lazy import of Rust bindings.
-
-    Returns:
-        The _marty_biometrics module.
-
-    Raises:
-        RuntimeError: If the Rust bindings are not available.
-    """
-    try:
-        import _marty_biometrics
-
-        return _marty_biometrics
-    except ImportError:
-        raise RuntimeError(
-            "marty-biometrics Rust bindings not available. "
-            "Install with: pip install marty-biometrics[ffi] "
-            "or build with: cd marty-biometrics && maturin develop --features python"
-        )
+try:
+    __version__ = version("marty-biometrics")
+except PackageNotFoundError:
+    __version__ = "unknown"

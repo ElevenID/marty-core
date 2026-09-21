@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-21
+
+### Changed
+
+- Make the default feature set empty and replace the former feature-complete
+  surface with explicit verification, eMRTD compatibility, public-key codec,
+  key-agreement, derivation, and symmetric-session capabilities.
+- Return zeroizing secret containers from key-agreement and derivation APIs;
+  callers must consume derived secret bytes through their guarded views.
+
+### Security
+
+- Remove production-selectable key generation, local signing, private-key
+  serialization, PKCS#12 extraction, certificate construction, and SOD
+  construction APIs. Their preserved fixtures now compile only under tests.
+- Reject malformed, non-canonical, weak, or curve-invalid public keys and
+  signatures at the shared verification and JWK boundaries, while keeping
+  Ed448 and legacy ICAO algorithms behind explicit eMRTD capabilities.
+- Zeroize protocol secrets and intermediate keyed state on native and WebAssembly
+  paths, including failure returns.
+
 ## [0.1.60] - 2026-08-25
 
 ### Security
