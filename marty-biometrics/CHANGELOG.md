@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run native and liveness feature tests, including malformed-request and mock
   provider parity cases, in the feature-combination gate.
 
+### Fixed
+
+- Load the packaged Rust extension through one package-relative adapter boundary
+  and report the installed wheel version from distribution metadata.
+
 ## [0.1.0] - 2026-01-07
 
 ### Added

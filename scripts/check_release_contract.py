@@ -829,7 +829,7 @@ def check_release_wheel_import_policy(
     )
     errors: list[str] = []
     common_markers = (
-        "Verify native wheel imports its Rust extension",
+        "Verify native wheel public API and Rust extension",
         "--force-reinstall --no-deps",
         'python scripts/check_python_wheel_import.py "${{ matrix.package }}"',
     )
@@ -863,7 +863,12 @@ def check_release_wheel_import_policy(
         )
     for path_filter in (
         '      - "*/pyproject.toml"',
+        '      - "marty-bindings/python/**"',
+        '      - "marty-biometrics/python/**"',
+        '      - "marty-iso18013/python/**"',
+        '      - "marty-verification/python/**"',
         '      - "scripts/check_python_wheel_import.py"',
+        '      - "scripts/test_check_python_wheel_import.py"',
     ):
         if path_filter not in preflight:
             errors.append(

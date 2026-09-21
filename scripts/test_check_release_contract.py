@@ -127,6 +127,28 @@ class ReleaseWheelImportPolicyTests(unittest.TestCase):
         )
         self.assertTrue(any("must trigger preflight" in error for error in errors))
 
+    def test_preflight_paths_cover_each_public_python_wrapper(self) -> None:
+        checked_in = (
+            ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
+        ).read_text(encoding="utf-8")
+        for wrapper_path in (
+            "marty-bindings/python/**",
+            "marty-biometrics/python/**",
+            "marty-iso18013/python/**",
+            "marty-verification/python/**",
+        ):
+            with self.subTest(wrapper_path=wrapper_path):
+                preflight = checked_in.replace(
+                    f'      - "{wrapper_path}"\n',
+                    "",
+                )
+                errors = check_release_contract.check_release_wheel_import_policy(
+                    preflight_text=preflight
+                )
+                self.assertTrue(
+                    any("must trigger preflight" in error for error in errors)
+                )
+
 
 class StableTagGateContractTests(unittest.TestCase):
     def test_checked_in_stable_tag_gate_is_complete(self) -> None:

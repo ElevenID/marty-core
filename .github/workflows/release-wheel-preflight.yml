@@ -9,11 +9,16 @@ on:
       - "Cargo.lock"
       - "*/Cargo.toml"
       - "*/pyproject.toml"
+      - "marty-bindings/python/**"
       - "marty-bindings/src/**"
+      - "marty-biometrics/python/**"
       - "marty-biometrics/src/**"
+      - "marty-iso18013/python/**"
       - "marty-iso18013/src/**"
+      - "marty-verification/python/**"
       - "marty-verification/src/**"
       - "scripts/check_python_wheel_import.py"
+      - "scripts/test_check_python_wheel_import.py"
 
 concurrency:
   group: release-wheel-preflight-${{ github.event.pull_request.number }}
@@ -62,7 +67,7 @@ jobs:
               exit 1
             fi
             perl -MIPC::Cmd -MTime::Piece -e 1
-      - name: Verify native wheel imports its Rust extension
+      - name: Verify native wheel public API and Rust extension
         shell: bash
         run: |
           set -euo pipefail

@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Split the Python verification adapter by domain without changing its retained
   verification entry points.
 
+### Fixed
+
+- Report the installed Python wheel version from distribution metadata instead
+  of retaining the pre-0.2 package constant.
+
 ### Security
 
 - Reject private JWK material at verification boundaries and bound compact JWS,
