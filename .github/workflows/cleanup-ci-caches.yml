@@ -19,6 +19,7 @@ jobs:
   cleanup:
     name: Remove caches for closed pull requests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: write
       contents: read
@@ -60,8 +61,11 @@ jobs:
             });
             const pullStates = new Map();
             const seenCacheIds = new Set();
-            const maxDeletions = 2000;
-            const deleteConcurrency = 10;
+            // Cache deletion is subject to GitHub's secondary REST API rate limit.
+            // A bounded daily batch keeps cleanup progressing without request bursts.
+            const maxDeletions = 300;
+            const deletePauseMs = 1000;
+            const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
             const selected = [];
             for (const {cache, number} of candidates) {
               if (seenCacheIds.has(cache.id)) continue;
@@ -79,20 +83,49 @@ jobs:
             }
             let removed = 0;
             let alreadyRemoved = 0;
-            for (let offset = 0; offset < selected.length; offset += deleteConcurrency) {
-              const batch = selected.slice(offset, offset + deleteConcurrency);
-              const results = await Promise.all(batch.map(async cache => {
+            for (let index = 0; index < selected.length; index += 1) {
+              const cache = selected[index];
+              let result;
+              for (let attempt = 0; attempt < 5; attempt += 1) {
                 try {
                   await github.rest.actions.deleteActionsCacheById({owner, repo, cache_id: cache.id});
-                  return 'removed';
+                  result = 'removed';
+                  break;
                 } catch (error) {
-                  if (error.status === 404) return 'missing';
+                  if (error.status === 404) {
+                    result = 'missing';
+                    break;
+                  }
+                  const headers = error.response?.headers || {};
+                  const message = String(error.response?.data?.message || error.message || '');
+                  const rateLimited = error.status === 429 || (
+                    error.status === 403 && (
+                      /secondary rate limit|too many requests/i.test(message)
+                      || headers['retry-after'] !== undefined
+                      || headers['x-ratelimit-remaining'] === '0'
+                    )
+                  );
+                  if (rateLimited && attempt < 4) {
+                    const retryAfter = Number(headers['retry-after']);
+                    const reset = Number(headers['x-ratelimit-reset']);
+                    const delayMs = Number.isFinite(retryAfter) && retryAfter > 0
+                      ? retryAfter * 1000
+                      : Number.isFinite(reset) && reset * 1000 > Date.now()
+                        ? reset * 1000 - Date.now() + 1000
+                        : 60000;
+                    core.warning(`Cache deletion was rate limited; retrying in ${delayMs / 1000}s.`);
+                    await sleep(delayMs);
+                    continue;
+                  }
                   throw error;
                 }
-              }));
-              removed += results.filter(result => result === 'removed').length;
-              alreadyRemoved += results.filter(result => result === 'missing').length;
-              core.info(`Processed ${Math.min(offset + batch.length, selected.length)} of ${selected.length} cache entries.`);
+              }
+              if (result === 'removed') removed += 1;
+              if (result === 'missing') alreadyRemoved += 1;
+              if ((index + 1) % 25 === 0 || index + 1 === selected.length) {
+                core.info(`Processed ${index + 1} of ${selected.length} cache entries.`);
+              }
+              if (index + 1 < selected.length) await sleep(deletePauseMs);
             }
             core.summary
               .addHeading('CI cache cleanup')

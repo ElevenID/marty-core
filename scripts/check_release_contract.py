@@ -381,9 +381,9 @@ WASM_SECURITY_WORKFLOW_ENV = """env:
   RUSTUP_TOOLCHAIN: 1.97.1
   RUSTC_WRAPPER: sccache
   SCCACHE_GHA_ENABLED: "true"
-  # Merge-queue and Dependabot refs create large, short-lived cache namespaces.
-  # They still read the default/PR cache but do not duplicate compiler objects.
-  SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}"""
+  # CI reads the shared compiler cache; a single affected-tests PR job may
+  # write changed-code objects so follow-up commits can reuse them.
+  SCCACHE_GHA_RW_MODE: READ_ONLY"""
 WASM_SECURITY_WORKFLOW_PREFIX = (
     """name: CI
 
