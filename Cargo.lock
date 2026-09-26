@@ -3876,6 +3876,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-emrtd-issuance"
+version = "0.2.0"
+dependencies = [
+ "cms",
+ "const-oid",
+ "der 0.7.10",
+ "ed25519-dalek",
+ "marty-crypto",
+ "marty-verification",
+ "p256",
+ "p384",
+ "rcgen",
+ "rsa",
+ "sha2 0.10.9",
+ "signature",
+ "spki",
+ "thiserror 2.0.20",
+ "x509-cert",
+]
+
+[[package]]
 name = "marty-iso18013"
 version = "0.2.0"
 dependencies = [
