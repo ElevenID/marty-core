@@ -302,7 +302,7 @@ WASM_SECURITY_TEST_COMMANDS = {
     ),
 }
 WASM_BINDGEN_INSTALLER_ACTION = (
-    "taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7"
+    "taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12"
 )
 WASM_BINDGEN_TOOL = "wasm-bindgen-cli@0.2.126"
 WASM_TEST_RUNNER_ENV = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER"
@@ -326,7 +326,7 @@ WASM_SECURITY_ACTION_STEPS = (
         with:
           version: v0.16.0""",
     """      - name: Install wasm-bindgen test runner
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12
         with:
           tool: wasm-bindgen-cli@0.2.126""",
 )
