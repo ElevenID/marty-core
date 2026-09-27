@@ -10,6 +10,11 @@ on:
       - '**/Cargo.toml'
       - '**/*.rs'
   workflow_dispatch:
+    inputs:
+      diagnose_linux_cache:
+        description: Capture sanitized Linux sccache backend status counts
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,7 +32,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(inputs.diagnose_linux_cache && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     env:
       # Spread compiler-object uploads below GitHub's per-repository burst cap.
       CARGO_BUILD_JOBS: 2
@@ -54,6 +59,12 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
+      - name: Capture Linux cache backend errors for diagnosis
+        if: github.event_name == 'workflow_dispatch' && inputs.diagnose_linux_cache && runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "SCCACHE_ERROR_LOG=$RUNNER_TEMP/sccache-backend-errors.log" >> "$GITHUB_ENV"
+          echo 'SCCACHE_LOG=debug' >> "$GITHUB_ENV"
       - name: Compile workspace test targets
         run: >-
           cargo test --locked --workspace --no-run
@@ -70,3 +81,7 @@ jobs:
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
+      - name: Report sanitized Linux cache backend status counts
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnose_linux_cache && runner.os == 'Linux'
+        shell: bash
+        run: python3 scripts/summarize_sccache_errors.py "$RUNNER_TEMP/sccache-backend-errors.log"
