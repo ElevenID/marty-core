@@ -52,14 +52,14 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/openwallet-foundation-labs/sd-jwt-rust
-    current: "0.7.1@c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+    current: "0.7.1@74c086841f8086507e5dc8b6a1acf59feecf0809"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-10-30
-    rationale: The immutable ElevenID revision carries the RFC 9901 holder API update plus reviewed serial-first issuance and verifier refactors, consumer-compatible WASM binding resolution, and dependency-supported Rust 1.85 metadata. Marty leaves the optional parallel and benchmark features disabled. The source-breaking holder constructor is adopted through its explicit unverified variant to preserve WalletEngine's existing preverified-input contract because that API does not yet receive a trusted issuer-key resolver or validate the supplied holder key against the credential's cnf claim; adding those checks is a separate product change rather than a hidden dependency-bump behavior change.
+    rationale: The immutable ElevenID revision retains the RFC 9901 holder API and serial-first issuance/verifier behavior, and adds reviewed Unicode escaping, authoritative holder cnf handling, and bounded recursive unpack. Its declared Rust minimum is 1.88. Marty leaves the optional parallel and benchmark features disabled. WalletEngine still uses the explicit unverified holder constructor to preserve its preverified-input contract because that API does not receive a trusted issuer-key resolver or validate the supplied holder key against the credential's cnf claim; adding those checks is a separate product change.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID

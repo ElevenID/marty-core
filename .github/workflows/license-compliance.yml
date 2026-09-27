@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Weekly Monday, staggered across repositories.
   pull_request:
-    branches: [main]
+    branches: [main, maintenance/0.1.x]
     paths:
       - 'Cargo.toml'
       - '**/Cargo.toml'

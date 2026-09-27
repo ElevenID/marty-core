@@ -93,10 +93,10 @@ fn p256_jwk(key: &SigningKey, include_private: bool) -> serde_json::Value {
 }
 
 fn fixture() -> Fixture {
-    fixture_with_cnf(false)
+    fixture_with_cnf(false).expect("public holder cnf fixture")
 }
 
-fn fixture_with_cnf(include_private_cnf: bool) -> Fixture {
+fn fixture_with_cnf(include_private_cnf: bool) -> Oid4vciResult<Fixture> {
     let issuer_signing_key = SigningKey::random(&mut OsRng);
     let holder_signing_key = SigningKey::random(&mut OsRng);
     let issuer = "did:example:verified-wallet-issuer".to_string();
@@ -128,8 +128,7 @@ fn fixture_with_cnf(include_private_cnf: bool) -> Fixture {
             algorithm: SigningAlgorithm::ES256,
         },
         &claims,
-    )
-    .unwrap();
+    )?;
     let credential = match signed {
         SignedCredential::SdJwt { compact, .. } => compact,
         _ => panic!("expected SD-JWT"),
@@ -139,13 +138,13 @@ fn fixture_with_cnf(include_private_cnf: bool) -> Fixture {
     issuer_public_jwk["kid"] = serde_json::Value::String(issuer.clone());
     issuer_public_jwk["alg"] = serde_json::Value::String("ES256".into());
 
-    Fixture {
+    Ok(Fixture {
         credential,
         issuer,
         issuer_public_jwk: issuer_public_jwk.to_string(),
         issuer_private_jwk,
         holder_private_jwk,
-    }
+    })
 }
 
 fn resolver_for(fixture: &Fixture) -> StaticResolver {
@@ -200,7 +199,11 @@ fn mutate_issuer_header_and_resign(
     mutate(&mut header);
     let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(&header).unwrap());
-    let signing_input = format!("{header}.{}", segments[1]);
+    resign_issuer_jws(fixture, &header, segments[1], suffix)
+}
+
+fn resign_issuer_jws(fixture: &Fixture, header: &str, payload: &str, suffix: &str) -> String {
+    let signing_input = format!("{header}.{payload}");
     let signature = IssuerKey {
         issuer_id: fixture.issuer.clone(),
         jwk_json: fixture.issuer_private_jwk.clone(),
@@ -212,6 +215,22 @@ fn mutate_issuer_header_and_resign(
         "{signing_input}.{}~{suffix}",
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
     )
+}
+
+fn mutate_issuer_payload_and_resign(
+    fixture: &Fixture,
+    mutate: impl FnOnce(&mut serde_json::Value),
+) -> String {
+    let (issuer_jws, suffix) = fixture.credential.split_once('~').unwrap();
+    let segments = issuer_jws.split('.').collect::<Vec<_>>();
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(segments[1])
+        .unwrap();
+    let mut payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
+    mutate(&mut payload);
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&payload).unwrap());
+    resign_issuer_jws(fixture, segments[0], &payload, suffix)
 }
 
 fn mutate_issuer_payload(credential: &str, mutate: impl FnOnce(&mut serde_json::Value)) -> String {
@@ -646,10 +665,14 @@ fn verified_presentation_rejects_private_issuer_material_from_resolver() {
 
 #[test]
 fn verified_presentation_rejects_private_holder_material_in_signed_cnf() {
-    let fixture = fixture_with_cnf(true);
+    let fixture = fixture();
+    let holder_jwk: serde_json::Value = serde_json::from_str(&fixture.holder_private_jwk).unwrap();
+    let signed_with_private_cnf = mutate_issuer_payload_and_resign(&fixture, |payload| {
+        payload["cnf"]["jwk"]["d"] = holder_jwk["d"].clone();
+    });
     let error = WalletEngine::new()
         .create_verified_sd_jwt_presentation(
-            &fixture.credential,
+            &signed_with_private_cnf,
             &["email".into()],
             &fresh_nonce(),
             "https://verifier.example",
@@ -658,10 +681,24 @@ fn verified_presentation_rejects_private_holder_material_in_signed_cnf() {
         )
         .unwrap_err();
 
-    assert!(matches!(error, Oid4vciError::KeyError(_)));
+    assert!(matches!(
+        error,
+        Oid4vciError::KeyError(_) | Oid4vciError::SdJwtError(_)
+    ));
     assert!(error
         .to_string()
         .contains("contains private key material: d"));
+}
+
+#[test]
+fn issuer_rejects_private_holder_material_in_cnf() {
+    let error = fixture_with_cnf(true)
+        .err()
+        .expect("private cnf must be rejected");
+    assert!(matches!(error, Oid4vciError::SdJwtError(_)));
+    assert!(error
+        .to_string()
+        .contains("cnf.jwk must be a public asymmetric JWK"));
 }
 
 #[test]

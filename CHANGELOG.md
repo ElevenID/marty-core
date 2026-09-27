@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Pin the reviewed SD-JWT 0.7.1 fix for Unicode disclosure escaping,
+  authoritative holder `cnf`, and bounded recursive disclosure unpacking.
 - Remove the unsound `im` and `sized-chunks` path from linked-data traversal
   through an exact, behavior-locked ElevenID revision.
 - Reject mdoc holder P-256 and P-384 JWK coordinates that are not valid points

@@ -4058,7 +4058,7 @@ checksum = "e20f57f9918e5bd7bc58c22cdd70a6afc7375d4dd9683af5f2b34bd3d2bba619"
 
 [[package]]
 name = "marty-bindings"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4082,7 +4082,7 @@ dependencies = [
 
 [[package]]
 name = "marty-biometrics"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4107,7 +4107,7 @@ dependencies = [
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4155,7 +4155,7 @@ dependencies = [
 
 [[package]]
 name = "marty-didcomm"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -4177,7 +4177,7 @@ dependencies = [
 
 [[package]]
 name = "marty-iso18013"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4209,7 +4209,7 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4241,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "marty-secure-storage"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -4265,7 +4265,7 @@ dependencies = [
 
 [[package]]
 name = "marty-status"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "base64 0.22.1",
  "criterion",
@@ -4279,7 +4279,7 @@ dependencies = [
 
 [[package]]
 name = "marty-test-wallet"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4295,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "marty-types"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "chrono",
  "pyo3",
@@ -4306,7 +4306,7 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4373,7 +4373,7 @@ dependencies = [
 
 [[package]]
 name = "marty-zkp"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "bindgen",
  "cc",
@@ -6403,13 +6403,14 @@ dependencies = [
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7#c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=74c086841f8086507e5dc8b6a1acf59feecf0809#74c086841f8086507e5dc8b6a1acf59feecf0809"
 dependencies = [
  "base64 0.21.7",
+ "curve25519-dalek",
  "getrandom 0.2.17",
- "hmac",
  "jsonwebtoken",
- "log",
+ "p256",
+ "p384",
  "rand 0.8.7",
  "serde",
  "serde_json",
