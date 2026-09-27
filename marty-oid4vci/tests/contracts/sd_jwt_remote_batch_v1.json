@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "description": "Caller-ordered SD-JWT remote preparation. The exact signing bytes and disclosure suffix are independent of language bindings.",
+  "issued_at_unix": 1735787045,
+  "issuer_id": "did:example:issuer",
+  "verification_method_id": "did:example:issuer#key-1",
+  "algorithm": "ES256",
+  "salts_base64url": [
+    "AAAAAAAAAAAAAAAAAAAAAA",
+    "AQEBAQEBAQEBAQEBAQEBAQ"
+  ],
+  "subject_id": "did:example:holder",
+  "credential_type": "EmployeeCredential",
+  "claims": {
+    "name": "Alice",
+    "email": "alice@example.com",
+    "department": "Research"
+  },
+  "expiration_seconds": 3600,
+  "selectors": [
+    "name",
+    "missing",
+    "email",
+    "name"
+  ],
+  "typ": "dc+sd-jwt",
+  "confirmation": {
+    "jwk": {
+      "kty": "EC"
+    }
+  },
+  "x5c": [
+    "Y2VydA"
+  ],
+  "include_nbf": true,
+  "items": [
+    {
+      "batch_id": 91,
+      "credential_id": "urn:uuid:01234567-89ab-4def-8123-456789abcdef",
+      "signing_input": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDpleGFtcGxlOmlzc3VlciNrZXktMSIsIng1YyI6WyJZMlZ5ZEEiXX0.eyJpc3MiOiJkaWQ6ZXhhbXBsZTppc3N1ZXIiLCJpYXQiOjE3MzU3ODcwNDUsImp0aSI6InVybjp1dWlkOjAxMjM0NTY3LTg5YWItNGRlZi04MTIzLTQ1Njc4OWFiY2RlZiIsInZjdCI6IkVtcGxveWVlQ3JlZGVudGlhbCIsInN1YiI6ImRpZDpleGFtcGxlOmhvbGRlciIsImV4cCI6MTczNTc5MDY0NSwiZGVwYXJ0bWVudCI6IlJlc2VhcmNoIiwiX3NkIjpbIk43ODBJUk1OYjlEaGJWQUhDLUUwSGpySXZYaEVtVzJNeTVWakwxVTJlaHciLCJNQ19jbEZ2T216QlJRQS1SSFMxdkwyeDMzeE1HQlBBU3pyM295M0hOY2l3Il0sIl9zZF9hbGciOiJzaGEtMjU2IiwibmJmIjoxNzM1Nzg3MDQ1LCJjbmYiOnsiandrIjp7Imt0eSI6IkVDIn19fQ",
+      "disclosures_suffix": "~WyJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwibmFtZSIsIkFsaWNlIl0~WyJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRIiwiZW1haWwiLCJhbGljZUBleGFtcGxlLmNvbSJd~"
+    },
+    {
+      "batch_id": 7,
+      "credential_id": "urn:uuid:01234567-89ab-4def-8123-456789abcdee",
+      "signing_input": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDpleGFtcGxlOmlzc3VlciNrZXktMSIsIng1YyI6WyJZMlZ5ZEEiXX0.eyJpc3MiOiJkaWQ6ZXhhbXBsZTppc3N1ZXIiLCJpYXQiOjE3MzU3ODcwNDUsImp0aSI6InVybjp1dWlkOjAxMjM0NTY3LTg5YWItNGRlZi04MTIzLTQ1Njc4OWFiY2RlZSIsInZjdCI6IkVtcGxveWVlQ3JlZGVudGlhbCIsInN1YiI6ImRpZDpleGFtcGxlOmhvbGRlciIsImV4cCI6MTczNTc5MDY0NSwiZGVwYXJ0bWVudCI6IlJlc2VhcmNoIiwiX3NkIjpbIk43ODBJUk1OYjlEaGJWQUhDLUUwSGpySXZYaEVtVzJNeTVWakwxVTJlaHciLCJNQ19jbEZ2T216QlJRQS1SSFMxdkwyeDMzeE1HQlBBU3pyM295M0hOY2l3Il0sIl9zZF9hbGciOiJzaGEtMjU2IiwibmJmIjoxNzM1Nzg3MDQ1LCJjbmYiOnsiandrIjp7Imt0eSI6IkVDIn19fQ",
+      "disclosures_suffix": "~WyJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwibmFtZSIsIkFsaWNlIl0~WyJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRIiwiZW1haWwiLCJhbGljZUBleGFtcGxlLmNvbSJd~"
+    }
+  ],
+  "error_cases": [
+    {
+      "kind": "duplicate_batch_id",
+      "expected_error": "SD-JWT preparation batch contains duplicate batch identity"
+    },
+    {
+      "kind": "duplicate_credential_id",
+      "expected_error": "SD-JWT preparation batch contains duplicate credential ID"
+    },
+    {
+      "kind": "invalid_credential_id",
+      "expected_error": "SD-JWT batch credential_id must be a urn:uuid identifier"
+    },
+    {
+      "kind": "invalid_algorithm",
+      "expected_error": "Unknown algorithm: invalid"
+    },
+    {
+      "kind": "expiration_overflow",
+      "expected_error": "SD-JWT expiration is out of range"
+    }
+  ],
+  "issuer_public_jwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+    "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+  }
+}

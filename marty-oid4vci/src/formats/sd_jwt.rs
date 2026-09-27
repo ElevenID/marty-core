@@ -13,6 +13,11 @@
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 #[cfg(any(test, feature = "issuer"))]
+use isomdl::{
+    definitions::DigestAlgorithm,
+    digest_executor::{DigestExecutor, DigestJob, SerialDigestExecutor},
+};
+#[cfg(any(test, feature = "issuer"))]
 use rand::RngCore;
 #[cfg(any(test, feature = "verifier"))]
 use sd_jwt_rs::SDJWTSerializationFormat;
@@ -29,6 +34,9 @@ use crate::signer::{validate_signer_public_jwk, verify_remote_signature, Credent
 use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
+
+#[cfg(any(test, feature = "issuer"))]
+const SD_JWT_BATCH_DIGEST_FAILURE: &str = "SD-JWT disclosure batch digest failed";
 
 #[cfg(any(test, feature = "issuer"))]
 const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
@@ -808,17 +816,6 @@ fn encode_sd_jwt_disclosure(
 }
 
 #[cfg(any(test, feature = "issuer"))]
-fn digest_sd_jwt_disclosure(encoded: EncodedSdJwtDisclosure) -> DigestedSdJwtDisclosure {
-    let digest_b64 = URL_SAFE_NO_PAD.encode(Sha256::digest(encoded.disclosure.as_bytes()));
-
-    DigestedSdJwtDisclosure {
-        source_ordinal: encoded.source_ordinal,
-        disclosure: encoded.disclosure,
-        digest_b64,
-    }
-}
-
-#[cfg(any(test, feature = "issuer"))]
 fn restore_sd_jwt_disclosures(
     digested: DigestedSdJwtDisclosureBatch,
 ) -> Oid4vciResult<Vec<DigestedSdJwtDisclosure>> {
@@ -923,17 +920,90 @@ fn encode_sd_jwt_disclosures(
 }
 
 #[cfg(any(test, feature = "issuer"))]
-fn digest_sd_jwt_disclosures(encoded: EncodedSdJwtDisclosureBatch) -> DigestedSdJwtDisclosureBatch {
-    let SdJwtDisclosureStage {
-        expected_source_ordinals,
-        items,
-    } = encoded;
-    let items = items.into_iter().map(digest_sd_jwt_disclosure).collect();
+fn digest_sd_jwt_disclosures(
+    encoded: EncodedSdJwtDisclosureBatch,
+) -> Oid4vciResult<DigestedSdJwtDisclosureBatch> {
+    let mut result = digest_sd_jwt_disclosure_batches(vec![(0, encoded)], &SerialDigestExecutor)?;
+    result
+        .pop()
+        .map(|(_, stage)| stage)
+        .ok_or_else(sd_jwt_batch_digest_error)
+}
 
-    SdJwtDisclosureStage {
-        expected_source_ordinals,
-        items,
+#[cfg(any(test, feature = "issuer"))]
+fn sd_jwt_batch_digest_error() -> Oid4vciError {
+    Oid4vciError::SdJwtError(SD_JWT_BATCH_DIGEST_FAILURE.into())
+}
+
+/// Both scalar and batch preparation use the same digest and restoration path.
+#[cfg(any(test, feature = "issuer"))]
+fn digest_sd_jwt_disclosure_batches(
+    batches: Vec<(u64, EncodedSdJwtDisclosureBatch)>,
+    executor: &dyn DigestExecutor,
+) -> Oid4vciResult<Vec<(u64, DigestedSdJwtDisclosureBatch)>> {
+    let mut jobs = Vec::new();
+    for (batch_id, stage) in &batches {
+        for disclosure in &stage.items {
+            let job_id = u64::try_from(disclosure.source_ordinal)
+                .map_err(|_| sd_jwt_batch_digest_error())?;
+            jobs.push(DigestJob {
+                credential_id: *batch_id,
+                job_id,
+                ordinal: disclosure.source_ordinal,
+                algorithm: DigestAlgorithm::SHA256,
+                input: disclosure.disclosure.as_bytes().to_vec(),
+            });
+        }
     }
+    let results = executor
+        .execute(&jobs)
+        .map_err(|_| sd_jwt_batch_digest_error())?;
+    if results.len() != jobs.len() {
+        return Err(sd_jwt_batch_digest_error());
+    }
+    let mut by_identity = std::collections::BTreeMap::new();
+    for result in results {
+        if result.digest.len() != 32
+            || by_identity
+                .insert((result.credential_id, result.job_id), result)
+                .is_some()
+        {
+            return Err(sd_jwt_batch_digest_error());
+        }
+    }
+    let mut digested = Vec::with_capacity(batches.len());
+    for (batch_id, stage) in batches {
+        let items = stage
+            .items
+            .into_iter()
+            .map(|item| {
+                let job_id =
+                    u64::try_from(item.source_ordinal).map_err(|_| sd_jwt_batch_digest_error())?;
+                let result = by_identity
+                    .remove(&(batch_id, job_id))
+                    .ok_or_else(sd_jwt_batch_digest_error)?;
+                if result.ordinal != item.source_ordinal {
+                    return Err(sd_jwt_batch_digest_error());
+                }
+                Ok(DigestedSdJwtDisclosure {
+                    source_ordinal: item.source_ordinal,
+                    disclosure: item.disclosure,
+                    digest_b64: URL_SAFE_NO_PAD.encode(result.digest),
+                })
+            })
+            .collect::<Oid4vciResult<Vec<_>>>()?;
+        digested.push((
+            batch_id,
+            SdJwtDisclosureStage {
+                expected_source_ordinals: stage.expected_source_ordinals,
+                items,
+            },
+        ));
+    }
+    if !by_identity.is_empty() {
+        return Err(sd_jwt_batch_digest_error());
+    }
+    Ok(digested)
 }
 
 /// Generate SD-JWT disclosures for selectively-disclosable claims.
@@ -949,7 +1019,100 @@ fn prepare_sd_jwt_disclosures(
 ) -> Oid4vciResult<DigestedSdJwtDisclosureBatch> {
     let planned = plan_sd_jwt_disclosures(target_object, sd_claims, next_salt);
     let encoded = encode_sd_jwt_disclosures(planned)?;
-    Ok(digest_sd_jwt_disclosures(encoded))
+    digest_sd_jwt_disclosures(encoded)
+}
+
+/// A validated remote preparation with its final credential identity and time.
+#[cfg(any(test, feature = "issuer"))]
+pub(crate) struct SdJwtBatchPreparationInput {
+    pub(crate) batch_id: u64,
+    pub(crate) signer: Box<dyn CredentialSigner>,
+    pub(crate) claims: CredentialClaims,
+    pub(crate) options: SdJwtPreparationOptions,
+    pub(crate) issued_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Check fields that cannot depend on generated time, identity or salts.
+#[cfg(any(test, feature = "issuer"))]
+pub(crate) fn validate_sd_jwt_batch_claims(
+    claims: &CredentialClaims,
+    options: &SdJwtPreparationOptions,
+) -> Oid4vciResult<()> {
+    validate_sd_jwt_managed_claims(claims, options.include_nbf, options.confirmation.is_some())?;
+    validate_sd_jwt_structural_markers(claims, options.confirmation.as_ref())?;
+    validate_sd_jwt_confirmation_inputs(claims, options.confirmation.as_ref())?;
+    if matches!(
+        claims.credential_payload_format,
+        CredentialPayloadFormat::W3cVcdmV2JwtVc
+    ) {
+        return Err(Oid4vciError::UnsupportedFormat(
+            "credential_payload_format 'w3c_vcdm_v2_jwt_vc' is only valid for jwt_vc_json, not for SD-JWT credentials".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(test, feature = "issuer"))]
+pub(crate) fn validate_sd_jwt_batch_time(
+    now: chrono::DateTime<chrono::Utc>,
+    expiration_seconds: Option<i64>,
+) -> Oid4vciResult<()> {
+    checked_sd_jwt_expiration_timestamp(now, expiration_seconds).map(|_| ())
+}
+
+/// Reuse the scalar planning and assembly stages, digesting every disclosure
+/// through one executor call and restoring results by routing identity.
+#[cfg(any(test, feature = "issuer"))]
+pub(crate) fn prepare_sd_jwt_batch_with_digest_executor(
+    batch: Vec<SdJwtBatchPreparationInput>,
+    mut next_salt: impl FnMut() -> [u8; 16],
+    executor: &dyn DigestExecutor,
+) -> Oid4vciResult<Vec<(u64, PreparedSdJwt)>> {
+    if batch.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut plans = Vec::with_capacity(batch.len());
+    let mut encoded_batches = Vec::with_capacity(batch.len());
+    let mut batch_ids = std::collections::HashSet::with_capacity(batch.len());
+    for item in batch {
+        if !batch_ids.insert(item.batch_id) {
+            return Err(sd_jwt_batch_digest_error());
+        }
+        let mut unused_uuid = || panic!("batch credential identity must already be assigned");
+        let mut fixed_now = || item.issued_at;
+        let mut planned = plan_sd_jwt_preparation(
+            item.signer.as_ref(),
+            &item.claims,
+            item.options,
+            &mut unused_uuid,
+            &mut fixed_now,
+        )?;
+        let encoded = if item.claims.selective_disclosure_claims.is_empty() {
+            SdJwtDisclosureStage::empty()
+        } else {
+            let target =
+                sd_jwt_disclosure_target_mut(&mut planned.payload, &planned.disclosure_target)?;
+            encode_sd_jwt_disclosures(plan_sd_jwt_disclosures(
+                target,
+                &item.claims.selective_disclosure_claims,
+                &mut next_salt,
+            ))?
+        };
+        encoded_batches.push((item.batch_id, encoded));
+        plans.push((item.batch_id, item.signer, planned));
+    }
+    let digested = digest_sd_jwt_disclosure_batches(encoded_batches, executor)?;
+    let mut prepared = Vec::with_capacity(plans.len());
+    for ((batch_id, signer, plan), (digested_id, digested)) in plans.into_iter().zip(digested) {
+        if batch_id != digested_id {
+            return Err(sd_jwt_batch_digest_error());
+        }
+        prepared.push((
+            batch_id,
+            assemble_sd_jwt_preparation(signer.as_ref(), plan, digested)?,
+        ));
+    }
+    Ok(prepared)
 }
 
 // =============================================================================
@@ -1295,6 +1458,129 @@ mod tests {
 
     const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
+    #[cfg(all(feature = "issuer", feature = "sd_jwt"))]
+    #[test]
+    fn batch_contract_matches_scalar_bytes_and_restores_caller_order() {
+        use isomdl::digest_executor::{DigestExecutionError, DigestResult, SerialDigestExecutor};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ReverseExecutor(AtomicUsize);
+        impl DigestExecutor for ReverseExecutor {
+            fn execute(
+                &self,
+                jobs: &[DigestJob],
+            ) -> Result<Vec<DigestResult>, DigestExecutionError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                let mut results = SerialDigestExecutor.execute(jobs)?;
+                results.reverse();
+                Ok(results)
+            }
+        }
+
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/contracts/sd_jwt_remote_batch_v1.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["version"], 1);
+        let signer = crate::remote_credential::RemoteSignerMetadata::new(
+            contract["issuer_id"].as_str().unwrap(),
+            contract["verification_method_id"].as_str().unwrap(),
+            contract["algorithm"].as_str().unwrap(),
+            contract["issuer_public_jwk"].to_string(),
+        )
+        .unwrap();
+        let now = chrono::DateTime::from_timestamp(contract["issued_at_unix"].as_i64().unwrap(), 0)
+            .unwrap();
+        let salts = contract["salts_base64url"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| {
+                B64.decode(value.as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect::<Vec<[u8; 16]>>();
+        let mut claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            serde_json::from_value(contract["selectors"].clone()).unwrap(),
+        );
+        claims.subject_id = Some(contract["subject_id"].as_str().unwrap().into());
+        claims.credential_type = contract["credential_type"].as_str().unwrap().into();
+        claims.claims = serde_json::from_value(contract["claims"].clone()).unwrap();
+        claims.expiration_seconds = Some(contract["expiration_seconds"].as_i64().unwrap());
+        let cases = contract["items"].as_array().unwrap();
+        let mut inputs = Vec::new();
+        let mut scalar = Vec::new();
+        for case in cases {
+            let route = case["batch_id"].as_u64().unwrap();
+            let id = case["credential_id"].as_str().unwrap();
+            let options = SdJwtPreparationOptions {
+                credential_id: Some(id.into()),
+                typ: Some(contract["typ"].as_str().unwrap().into()),
+                confirmation: Some(contract["confirmation"].clone()),
+                x5c: serde_json::from_value(contract["x5c"].clone()).unwrap(),
+                include_nbf: contract["include_nbf"].as_bool().unwrap(),
+            };
+            let mut salt_index = 0;
+            let prepared = prepare_sd_jwt_with_options_and_sources(
+                &signer,
+                &claims,
+                options.clone(),
+                || panic!("explicit credential ID must be used"),
+                || now,
+                || {
+                    let salt = salts[salt_index];
+                    salt_index += 1;
+                    salt
+                },
+            )
+            .unwrap();
+            scalar.push(prepared);
+            inputs.push(SdJwtBatchPreparationInput {
+                batch_id: route,
+                signer: Box::new(signer.clone()),
+                claims: claims.clone(),
+                options,
+                issued_at: now,
+            });
+        }
+        let executor = ReverseExecutor(AtomicUsize::new(0));
+        let mut salt_index = 0;
+        let batch = prepare_sd_jwt_batch_with_digest_executor(
+            inputs,
+            || {
+                let salt = salts[salt_index % 2];
+                salt_index += 1;
+                salt
+            },
+            &executor,
+        )
+        .unwrap();
+        assert_eq!(executor.0.load(Ordering::Relaxed), 1);
+        assert_eq!(batch.len(), cases.len());
+        for (index, ((route, prepared), expected)) in batch.into_iter().zip(scalar).enumerate() {
+            let case = &cases[index];
+            assert_eq!(route, case["batch_id"].as_u64().unwrap());
+            assert_eq!(prepared.signing_input(), expected.signing_input());
+            assert_eq!(prepared.disclosures_suffix(), expected.disclosures_suffix());
+            assert_eq!(prepared.credential_id(), expected.credential_id());
+            assert_eq!(
+                prepared.signing_input(),
+                case["signing_input"].as_str().unwrap()
+            );
+            assert_eq!(
+                prepared.disclosures_suffix(),
+                case["disclosures_suffix"].as_str().unwrap()
+            );
+            assert_eq!(
+                prepared.credential_id(),
+                case["credential_id"].as_str().unwrap()
+            );
+        }
+    }
+
     fn test_p256_key() -> IssuerKey {
         let jwk = JWK::generate_p256();
         let jwk_json = serde_json::to_string(&jwk).unwrap();
@@ -1575,7 +1861,7 @@ mod tests {
 
         let encoded = encode_sd_jwt_disclosures(planned).unwrap();
         assert_eq!(encoded.expected_source_ordinals, vec![0, 2]);
-        let digested = digest_sd_jwt_disclosures(encoded);
+        let digested = digest_sd_jwt_disclosures(encoded).unwrap();
         assert_eq!(digested.expected_source_ordinals, vec![0, 2]);
         assert_eq!(
             digested
