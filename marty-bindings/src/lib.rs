@@ -2100,6 +2100,7 @@ mod tests {
 
             for remote_signing_operation in [
                 "oid4vci_prepare_sd_jwt",
+                "oid4vci_prepare_sd_jwt_batch",
                 "oid4vci_assemble_sd_jwt",
                 "oid4vci_prepare_jwt_vc",
                 "oid4vci_assemble_jwt_vc",

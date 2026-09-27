@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add caller-ordered remote SD-JWT batch preparation to Rust and Python. The
+  batch validates all requests before allocating source values, uses the shared
+  disclosure pipeline with one digest call, and returns existing opaque signing
+  handles. Add a sequential versus batch issuance benchmark.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added

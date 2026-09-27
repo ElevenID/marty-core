@@ -2,7 +2,8 @@ use base64::Engine;
 use marty_oid4vci::signer::MAX_REMOTE_RSA_SIGNATURE_BYTES;
 use marty_oid4vci::{
     remote_credential::{
-        prepare_remote_jwt_vc, prepare_remote_sd_jwt, RemoteJwtVcRequest, RemoteSdJwtRequest,
+        prepare_remote_jwt_vc, prepare_remote_sd_jwt, prepare_remote_sd_jwt_batch,
+        RemoteJwtVcRequest, RemoteSdJwtBatchItem, RemoteSdJwtRequest,
     },
     types::SignedCredential,
 };
@@ -155,6 +156,73 @@ fn oid4vci_prepare_sd_jwt(
     Ok(PreparedRemoteCredential {
         inner: Some(PreparedCredential::SdJwt(prepared)),
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteSdJwtBatchInput {
+    batch_id: u64,
+    issuer_id: String,
+    verification_method_id: String,
+    algorithm: String,
+    issuer_public_jwk: String,
+    subject_id: Option<String>,
+    credential_type: String,
+    claims: std::collections::HashMap<String, serde_json::Value>,
+    expiration_seconds: Option<i64>,
+    #[serde(default)]
+    selective_disclosure_claims: Vec<String>,
+    credential_format: Option<String>,
+    credential_id: Option<String>,
+    holder_jwk: Option<serde_json::Value>,
+    #[serde(default)]
+    issuer_certificate_chain: Vec<String>,
+}
+
+/// Prepare a caller-ordered batch while retaining each opaque signing handle
+/// in Rust. Sign each exact input and use the existing SD-JWT assembler.
+#[pyfunction]
+fn oid4vci_prepare_sd_jwt_batch(
+    batch_json: &str,
+) -> PyResult<Vec<(u64, PreparedRemoteCredential)>> {
+    let batch: Vec<RemoteSdJwtBatchInput> = serde_json::from_str(batch_json)
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid remote SD-JWT batch JSON"))?;
+    let batch = batch
+        .into_iter()
+        .map(|item| {
+            RemoteSdJwtBatchItem::new(
+                item.batch_id,
+                RemoteSdJwtRequest {
+                    issuer_id: item.issuer_id,
+                    verification_method_id: item.verification_method_id,
+                    algorithm: item.algorithm,
+                    issuer_public_jwk: item.issuer_public_jwk,
+                    subject_id: item.subject_id,
+                    credential_type: item.credential_type,
+                    claims: item.claims,
+                    expiration_seconds: item.expiration_seconds,
+                    selective_disclosure_claims: item.selective_disclosure_claims,
+                    credential_format: item.credential_format,
+                    credential_id: item.credential_id,
+                    holder_jwk: item.holder_jwk,
+                    issuer_certificate_chain: item.issuer_certificate_chain,
+                },
+            )
+        })
+        .collect();
+    let prepared = prepare_remote_sd_jwt_batch(batch).map_err(remote_pyerr)?;
+    Ok(prepared
+        .into_iter()
+        .map(|item| {
+            let batch_id = item.batch_id();
+            (
+                batch_id,
+                PreparedRemoteCredential {
+                    inner: Some(PreparedCredential::SdJwt(item.into_prepared_sd_jwt())),
+                },
+            )
+        })
+        .collect())
 }
 
 #[pyfunction]
@@ -360,6 +428,7 @@ fn assemble_jwt_vc_impl(
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PreparedRemoteCredential>()?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_sd_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_prepare_sd_jwt_batch, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_jwt_vc, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_open_badge_v3_jwt_vc, m)?)?;
@@ -455,6 +524,52 @@ mod tests {
         .err()
         .expect("private holder JWK must be rejected by the binding");
         assert!(private_error.to_string().contains("private member"));
+    }
+
+    #[test]
+    fn remote_sd_jwt_batch_binding_preserves_route_and_assembly_handle() {
+        Python::initialize();
+        let item = |batch_id, credential_id| {
+            serde_json::json!({
+                "batch_id": batch_id,
+                "issuer_id": "did:web:issuer.example",
+                "verification_method_id": "did:web:issuer.example#key-1",
+                "algorithm": "ES256",
+                "issuer_public_jwk": issuer_public_jwk(),
+                "subject_id": "did:key:holder",
+                "credential_type": "AccessBadge",
+                "claims": {"name": "Alice"},
+                "expiration_seconds": 3600,
+                "selective_disclosure_claims": ["name"],
+                "credential_format": "dc+sd-jwt",
+                "credential_id": credential_id,
+            })
+        };
+        let input = serde_json::json!([
+            item(91, "urn:uuid:00000000-0000-4000-8000-000000000091"),
+            item(7, "urn:uuid:00000000-0000-4000-8000-000000000007"),
+        ])
+        .to_string();
+        let prepared = oid4vci_prepare_sd_jwt_batch(&input).expect("batch preparation");
+        assert_eq!(prepared.len(), 2);
+        for (expected_id, (route, mut handle)) in [91, 7].into_iter().zip(prepared) {
+            assert_eq!(route, expected_id);
+            let signing_input = match handle.inner.as_ref().unwrap() {
+                PreparedCredential::SdJwt(state) => state.signing_input().to_owned(),
+                _ => panic!("expected SD-JWT state"),
+            };
+            let (compact, credential_id) =
+                assemble_sd_jwt_impl(&mut handle, &sign_payload(signing_input.as_bytes())).unwrap();
+            assert!(compact.starts_with(&format!("{signing_input}.")));
+            assert!(credential_id.ends_with(&format!("{route:012}")));
+        }
+        assert!(
+            oid4vci_prepare_sd_jwt_batch("[{\"batch_id\":1,\"unknown\":true}]")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Invalid remote SD-JWT batch JSON")
+        );
     }
 
     #[test]

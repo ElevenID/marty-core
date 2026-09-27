@@ -20,6 +20,7 @@ default = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"]
 kms-only = ["marty-crypto/kms-only"] # Reject in-process credential private-key capabilities
 jose-verification = ["sd-jwt-rs/crypto-provider"] # Verification-only JOSE backend; no local signing
 issuer = [
+    "dep:isomdl",
     "isomdl?/issuer-planning",
     "sd-jwt-rs/issuer-completion",
     "jose-verification",
@@ -102,6 +103,10 @@ wasm-bindgen-test = "=0.3.76"
 
 [[bench]]
 name = "mdoc_issuance"
+harness = false
+
+[[bench]]
+name = "sd_jwt_issuance"
 harness = false
 
 [[bench]]
