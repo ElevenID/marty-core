@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        os: ${{ fromJSON(inputs.diagnose_linux_cache && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.diagnose_linux_cache && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     env:
       # Spread compiler-object uploads below GitHub's per-repository burst cap.
       CARGO_BUILD_JOBS: 2
