@@ -581,9 +581,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.17.3"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00bdb5da18dac48ca2cc7cd4a98e533e8635a58e2361d13a1a4ee3888e0d72f1"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -591,9 +591,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.43.0"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43103168cc76fe62678a375e722fc9cb3a0146159ac5828bc4f0dfd755c2224c"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
 dependencies = [
  "cc",
  "cmake",
@@ -4058,7 +4058,7 @@ checksum = "e20f57f9918e5bd7bc58c22cdd70a6afc7375d4dd9683af5f2b34bd3d2bba619"
 
 [[package]]
 name = "marty-bindings"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4082,7 +4082,7 @@ dependencies = [
 
 [[package]]
 name = "marty-biometrics"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4107,7 +4107,7 @@ dependencies = [
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4155,7 +4155,7 @@ dependencies = [
 
 [[package]]
 name = "marty-didcomm"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -4177,7 +4177,7 @@ dependencies = [
 
 [[package]]
 name = "marty-iso18013"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4209,7 +4209,7 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4241,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "marty-secure-storage"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -4265,7 +4265,7 @@ dependencies = [
 
 [[package]]
 name = "marty-status"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "base64 0.22.1",
  "criterion",
@@ -4279,7 +4279,7 @@ dependencies = [
 
 [[package]]
 name = "marty-test-wallet"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -4295,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "marty-types"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "chrono",
  "pyo3",
@@ -4306,7 +4306,7 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4373,7 +4373,7 @@ dependencies = [
 
 [[package]]
 name = "marty-zkp"
-version = "0.1.61"
+version = "0.1.62"
 dependencies = [
  "bindgen",
  "cc",
@@ -6221,9 +6221,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.42"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c54fcab019b409d04215d3a17cb438fd7fbf192ee61461f20f4fe18704bc138"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -6286,9 +6286,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -6403,13 +6403,14 @@ dependencies = [
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7#c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=74c086841f8086507e5dc8b6a1acf59feecf0809#74c086841f8086507e5dc8b6a1acf59feecf0809"
 dependencies = [
  "base64 0.21.7",
+ "curve25519-dalek",
  "getrandom 0.2.17",
- "hmac",
  "jsonwebtoken",
- "log",
+ "p256",
+ "p384",
  "rand 0.8.7",
  "serde",
  "serde_json",

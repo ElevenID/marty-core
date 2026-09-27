@@ -10,8 +10,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/99
-    review-after: 2026-09-07
-    rationale: The certificate, SPKI, signature, elliptic-curve, and RSA crates must move as one compatibility set. Updating their major versions independently creates duplicate, incompatible signature, SPKI, and rand trait implementations and breaks certificate and signing paths. The latest RSA compatible direction is still a release candidate, so ElevenID retains the current stable set and will adopt the coordinated stable stack after it passes the existing RSA, certificate, JOSE, passport, mdoc, and Python conformance tests. No RSA functionality is being removed.
+    review-after: 2026-10-08
+    rationale: Re-reviewed 2026-09-08. The certificate, SPKI, signature, elliptic-curve, and RSA crates must move as one compatibility set. x509-cert 0.3, der 0.8, signature 3, and elliptic-curve 0.14 are stable, but the compatible RSA 0.10 line remains a release candidate. Updating their major versions independently creates duplicate, incompatible signature, SPKI, and rand trait implementations and breaks certificate and signing paths. ElevenID retains the current stable set until RSA stabilizes, then will qualify the coordinated stack against the existing RSA, certificate, JOSE, passport, mdoc, and Python conformance tests. No RSA functionality is being removed.
   - package: affinidi-messaging-didcomm
     ecosystem: rust
     owner: ElevenID
@@ -22,8 +22,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/99
-    review-after: 2026-09-07
-    rationale: Version 0.14.0 is the first release with the corrected ECDH-1PU tag KDF and supplies the DIDComm 2.1 envelope implementation without introducing duplicate RustCrypto major versions. Marty uses its anoncrypt boundary today. Upgrade to the latest release in the same change that moves the workspace to RustCrypto elliptic-curve 0.14, ed25519-dalek 3, and x25519-dalek 3; do not carry two production crypto stacks merely to raise this package version.
+    review-after: 2026-10-08
+    rationale: Re-reviewed 2026-09-08. Version 0.14.0 is the first release with the corrected ECDH-1PU tag KDF and supplies the DIDComm 2.1 envelope implementation without introducing duplicate RustCrypto major versions. Marty uses its anoncrypt boundary today. The current 0.15.8 release requires Rust 1.95 plus ed25519-dalek 3 and the 0.14 elliptic-curve family, so upgrade it in the same change that moves the workspace to that coordinated RustCrypto stack; do not carry two production crypto stacks merely to raise this package version.
   - package: ssi subcrates
     ecosystem: rust
     owner: ElevenID
@@ -34,8 +34,8 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2022-0040, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-09-20
-    rationale: Re-reviewed 2026-08-20. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification; spruceid/ssi#706 remains open and upstream main 89630368438c81b55335362b21621d3aadd48d93 still declares unused serde_with 2.3.2. The exact ElevenID ssi-jwt revision remains necessary, and the lock contains only serde_with 3.x.
+    review-after: 2026-10-20
+    rationale: Re-reviewed 2026-09-20. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification. spruceid/ssi#706 closed unmerged on 2026-08-25 without maintainer review after remaining CLA-pending, so the exact ElevenID ssi-jwt revision remains necessary. Upstream main still declares serde_with 2.3.2 in ssi-jwt and serde_cbor 0.11.2 directly in ssi-data-integrity-suites, so a consumer-only version bump cannot remove either exception. The lock contains only patched serde_with 3.22.0, owning_ref is absent, cargo-deny reports no unignored SSI exception advisory after the rustls 0.23.45 lock repair, and issue 26 remains the replacement gate.
   - package: linked-data
     ecosystem: rust
     owner: ElevenID
@@ -52,14 +52,14 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/openwallet-foundation-labs/sd-jwt-rust
-    current: "0.7.1@c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+    current: "0.7.1@74c086841f8086507e5dc8b6a1acf59feecf0809"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
     review-after: 2026-10-30
-    rationale: The immutable ElevenID revision carries the RFC 9901 holder API update plus reviewed serial-first issuance and verifier refactors, consumer-compatible WASM binding resolution, and dependency-supported Rust 1.85 metadata. Marty leaves the optional parallel and benchmark features disabled. The source-breaking holder constructor is adopted through its explicit unverified variant to preserve WalletEngine's existing preverified-input contract because that API does not yet receive a trusted issuer-key resolver or validate the supplied holder key against the credential's cnf claim; adding those checks is a separate product change rather than a hidden dependency-bump behavior change.
+    rationale: The immutable ElevenID revision retains the RFC 9901 holder API and serial-first issuance/verifier behavior, and adds reviewed Unicode escaping, authoritative holder cnf handling, and bounded recursive unpack. Its declared Rust minimum is 1.88. Marty leaves the optional parallel and benchmark features disabled. WalletEngine still uses the explicit unverified holder constructor to preserve its preverified-input contract because that API does not receive a trusted issuer-key resolver or validate the supplied holder key against the credential's cnf claim; adding those checks is a separate product change.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID
