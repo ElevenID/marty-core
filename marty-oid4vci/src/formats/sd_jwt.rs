@@ -1481,15 +1481,13 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(contract["version"], 1);
-        assert_eq!(contract["issuer_id"], FixedPreparationSigner.issuer_id());
-        assert_eq!(
-            contract["verification_method_id"],
-            FixedPreparationSigner.kid_url()
-        );
-        assert_eq!(
-            contract["algorithm"],
-            FixedPreparationSigner.algorithm().as_str()
-        );
+        let signer = crate::remote_credential::RemoteSignerMetadata::new(
+            contract["issuer_id"].as_str().unwrap(),
+            contract["verification_method_id"].as_str().unwrap(),
+            contract["algorithm"].as_str().unwrap(),
+            contract["issuer_public_jwk"].to_string(),
+        )
+        .unwrap();
         let now = chrono::DateTime::from_timestamp(contract["issued_at_unix"].as_i64().unwrap(), 0)
             .unwrap();
         let salts = contract["salts_base64url"]
@@ -1526,7 +1524,7 @@ mod tests {
             };
             let mut salt_index = 0;
             let prepared = prepare_sd_jwt_with_options_and_sources(
-                &FixedPreparationSigner,
+                &signer,
                 &claims,
                 options.clone(),
                 || panic!("explicit credential ID must be used"),
@@ -1541,7 +1539,7 @@ mod tests {
             scalar.push(prepared);
             inputs.push(SdJwtBatchPreparationInput {
                 batch_id: route,
-                signer: Box::new(FixedPreparationSigner),
+                signer: Box::new(signer.clone()),
                 claims: claims.clone(),
                 options,
                 issued_at: now,

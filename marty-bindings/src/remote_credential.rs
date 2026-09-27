@@ -529,39 +529,55 @@ mod tests {
     #[test]
     fn remote_sd_jwt_batch_binding_preserves_route_and_assembly_handle() {
         Python::initialize();
-        let item = |batch_id, credential_id| {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../marty-oid4vci/tests/contracts/sd_jwt_remote_batch_v1.json"
+        ))
+        .unwrap();
+        let item = |case: &serde_json::Value| {
             serde_json::json!({
-                "batch_id": batch_id,
-                "issuer_id": "did:web:issuer.example",
-                "verification_method_id": "did:web:issuer.example#key-1",
-                "algorithm": "ES256",
-                "issuer_public_jwk": issuer_public_jwk(),
-                "subject_id": "did:key:holder",
-                "credential_type": "AccessBadge",
-                "claims": {"name": "Alice"},
-                "expiration_seconds": 3600,
-                "selective_disclosure_claims": ["name"],
-                "credential_format": "dc+sd-jwt",
-                "credential_id": credential_id,
+                "batch_id": case["batch_id"],
+                "issuer_id": contract["issuer_id"],
+                "verification_method_id": contract["verification_method_id"],
+                "algorithm": contract["algorithm"],
+                "issuer_public_jwk": contract["issuer_public_jwk"].to_string(),
+                "subject_id": contract["subject_id"],
+                "credential_type": contract["credential_type"],
+                "claims": contract["claims"],
+                "expiration_seconds": contract["expiration_seconds"],
+                "selective_disclosure_claims": contract["selectors"],
+                "credential_format": contract["typ"],
+                "credential_id": case["credential_id"],
+                "holder_jwk": contract["confirmation"]["jwk"],
+                "issuer_certificate_chain": contract["x5c"],
             })
         };
-        let input = serde_json::json!([
-            item(91, "urn:uuid:00000000-0000-4000-8000-000000000091"),
-            item(7, "urn:uuid:00000000-0000-4000-8000-000000000007"),
-        ])
+        let input = serde_json::Value::Array(
+            contract["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(item)
+                .collect(),
+        )
         .to_string();
         let prepared = oid4vci_prepare_sd_jwt_batch(&input).expect("batch preparation");
-        assert_eq!(prepared.len(), 2);
-        for (expected_id, (route, mut handle)) in [91, 7].into_iter().zip(prepared) {
-            assert_eq!(route, expected_id);
+        assert_eq!(prepared.len(), contract["items"].as_array().unwrap().len());
+        for (case, (route, mut handle)) in
+            contract["items"].as_array().unwrap().iter().zip(prepared)
+        {
+            assert_eq!(route, case["batch_id"].as_u64().unwrap());
             let signing_input = match handle.inner.as_ref().unwrap() {
                 PreparedCredential::SdJwt(state) => state.signing_input().to_owned(),
                 _ => panic!("expected SD-JWT state"),
             };
+            let header = decode_segment(signing_input.split('.').next().unwrap());
+            let payload = decode_segment(signing_input.split('.').nth(1).unwrap());
+            assert_eq!(header["kid"], contract["verification_method_id"]);
+            assert_eq!(payload["iss"], contract["issuer_id"]);
             let (compact, credential_id) =
                 assemble_sd_jwt_impl(&mut handle, &sign_payload(signing_input.as_bytes())).unwrap();
             assert!(compact.starts_with(&format!("{signing_input}.")));
-            assert!(credential_id.ends_with(&format!("{route:012}")));
+            assert_eq!(credential_id, case["credential_id"].as_str().unwrap());
         }
         assert!(
             oid4vci_prepare_sd_jwt_batch("[{\"batch_id\":1,\"unknown\":true}]")

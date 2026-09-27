@@ -991,6 +991,111 @@ mod tests {
     }
 
     #[test]
+    fn public_sd_jwt_batch_consumes_exact_byte_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/contracts/sd_jwt_remote_batch_v1.json"
+        ))
+        .unwrap();
+        let fixture_batch = || {
+            contract["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|case| {
+                    RemoteSdJwtBatchItem::new(
+                        case["batch_id"].as_u64().unwrap(),
+                        RemoteSdJwtRequest {
+                            issuer_id: contract["issuer_id"].as_str().unwrap().into(),
+                            verification_method_id: contract["verification_method_id"]
+                                .as_str()
+                                .unwrap()
+                                .into(),
+                            algorithm: contract["algorithm"].as_str().unwrap().into(),
+                            issuer_public_jwk: contract["issuer_public_jwk"].to_string(),
+                            subject_id: Some(contract["subject_id"].as_str().unwrap().into()),
+                            credential_type: contract["credential_type"].as_str().unwrap().into(),
+                            claims: serde_json::from_value(contract["claims"].clone()).unwrap(),
+                            expiration_seconds: Some(
+                                contract["expiration_seconds"].as_i64().unwrap(),
+                            ),
+                            selective_disclosure_claims: serde_json::from_value(
+                                contract["selectors"].clone(),
+                            )
+                            .unwrap(),
+                            credential_format: Some(contract["typ"].as_str().unwrap().into()),
+                            credential_id: Some(case["credential_id"].as_str().unwrap().into()),
+                            holder_jwk: Some(contract["confirmation"]["jwk"].clone()),
+                            issuer_certificate_chain: serde_json::from_value(
+                                contract["x5c"].clone(),
+                            )
+                            .unwrap(),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let salts = contract["salts_base64url"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|salt| {
+                URL_SAFE_NO_PAD
+                    .decode(salt.as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect::<Vec<[u8; 16]>>();
+        let now = chrono::DateTime::from_timestamp(contract["issued_at_unix"].as_i64().unwrap(), 0)
+            .unwrap();
+        let mut salt_index = 0;
+        let deterministic = prepare_remote_sd_jwt_batch_with_sources(
+            fixture_batch(),
+            || panic!("explicit IDs require no UUID source"),
+            || now,
+            || {
+                let salt = salts[salt_index % salts.len()];
+                salt_index += 1;
+                salt
+            },
+            &SerialDigestExecutor,
+        )
+        .unwrap();
+        for (case, item) in contract["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(deterministic)
+        {
+            assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
+            assert_eq!(
+                item.prepared_sd_jwt().credential_id(),
+                case["credential_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                item.prepared_sd_jwt().signing_input(),
+                case["signing_input"].as_str().unwrap()
+            );
+            assert_eq!(
+                item.prepared_sd_jwt().disclosures_suffix(),
+                case["disclosures_suffix"].as_str().unwrap()
+            );
+        }
+        let public = super::prepare_remote_sd_jwt_batch(fixture_batch()).unwrap();
+        for (case, item) in contract["items"].as_array().unwrap().iter().zip(public) {
+            assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
+            assert_eq!(
+                item.prepared_sd_jwt().credential_id(),
+                case["credential_id"].as_str().unwrap()
+            );
+            let header = segment(item.prepared_sd_jwt().signing_input(), 0);
+            let payload = segment(item.prepared_sd_jwt().signing_input(), 1);
+            assert_eq!(header["kid"], contract["verification_method_id"]);
+            assert_eq!(payload["iss"], contract["issuer_id"]);
+        }
+    }
+
+    #[test]
     fn sd_jwt_batch_validates_every_item_before_any_source() {
         let mut invalid = sd_jwt_batch_request(None);
         invalid.algorithm = "invalid".into();
