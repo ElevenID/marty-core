@@ -1458,6 +1458,7 @@ mod tests {
 
     const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
+    #[cfg(all(feature = "issuer", feature = "sd_jwt"))]
     #[test]
     fn batch_contract_matches_scalar_bytes_and_restores_caller_order() {
         use isomdl::digest_executor::{DigestExecutionError, DigestResult, SerialDigestExecutor};
