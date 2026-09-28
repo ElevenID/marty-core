@@ -407,11 +407,7 @@ mod tests {
     #[test]
     fn tagged_binary_face_with_jpeg2000_decodes() {
         let encoded = generated_face(&[]);
-        assert!(
-            verify_icao_39794_face(&encoded).is_ok(),
-            "{:?}",
-            verify_icao_39794_face(&encoded)
-        );
+        assert!(verify_icao_39794_face(&encoded).is_ok());
     }
 
     #[test]
@@ -459,10 +455,6 @@ mod tests {
         assert_eq!(faces[0].data_tag, 0x7f2e);
         assert_eq!(faces[0].format_owner, 0x0101);
         assert_eq!(faces[0].format_type, 0x002a);
-        assert!(
-            verify_icao_39794_face(faces[0].data).is_ok(),
-            "{:?}",
-            verify_icao_39794_face(faces[0].data)
-        );
+        assert!(verify_icao_39794_face(faces[0].data).is_ok());
     }
 }

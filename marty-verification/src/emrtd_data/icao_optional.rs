@@ -821,11 +821,7 @@ mod tests {
                 0x31, 0x09, 0x30, 0x07, 0x06, 0x02, 0x2a, 0x03, 0x02, 0x01, 0x01,
             ],
         );
-        assert!(
-            validate_icao_optional_dg(14, &valid).is_ok(),
-            "{:?}",
-            validate_icao_optional_dg(14, &valid)
-        );
+        assert!(validate_icao_optional_dg(14, &valid).is_ok());
     }
 
     #[test]
