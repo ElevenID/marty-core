@@ -32,7 +32,7 @@ ephemeral-session-keys = [
     "p384/ecdh",
 ]
 network-tls-client = ["dep:reqwest"]
-aamva-client = ["network-tls-client", "tokio", "moka"]
+aamva-client = ["network-tls-client", "reqwest/form", "tokio", "moka"]
 icao-client = ["network-tls-client", "tokio", "moka", "ldap3"]
 eudi-client = ["network-tls-client", "reqwest/stream", "tokio", "moka", "quick-xml"]
 cross-validation = []  # OpenSSL cross-validation tests

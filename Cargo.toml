@@ -83,7 +83,7 @@ regex = { version = "1", default-features = false }
 
 # Async runtime
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
-reqwest = { version = "0.13", default-features = false, features = ["form", "json", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 # Caching
 moka = { version = "0.12", features = ["future"] }
