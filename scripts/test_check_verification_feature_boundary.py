@@ -26,6 +26,22 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         check_repository()
 
+    def test_ecdsa_primitive_cannot_restore_signing_or_be_required(self) -> None:
+        for field, value in (("features", ["signing"]), ("optional", False)):
+            with self.subTest(field=field):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "marty-crypto" / "Cargo.toml":
+                        manifest["dependencies"]["ecdsa-core"][field] = value
+                    return manifest
+
+                with patch(
+                    "check_verification_feature_boundary.load_toml",
+                    side_effect=mutated_manifest,
+                ):
+                    with self.assertRaises(ValueError):
+                        check_repository()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -123,7 +123,8 @@ def check_repository(root: Path = ROOT) -> None:
         and not workspace_dependencies["ecdsa-core"].get("features", [])
         and crypto["dependencies"]["ecdsa-core"].get("workspace") is True
         and crypto["dependencies"]["ecdsa-core"].get("optional") is True
-        and crypto["dependencies"]["ecdsa-core"].get("default-features") is not True,
+        and crypto["dependencies"]["ecdsa-core"].get("default-features") is not True
+        and not crypto["dependencies"]["ecdsa-core"].get("features", []),
         "the direct ECDSA primitive dependency must inherit an optional, default-free workspace declaration",
     )
 
