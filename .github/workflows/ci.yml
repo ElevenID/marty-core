@@ -19,6 +19,8 @@ env:
   RUST_BACKTRACE: 1
   RUSTUP_TOOLCHAIN: 1.97.1
   RUSTC_WRAPPER: sccache
+  # Incremental rustc outputs are not cacheable by sccache on ephemeral CI runners.
+  CARGO_INCREMENTAL: "0"
   SCCACHE_GHA_ENABLED: "true"
   # CI reads the shared compiler cache; a single affected-tests PR job may
   # write changed-code objects so follow-up commits can reuse them.
