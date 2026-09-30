@@ -78,7 +78,7 @@ ed25519-dalek = { workspace = true }
 
 # SSI
 ssi-claims = { version = "0.7.0", features = ["w3c", "ed25519", "secp256r1"] }
-ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519"] }
+ssi-crypto = { workspace = true, features = ["ed25519"] }
 ssi-dids = { version = "0.5.0", default-features = false, features = ["secp256r1"] }
 ssi-json-ld = "0.3.3"
 ssi-jwk = { workspace = true, features = ["ed25519", "secp256r1"] }
@@ -87,7 +87,7 @@ ssi-verification-methods = { version = "0.3.0", default-features = false, featur
 bs58 = "0.4.0"
 iref = "3.2.2"
 futures = "0.3"
-flate2 = "1.0"
+flate2.workspace = true
 
 # Serialization
 serde = { workspace = true }
@@ -102,6 +102,7 @@ tracing = { workspace = true }
 tracing-error = { workspace = true }
 regex = { workspace = true, features = ["std"] }
 cedar-policy = { version = "=4.12.0", default-features = false }
+# Keep the published 2.0 floor for downstream consumers.
 url = "2"
 
 # Time
@@ -120,8 +121,8 @@ pyo3 = { workspace = true, optional = true }
 
 # mDoc/mDL support
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e", default-features = false, features = ["presentation-verifier"] }
-coset = "0.3.8"
-time = { version = "0.3", features = ["formatting"] }
+coset.workspace = true
+time = { workspace = true, features = ["formatting"] }
 hex.workspace = true
 zeroize = { workspace = true, features = ["serde"] }
 
@@ -133,9 +134,9 @@ marty-oid4vci = { version = "0.2.0", path = "../marty-oid4vci", default-features
 tempfile = { workspace = true }
 tokio = { workspace = true }
 rcgen = { workspace = true, features = ["aws_lc_rs"] }
-time = "0.3"
+time.workspace = true
 proptest = { workspace = true }
-coset = "0.3.8"
+coset.workspace = true
 criterion = { workspace = true }
 p256 = { workspace = true, features = ["ecdh"] }
 p384 = { workspace = true, features = ["ecdh"] }

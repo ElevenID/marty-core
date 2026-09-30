@@ -28,7 +28,7 @@ pyo3 = { workspace = true, features = ["abi3-py311"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json.workspace = true
 ciborium = { workspace = true }
 
 # Base64 encoding
@@ -54,7 +54,7 @@ marty-oid4vci = { version = "0.2.0", path = "../marty-oid4vci", default-features
 marty-verification = { version = "0.2.0", path = "../marty-verification", default-features = false, features = ["ephemeral-session-keys"] }
 p256 = { workspace = true, features = ["ecdsa"] }
 p384 = { workspace = true, features = ["ecdsa"] }
-serde_json = "1.0"
+serde_json.workspace = true
 hex.workspace = true
 
 [features]
