@@ -128,7 +128,10 @@ codegen-units = 1
 
 [profile.dev]
 opt-level = 0
-debug = true
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
 
 [patch.crates-io]
 # Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
