@@ -43,7 +43,7 @@ anyhow = "1.0"
 thiserror = "2.0"
 
 # Async runtime (needed for DIDComm DID resolution)
-tokio = { version = "1.35", features = ["rt", "macros"] }
+tokio = { workspace = true }
 
 [dev-dependencies]
 # Test-only dependencies retain regression coverage without re-enabling issuer
