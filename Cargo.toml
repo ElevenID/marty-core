@@ -133,6 +133,10 @@ debug = "line-tables-only"
 [profile.test]
 debug = "line-tables-only"
 
+[profile.debugging]
+inherits = "dev"
+debug = "full"
+
 [patch.crates-io]
 # Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
 ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0fbf3e4b967fe73c858a22b38e907b3023" }
