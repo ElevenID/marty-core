@@ -44,7 +44,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Crypto and signing
-ssi-jwk = { version = "0.4.0", default-features = false }
+ssi-jwk.workspace = true
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "82143d688355315f22297b40ca18050a94cd2525", default-features = false }
 jsonwebtoken = { version = "10.3", default-features = false }
 
@@ -59,8 +59,8 @@ base64 = { workspace = true }
 # Key management
 p256 = { workspace = true, features = ["arithmetic"] }
 p384 = { workspace = true, features = ["arithmetic"] }
-ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, features = ["verifying"] }
-k256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa-core", "sha256"] }
+ecdsa-core = { workspace = true, features = ["verifying"] }
+k256 = { workspace = true, features = ["arithmetic", "ecdsa-core", "sha256"] }
 curve25519-dalek = "4.1"
 ed25519-dalek = { workspace = true }
 sha2 = { workspace = true }
@@ -72,7 +72,7 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = "2.5"
-regex = { version = "1", default-features = false, features = ["std"] }
+regex = { workspace = true, features = ["std"] }
 
 # ZK Proofs (optional, behind zk_mdoc feature)
 marty-zkp = { version = "0.2.0", path = "../marty-zkp", optional = true }
@@ -88,9 +88,9 @@ isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "82143d688355315f22297b40ca18050a94cd2525" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
-k256 = { version = "0.13", default-features = false, features = ["ecdsa", "sha256"] }
+k256 = { workspace = true, features = ["ecdsa", "sha256"] }
 ssi-crypto = { version = "0.2.1", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
-ssi-jwk = { version = "0.4.0", default-features = false, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
+ssi-jwk = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 aws-lc-rs = { version = "1.14", default-features = false, features = ["aws-lc-sys", "ring-io"] }

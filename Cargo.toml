@@ -20,7 +20,9 @@ sha2 = "0.10"
 p256 = { version = "0.13", default-features = false }
 p384 = { version = "0.13", default-features = false }
 p521 = { version = "0.13", default-features = false }
+k256 = { version = "0.13", default-features = false }
 ecdsa = "0.16"
+ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false }
 elliptic-curve = "0.13"
 pem-rfc7468 = "0.7"
 signature = "2.0"
@@ -76,6 +78,8 @@ rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ciborium = "0.2"
+ssi-jwk = { version = "0.4.0", default-features = false }
+regex = { version = "1", default-features = false }
 
 # Async runtime
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }

@@ -109,7 +109,7 @@ sha2 = { workspace = true, features = ["compress"], optional = true }
 p256 = { workspace = true, optional = true }
 p384 = { workspace = true, optional = true }
 p521 = { workspace = true, optional = true }
-ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, optional = true }
+ecdsa-core = { workspace = true, optional = true }
 elliptic-curve = { workspace = true, optional = true }
 pem-rfc7468 = { workspace = true, optional = true }
 
@@ -168,7 +168,7 @@ aws-lc-rs = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 cms = { workspace = true, features = ["builder"] }
-ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false, features = ["signing"] }
+ecdsa-core = { workspace = true, features = ["signing"] }
 ed25519-dalek = { workspace = true, features = ["pem", "pkcs8", "rand_core"] }
 hmac = { workspace = true }
 p12 = { workspace = true }
