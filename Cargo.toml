@@ -16,7 +16,7 @@ x509-cert = { version = "0.2", default-features = false, features = ["pem", "std
 der = { version = "0.7", features = ["pem", "derive"] }
 const-oid = "0.9"
 sha1 = { version = "0.10", features = ["oid"] }
-sha2 = { version = "0.10", features = ["compress"] }
+sha2 = "0.10"
 p256 = { version = "0.13", default-features = false }
 p384 = { version = "0.13", default-features = false }
 p521 = { version = "0.13", default-features = false }
