@@ -18,26 +18,26 @@ marty-types = { version = "0.2.0", path = "../marty-types", optional = true }
 marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, optional = true }
 
 # CBOR and COSE
-ciborium = "0.2"
+ciborium = { workspace = true }
 coset = { version = "0.3", optional = true }
 isomdl = { version = "0.3", default-features = false, features = ["session-key-agreement"], optional = true }
 
 # Async runtime
-tokio = { version = "1", features = ["full"], optional = true }
+tokio = { workspace = true, optional = true }
 async-trait = { version = "0.1", optional = true }
 
 # Cryptography
-rand = { version = "0.8", optional = true }
+rand = { workspace = true, optional = true }
 sha2 = "0.10"
 hex = "0.4"
 
 # Error handling
-thiserror = "2.0"
-anyhow = "1.0"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # QR code generation
 qrcode = { version = "0.14", default-features = false, features = ["image"], optional = true }
@@ -47,7 +47,7 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
 
 # Logging
-tracing = { version = "0.1", optional = true }
+tracing = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
 
 # Optional: Python bindings
@@ -93,11 +93,11 @@ nfc = ["session-protocol", "pcsc"]
 all-transports = ["ble", "nfc"]
 
 [dev-dependencies]
-tempfile = "3.14"
-proptest = "1.5"
+tempfile = { workspace = true }
+proptest = { workspace = true }
 criterion = { workspace = true }
-marty-verification = { version = "0.2.0", path = "../marty-verification" }
-rand = "0.8"
+marty-verification = { workspace = true }
+rand = { workspace = true }
 
 [[test]]
 name = "cbor_conformance"
