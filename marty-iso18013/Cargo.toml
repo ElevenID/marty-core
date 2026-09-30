@@ -19,6 +19,7 @@ marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features =
 
 # CBOR and COSE
 ciborium = { workspace = true }
+# Keep the published 0.3.0 floor for downstream consumers.
 coset = { version = "0.3", optional = true }
 isomdl = { version = "0.3", default-features = false, features = ["session-key-agreement"], optional = true }
 
@@ -41,7 +42,7 @@ serde_json = { workspace = true }
 
 # QR code generation
 qrcode = { version = "0.14", default-features = false, features = ["image"], optional = true }
-image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+image = { workspace = true, features = ["png"], optional = true }
 
 # HTTP client
 reqwest = { workspace = true, optional = true }
