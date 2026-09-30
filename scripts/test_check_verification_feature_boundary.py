@@ -1,11 +1,30 @@
 import unittest
+from unittest.mock import patch
 
-from check_verification_feature_boundary import check_repository
+from check_verification_feature_boundary import ROOT, check_repository, load_toml
 
 
 class VerificationFeatureBoundaryTests(unittest.TestCase):
     def test_repository_feature_boundary(self) -> None:
         check_repository()
+
+    def test_inherited_crypto_dependencies_remain_default_free(self) -> None:
+        for dependency in ("ecdsa-core", "k256", "ssi-jwk"):
+            with self.subTest(dependency=dependency):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "Cargo.toml":
+                        manifest["workspace"]["dependencies"][dependency][
+                            "default-features"
+                        ] = True
+                    return manifest
+
+                with patch(
+                    "check_verification_feature_boundary.load_toml",
+                    side_effect=mutated_manifest,
+                ):
+                    with self.assertRaises(ValueError):
+                        check_repository()
 
 
 if __name__ == "__main__":
