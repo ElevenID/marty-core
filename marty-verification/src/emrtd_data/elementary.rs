@@ -147,7 +147,7 @@ pub fn parse_tlv(data: &[u8], offset: usize) -> EmrtdDataResult<Tlv<'_>> {
     })
 }
 
-fn parse_complete_tlv<'a>(
+pub(super) fn parse_complete_tlv<'a>(
     data: &'a [u8],
     expected_tag: u32,
     kind: &str,
@@ -206,10 +206,22 @@ pub fn parse_ef_com(data: &[u8]) -> EmrtdDataResult<EfCom> {
     Ok(result)
 }
 
-pub fn parse_ef_dg1(data: &[u8]) -> EmrtdDataResult<MrzInfo> {
+/// Return the exact EF.DG1 MRZ value bytes after checking both TLV envelopes.
+/// Callers that bind a digital package must hash these bytes before any display
+/// normalization performed by the general MRZ parser.
+pub fn extract_ef_dg1_mrz(data: &[u8]) -> EmrtdDataResult<&[u8]> {
     let outer = parse_complete_tlv(data, 0x61, "EF.DG1")?;
     let mrz_tlv = parse_complete_tlv(outer.value, 0x5f1f, "DG1 MRZ")?;
-    let text = decode_ascii(mrz_tlv.value, "MRZ")?;
+    if !mrz_tlv.value.is_ascii() {
+        return Err(EmrtdDataError::Encoding(
+            "MRZ must contain ASCII data".into(),
+        ));
+    }
+    Ok(mrz_tlv.value)
+}
+
+pub fn parse_ef_dg1(data: &[u8]) -> EmrtdDataResult<MrzInfo> {
+    let text = decode_ascii(extract_ef_dg1_mrz(data)?, "MRZ")?;
     let owned_lines = if text.contains('\n') || text.contains('\r') {
         text.lines().map(str::to_owned).collect::<Vec<_>>()
     } else {

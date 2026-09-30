@@ -7,6 +7,10 @@
 mod biometric;
 mod dg15;
 mod elementary;
+mod icao_dg2;
+mod icao_face_39794;
+mod icao_image;
+mod icao_optional;
 
 pub use biometric::{
     parse_biometric_template, validate_template_quality, BiometricHeader, BiometricTemplate,
@@ -15,9 +19,13 @@ pub use biometric::{
 };
 pub use dg15::{inspect_rsa_public_key, parse_dg15, rsa_public_key_spki, Dg15Info};
 pub use elementary::{
-    parse_ef_com, parse_ef_dg1, parse_ef_dg2, parse_elementary_file, parse_tlv, BiometricInfo,
-    EfCom, ElementaryFile, MrzInfo, Tlv,
+    extract_ef_dg1_mrz, parse_ef_com, parse_ef_dg1, parse_ef_dg2, parse_elementary_file, parse_tlv,
+    BiometricInfo, EfCom, ElementaryFile, MrzInfo, Tlv,
 };
+pub use icao_dg2::{parse_icao_ef_dg2, IcaoFaceBiometric};
+pub(crate) use icao_face_39794::verify_icao_39794_face;
+pub(crate) use icao_image::verify_icao_image;
+pub use icao_optional::validate_icao_optional_dg;
 
 use thiserror::Error;
 

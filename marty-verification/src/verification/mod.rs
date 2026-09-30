@@ -16,6 +16,11 @@ pub mod vds_nc;
 #[cfg(feature = "csca")]
 pub mod emrtd;
 
+#[cfg(feature = "csca")]
+pub mod digital_passport_package;
+#[cfg(feature = "csca")]
+mod passport_country_codes;
+
 pub use chain::{ChainValidationResult, ChainValidator, ChainValidatorConfig, KeyUsage};
 pub use decision::{
     reduce_required_checks, ReducedVerificationDecision, VerificationCategoryOutcome,
