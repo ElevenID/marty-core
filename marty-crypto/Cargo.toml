@@ -160,7 +160,7 @@ thiserror = { workspace = true }
 zeroize = { workspace = true, optional = true }
 
 # Hex encoding (for fingerprints and vectors)
-hex = "0.4"
+hex.workspace = true
 zkryptium = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
