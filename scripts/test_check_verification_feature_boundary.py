@@ -42,6 +42,20 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         check_repository()
 
+    def test_oid4vci_ecdsa_primitive_cannot_restore_signing(self) -> None:
+        def mutated_manifest(path):
+            manifest = load_toml(path)
+            if path == ROOT / "marty-oid4vci" / "Cargo.toml":
+                manifest["dependencies"]["ecdsa-core"]["features"].append("signing")
+            return manifest
+
+        with patch(
+            "check_verification_feature_boundary.load_toml",
+            side_effect=mutated_manifest,
+        ):
+            with self.assertRaises(ValueError):
+                check_repository()
+
 
 if __name__ == "__main__":
     unittest.main()

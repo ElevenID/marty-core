@@ -189,6 +189,12 @@ def check_repository(root: Path = ROOT) -> None:
         "remote-signature issuer assembly must select signature codecs without signing",
     )
     require(
+        oid4vci["dependencies"]["ecdsa-core"].get("workspace") is True
+        and oid4vci["dependencies"]["ecdsa-core"].get("default-features") is not True
+        and oid4vci["dependencies"]["ecdsa-core"].get("features") == ["verifying"],
+        "OID4VCI ECDSA primitives must remain verification-only",
+    )
+    require(
         workspace_dependencies["k256"].get("default-features") is False
         and not workspace_dependencies["k256"].get("features", [])
         and oid4vci["dependencies"]["k256"].get("workspace") is True
