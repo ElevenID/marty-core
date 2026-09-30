@@ -118,9 +118,14 @@ def check_repository(root: Path = ROOT) -> None:
         "workspace RSA verification must not enable private-key PEM support",
     )
     require(
-        crypto["dependencies"]["ecdsa-core"].get("default-features") is False
-        and crypto["dependencies"]["ecdsa-core"].get("optional") is True,
-        "the direct ECDSA primitive dependency must be optional and default-free",
+        workspace_dependencies["ecdsa-core"].get("package") == "ecdsa"
+        and workspace_dependencies["ecdsa-core"].get("default-features") is False
+        and not workspace_dependencies["ecdsa-core"].get("features", [])
+        and crypto["dependencies"]["ecdsa-core"].get("workspace") is True
+        and crypto["dependencies"]["ecdsa-core"].get("optional") is True
+        and crypto["dependencies"]["ecdsa-core"].get("default-features") is not True
+        and not crypto["dependencies"]["ecdsa-core"].get("features", []),
+        "the direct ECDSA primitive dependency must inherit an optional, default-free workspace declaration",
     )
 
     verification_features = verification["features"]
@@ -184,13 +189,26 @@ def check_repository(root: Path = ROOT) -> None:
         "remote-signature issuer assembly must select signature codecs without signing",
     )
     require(
-        oid4vci["dependencies"]["k256"].get("default-features") is False
+        oid4vci["dependencies"]["ecdsa-core"].get("workspace") is True
+        and oid4vci["dependencies"]["ecdsa-core"].get("default-features") is not True
+        and oid4vci["dependencies"]["ecdsa-core"].get("features") == ["verifying"],
+        "OID4VCI ECDSA primitives must remain verification-only",
+    )
+    require(
+        workspace_dependencies["k256"].get("default-features") is False
+        and not workspace_dependencies["k256"].get("features", [])
+        and oid4vci["dependencies"]["k256"].get("workspace") is True
+        and oid4vci["dependencies"]["k256"].get("default-features") is not True
         and set(oid4vci["dependencies"]["k256"].get("features", []))
         == {"arithmetic", "ecdsa-core", "sha256"},
         "secp256k1 proof verification must omit combined signing support",
     )
     require(
-        "ssi-crypto" not in oid4vci["dependencies"]
+        workspace_dependencies["ssi-jwk"].get("default-features") is False
+        and not workspace_dependencies["ssi-jwk"].get("features", [])
+        and oid4vci["dependencies"]["ssi-jwk"].get("workspace") is True
+        and oid4vci["dependencies"]["ssi-jwk"].get("default-features") is not True
+        and "ssi-crypto" not in oid4vci["dependencies"]
         and not oid4vci["dependencies"]["ssi-jwk"].get("features", []),
         "SSI signing and key-generation algorithms must be absent from production dependencies",
     )
