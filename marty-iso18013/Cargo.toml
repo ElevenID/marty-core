@@ -29,7 +29,7 @@ async-trait = { version = "0.1", optional = true }
 # Cryptography
 rand = { workspace = true, optional = true }
 sha2.workspace = true
-hex = "0.4"
+hex.workspace = true
 
 # Error handling
 thiserror = { workspace = true }

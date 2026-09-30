@@ -122,7 +122,7 @@ pyo3 = { workspace = true, optional = true }
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e", default-features = false, features = ["presentation-verifier"] }
 coset = "0.3.8"
 time = { version = "0.3", features = ["formatting"] }
-hex = "0.4"
+hex.workspace = true
 zeroize = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]

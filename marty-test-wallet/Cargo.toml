@@ -31,4 +31,4 @@ zeroize = { workspace = true }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Authorization", "Win32_System_Threading"] }
 
 [dev-dependencies]
-hex = "0.4"
+hex.workspace = true
