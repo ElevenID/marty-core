@@ -8,6 +8,24 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
     def test_repository_feature_boundary(self) -> None:
         check_repository()
 
+    def test_test_support_cannot_ship_via_member_dependency(self) -> None:
+        for dependency_kind in ("dependencies", "build-dependencies"):
+            with self.subTest(dependency_kind=dependency_kind):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "marty-verification" / "Cargo.toml":
+                        manifest.setdefault(dependency_kind, {})[
+                            "marty-crypto-test-support"
+                        ] = {"workspace": True}
+                    return manifest
+
+                with patch(
+                    "check_verification_feature_boundary.load_toml",
+                    side_effect=mutated_manifest,
+                ):
+                    with self.assertRaises(ValueError):
+                        check_repository()
+
     def test_inherited_crypto_dependencies_remain_default_free(self) -> None:
         for dependency in ("ecdsa-core", "k256", "ssi-jwk"):
             with self.subTest(dependency=dependency):
