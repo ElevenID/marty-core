@@ -439,6 +439,10 @@ def check_repository(root: Path = ROOT) -> None:
         if not isinstance(table, dict):
             return False
         for key, value in table.items():
+            # Workspace dependency declarations are inert until a member uses
+            # them; only member normal/build edges can ship test support.
+            if key == "workspace":
+                continue
             if key in {"dependencies", "build-dependencies"} and isinstance(value, dict):
                 if "marty-crypto-test-support" in value:
                     return True

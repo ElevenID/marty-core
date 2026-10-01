@@ -122,11 +122,20 @@ zeroize = "1.7"
 pyo3 = { version = "0.29.0", features = ["abi3-py311"] }
 
 # Internal crates
-marty-crypto = { version = "0.2.0", path = "marty-crypto" }
-marty-verification = { version = "0.2.0", path = "marty-verification" }
+# Default features stay off for the shared declarations that have lean consumers;
+# individual consumers opt back into "default" where they previously used it.
+marty-crypto = { version = "0.2.0", path = "marty-crypto", default-features = false }
+marty-verification = { version = "0.2.0", path = "marty-verification", default-features = false }
 marty-secure-storage = { version = "0.2.0", path = "marty-secure-storage" }
 marty-biometrics = { version = "0.2.0", path = "marty-biometrics" }
 marty-status = { version = "0.2.0", path = "marty-status" }
+marty-types = { version = "0.2.0", path = "marty-types" }
+marty-oid4vci = { version = "0.2.0", path = "marty-oid4vci", default-features = false }
+marty-didcomm = { version = "0.2.0", path = "marty-didcomm", default-features = false }
+marty-iso18013 = { version = "0.2.0", path = "marty-iso18013", default-features = false }
+marty-zkp = { version = "0.2.0", path = "marty-zkp" }
+marty-python-adapters = { path = "marty-python-adapters" }
+marty-crypto-test-support = { path = "marty-crypto-test-support" }
 
 # Test/dev dependencies
 rcgen = "0.14"
