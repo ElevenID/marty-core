@@ -12,7 +12,7 @@ description = "Keyless ICAO eMRTD SOD preparation and remote-signature assembly"
 cms = { workspace = true }
 const-oid = { workspace = true }
 der = { workspace = true }
-marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = ["kms-only", "signature-verification"] }
+marty-crypto = { workspace = true, default-features = false, features = ["kms-only", "signature-verification"] }
 sha2 = { workspace = true }
 spki = { workspace = true }
 thiserror = { workspace = true }
@@ -20,7 +20,7 @@ x509-cert = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true, features = ["pkcs8"] }
-marty-verification = { version = "0.2.0", path = "../marty-verification", default-features = false, features = ["csca"] }
+marty-verification = { workspace = true, default-features = false, features = ["csca"] }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8", "std"] }
 p384 = { workspace = true, features = ["ecdsa", "pkcs8", "std"] }
 rcgen = { workspace = true, features = ["aws_lc_rs"] }

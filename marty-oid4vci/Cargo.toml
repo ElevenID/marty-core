@@ -36,8 +36,8 @@ mso_mdoc = ["dep:isomdl"] # ISO 18013-5 mDoc format; issuer adds planning
 zk_mdoc = ["dep:marty-zkp", "dep:marty-iso18013"]  # ZK proof verification; issuance additionally selects issuer,mso_mdoc
 
 [dependencies]
-marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "eddsa-verification"] }
-marty-iso18013 = { version = "0.2.0", path = "../marty-iso18013", default-features = false, features = ["verifier"], optional = true }
+marty-crypto = { workspace = true, default-features = false, features = ["ecdsa-verification", "eddsa-verification"] }
+marty-iso18013 = { workspace = true, default-features = false, features = ["verifier"], optional = true }
 
 # Serialization
 serde = { workspace = true }
@@ -76,7 +76,7 @@ url.workspace = true
 regex = { workspace = true, features = ["std"] }
 
 # ZK Proofs (optional, behind zk_mdoc feature)
-marty-zkp = { version = "0.2.0", path = "../marty-zkp", optional = true }
+marty-zkp = { workspace = true, optional = true }
 
 # HTTP client (optional, behind wallet feature)
 reqwest = { workspace = true, features = ["form"], optional = true }
@@ -96,7 +96,7 @@ ssi-jwk = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 aws-lc-rs = { version = "1.14", default-features = false, features = ["aws-lc-sys", "ring-io"] }
 criterion = { workspace = true }
-marty-crypto-test-support = { path = "../marty-crypto-test-support" }
+marty-crypto-test-support = { workspace = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]

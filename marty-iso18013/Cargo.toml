@@ -14,8 +14,8 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 # Internal dependencies
-marty-types = { version = "0.2.0", path = "../marty-types", optional = true }
-marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, optional = true }
+marty-types = { workspace = true, optional = true }
+marty-crypto = { workspace = true, default-features = false, optional = true }
 
 # CBOR and COSE
 ciborium = { workspace = true }
@@ -97,7 +97,7 @@ all-transports = ["ble", "nfc"]
 tempfile = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
-marty-verification = { workspace = true }
+marty-verification = { workspace = true, features = ["default"] }
 rand = { workspace = true }
 
 [[test]]

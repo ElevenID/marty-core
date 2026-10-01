@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/ElevenID/marty-core"
 
 [dependencies]
-marty-types = { version = "0.2.0", path = "../marty-types" }
+marty-types = { workspace = true }
 thiserror.workspace = true
 serde.workspace = true
 libc = "0.2"
