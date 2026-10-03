@@ -7,8 +7,8 @@
       "status": "temporary",
       "default": false,
       "successor": "open-badges-3",
-      "review_on": "2026-09-01",
-      "target_removal": "2026-10-01",
+      "review_on": "2026-10-15",
+      "target_removal": "2026-11-01",
       "tracking_issue": "https://github.com/ElevenID/marty-core/issues/96",
       "public_interfaces": [
         "marty_verification_py.open_badge_ob2_issue",
@@ -22,7 +22,7 @@
         "no new dependency exception may be justified only by OB2",
         "issuance and verification remain covered by positive and negative tests until removal"
       ],
-      "rationale": "Short migration window explicitly approved while the stack remains pre-1.0; this is not a general backward-compatibility commitment."
+      "rationale": "Short migration window explicitly extended with owner approval to November 1, 2026, with an October 15 review while the stack remains pre-1.0; this is not a general backward-compatibility commitment."
     },
     {
       "id": "open-badges-3",
