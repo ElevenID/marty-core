@@ -41,6 +41,7 @@ def require(condition: bool, message: str) -> None:
 
 def check_repository(root: Path = ROOT) -> None:
     workspace = load_toml(root / "Cargo.toml")
+    canonical_digest = load_toml(root / "marty-canonical-digest" / "Cargo.toml")
     crypto = load_toml(root / "marty-crypto" / "Cargo.toml")
     verification = load_toml(root / "marty-verification" / "Cargo.toml")
     oid4vci = load_toml(root / "marty-oid4vci" / "Cargo.toml")
@@ -51,6 +52,19 @@ def check_repository(root: Path = ROOT) -> None:
     verification_python = load_toml(root / "marty-verification" / "pyproject.toml")
 
     workspace_dependencies = workspace["workspace"]["dependencies"]
+    require(
+        set(canonical_digest["dependencies"]) == {"serde_json", "sha2"}
+        and not canonical_digest.get("build-dependencies")
+        and all(
+            dependency.get("workspace") is True
+            for dependency in canonical_digest["dependencies"].values()
+        )
+        and workspace_dependencies["marty-canonical-digest"]
+        == {"version": "0.2.0", "path": "marty-canonical-digest"}
+        and verification["dependencies"].get("marty-canonical-digest")
+        == {"workspace": True},
+        "canonical digest boundary must contain only shared JSON/SHA-256 and feed verification",
+    )
     for curve in ("p256", "p384", "p521"):
         dependency = workspace_dependencies[curve]
         require(

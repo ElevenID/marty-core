@@ -42,6 +42,7 @@ full = ["iaca", "csca", "eudi", "aamva-client", "icao-client", "eudi-client", "s
 
 [dependencies]
 # Internal crate
+marty-canonical-digest.workspace = true
 marty-crypto = { workspace = true, default-features = false, features = [
     "crl",
     "ecdsa-verification",

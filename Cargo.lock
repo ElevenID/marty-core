@@ -3788,6 +3788,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-canonical-digest"
+version = "0.2.0"
+dependencies = [
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "marty-crypto"
 version = "0.2.0"
 dependencies = [
@@ -4081,6 +4089,7 @@ dependencies = [
  "iref",
  "isomdl",
  "ldap3",
+ "marty-canonical-digest",
  "marty-crypto",
  "marty-crypto-test-support",
  "marty-oid4vci",

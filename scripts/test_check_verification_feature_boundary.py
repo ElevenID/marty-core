@@ -8,6 +8,22 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
     def test_repository_feature_boundary(self) -> None:
         check_repository()
 
+    def test_canonical_digest_boundary_rejects_verifier_or_crypto_dependencies(self) -> None:
+        for dependency in ("marty-verification", "marty-crypto", "marty-oid4vci"):
+            with self.subTest(dependency=dependency):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "marty-canonical-digest" / "Cargo.toml":
+                        manifest["dependencies"][dependency] = {"workspace": True}
+                    return manifest
+
+                with patch(
+                    "check_verification_feature_boundary.load_toml",
+                    side_effect=mutated_manifest,
+                ):
+                    with self.assertRaisesRegex(ValueError, "canonical digest boundary"):
+                        check_repository()
+
     def test_test_support_cannot_ship_via_member_dependency(self) -> None:
         for dependency_kind in ("dependencies", "build-dependencies"):
             with self.subTest(dependency_kind=dependency_kind):
