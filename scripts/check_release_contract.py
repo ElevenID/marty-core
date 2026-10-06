@@ -865,6 +865,7 @@ def check_release_wheel_import_policy(
         )
     for path_filter in (
         '      - "*/pyproject.toml"',
+        '      - "marty-canonical-digest/src/**"',
         '      - "marty-bindings/python/**"',
         '      - "marty-biometrics/python/**"',
         '      - "marty-iso18013/python/**"',
@@ -1047,6 +1048,37 @@ def check_capability_lifecycle(as_of: date | None = None) -> list[str]:
     return errors
 
 
+def check_canonical_digest_publish_order(release_text: str | None = None) -> list[str]:
+    contents = (
+        RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        if release_text is None
+        else release_text
+    )
+    publish_job = contents.split("  publish-crates:", 1)[-1].split(
+        "  build-python-wheels:", 1
+    )[0]
+    ordered = [
+        crate
+        for group in re.findall(
+            r'for crate in ([^;\n]+); do publish "\$crate"; done', publish_job
+        )
+        for crate in group.split()
+    ]
+    if (
+        ordered.count("marty-canonical-digest") != 1
+        or ordered.count("marty-verification") != 1
+        or ordered.index("marty-canonical-digest")
+        > ordered.index("marty-verification")
+    ):
+        return [
+            (
+                "release.yml must publish marty-canonical-digest exactly once before "
+                "marty-verification"
+            )
+        ]
+    return []
+
+
 def main() -> int:
     errors = [
         *check_python_versions(),
@@ -1056,6 +1088,7 @@ def main() -> int:
         *check_zkp_native_security_tests(),
         *check_release_checksum_policy(),
         *check_release_wheel_import_policy(),
+        *check_canonical_digest_publish_order(),
         *check_stable_tag_gate(),
         *check_capability_lifecycle(),
     ]
@@ -1076,6 +1109,7 @@ def main() -> int:
         "release-contract: checksum manifest excludes itself and verifies listed assets"
     )
     print("release-contract: every native Python wheel is import-checked")
+    print("release-contract: canonical digest crate precedes verification publication")
     print("release-contract: stable tags require exact-main preparation evidence")
     print("release-contract: temporary capability lifecycle policy is current")
     return 0

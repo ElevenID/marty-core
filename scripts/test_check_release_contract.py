@@ -58,6 +58,29 @@ class CapabilityLifecycleTests(unittest.TestCase):
         self.assertTrue(any("unknown successor" in error for error in errors))
 
 
+class CanonicalDigestPublishOrderTests(unittest.TestCase):
+    def test_checked_in_order(self) -> None:
+        self.assertEqual(check_release_contract.check_canonical_digest_publish_order(), [])
+
+    def test_missing_or_late_digest_crate_fails(self) -> None:
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        for changed in [
+            release.replace("marty-canonical-digest ", ""),
+            release.replace(
+                "marty-types marty-canonical-digest marty-crypto",
+                "marty-types marty-crypto",
+            ).replace(
+                "marty-verification marty-secure-storage",
+                "marty-verification marty-canonical-digest marty-secure-storage",
+            ),
+        ]:
+            self.assertTrue(
+                check_release_contract.check_canonical_digest_publish_order(changed)
+            )
+
+
 class ReleaseChecksumPolicyTests(unittest.TestCase):
     def test_checked_in_release_workflow_excludes_and_verifies_manifest(self) -> None:
         self.assertEqual(check_release_contract.check_release_checksum_policy(), [])
@@ -125,6 +148,16 @@ class ReleaseWheelImportPolicyTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
         ).read_text(encoding="utf-8")
         preflight = preflight.replace('      - "*/pyproject.toml"\n', "")
+        errors = check_release_contract.check_release_wheel_import_policy(
+            preflight_text=preflight
+        )
+        self.assertTrue(any("must trigger preflight" in error for error in errors))
+
+    def test_preflight_tracks_canonical_digest_source(self) -> None:
+        preflight = (
+            ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
+        ).read_text(encoding="utf-8")
+        preflight = preflight.replace('      - "marty-canonical-digest/src/**"\n', "")
         errors = check_release_contract.check_release_wheel_import_policy(
             preflight_text=preflight
         )

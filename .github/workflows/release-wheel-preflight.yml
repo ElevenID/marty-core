@@ -9,6 +9,7 @@ on:
       - "Cargo.lock"
       - "*/Cargo.toml"
       - "*/pyproject.toml"
+      - "marty-canonical-digest/src/**"
       - "marty-bindings/python/**"
       - "marty-bindings/src/**"
       - "marty-biometrics/python/**"
