@@ -379,6 +379,33 @@ pub struct DescriptorVerificationResult {
     pub error: Option<String>,
 }
 
+/// Authenticated JWT VP proof, not an authorization or credential decision.
+///
+/// The signature, transaction nonce, verifier audience, time window, and
+/// supported algorithm have passed. The signing key is supplied by the VP
+/// itself; this does **not** establish that an issuer-signed credential names
+/// that key or holder. Callers must separately verify the credential and bind
+/// its holder to this key before treating a presentation as decision-ready.
+pub struct VerifiedVpTokenProof {
+    claims: serde_json::Value,
+    signer_public_jwk: serde_json::Value,
+    algorithm: String,
+}
+
+impl VerifiedVpTokenProof {
+    pub fn claims(&self) -> &serde_json::Value {
+        &self.claims
+    }
+
+    pub fn signer_public_jwk(&self) -> &serde_json::Value {
+        &self.signer_public_jwk
+    }
+
+    pub fn algorithm(&self) -> &str {
+        &self.algorithm
+    }
+}
+
 // ── Verification Engine ──────────────────────────────────────────────
 
 /// OID4VP verification engine.
@@ -692,6 +719,30 @@ impl VerificationEngine {
     /// * `vp_token`         — compact JWT VP token from the wallet
     /// * `expected_nonce`   — nonce from the original authorization request
     pub fn verify_vp_token(&self, vp_token: &str, expected_nonce: &str) -> VerificationResult {
+        self.verify_vp_token_internal(vp_token, expected_nonce, None)
+    }
+
+    /// Return authenticated VP claims and the public key that verified them.
+    ///
+    /// Failure returns the same proof-only result as [`Self::verify_vp_token`].
+    /// Success does not validate an embedded credential, prove issuer trust,
+    /// bind a credential holder to this self-declared key, or grant a decision.
+    pub fn verify_authenticated_vp_proof(
+        &self,
+        vp_token: &str,
+        expected_nonce: &str,
+    ) -> Result<VerifiedVpTokenProof, VerificationResult> {
+        let mut proof = None;
+        let result = self.verify_vp_token_internal(vp_token, expected_nonce, Some(&mut proof));
+        proof.ok_or(result)
+    }
+
+    fn verify_vp_token_internal(
+        &self,
+        vp_token: &str,
+        expected_nonce: &str,
+        authenticated: Option<&mut Option<VerifiedVpTokenProof>>,
+    ) -> VerificationResult {
         let failed = |message: String,
                       presentation_proof: VerificationCheckStatus,
                       transaction_binding: VerificationCheckStatus| {
@@ -848,7 +899,7 @@ impl VerificationEngine {
             }
         };
 
-        let jwk = match serde_json::to_string(&jwk) {
+        let jwk_json = match serde_json::to_string(&jwk) {
             Ok(jwk) => jwk,
             Err(e) => {
                 return failed(
@@ -860,8 +911,15 @@ impl VerificationEngine {
         };
 
         // ── Step 7: Verify with the same bounded, public-key-only JOSE boundary ───
-        match crate::jose::verify_compact_jwt_with_public_jwk(vp_token, &jwk, algorithm) {
-            Ok(_) => {
+        match crate::jose::verify_compact_jwt_with_public_jwk(vp_token, &jwk_json, algorithm) {
+            Ok(verified) => {
+                if let Some(output) = authenticated {
+                    *output = Some(VerifiedVpTokenProof {
+                        claims: verified.claims,
+                        signer_public_jwk: jwk,
+                        algorithm: algorithm.to_owned(),
+                    });
+                }
                 let mut evidence = VerificationEvidence::not_checked();
                 evidence.presentation_proof = VerificationCheckStatus::Passed;
                 evidence.transaction_binding = VerificationCheckStatus::Passed;
