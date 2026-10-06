@@ -135,6 +135,70 @@ fn make_vp_jwt(sk: &SigningKey, nonce: &str, aud: &str, exp_offset_secs: i64) ->
     sign_jwt(sk, &header, &payload)
 }
 
+#[test]
+fn authenticated_vp_proof_exposes_verified_claims_and_public_signer_key_only() {
+    let vp = make_vp_jwt(&test_signing_key(), NONCE, VERIFIER_ID, 3600);
+    let engine = make_engine();
+    let proof = engine
+        .verify_authenticated_vp_proof(&vp, NONCE)
+        .unwrap_or_else(|result| panic!("VP proof failed: {:?}", result.errors));
+
+    assert_eq!(proof.claims()["nonce"], NONCE);
+    assert_eq!(proof.claims()["aud"], VERIFIER_ID);
+    assert_eq!(proof.signer_public_jwk()["kty"], "OKP");
+    assert_eq!(proof.signer_public_jwk()["crv"], "Ed25519");
+    assert!(proof.signer_public_jwk().get("d").is_none());
+    assert_eq!(proof.algorithm(), "EdDSA");
+    let legacy = engine.verify_vp_token(&vp, NONCE);
+    assert!(legacy.check_valid);
+    assert!(!legacy.valid && !legacy.decision_ready);
+}
+
+#[test]
+fn authenticated_vp_proof_rejects_bad_signature_nonce_audience_expiry_and_algorithm() {
+    let signing_key = test_signing_key();
+    let valid = make_vp_jwt(&signing_key, NONCE, VERIFIER_ID, 3600);
+    let (prefix, signature) = valid.rsplit_once('.').unwrap();
+    let changed = if signature.starts_with('A') { 'B' } else { 'A' };
+    let bad_signature = format!("{prefix}.{changed}{}", &signature[1..]);
+    let bad_nonce = make_vp_jwt(&signing_key, "wrong_nonce", VERIFIER_ID, 3600);
+    let bad_audience = make_vp_jwt(&signing_key, NONCE, "https://other.example", 3600);
+    let expired = make_vp_jwt(&signing_key, NONCE, VERIFIER_ID, -300);
+    let (header, payload) = crate_token_parts(&valid);
+    let mut bad_alg_header = header.clone();
+    bad_alg_header["alg"] = json!("HS256");
+    let bad_algorithm = sign_jwt(&signing_key, &bad_alg_header, &payload);
+    let mut private_key_header = header;
+    private_key_header["jwk"]["d"] = json!("forbidden");
+    let private_key = sign_jwt(&signing_key, &private_key_header, &payload);
+
+    let engine = make_engine();
+    for token in [
+        bad_signature,
+        bad_nonce,
+        bad_audience,
+        expired,
+        bad_algorithm,
+        private_key,
+    ] {
+        let result = engine
+            .verify_authenticated_vp_proof(&token, NONCE)
+            .err()
+            .expect("invalid VP must not expose proof");
+        assert!(!result.check_valid);
+        assert!(!result.valid && !result.decision_ready);
+    }
+}
+
+fn crate_token_parts(token: &str) -> (Value, Value) {
+    let mut parts = token.split('.');
+    let header =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts.next().unwrap()).unwrap()).unwrap();
+    let payload =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts.next().unwrap()).unwrap()).unwrap();
+    (header, payload)
+}
+
 fn make_pd_from_fixture() -> PresentationDefinition {
     serde_json::from_str(PRESENTATION_DEFINITION_JSON)
         .expect("presentation_definition.json must be valid JSON for PresentationDefinition")
