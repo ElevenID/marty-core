@@ -8,17 +8,14 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_oid4vci::{
     formats::sd_jwt::{
-        prepare_sd_jwt, prepare_sd_jwt_with_options, sign_sd_jwt, sign_sd_jwt_with_signer,
-        PreparedSdJwt, SdJwtPreparationOptions,
+        prepare_sd_jwt, prepare_sd_jwt_with_options, sign_sd_jwt_with_signer, PreparedSdJwt,
+        SdJwtPreparationOptions,
     },
     remote_credential::{prepare_remote_sd_jwt, RemoteSdJwtRequest},
     signer::CredentialSigner,
-    types::{
-        CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential, SigningAlgorithm,
-    },
+    types::{CredentialClaims, CredentialPayloadFormat, SigningAlgorithm},
     Oid4vciError, Oid4vciResult,
 };
-use ssi_jwk::JWK;
 
 const MANAGED_COLLISION: &str = "SD-JWT claims conflict with issuer-controlled claims";
 const NON_DISCLOSABLE_SELECTOR: &str = "SD-JWT selector targets a non-disclosable claim";
@@ -68,17 +65,6 @@ impl CredentialSigner for SignerSpy {
     }
 }
 
-fn test_key() -> IssuerKey {
-    let jwk = JWK::generate_p256();
-    let jwk_json = serde_json::to_string(&jwk).unwrap();
-    let issuer_id = format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(jwk_json.as_bytes()));
-    IssuerKey {
-        issuer_id,
-        jwk_json,
-        algorithm: SigningAlgorithm::ES256,
-    }
-}
-
 fn claims(format: CredentialPayloadFormat) -> CredentialClaims {
     CredentialClaims {
         subject_id: Some("did:example:canonical-holder".into()),
@@ -103,19 +89,6 @@ fn payload_from_prepared(prepared: &PreparedSdJwt) -> serde_json::Value {
     serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap()
 }
 
-fn signed_parts(signed: SignedCredential) -> (String, String, serde_json::Value) {
-    let SignedCredential::SdJwt {
-        compact,
-        credential_id,
-    } = signed
-    else {
-        panic!("expected SD-JWT")
-    };
-    let payload = compact.split('.').nth(1).unwrap();
-    let decoded = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-    (compact, credential_id, decoded)
-}
-
 fn decoded_disclosures(suffix_or_compact: &str) -> Vec<serde_json::Value> {
     suffix_or_compact
         .split('~')
@@ -138,13 +111,7 @@ fn assert_sd_jwt_error<T>(result: Oid4vciResult<T>, expected: &str) {
     assert!(!message.contains("Sensitive replacement value"));
 }
 
-fn assert_direct_boundaries_reject(
-    key: &IssuerKey,
-    spy: &SignerSpy,
-    submitted: &CredentialClaims,
-    expected: &str,
-) {
-    assert_sd_jwt_error(sign_sd_jwt(key, submitted), expected);
+fn assert_direct_boundaries_reject(spy: &SignerSpy, submitted: &CredentialClaims, expected: &str) {
     assert_sd_jwt_error(prepare_sd_jwt(spy, submitted), expected);
     assert_sd_jwt_error(sign_sd_jwt_with_signer(spy, submitted), expected);
 }
@@ -182,7 +149,6 @@ fn remote_request() -> RemoteSdJwtRequest {
 
 #[test]
 fn ietf_rejects_raw_collisions_only_when_marty_authors_the_claim() {
-    let key = test_key();
     let spy = SignerSpy::default();
 
     for name in ["iss", "iat", "jti", "vct", "sub", "exp"] {
@@ -191,7 +157,7 @@ fn ietf_rejects_raw_collisions_only_when_marty_authors_the_claim() {
             name.into(),
             serde_json::json!("Sensitive replacement value"),
         );
-        assert_direct_boundaries_reject(&key, &spy, &submitted, MANAGED_COLLISION);
+        assert_direct_boundaries_reject(&spy, &submitted, MANAGED_COLLISION);
     }
 
     for (name, options) in [
@@ -230,7 +196,6 @@ fn ietf_rejects_raw_collisions_only_when_marty_authors_the_claim() {
 
 #[test]
 fn ietf_preserves_unmanaged_optional_raw_claims_and_exact_generated_identity() {
-    let key = test_key();
     let mut submitted = claims(CredentialPayloadFormat::IetfSdJwt);
     submitted.subject_id = None;
     submitted.expiration_seconds = None;
@@ -267,12 +232,14 @@ fn ietf_preserves_unmanaged_optional_raw_claims_and_exact_generated_identity() {
     assert_eq!(payload["nbf"], 1_700_000_000_i64);
     assert_eq!(payload["cnf"]["kid"], "did:example:raw-holder");
 
-    let (_, generated_id, signed_payload) = signed_parts(sign_sd_jwt(&key, &submitted).unwrap());
-    assert_eq!(signed_payload["jti"], generated_id);
+    let generated = prepare_sd_jwt(&SignerSpy::default(), &submitted).unwrap();
+    let generated_id = generated.credential_id();
+    let generated_payload = payload_from_prepared(&generated);
+    assert_eq!(generated_payload["jti"], generated_id);
     let uuid = generated_id.strip_prefix("urn:uuid:").unwrap();
     assert_eq!(uuid::Uuid::parse_str(uuid).unwrap().get_version_num(), 4);
-    assert_eq!(signed_payload["sub"], "raw-subject");
-    assert_eq!(signed_payload["cnf"]["kid"], "did:example:raw-holder");
+    assert_eq!(generated_payload["sub"], "raw-subject");
+    assert_eq!(generated_payload["cnf"]["kid"], "did:example:raw-holder");
 }
 
 #[test]
@@ -316,7 +283,6 @@ fn direct_preparation_preserves_every_typed_canonical_field_and_explicit_id() {
 
 #[test]
 fn ietf_selector_policy_rejects_the_exact_draft_18_non_disclosable_list() {
-    let key = test_key();
     let spy = SignerSpy::default();
 
     for name in IETF_NON_DISCLOSABLE {
@@ -324,14 +290,13 @@ fn ietf_selector_policy_rejects_the_exact_draft_18_non_disclosable_list() {
         submitted.subject_id = None;
         submitted.expiration_seconds = None;
         submitted.selective_disclosure_claims = vec![(*name).into()];
-        assert_direct_boundaries_reject(&key, &spy, &submitted, NON_DISCLOSABLE_SELECTOR);
+        assert_direct_boundaries_reject(&spy, &submitted, NON_DISCLOSABLE_SELECTOR);
     }
     assert_eq!(spy.calls.load(Ordering::Relaxed), 0);
 }
 
 #[test]
 fn ietf_sub_iat_jti_and_aud_selectors_remain_unrestricted() {
-    let key = test_key();
     let mut allowed = claims(CredentialPayloadFormat::IetfSdJwt);
     allowed.expiration_seconds = None;
     allowed
@@ -381,40 +346,39 @@ fn ietf_sub_iat_jti_and_aud_selectors_remain_unrestricted() {
         .unwrap();
     assert_eq!(disclosed_aud[2], "verifier.example");
 
-    let (compact, generated_id, signed_payload) =
-        signed_parts(sign_sd_jwt(&key, &allowed).unwrap());
-    assert!(signed_payload.get("sub").is_none());
-    assert!(signed_payload.get("iat").is_none());
-    assert!(signed_payload.get("jti").is_none());
-    assert!(signed_payload.get("aud").is_none());
-    let signed_disclosures = decoded_disclosures(&compact);
-    let signed_names = signed_disclosures
+    let generated = prepare_sd_jwt(&SignerSpy::default(), &allowed).unwrap();
+    let generated_payload = payload_from_prepared(&generated);
+    assert!(generated_payload.get("sub").is_none());
+    assert!(generated_payload.get("iat").is_none());
+    assert!(generated_payload.get("jti").is_none());
+    assert!(generated_payload.get("aud").is_none());
+    let generated_disclosures = decoded_disclosures(generated.disclosures_suffix());
+    let generated_names = generated_disclosures
         .iter()
         .map(|disclosure| disclosure[1].as_str().unwrap())
         .collect::<HashSet<_>>();
-    assert_eq!(signed_names, HashSet::from(["sub", "iat", "jti", "aud"]));
-    let signed_jti = signed_disclosures
+    assert_eq!(generated_names, HashSet::from(["sub", "iat", "jti", "aud"]));
+    let generated_jti = generated_disclosures
         .iter()
         .find(|disclosure| disclosure[1] == "jti")
         .unwrap();
-    assert_eq!(signed_jti[2], generated_id);
-    let signed_aud = signed_disclosures
+    assert_eq!(generated_jti[2], generated.credential_id());
+    let generated_aud = generated_disclosures
         .iter()
         .find(|disclosure| disclosure[1] == "aud")
         .unwrap();
-    assert_eq!(signed_aud[2], "verifier.example");
+    assert_eq!(generated_aud[2], "verifier.example");
 }
 
 #[test]
 fn w3c_subject_id_collision_is_conditional_and_generated_id_remains_selectable() {
-    let key = test_key();
     let spy = SignerSpy::default();
     let mut collision = claims(CredentialPayloadFormat::W3cVcdmV2SdJwt);
     collision.claims.insert(
         "id".into(),
         serde_json::json!("did:example:Sensitive-replacement"),
     );
-    assert_direct_boundaries_reject(&key, &spy, &collision, MANAGED_COLLISION);
+    assert_direct_boundaries_reject(&spy, &collision, MANAGED_COLLISION);
     assert_eq!(spy.calls.load(Ordering::Relaxed), 0);
 
     let mut generated = claims(CredentialPayloadFormat::W3cVcdmV2SdJwt);
@@ -565,7 +529,7 @@ fn remote_preparation_preserves_conditional_claims_and_unrestricted_selectors() 
 }
 
 #[test]
-fn reserved_matching_is_exact_and_unknown_selectors_keep_legacy_skip_behavior() {
+fn reserved_matching_is_exact_and_unknown_selectors_are_ignored() {
     let mut submitted = claims(CredentialPayloadFormat::IetfSdJwt);
     submitted.subject_id = None;
     submitted.expiration_seconds = None;

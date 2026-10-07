@@ -141,6 +141,16 @@ name = "signing_payload_semantics"
 path = "tests/signing_payload_semantics.rs"
 
 [[test]]
+name = "sd_jwt_structural_boundaries"
+path = "tests/sd_jwt_structural_boundaries.rs"
+required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
+name = "sd_jwt_managed_claim_boundaries"
+path = "tests/sd_jwt_managed_claim_boundaries.rs"
+required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
 name = "benchmark_support"
 path = "tests/benchmark_support.rs"
 
