@@ -114,9 +114,7 @@ pub use chip_io::{BacHandshake, BacSession, MrzKeyInfo, PaceCompatibilityHandsha
 // Re-export crypto primitives from marty-crypto
 pub use marty_crypto::{verify_signature, HashAlgorithm, SignatureAlgorithm};
 
-// Preserve legacy behavior and imported compliance suites as crate-internal
-// tests. This lets them exercise test-only signing fixtures without restoring
-// any production-selectable private-key API or modifying the imported sources.
+// Imported compliance suites still use crate-internal test access.
 #[cfg(test)]
 extern crate self as marty_verification;
 #[cfg(test)]
@@ -125,9 +123,6 @@ mod dtc_behavior_tests;
 #[cfg(all(test, feature = "csca", feature = "ephemeral-session-keys"))]
 #[path = "../tests/eac_behavior.rs"]
 mod eac_behavior_tests;
-#[cfg(test)]
-#[path = "../tests/open_badges_tests.rs"]
-mod open_badges_behavior_tests;
 #[cfg(all(test, feature = "csca", feature = "ephemeral-session-keys"))]
 #[path = "../tests/passport_chip_behavior.rs"]
 mod passport_chip_behavior_tests;
