@@ -8,7 +8,11 @@ use base64::{
     Engine,
 };
 use marty_oid4vci::{
-    formats::{jwt_vc::sign_jwt_vc_with_signer, mdoc::sign_mdoc_with_signer},
+    formats::{
+        jwt_vc::sign_jwt_vc_with_signer,
+        mdoc::sign_mdoc_with_signer,
+        sd_jwt::{sign_sd_jwt_with_signer, verify_sd_jwt},
+    },
     signer::CredentialSigner,
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     Oid4vciError, Oid4vciResult,
@@ -226,7 +230,7 @@ fn claims(format: CredentialPayloadFormat) -> CredentialClaims {
 
 #[test]
 #[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
-fn jwt_vc_es256_and_eddsa_and_mdoc_es256_use_remote_non_exportable_keys() {
+fn issuer_formats_use_remote_non_exportable_keys() {
     let (client, base, root_token) = disposable_openbao();
     let es256 = create_signer(
         &client,
@@ -294,4 +298,47 @@ fn jwt_vc_es256_and_eddsa_and_mdoc_es256_use_remote_non_exportable_keys() {
     assert_eq!(signatures.len(), 2);
     assert_eq!(issuer_signed.issuer_auth.tbs_data(&[]), payloads[1]);
     assert_eq!(issuer_signed.issuer_auth.signature, signatures[1]);
+    drop(payloads);
+    drop(signatures);
+
+    for signer in [&es256, &eddsa] {
+        let mut sd_claims = claims(CredentialPayloadFormat::IetfSdJwt);
+        sd_claims.selective_disclosure_claims = vec!["given_name".into()];
+        let signed = sign_sd_jwt_with_signer(signer, &sd_claims).unwrap();
+        let SignedCredential::SdJwt {
+            compact,
+            credential_id,
+        } = signed
+        else {
+            panic!("expected SD-JWT")
+        };
+        assert!(credential_id.starts_with("urn:uuid:"));
+        let (jws, disclosure) = compact.split_once('~').unwrap();
+        assert!(!disclosure.is_empty());
+        let segments: Vec<_> = jws.split('.').collect();
+        assert_eq!(segments.len(), 3);
+        let payloads = signer.payloads.lock().unwrap();
+        let signatures = signer.signatures.lock().unwrap();
+        let index = if signer.algorithm == SigningAlgorithm::ES256 {
+            2
+        } else {
+            1
+        };
+        assert_eq!(payloads.len(), index + 1);
+        assert_eq!(signatures.len(), index + 1);
+        assert_eq!(
+            payloads[index],
+            format!("{}.{}", segments[0], segments[1]).as_bytes()
+        );
+        assert_eq!(
+            signatures[index],
+            URL_SAFE_NO_PAD.decode(segments[2]).unwrap()
+        );
+        drop(payloads);
+        drop(signatures);
+
+        let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
+        assert_eq!(verified["given_name"], "Alice");
+        assert_eq!(verified["family_name"], "Smith");
+    }
 }

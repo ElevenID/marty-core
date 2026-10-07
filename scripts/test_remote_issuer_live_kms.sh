@@ -44,5 +44,5 @@ export MARTY_TEST_OPENBAO_URL="$base"
 export MARTY_TEST_OPENBAO_TOKEN="$token"
 export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
 cargo test --locked -p marty-oid4vci --test remote_issuer_live_kms \
-  --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc \
+  --no-default-features --features kms-only,issuer,verifier,jwt_vc_json,sd_jwt,mso_mdoc \
   -- --ignored
