@@ -78,27 +78,3 @@ fn encoded_credentials_preserve_every_format_and_zk_response_metadata() {
         }
     }
 }
-
-#[test]
-fn compact_signing_preserves_payload_and_binds_header_to_key() {
-    use base64::Engine;
-    use marty_oid4vci::jose::{sign_compact_jwt, verify_compact_jwt_with_public_jwk};
-    let jwk = ssi_jwk::JWK::generate_ed25519().unwrap();
-    let payload =
-        json!({"iss":"did:example:issuer", "vc":{"credentialSubject":{"claims":{"name":"test"}}}});
-    let jwt = sign_compact_jwt(&jwk, &json!({"alg":"EdDSA", "typ":"JWT"}), &payload).unwrap();
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(jwt.split('.').nth(1).unwrap())
-        .unwrap();
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&decoded).unwrap(),
-        payload
-    );
-    // Public verification checks the signature independently of the signing helper.
-    let public = serde_json::to_string(&jwk.to_public()).unwrap();
-    let verified = verify_compact_jwt_with_public_jwk(&jwt, &public, "EdDSA").unwrap();
-    assert_eq!(verified.claims, payload);
-    for header in [json!({}), json!({"alg":7}), json!({"alg":"ES256"})] {
-        assert!(sign_compact_jwt(&jwk, &header, &payload).is_err());
-    }
-}

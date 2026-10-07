@@ -13,6 +13,7 @@ use marty_oid4vci::{
         mdoc::sign_mdoc_with_signer,
         sd_jwt::{sign_sd_jwt_with_signer, verify_sd_jwt},
     },
+    jose::verify_compact_jwt_with_public_jwk,
     signer::CredentialSigner,
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     Oid4vciError, Oid4vciResult,
@@ -280,6 +281,22 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         );
         assert_eq!(signatures[0], URL_SAFE_NO_PAD.decode(segments[2]).unwrap());
         assert!(credential_id.starts_with("urn:uuid:"));
+        let verified =
+            verify_compact_jwt_with_public_jwk(&jwt, &signer.public_jwk, signer.algorithm.as_str())
+                .unwrap();
+        assert_eq!(verified.header["alg"], signer.algorithm.as_str());
+        assert_eq!(
+            verified.claims["vc"]["credentialSubject"]["given_name"],
+            "Alice"
+        );
+        let other_algorithm = if signer.algorithm == SigningAlgorithm::ES256 {
+            "EdDSA"
+        } else {
+            "ES256"
+        };
+        assert!(
+            verify_compact_jwt_with_public_jwk(&jwt, &signer.public_jwk, other_algorithm).is_err()
+        );
         assert_eq!(format!("{signer:?}"), "OpenBaoSigner([redacted])");
     }
 

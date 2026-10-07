@@ -48,25 +48,7 @@ pub fn sign_credential(
     issuer_key: &IssuerKey,
     claims: &CredentialClaims,
 ) -> Oid4vciResult<SignedCredential> {
-    match format {
-        CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc(issuer_key, claims),
-        #[cfg(any(feature = "sd_jwt", all(test, feature = "issuer")))]
-        CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt(issuer_key, claims),
-        #[cfg(all(feature = "issuer", any(test, feature = "mso_mdoc")))]
-        CredentialFormat::MsoMdoc => mdoc::sign_mdoc(issuer_key, claims),
-        #[cfg(all(
-            feature = "zk_mdoc",
-            feature = "issuer",
-            any(test, feature = "mso_mdoc")
-        ))]
-        CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc(issuer_key, claims),
-        CredentialFormat::VdsNc => vds_nc::sign_vds_nc(issuer_key, claims),
-        #[allow(unreachable_patterns)]
-        _ => Err(Oid4vciError::UnsupportedFormat(format!(
-            "Credential format '{}' is not compiled into this build",
-            format.as_str()
-        ))),
-    }
+    sign_credential_with_signer(format, issuer_key, claims)
 }
 
 /// Sign a credential using any [`CredentialSigner`] implementation.
