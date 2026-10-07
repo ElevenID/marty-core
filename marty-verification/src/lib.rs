@@ -128,9 +128,6 @@ mod eac_behavior_tests;
 #[cfg(test)]
 #[path = "../tests/open_badges_tests.rs"]
 mod open_badges_behavior_tests;
-#[cfg(test)]
-#[path = "../tests/open_badges_conformance.rs"]
-mod open_badges_conformance_tests;
 #[cfg(all(test, feature = "csca", feature = "ephemeral-session-keys"))]
 #[path = "../tests/passport_chip_behavior.rs"]
 mod passport_chip_behavior_tests;

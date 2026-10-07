@@ -85,6 +85,7 @@ jobs:
           cargo test --locked -p marty-crypto --no-default-features --features ed448-verification ed448::tests
           cargo test --locked -p marty-emrtd-issuance
           cargo check --locked -p marty-verification --no-default-features --features kms-only,ephemeral-session-keys --lib
+          cargo test --locked -p marty-verification --test open_badges_conformance --no-default-features --features kms-only
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
           kms_ecdsa_verification_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,ecdsa-verification -e features,no-dev)"
           kms_issuer_tree="$(cargo tree --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc -e features,no-dev)"
