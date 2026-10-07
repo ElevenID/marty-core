@@ -320,10 +320,14 @@ fn issuer_formats_use_remote_non_exportable_keys() {
             panic!("expected SD-JWT")
         };
         assert!(credential_id.starts_with("urn:uuid:"));
+        uuid::Uuid::parse_str(credential_id.trim_start_matches("urn:uuid:")).unwrap();
         let (jws, disclosure) = compact.split_once('~').unwrap();
         assert!(!disclosure.is_empty());
         let segments: Vec<_> = jws.split('.').collect();
         assert_eq!(segments.len(), 3);
+        let issued_payload: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
+        assert_eq!(issued_payload["jti"], credential_id);
         let payloads = signer.payloads.lock().unwrap();
         let signatures = signer.signatures.lock().unwrap();
         let index = if signer.algorithm == SigningAlgorithm::ES256 {
@@ -380,5 +384,32 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
         assert_eq!(verified["credentialSubject"]["given_name"], "Alice");
         assert_eq!(verified["credentialSubject"]["family_name"], "Smith");
+
+        let SignedCredential::SdJwt { compact, .. } =
+            sign_sd_jwt_with_signer(signer, &claims(CredentialPayloadFormat::IetfSdJwt)).unwrap()
+        else {
+            panic!("expected no-disclosure SD-JWT")
+        };
+        assert!(compact.ends_with('~'));
+        assert_eq!(compact.split('~').count(), 2);
+        let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
+        assert_eq!(verified["given_name"], "Alice");
+        assert_eq!(verified["family_name"], "Smith");
+
+        let mut two_disclosures = claims(CredentialPayloadFormat::IetfSdJwt);
+        two_disclosures.selective_disclosure_claims =
+            vec!["given_name".into(), "family_name".into()];
+        let SignedCredential::SdJwt { compact, .. } =
+            sign_sd_jwt_with_signer(signer, &two_disclosures).unwrap()
+        else {
+            panic!("expected two-disclosure SD-JWT")
+        };
+        assert_eq!(
+            compact.split('~').filter(|part| !part.is_empty()).count(),
+            3
+        );
+        let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
+        assert_eq!(verified["given_name"], "Alice");
+        assert_eq!(verified["family_name"], "Smith");
     }
 }

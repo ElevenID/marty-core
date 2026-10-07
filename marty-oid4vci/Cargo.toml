@@ -154,6 +154,11 @@ path = "tests/sd_jwt_managed_claim_boundaries.rs"
 required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
 
 [[test]]
+name = "sd_jwt_vc_conformance"
+path = "tests/sd_jwt_vc_conformance.rs"
+required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
 name = "remote_jwt_vc_boundary"
 path = "tests/remote_jwt_vc_boundary.rs"
 required-features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
