@@ -57,3 +57,39 @@ cargo run -p marty-test-wallet --bin marty-test-signer-agent
 ```
 
 The default browser URL is `http://127.0.0.1:8787`.
+
+## Remote positive verifier input
+
+`marty-kms-positive-verifier-input` is a non-publishable acceptance binary. It
+uses the canonical Core SD-JWT issuer preparation and wallet presentation
+preparation APIs, then asks two separately scoped signer agents to sign their
+exact inputs. It emits only `{ "presentation", "issuer_public_jwk" }` JSON for
+the Marty UI verifier probe. It does not create, load or serialize an issuer or
+holder private key.
+
+Configure one instance of `marty-test-signer-agent` for the issuer KMS key and
+another for the holder KMS key. Each agent needs its own authenticated local IPC
+endpoint, authentication key, `MARTY_TEST_SIGNER_AGENT_ALLOWED_KEY_ID`, HTTPS
+KMS URL and provider authorization. The producer needs:
+
+- `MARTY_POSITIVE_GATE_ISSUER_PUBLIC_JWK`: public P-256 JWK with `kid` set to
+  `did:example:verifier-runtime-gate-issuer` and `alg` set to `ES256`;
+- `MARTY_POSITIVE_GATE_ISSUER_KID`: that same issuer identifier;
+- `MARTY_POSITIVE_GATE_ISSUER_SIGNER_ENDPOINT` and
+  `MARTY_POSITIVE_GATE_ISSUER_SIGNER_AUTHENTICATION_KEY`: the issuer agent's
+  authenticated IPC configuration;
+- `MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK`: the holder agent's public P-256 JWK;
+- `MARTY_TEST_WALLET_HOLDER_KID`: `did:example:runtime-gate-holder` or one of
+  its fragment keys;
+- `MARTY_TEST_WALLET_HOLDER_SIGNER_ENDPOINT` and
+  `MARTY_TEST_WALLET_HOLDER_SIGNER_AUTHENTICATION_KEY`: the holder agent's
+  authenticated IPC configuration.
+
+Run `cargo run -p marty-test-wallet --bin marty-kms-positive-verifier-input`
+after both agents are ready. The producer first verifies the issuer signature
+against the supplied public key before asking the wallet to prepare a holder
+proof. Either backend failing makes the command fail closed. Its output is a
+fresh public input for the verifier probe, not a standalone custody or release
+attestation. The integration runner pins the exact producer executable digest
+and verifies the result against the released service image; live KMS provider,
+tenant, wallet and release provenance still require their own evidence.
