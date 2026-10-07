@@ -246,6 +246,13 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         "ed25519",
         SigningAlgorithm::EdDSA,
     );
+    let unrelated_eddsa = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ed25519",
+        SigningAlgorithm::EdDSA,
+    );
     let wrong_key = client
         .post(format!("{base}/v1/transit/sign/{}", eddsa.key_name))
         .header("X-Vault-Token", &es256.token)
@@ -340,5 +347,38 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
         assert_eq!(verified["given_name"], "Alice");
         assert_eq!(verified["family_name"], "Smith");
+
+        let mut tampered_signature = URL_SAFE_NO_PAD.decode(segments[2]).unwrap();
+        tampered_signature[0] ^= 0x01;
+        let tampered = format!(
+            "{}.{}.{}~{}",
+            segments[0],
+            segments[1],
+            URL_SAFE_NO_PAD.encode(tampered_signature),
+            disclosure
+        );
+        assert!(verify_sd_jwt(&tampered, &signer.public_jwk, None, None).is_err());
+        assert!(verify_sd_jwt(
+            &compact,
+            &signer.public_jwk,
+            Some("https://verifier.example/response".into()),
+            Some("nonce-1".into()),
+        )
+        .is_err());
+        if signer.algorithm == SigningAlgorithm::EdDSA {
+            assert!(verify_sd_jwt(&compact, &unrelated_eddsa.public_jwk, None, None).is_err());
+        }
+
+        let mut w3c_claims = claims(CredentialPayloadFormat::W3cVcdmV2SdJwt);
+        w3c_claims.selective_disclosure_claims = vec!["given_name".into()];
+        w3c_claims.w3c_types = vec!["EmployeeCredential".into()];
+        let SignedCredential::SdJwt { compact, .. } =
+            sign_sd_jwt_with_signer(signer, &w3c_claims).unwrap()
+        else {
+            panic!("expected W3C SD-JWT")
+        };
+        let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
+        assert_eq!(verified["credentialSubject"]["given_name"], "Alice");
+        assert_eq!(verified["credentialSubject"]["family_name"], "Smith");
     }
 }

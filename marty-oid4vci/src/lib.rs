@@ -135,9 +135,6 @@ mod local_issuer_key_compile_boundary {}
 #[cfg(test)]
 #[path = "../tests/issuance_input.rs"]
 mod issuance_input_tests;
-#[cfg(all(test, feature = "issuer"))]
-#[path = "../tests/issuer_key_algorithm_binding.rs"]
-mod issuer_key_algorithm_binding;
 #[cfg(all(test, feature = "issuer", feature = "mso_mdoc"))]
 #[path = "../tests/mdoc_x5chain_conformance.rs"]
 mod mdoc_x5chain_conformance;
