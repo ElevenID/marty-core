@@ -130,12 +130,8 @@ pub use holder_key::{
 /// ```
 mod local_issuer_key_compile_boundary {}
 
-// Legacy local-signing behavior remains testable without a downstream-selectable
-// Cargo capability. These sources compile as crate-internal tests, where `cfg(test)`
-// exposes the fixture-only key implementation.
-#[cfg(all(test, feature = "issuer", feature = "jwt_vc_json"))]
-#[path = "../tests/byok_prepare_assemble.rs"]
-mod byok_prepare_assemble;
+// Remaining legacy local-signing tests are crate-internal until their
+// assertions move to KMS-only integration targets or public signed vectors.
 #[cfg(test)]
 #[path = "../tests/issuance_input.rs"]
 mod issuance_input_tests;
@@ -148,12 +144,6 @@ mod mdoc_x5chain_conformance;
 #[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
 #[path = "../tests/scalar_sd_jwt_holder_binding.rs"]
 mod scalar_sd_jwt_holder_binding;
-#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
-#[path = "../tests/sd_jwt_managed_claim_boundaries.rs"]
-mod sd_jwt_managed_claim_boundaries;
-#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
-#[path = "../tests/sd_jwt_structural_boundaries.rs"]
-mod sd_jwt_structural_boundaries;
 #[cfg(all(
     test,
     feature = "sd_jwt",
