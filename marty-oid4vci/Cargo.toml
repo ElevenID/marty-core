@@ -85,6 +85,8 @@ reqwest = { workspace = true, features = ["form"], optional = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
+marty-crypto = { workspace = true, default-features = false, features = ["jwk", "ecdsa-verification"] }
+reqwest = { workspace = true, features = ["blocking"] }
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "82143d688355315f22297b40ca18050a94cd2525" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
@@ -139,6 +141,7 @@ required-features = ["verifier"]
 [[test]]
 name = "signing_payload_semantics"
 path = "tests/signing_payload_semantics.rs"
+required-features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
 
 [[test]]
 name = "sd_jwt_structural_boundaries"
@@ -153,6 +156,11 @@ required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
 [[test]]
 name = "remote_jwt_vc_boundary"
 path = "tests/remote_jwt_vc_boundary.rs"
+required-features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
+name = "remote_issuer_live_kms"
+path = "tests/remote_issuer_live_kms.rs"
 required-features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
 
 [[test]]

@@ -75,6 +75,7 @@ jobs:
           cargo test --locked -p marty-oid4vci --test sd_jwt_structural_boundaries --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc
           cargo test --locked -p marty-oid4vci --test sd_jwt_managed_claim_boundaries --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc
           cargo test --locked -p marty-oid4vci --test remote_jwt_vc_boundary --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
+          cargo test --locked -p marty-oid4vci --test signing_payload_semantics --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
           cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings
           cargo test --locked -p marty-oid4vci --no-default-features --lib
@@ -106,6 +107,9 @@ jobs:
             printf '%s\n' "$kms_emrtd_tree"
             exit 1
           fi
+      - name: Prove issuer signing with disposable non-exportable OpenBao keys
+        shell: bash
+        run: bash scripts/test_remote_issuer_live_kms.sh
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
       - name: Check OID4VCI WASM serial fallback contract
