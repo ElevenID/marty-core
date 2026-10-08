@@ -2916,7 +2916,7 @@ mod tests {
     }
 
     impl ResultFault {
-        fn corrupts_identity_envelope(self) -> bool {
+        fn rejects_before_valid_signature_is_needed(self) -> bool {
             matches!(
                 self,
                 Self::Missing
@@ -2925,6 +2925,8 @@ mod tests {
                     | Self::WrongScope
                     | Self::WrongBatch
                     | Self::WrongRoute
+                    | Self::WrongLength
+                    | Self::WrongEncoding
                     | Self::InvalidSignatureAndDuplicateIdentity
                     | Self::BackendFailureAndDuplicateIdentity
             )
@@ -2946,12 +2948,12 @@ mod tests {
             signer: &dyn CredentialSigner,
             jobs: &[SigningJob<'_>],
         ) -> Result<Vec<SigningResult>, SigningExecutionError> {
-            let mut results = if self.0.corrupts_identity_envelope() {
+            let mut results = if self.0.rejects_before_valid_signature_is_needed() {
                 jobs.iter()
                     .map(|job| SigningResult {
                         identity: job.identity,
-                        // Deliberately invalid: the envelope must fail before
-                        // signature validation or any signer invocation.
+                        // Envelope faults fail first. First-ordinal signature
+                        // faults also need no valid signature from any job.
                         outcome: SigningOutcome::Signature(vec![0xA5; ES256_SIGNATURE_LENGTH]),
                     })
                     .collect()
@@ -3054,7 +3056,7 @@ mod tests {
     #[test]
     fn signature_validation_runs_after_envelope_and_in_expected_order() {
         for fault in [ResultFault::WrongLength, ResultFault::WrongEncoding] {
-            let signer = RecordingSigner::es256();
+            let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
             let scope = Es256SignerScope::new(&signer).unwrap();
             assert_error(
                 scope.sign_batch_with_components(
