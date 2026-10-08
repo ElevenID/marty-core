@@ -55,6 +55,8 @@ if [[ "${MARTY_TEST_ZK_MDOC:-0}" == '1' ]]; then
   features+=',zk_mdoc'
 fi
 run_bench_smoke() {
+  "$cargo" test --locked -p marty-oid4vci --test benchmark_support \
+    --no-default-features --features "$features" -- --ignored
   for bench in mdoc_issuance sd_jwt_issuance mdoc_allocation_evidence mdoc_tail_evidence es256_signing_batch; do
     "$cargo" test --locked -p marty-oid4vci --bench "$bench" \
       --no-default-features --features "$features" -- --test
@@ -88,6 +90,8 @@ if [[ -n "${MARTY_TEST_BENCH_RUN:-}" ]]; then
     --no-default-features --features "$features"
   exit 0
 fi
+"$cargo" test --locked -p marty-oid4vci --test benchmark_support \
+  --no-default-features --features "$features" -- --ignored
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
   signing_batch::tests \
