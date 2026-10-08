@@ -1793,19 +1793,22 @@ mod tests {
         }
     }
 
-    fn fixed_private_holder_jwk() -> JWK {
+    fn fixed_public_holder_jwk() -> JWK {
         serde_json::from_value(serde_json::json!({
             "kty": "EC",
             "crv": "P-256",
             "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
-            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
-            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
         }))
         .unwrap()
     }
 
-    fn fixed_public_holder_jwk() -> JWK {
-        fixed_private_holder_jwk().to_public()
+    fn fixed_public_ed25519_jwk() -> JWK {
+        serde_json::from_value(serde_json::json!({
+            "kty": "OKP", "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+        }))
+        .unwrap()
     }
 
     fn mdoc_claims(label: &str) -> CredentialClaims {
@@ -2246,7 +2249,10 @@ mod tests {
 
     #[test]
     fn sd_jwt_input_rejects_private_material_and_retains_verified_public_key() {
-        for private in [fixed_private_holder_jwk(), JWK::generate_ed25519().unwrap()] {
+        for public in [fixed_public_holder_jwk(), fixed_public_ed25519_jwk()] {
+            let mut with_private_member = serde_json::to_value(public).unwrap();
+            with_private_member["d"] = serde_json::json!("AA");
+            let private: JWK = serde_json::from_value(with_private_member).unwrap();
             assert!(SdJwtSigningBatchInput::new(
                 SigningRouteId::new(91),
                 sd_jwt_claims(CLAIM_SECRET),
@@ -2274,7 +2280,7 @@ mod tests {
     fn jwt_sd_jwt_and_mdoc_sign_complete_payloads_and_preserve_raw_p1363_bytes() {
         let signer = RecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
-        let holder_jwk = JWK::generate_ed25519().unwrap().to_public();
+        let holder_jwk = fixed_public_ed25519_jwk();
         let credentials = scope
             .sign_batch(vec![
                 jwt_input(1, "jwt"),

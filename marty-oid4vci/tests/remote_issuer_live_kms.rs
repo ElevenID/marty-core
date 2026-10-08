@@ -24,6 +24,10 @@ use marty_oid4vci::{
     jose::verify_compact_jwt_with_public_jwk,
     proof::verify_jwt_proof,
     signer::CredentialSigner,
+    signing_batch::{
+        Es256SignerScope, JwtVcSigningBatchInput, MdocSigningBatchInput, SdJwtSigningBatchInput,
+        SigningBatchErrorKind, SigningRouteId,
+    },
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     wallet::WalletEngine,
     Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
@@ -335,6 +339,96 @@ fn claims(format: CredentialPayloadFormat) -> CredentialClaims {
         w3c_context: vec![],
         w3c_types: vec![],
     }
+}
+
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn mixed_format_batch_signs_only_with_remote_es256_key() {
+    let (client, base, root_token) = disposable_openbao();
+    let signer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder_signer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder: ssi_jwk::JWK = serde_json::from_str(&holder_signer.public_jwk).unwrap();
+    let mut mdoc_claims = claims(CredentialPayloadFormat::default());
+    mdoc_claims.credential_type = "org.iso.18013.5.1.mDL".into();
+    mdoc_claims.mdoc_namespace = Some("org.iso.18013.5.1".into());
+    mdoc_claims.mdoc_doctype = Some("org.iso.18013.5.1.mDL".into());
+    let scope = Es256SignerScope::new(&signer).unwrap();
+    let credentials = scope
+        .sign_batch(vec![
+            JwtVcSigningBatchInput::new(
+                SigningRouteId::new(1),
+                claims(CredentialPayloadFormat::W3cVcdmV2JwtVc),
+            )
+            .into(),
+            SdJwtSigningBatchInput::new(
+                SigningRouteId::new(2),
+                claims(CredentialPayloadFormat::IetfSdJwt),
+                &holder,
+            )
+            .unwrap()
+            .into(),
+            MdocSigningBatchInput::new(SigningRouteId::new(3), mdoc_claims).into(),
+        ])
+        .unwrap();
+    let payloads = signer.payloads.lock().unwrap();
+    let signatures = signer.signatures.lock().unwrap();
+    assert_eq!(payloads.len(), 3);
+    assert_eq!(signatures.len(), 3);
+    for (index, signed) in credentials.iter().enumerate().take(2) {
+        let jws = match signed {
+            SignedCredential::JwtVcJson { jwt, .. } => jwt.as_str(),
+            SignedCredential::SdJwt { compact, .. } => compact.split('~').next().unwrap(),
+            _ => panic!("mixed batch must preserve caller order"),
+        };
+        let segments = jws.split('.').collect::<Vec<_>>();
+        assert_eq!(segments.len(), 3);
+        assert_eq!(
+            payloads[index],
+            format!("{}.{}", segments[0], segments[1]).as_bytes()
+        );
+        assert_eq!(
+            signatures[index],
+            URL_SAFE_NO_PAD.decode(segments[2]).unwrap()
+        );
+    }
+    let SignedCredential::MsoMdoc {
+        issuer_signed_b64, ..
+    } = &credentials[2]
+    else {
+        panic!("mixed batch must preserve mdoc caller order")
+    };
+    let issuer_signed: isomdl::definitions::IssuerSigned =
+        isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap()).unwrap();
+    assert_eq!(payloads[2], issuer_signed.issuer_auth.tbs_data(&[]));
+    assert_eq!(signatures[2], issuer_signed.issuer_auth.signature);
+    drop(payloads);
+    drop(signatures);
+
+    let failed = scope
+        .sign_batch(vec![
+            JwtVcSigningBatchInput::new(
+                SigningRouteId::new(9),
+                claims(CredentialPayloadFormat::W3cVcdmV2JwtVc),
+            )
+            .into(),
+            MdocSigningBatchInput::new(SigningRouteId::new(9), claims(Default::default())).into(),
+        ])
+        .unwrap_err();
+    assert_eq!(failed.kind(), SigningBatchErrorKind::DuplicateRoute);
+    assert_eq!(signer.payloads.lock().unwrap().len(), 3);
+    assert!(holder_signer.payloads.lock().unwrap().is_empty());
 }
 
 struct PublicIssuerResolver {
