@@ -8,24 +8,26 @@ fn marty_and_sd_jwt_share_curve_verification_provider() {
     sd_jwt_rs::install_crypto_provider().expect("SD-JWT provider installs idempotently");
 
     let message = b"shared browser verification provider";
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/wasm_provider_public.json"))
+            .expect("public browser verification vectors");
 
     {
-        use p384::ecdsa::signature::Signer as _;
-        let key = p384::ecdsa::SigningKey::from_slice(&[9u8; 48]).unwrap();
-        let point = key.verifying_key().to_encoded_point(false);
         let public_jwk = serde_json::json!({
             "kty": "EC",
             "crv": "P-384",
             "alg": "ES384",
-            "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-            "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+            "x": vectors["p384"]["x"],
+            "y": vectors["p384"]["y"],
         })
         .to_string();
-        let signature: p384::ecdsa::Signature = key.sign(message);
+        let signature = URL_SAFE_NO_PAD
+            .decode(vectors["p384"]["signature"].as_str().unwrap())
+            .unwrap();
         assert!(
             marty_oid4vci::jose::verify_detached_signature_with_public_jwk(
                 message,
-                signature.to_bytes().as_slice(),
+                &signature,
                 &public_jwk,
                 "ES384",
             )
@@ -34,20 +36,20 @@ fn marty_and_sd_jwt_share_curve_verification_provider() {
     }
 
     {
-        use ed25519_dalek::Signer as _;
-        let key = ed25519_dalek::SigningKey::from_bytes(&[10u8; 32]);
         let public_jwk = serde_json::json!({
             "kty": "OKP",
             "crv": "Ed25519",
             "alg": "EdDSA",
-            "x": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
+            "x": vectors["ed25519"]["x"],
         })
         .to_string();
-        let signature = key.sign(message);
+        let signature = URL_SAFE_NO_PAD
+            .decode(vectors["ed25519"]["signature"].as_str().unwrap())
+            .unwrap();
         assert!(
             marty_oid4vci::jose::verify_detached_signature_with_public_jwk(
                 message,
-                &signature.to_bytes(),
+                &signature,
                 &public_jwk,
                 "EdDSA",
             )

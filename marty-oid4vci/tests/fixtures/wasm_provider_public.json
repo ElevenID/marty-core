@@ -1,0 +1,12 @@
+{
+  "_provenance": "Public-only browser verifier vectors captured from the former fixed test inputs during KMS-only test retirement; no private seed or scalar is retained. Future positive vectors should come from a remote KMS.",
+  "ed25519": {
+    "signature": "SAkgKudYJouL4fo_QPWgk-EuZd5kQ1_8EG6Nn0IJeMGrvryYQXhnabbnrP1cwPHDCC78UdSORhF0C5DfwVVpBQ",
+    "x": "Q6cucUQBdi32a2jCbfvfJoKq7J8kdOykYT5CSg-6_Tw"
+  },
+  "p384": {
+    "signature": "zmHWac401Uw-cS2dTN5Filwu2ou1C325KDdW8n6ejRk9ReXWHLgKmovlZu21xhf-_CT3IAHPVRy9m1hQHCbyBVO561CyXK3I6lYsIlLFLly4gK6zvj-KaNcGh2JFbeeF",
+    "x": "M6qJX_GgzRxunmbQY67Gs1y1HlJKDZ3vi3phJYK0_-xPAImwUzmZA1KOC-f-WswJ",
+    "y": "uptQUm6hYgUiED2ody9ebnQqlD0XbH2rBVjEE-_DTUKAe91kdoA7cLhWas2OXECq"
+  }
+}
