@@ -4,6 +4,7 @@
 //! `dev-dependencies`. Shipping crates expose remote-signing inputs instead.
 
 pub mod openbao_transit;
+pub mod remote_certificate;
 
 pub mod ecdsa {
     use marty_crypto::{CryptoError, CryptoResult};

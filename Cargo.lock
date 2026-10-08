@@ -3855,10 +3855,12 @@ dependencies = [
  "pem-rfc7468 0.7.0",
  "pkcs8",
  "rand 0.8.7",
+ "rcgen",
  "reqwest",
  "rsa",
  "serde_json",
  "sha2 0.10.9",
+ "spki",
  "uuid",
 ]
 

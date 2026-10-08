@@ -1,58 +1,17 @@
-use der::Decode;
-use marty_crypto_test_support::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
+use marty_crypto_test_support::remote_certificate::{
+    RemoteCertificateAlgorithm, RemoteCertificateKey,
+};
 use marty_emrtd_issuance::{prepare_sod, SodError, SodSignatureAlgorithm};
-use rcgen::{CertificateParams, DnType, PublicKeyData, SigningKey};
-use spki::SubjectPublicKeyInfoOwned;
-
-struct RemoteCertificateKey {
-    signer: ScopedTransitSigner,
-    algorithm: SodSignatureAlgorithm,
-    public_key: Vec<u8>,
-}
-
-impl PublicKeyData for RemoteCertificateKey {
-    fn der_bytes(&self) -> &[u8] {
-        &self.public_key
-    }
-
-    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
-        match self.algorithm {
-            SodSignatureAlgorithm::Es256 => &rcgen::PKCS_ECDSA_P256_SHA256,
-            SodSignatureAlgorithm::Es384 => &rcgen::PKCS_ECDSA_P384_SHA384,
-            SodSignatureAlgorithm::Rs256 => &rcgen::PKCS_RSA_SHA256,
-            SodSignatureAlgorithm::Ed25519 => &rcgen::PKCS_ED25519,
-        }
-    }
-}
-
-impl SigningKey for RemoteCertificateKey {
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-        let result = match self.algorithm {
-            SodSignatureAlgorithm::Es256 => self.signer.sign_der(message),
-            SodSignatureAlgorithm::Es384 => self.signer.sign_es384_der(message),
-            SodSignatureAlgorithm::Rs256 => self.signer.sign_rsa_pkcs1(message),
-            SodSignatureAlgorithm::Ed25519 => self.signer.sign_ed25519(message),
-        };
-        result.map_err(|_| rcgen::Error::RemoteKeyError)
-    }
-}
+use rcgen::{CertificateParams, DnType, SigningKey};
 
 fn remote_document_signer(algorithm: SodSignatureAlgorithm) -> (Vec<u8>, RemoteCertificateKey) {
-    let provider = DisposableOpenBao::from_marked_env();
-    let signer = match algorithm {
-        SodSignatureAlgorithm::Es256 => provider.create_es256(),
-        SodSignatureAlgorithm::Es384 => provider.create_es384(),
-        SodSignatureAlgorithm::Rs256 => provider.create_rsa2048(),
-        SodSignatureAlgorithm::Ed25519 => provider.create_ed25519(),
+    let remote_algorithm = match algorithm {
+        SodSignatureAlgorithm::Es256 => RemoteCertificateAlgorithm::Es256,
+        SodSignatureAlgorithm::Es384 => RemoteCertificateAlgorithm::Es384,
+        SodSignatureAlgorithm::Rs256 => RemoteCertificateAlgorithm::Rs256,
+        SodSignatureAlgorithm::Ed25519 => RemoteCertificateAlgorithm::Ed25519,
     };
-    let spki = SubjectPublicKeyInfoOwned::from_der(signer.public_key_spki_der())
-        .expect("OpenBao public key must be valid SPKI");
-    let public_key = spki.subject_public_key.as_bytes().unwrap().to_vec();
-    let remote_key = RemoteCertificateKey {
-        signer,
-        algorithm,
-        public_key,
-    };
+    let remote_key = RemoteCertificateKey::new(remote_algorithm);
     let mut params = CertificateParams::default();
     params
         .distinguished_name
