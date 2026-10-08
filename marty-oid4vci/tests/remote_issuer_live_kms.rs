@@ -40,6 +40,71 @@ const ISSUER_DID: &str = "did:web:issuer.example";
 const COSE_HEADER_ALG: i64 = 1;
 const COSE_HEADER_X5CHAIN: i64 = 33;
 
+fn assert_mdoc_digest_integrity(issuer_signed_b64: &str) {
+    let bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
+    let CborValue::Map(fields) = isomdl::cbor::from_slice::<CborValue>(&bytes).unwrap() else {
+        panic!("IssuerSigned must be a CBOR map")
+    };
+    let issuer_auth = fields
+        .iter()
+        .find_map(|(key, value)| (key == &CborValue::Text("issuerAuth".into())).then_some(value))
+        .expect("issuerAuth present");
+    assert!(
+        matches!(issuer_auth, CborValue::Array(_)),
+        "issuerAuth must be a COSE_Sign1 array without an outer tag"
+    );
+    let issuer_signed: isomdl::definitions::IssuerSigned =
+        isomdl::cbor::from_slice(&bytes).unwrap();
+    let encoded_mso: CborValue =
+        isomdl::cbor::from_slice(issuer_signed.issuer_auth.payload.as_ref().unwrap()).unwrap();
+    let CborValue::Tag(24, encoded_mso) = encoded_mso else {
+        panic!("issuerAuth payload must contain MobileSecurityObjectBytes")
+    };
+    let CborValue::Bytes(encoded_mso) = *encoded_mso else {
+        panic!("MobileSecurityObjectBytes must contain a byte string")
+    };
+    let CborValue::Map(mso) = isomdl::cbor::from_slice(&encoded_mso).unwrap() else {
+        panic!("MobileSecurityObject must be a CBOR map")
+    };
+    let CborValue::Map(value_digests) = mso
+        .iter()
+        .find_map(|(key, value)| (key == &CborValue::Text("valueDigests".into())).then_some(value))
+        .expect("valueDigests present")
+    else {
+        panic!("valueDigests must be a CBOR map")
+    };
+
+    for (namespace, items) in issuer_signed.namespaces.as_ref().unwrap().iter() {
+        let CborValue::Map(expected_digests) = value_digests
+            .iter()
+            .find_map(|(key, value)| (key == &CborValue::Text(namespace.clone())).then_some(value))
+            .expect("namespace digests present")
+        else {
+            panic!("namespace digests must be a CBOR map")
+        };
+        assert_eq!(expected_digests.len(), items.len());
+        for tagged_item in items.iter() {
+            let digest_id = serde_json::to_value(tagged_item.as_ref().digest_id)
+                .unwrap()
+                .as_u64()
+                .unwrap();
+            let CborValue::Bytes(expected) = expected_digests
+                .iter()
+                .find_map(|(key, value)| {
+                    (key == &CborValue::Integer(digest_id.into())).then_some(value)
+                })
+                .expect("item digest present")
+            else {
+                panic!("issuer value digest must be a byte string")
+            };
+            let encoded_wrapper = isomdl::cbor::to_vec(tagged_item).unwrap();
+            assert_eq!(Sha256::digest(encoded_wrapper).as_slice(), expected);
+            let encoded_inner = isomdl::cbor::to_vec(tagged_item.as_ref()).unwrap();
+            assert_ne!(Sha256::digest(encoded_inner).as_slice(), expected);
+        }
+    }
+}
+
 fn assert_iso_18013_x5chain_location(credential: SignedCredential, certificates: &[Vec<u8>]) {
     let SignedCredential::MsoMdoc {
         issuer_signed_b64, ..
@@ -47,7 +112,8 @@ fn assert_iso_18013_x5chain_location(credential: SignedCredential, certificates:
     else {
         panic!("expected mso_mdoc credential")
     };
-    let bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
+    let bytes = URL_SAFE_NO_PAD.decode(&issuer_signed_b64).unwrap();
+    assert_mdoc_digest_integrity(&issuer_signed_b64);
     let typed: isomdl::definitions::IssuerSigned = isomdl::cbor::from_slice(&bytes).unwrap();
     let namespaces = typed.namespaces.as_ref().expect("nameSpaces present");
     let items = namespaces
@@ -695,7 +761,8 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         panic!("expected mDoc")
     };
     assert!(credential_id.starts_with("urn:uuid:"));
-    let issuer_signed_bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
+    let issuer_signed_bytes = URL_SAFE_NO_PAD.decode(&issuer_signed_b64).unwrap();
+    assert_mdoc_digest_integrity(&issuer_signed_b64);
     let issuer_signed: isomdl::definitions::IssuerSigned =
         isomdl::cbor::from_slice(&issuer_signed_bytes).unwrap();
     let payloads = es256.payloads.lock().unwrap();

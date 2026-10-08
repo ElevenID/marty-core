@@ -25,8 +25,6 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::{
     validate_signer_public_jwk_for_algorithm, verify_remote_signature, CredentialSigner,
 };
-#[cfg(test)]
-use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
 
 // ── CBOR tag number for `encoded-cbor` (tag 24, RFC 8949 §3.4.5.1) ──
@@ -45,113 +43,6 @@ const MDOC_UNSUPPORTED_NUMERIC_VALUE: &str = "mdoc claim contains an unsupported
 const MDOC_VALIDITY_OUT_OF_RANGE: &str = "mdoc validity period is out of range";
 const MDOC_RS256_UNSUPPORTED: &str = "RS256 is not supported for mDoc COSE signing";
 const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
-
-/// Sign an mDoc credential.
-///
-/// Produces a CBOR-encoded `IssuerSigned` structure containing:
-///   - `nameSpaces`: `IssuerSignedItem` entries per namespace
-///   - `issuerAuth`: COSE_Sign1(MobileSecurityObject)
-///
-/// The resulting credential is base64url-encoded for transport.
-#[cfg(test)]
-pub fn sign_mdoc(
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-) -> Oid4vciResult<SignedCredential> {
-    sign_mdoc_with_local_key(issuer_key, claims)
-}
-
-#[cfg(test)]
-fn sign_mdoc_with_local_key(
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-) -> Oid4vciResult<SignedCredential> {
-    let jwk: ssi_jwk::JWK = serde_json::from_str(&issuer_key.jwk_json)
-        .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
-
-    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now();
-
-    // Determine docType and namespace
-    let doc_type = claims
-        .mdoc_doctype
-        .as_deref()
-        .unwrap_or("org.iso.18013.5.1.mDL");
-    let namespace = claims
-        .mdoc_namespace
-        .as_deref()
-        .unwrap_or("org.iso.18013.5.1");
-    let x5chain_der = extract_mdoc_x5chain_from_claims(claims)?;
-
-    let validity_duration = mdoc_validity_duration(claims.expiration_seconds)?;
-    let valid_until = checked_mdoc_valid_until(now, validity_duration)?;
-
-    // 1. Plan and execute IssuerSignedItem digests through the same serial
-    // boundary used by split/BYOK signing.
-    let issuer_claims = claims
-        .claims
-        .iter()
-        .filter(|(claim_name, _)| claim_name.as_str() != MDOC_X5C_CLAIM_KEY)
-        .map(|(claim_name, claim_value)| (claim_name.as_str(), claim_value));
-    let digest_plan = plan_mdoc_digests(SINGLE_MDOC_DIGEST_CREDENTIAL_ID, issuer_claims, || {
-        rand::thread_rng().gen()
-    })?;
-    let digest_results = execute_mdoc_digest_plan(&digest_plan, &SerialDigestExecutor)?;
-    let MdocDigestAssembly {
-        issuer_signed_items,
-        value_digests,
-    } = assemble_mdoc_digest_plan(digest_plan, digest_results)?;
-
-    // 2. Build the MobileSecurityObject
-    let mso = build_mobile_security_object(
-        doc_type,
-        namespace,
-        &value_digests,
-        &now,
-        &valid_until,
-        None,
-    )?;
-
-    let mobile_security_object_bytes = encode_mobile_security_object_bytes(&mso)?;
-
-    // 3. Sign MobileSecurityObjectBytes with COSE_Sign1.
-    let issuer_auth = sign_cose_sign1(
-        &mobile_security_object_bytes,
-        &jwk,
-        issuer_key,
-        &x5chain_der,
-    )?;
-
-    // 4. Assemble IssuerSigned = { nameSpaces, issuerAuth }
-    // issuerAuth must be the COSE_Sign1 CBOR structure (array), NOT a byte
-    // string wrapping the serialized structure.  ISO 18013-5 §9.1.2.4 defines
-    // IssuerAuth = COSE_Sign1 which is a CBOR array [protected, unprotected,
-    // payload, signature].  Wallet implementations (e.g. Walt.id) expect the
-    // array directly in the IssuerSigned map.
-    let issuer_auth_cbor: CborValue = ciborium::from_reader(&issuer_auth[..])
-        .map_err(|e| Oid4vciError::MdocError(format!("Failed to parse issuer_auth CBOR: {e}")))?;
-
-    let name_spaces = CborValue::Map(vec![(
-        CborValue::Text(namespace.to_string()),
-        CborValue::Array(issuer_signed_items),
-    )]);
-
-    let issuer_signed = CborValue::Map(vec![
-        (CborValue::Text("nameSpaces".into()), name_spaces),
-        (CborValue::Text("issuerAuth".into()), issuer_auth_cbor),
-    ]);
-
-    let result_bytes = cbor_encode(&issuer_signed)?;
-    let encoded = base64::Engine::encode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        &result_bytes,
-    );
-
-    Ok(SignedCredential::MsoMdoc {
-        issuer_signed_b64: encoded,
-        credential_id,
-    })
-}
 
 /// Sign an mDoc credential using any [`CredentialSigner`].
 ///
@@ -1261,94 +1152,6 @@ fn validate_public_holder_jwk(jwk: &serde_json::Value) -> Oid4vciResult<()> {
     Ok(())
 }
 
-/// Sign a payload with COSE_Sign1 using the issuer's JWK.
-///
-/// Returns the serialized COSE_Sign1 bytes.
-#[cfg(test)]
-fn sign_cose_sign1(
-    payload: &[u8],
-    jwk: &ssi_jwk::JWK,
-    issuer_key: &IssuerKey,
-    x5chain_der: &[Vec<u8>],
-) -> Oid4vciResult<Vec<u8>> {
-    use ssi_crypto::{AlgorithmInstance, SecretKey};
-    use ssi_jwk::Params;
-
-    let alg = mdoc_cose_algorithm(issuer_key.algorithm)?;
-
-    // ISO 18013-5 section 9.1.2.4 puts alg in the protected header and
-    // x5chain in the unprotected header.
-    let protected = build_protected_header(alg);
-    let unprotected = build_unprotected_header(x5chain_der);
-
-    // Build the COSE_Sign1 without signature to get the TBS data
-    let cose_for_tbs = CoseSign1Builder::new()
-        .protected(protected.clone())
-        .unprotected(unprotected.clone())
-        .payload(payload.to_vec())
-        .build();
-    let tbs = cose_for_tbs.tbs_data(&[]);
-
-    // Extract secret key from JWK (same pattern as jwt_vc.rs)
-    let secret_key = match &jwk.params {
-        Params::OKP(params) => {
-            let d = params
-                .private_key
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing Ed25519 private key".into()))?;
-            SecretKey::new_ed25519(&d.0)
-                .map_err(|e| Oid4vciError::KeyError(format!("Invalid Ed25519 key: {:?}", e)))
-        }
-        Params::EC(params) => {
-            let d = params
-                .ecc_private_key
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing EC private key".into()))?;
-            match params.curve.as_deref() {
-                Some("P-256") => SecretKey::new_p256(&d.0)
-                    .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 key: {:?}", e))),
-                Some(curve) => Err(Oid4vciError::KeyError(format!(
-                    "Unsupported EC curve for COSE: {}",
-                    curve
-                ))),
-                None => Err(Oid4vciError::KeyError("Missing curve in EC JWK".into())),
-            }
-        }
-        _ => Err(Oid4vciError::KeyError(
-            "Unsupported key type for COSE signing".into(),
-        )),
-    }?;
-
-    let ssi_alg = match issuer_key.algorithm {
-        crate::types::SigningAlgorithm::ES256 => AlgorithmInstance::ES256,
-        crate::types::SigningAlgorithm::EdDSA => AlgorithmInstance::EdDSA,
-        crate::types::SigningAlgorithm::ES384 => AlgorithmInstance::ES384,
-        _ => {
-            return Err(Oid4vciError::MdocError(
-                "Algorithm not supported for COSE signing".into(),
-            ));
-        }
-    };
-
-    let signature = secret_key
-        .sign(ssi_alg, &tbs)
-        .map_err(|e| Oid4vciError::MdocError(format!("COSE signing failed: {:?}", e)))?;
-
-    // Build final COSE_Sign1 with signature
-    let cose_sign1 = CoseSign1Builder::new()
-        .protected(protected)
-        .unprotected(unprotected)
-        .payload(payload.to_vec())
-        .signature(signature)
-        .build();
-
-    // IssuerAuth is embedded as the COSE_Sign1 array. An optional outer COSE
-    // tag 18 is not used because ISO mdoc consumers parse the array directly.
-    cose_sign1
-        .to_vec()
-        .map_err(|e| Oid4vciError::MdocError(format!("COSE serialization failed: {:?}", e)))
-}
-
 fn build_protected_header(alg: iana::Algorithm) -> coset::Header {
     HeaderBuilder::new().algorithm(alg).build()
 }
@@ -1701,16 +1504,6 @@ mod tests {
         plan
     }
 
-    fn test_p256_key() -> IssuerKey {
-        let jwk = ssi_jwk::JWK::generate_p256();
-        let jwk_json = serde_json::to_string(&jwk).unwrap();
-        IssuerKey {
-            issuer_id: "did:example:issuer".into(),
-            jwk_json,
-            algorithm: SigningAlgorithm::ES256,
-        }
-    }
-
     fn test_mdoc_claims(
         entries: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> CredentialClaims {
@@ -1753,43 +1546,6 @@ mod tests {
             panic!("unsupported mdoc algorithms must use the mdoc error boundary")
         };
         assert_eq!(message, MDOC_RS256_UNSUPPORTED);
-    }
-
-    #[test]
-    fn local_rs256_rejection_preserves_key_parsing_precedence() {
-        let claims = test_mdoc_claims([]);
-        let malformed_local_key = IssuerKey {
-            issuer_id: "did:example:sensitive-issuer".into(),
-            jwk_json: "Sensitive malformed private JWK".into(),
-            algorithm: SigningAlgorithm::RS256,
-        };
-        let malformed_error = match sign_mdoc(&malformed_local_key, &claims) {
-            Ok(_) => panic!("malformed local JWK must fail"),
-            Err(error) => error,
-        };
-        let Oid4vciError::KeyError(malformed_message) = malformed_error else {
-            panic!("local JWK parsing must retain precedence over algorithm rejection")
-        };
-        assert!(malformed_message.starts_with("Invalid issuer JWK:"));
-        assert!(!malformed_message.contains("Sensitive"));
-
-        // A parseable public RSA JWK has no private signing material. Reaching
-        // the fixed mdoc error proves the COSE contract rejects RS256 before
-        // secret-key extraction or signing.
-        let public_rsa_key = IssuerKey {
-            issuer_id: "did:example:sensitive-issuer".into(),
-            jwk_json: r#"{"kty":"RSA","n":"AQAB","e":"AQAB"}"#.into(),
-            algorithm: SigningAlgorithm::RS256,
-        };
-        let local_error = match sign_mdoc(&public_rsa_key, &claims) {
-            Ok(_) => panic!("local RS256 mdoc issuance must fail"),
-            Err(error) => error,
-        };
-        let Oid4vciError::MdocError(local_message) = local_error else {
-            panic!("local RS256 rejection must use the mdoc error boundary")
-        };
-        assert_eq!(local_message, MDOC_RS256_UNSUPPORTED);
-        assert!(!local_message.contains("sensitive-issuer"));
     }
 
     #[test]
@@ -1853,16 +1609,6 @@ mod tests {
     fn es256k_keeps_key_identifier_claim_and_holder_error_precedence() {
         let signer = PreparationOnlySigner(SigningAlgorithm::ES256K);
         let claims = test_mdoc_claims([]);
-
-        let malformed_key = IssuerKey {
-            issuer_id: "did:example:issuer".into(),
-            jwk_json: "not a JWK".into(),
-            algorithm: SigningAlgorithm::ES256K,
-        };
-        assert!(matches!(
-            sign_mdoc(&malformed_key, &claims),
-            Err(Oid4vciError::KeyError(_))
-        ));
 
         let reserved_id_error = match prepare_mdoc_with_credential_id(
             &signer,
@@ -2129,115 +1875,6 @@ mod tests {
             .collect();
         assert!(salt_tape.next().is_none());
         prepared
-    }
-
-    fn assert_mobile_security_object_bytes(issuer_signed_b64: &str) {
-        let bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            issuer_signed_b64,
-        )
-        .unwrap();
-        let issuer_signed: CborValue = ciborium::from_reader(&bytes[..]).unwrap();
-        let issuer_auth = match issuer_signed {
-            CborValue::Map(entries) => entries
-                .into_iter()
-                .find_map(|(key, value)| {
-                    (key == CborValue::Text("issuerAuth".into())).then_some(value)
-                })
-                .expect("issuerAuth present"),
-            _ => panic!("IssuerSigned must be a CBOR map"),
-        };
-        let cose_parts = match issuer_auth {
-            CborValue::Array(parts) => parts,
-            CborValue::Tag(18, _) => {
-                panic!("issuerAuth must not use optional outer COSE tag 18")
-            }
-            _ => panic!("issuerAuth must be a COSE_Sign1 array"),
-        };
-        let payload = match cose_parts.get(2) {
-            Some(CborValue::Bytes(payload)) => payload,
-            _ => panic!("issuerAuth payload must contain MobileSecurityObjectBytes"),
-        };
-        let mobile_security_object_bytes: CborValue = ciborium::from_reader(&payload[..]).unwrap();
-        let encoded_mso = match mobile_security_object_bytes {
-            CborValue::Tag(CBOR_TAG_ENCODED_CBOR, value) => match *value {
-                CborValue::Bytes(encoded_mso) => encoded_mso,
-                _ => panic!("MobileSecurityObjectBytes tag must contain a byte string"),
-            },
-            _ => panic!("issuerAuth payload must be tag 24 MobileSecurityObjectBytes"),
-        };
-        let mso: CborValue = ciborium::from_reader(&encoded_mso[..]).unwrap();
-        assert!(matches!(mso, CborValue::Map(_)));
-    }
-
-    fn assert_issuer_value_digests(issuer_signed_b64: &str) {
-        use isomdl::definitions::IssuerSigned;
-
-        let bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            issuer_signed_b64,
-        )
-        .unwrap();
-        let issuer_signed: IssuerSigned = isomdl::cbor::from_slice(&bytes).unwrap();
-        let encoded_mso: CborValue =
-            isomdl::cbor::from_slice(issuer_signed.issuer_auth.payload.as_ref().unwrap()).unwrap();
-        let CborValue::Tag(CBOR_TAG_ENCODED_CBOR, encoded_mso) = encoded_mso else {
-            panic!("issuerAuth payload must be MobileSecurityObjectBytes");
-        };
-        let CborValue::Bytes(encoded_mso) = *encoded_mso else {
-            panic!("MobileSecurityObjectBytes must contain a byte string");
-        };
-        let CborValue::Map(mso) = isomdl::cbor::from_slice(&encoded_mso).unwrap() else {
-            panic!("MobileSecurityObject must be a CBOR map");
-        };
-        let CborValue::Map(value_digests) = mso
-            .iter()
-            .find_map(|(key, value)| {
-                (key == &CborValue::Text("valueDigests".to_string())).then_some(value)
-            })
-            .unwrap()
-        else {
-            panic!("MobileSecurityObject must contain valueDigests");
-        };
-
-        for (namespace, items) in issuer_signed.namespaces.unwrap().iter() {
-            let CborValue::Map(expected_digests) = value_digests
-                .iter()
-                .find_map(|(key, value)| {
-                    (key == &CborValue::Text(namespace.clone())).then_some(value)
-                })
-                .unwrap()
-            else {
-                panic!("namespace digest collection must be a CBOR map");
-            };
-            assert_eq!(
-                expected_digests.len(),
-                items.len(),
-                "each issued item must have exactly one valueDigest",
-            );
-            for tagged_item in items.iter() {
-                let digest_id = serde_json::to_value(tagged_item.as_ref().digest_id)
-                    .unwrap()
-                    .as_u64()
-                    .unwrap();
-                let CborValue::Bytes(expected) = expected_digests
-                    .iter()
-                    .find_map(|(key, value)| {
-                        (key == &CborValue::Integer(digest_id.into())).then_some(value)
-                    })
-                    .unwrap()
-                else {
-                    panic!("issuer value digest must be a byte string");
-                };
-                let encoded_wrapper = isomdl::cbor::to_vec(tagged_item).unwrap();
-                let computed = Sha256::digest(encoded_wrapper);
-                assert_eq!(computed.as_slice(), expected);
-
-                let encoded_item = isomdl::cbor::to_vec(tagged_item.as_ref()).unwrap();
-                let inner_item_digest = Sha256::digest(encoded_item);
-                assert_ne!(inner_item_digest.as_slice(), expected);
-            }
-        }
     }
 
     #[test]
@@ -3058,13 +2695,13 @@ mod tests {
 
     #[test]
     fn empty_mdoc_digest_plan_consumes_no_salt_and_preserves_empty_mso() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let claims = test_mdoc_claims([]);
         let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
         let prepared = prepare_mdoc_with_inputs(
-            &key,
+            &signer,
             &claims,
             "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
             None,
@@ -3193,7 +2830,7 @@ mod tests {
 
     #[test]
     fn scalar_mdoc_rejects_extreme_validity_before_salts_or_digest_execution() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -3207,7 +2844,7 @@ mod tests {
                 .iter()
                 .map(|(name, value)| (name.as_str(), value));
             let result = prepare_mdoc_with_inputs_and_digest_executor(
-                &PreparationOnlySigner(SigningAlgorithm::ES256),
+                &signer,
                 &claims,
                 "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
                 None,
@@ -3225,15 +2862,6 @@ mod tests {
             };
             assert_eq!(message, MDOC_VALIDITY_OUT_OF_RANGE);
             assert!(!message.contains(&expiration_seconds.to_string()));
-
-            let local_error = match sign_mdoc(&key, &claims) {
-                Ok(_) => panic!("invalid local validity must not issue a credential"),
-                Err(error) => error,
-            };
-            let Oid4vciError::MdocError(message) = local_error else {
-                panic!("local validity failures must use the mdoc error boundary")
-            };
-            assert_eq!(message, MDOC_VALIDITY_OUT_OF_RANGE);
         }
     }
 
@@ -3345,7 +2973,7 @@ mod tests {
 
     #[test]
     fn test_split_mdoc_signing_matches_deterministic_byte_fixture() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let certificate = [0x30, 0x82, 0x01, 0x0a];
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
@@ -3403,7 +3031,7 @@ mod tests {
             .with_timezone(&chrono::Utc);
         let mut salt_tape = salts.into_iter();
         let prepared = prepare_mdoc_with_inputs(
-            &key,
+            &signer,
             &claims,
             "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c".into(),
             Some(&holder_public_jwk),
@@ -3436,145 +3064,11 @@ mod tests {
             "hGpTaWduYXR1cmUxQ6EBJkBZAaLYGFkBnaZndmVyc2lvbmMxLjBvZGlnZXN0QWxnb3JpdGhtZ1NIQS0yNTZsdmFsdWVEaWdlc3RzoXFvcmcuaXNvLjE4MDEzLjUuMaMAWCAKt32OOsYVqUvbMFQA3zh2_suXsV7pBIoIeh7F4whVGAFYINZoqxbU3lwEoz1b9qT1HODLgtjJxigDer8CvDDb7nkgAlggX4lKjQYTT9BbwJaEYSvGmQMN3i3O3Nf764yGqVH-_TtnZG9jVHlwZXVvcmcuaXNvLjE4MDEzLjUuMS5tRExsdmFsaWRpdHlJbmZvo2ZzaWduZWTAdDIwMjYtMDgtMjlUMTI6MzQ6NTZaaXZhbGlkRnJvbcB0MjAyNi0wOC0yOVQxMjozNDo1NlpqdmFsaWRVbnRpbMB0MjAyNy0wOC0yOVQxMjozNDo1NlptZGV2aWNlS2V5SW5mb6FpZGV2aWNlS2V5pAECIAEhWCBrF9Hy4SxCR_i85uVjpEDydwN9gS3rM6D0oTlF2JjCliJYIE_jQuL-Gn-bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1",
             "COSE Sig_structure bytes must remain stable for remote signing",
         );
-
-        let signature = key.sign(prepared.signing_payload()).unwrap();
-        let signed = assemble_mdoc(prepared, &signature).unwrap();
-        let SignedCredential::MsoMdoc {
-            issuer_signed_b64,
-            credential_id,
-        } = signed
-        else {
-            panic!("Expected MsoMdoc");
-        };
-
-        let assembled = base64::Engine::decode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &issuer_signed_b64,
-        )
-        .unwrap();
-        let CborValue::Map(issuer_signed) =
-            ciborium::from_reader::<CborValue, _>(&assembled[..]).unwrap()
-        else {
-            panic!("IssuerSigned must be a map");
-        };
-        let CborValue::Map(namespaces) = map_value(&issuer_signed, "nameSpaces") else {
-            panic!("nameSpaces must be a map");
-        };
-        let (_, CborValue::Array(items)) = &namespaces[0] else {
-            panic!("namespace must contain IssuerSignedItems");
-        };
-        assert_eq!(
-            items, &expected_items,
-            "assembly must preserve planned item order"
-        );
-        let CborValue::Array(issuer_auth) = map_value(&issuer_signed, "issuerAuth") else {
-            panic!("issuerAuth must be a COSE_Sign1 array");
-        };
-        assert_eq!(issuer_auth.get(3), Some(&CborValue::Bytes(signature)));
-        assert_eq!(
-            credential_id,
-            "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"
-        );
-    }
-
-    #[test]
-    fn test_sign_mdoc_basic() {
-        let key = test_p256_key();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "mDL".into(),
-            claims: [
-                ("family_name".into(), serde_json::json!("Smith")),
-                ("given_name".into(), serde_json::json!("John")),
-                ("birth_date".into(), serde_json::json!("1990-01-15")),
-            ]
-            .into(),
-            expiration_seconds: Some(365 * 86400),
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: Some("org.iso.18013.5.1".into()),
-            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        let result = sign_mdoc(&key, &claims).unwrap();
-        match result {
-            SignedCredential::MsoMdoc {
-                issuer_signed_b64,
-                credential_id,
-            } => {
-                assert!(
-                    !issuer_signed_b64.is_empty(),
-                    "Should produce non-empty output"
-                );
-                assert!(credential_id.starts_with("urn:uuid:"));
-                assert_mobile_security_object_bytes(&issuer_signed_b64);
-                assert_issuer_value_digests(&issuer_signed_b64);
-
-                // Decode and verify it's valid CBOR
-                let bytes = base64::Engine::decode(
-                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                    &issuer_signed_b64,
-                )
-                .unwrap();
-                let decoded: CborValue = ciborium::from_reader(&bytes[..]).unwrap();
-                if let CborValue::Map(entries) = decoded {
-                    let keys: Vec<_> = entries
-                        .iter()
-                        .filter_map(|(k, _)| {
-                            if let CborValue::Text(t) = k {
-                                Some(t.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    assert!(keys.contains(&"nameSpaces"));
-                    assert!(keys.contains(&"issuerAuth"));
-                } else {
-                    panic!("Expected CBOR map at top level");
-                }
-            }
-            _ => panic!("Expected MsoMdoc"),
-        }
-    }
-
-    #[test]
-    fn test_split_mdoc_signing_uses_mobile_security_object_bytes() {
-        let key = test_p256_key();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "mDL".into(),
-            claims: [("family_name".into(), serde_json::json!("Smith"))].into(),
-            expiration_seconds: Some(365 * 86400),
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: Some("org.iso.18013.5.1".into()),
-            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        let prepared = prepare_mdoc(&key, &claims).unwrap();
-        let signature = key.sign(&prepared.tbs_data).unwrap();
-        let result = assemble_mdoc(prepared, &signature).unwrap();
-        let SignedCredential::MsoMdoc {
-            issuer_signed_b64, ..
-        } = result
-        else {
-            panic!("Expected MsoMdoc");
-        };
-
-        assert_mobile_security_object_bytes(&issuer_signed_b64);
-        assert_issuer_value_digests(&issuer_signed_b64);
     }
 
     #[test]
     fn test_prepare_mdoc_preserves_reserved_credential_id() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
             credential_type: "org.iso.18013.5.1.mDL".into(),
@@ -3590,14 +3084,14 @@ mod tests {
         };
         let reserved = "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c";
 
-        let prepared = prepare_mdoc_with_credential_id(&key, &claims, Some(reserved)).unwrap();
+        let prepared = prepare_mdoc_with_credential_id(&signer, &claims, Some(reserved)).unwrap();
 
         assert_eq!(prepared.credential_id, reserved);
     }
 
     #[test]
     fn test_prepare_mdoc_binds_holder_public_jwk_as_device_key() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
             credential_type: "org.iso.18013.5.1.mDL".into(),
@@ -3635,9 +3129,13 @@ mod tests {
             ),
         });
 
-        let prepared =
-            prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&holder_jwk))
-                .unwrap();
+        let prepared = prepare_mdoc_with_credential_id_and_device_key(
+            &signer,
+            &claims,
+            None,
+            Some(&holder_jwk),
+        )
+        .unwrap();
         let wrapped: CborValue =
             ciborium::from_reader(&prepared.mobile_security_object_bytes[..]).unwrap();
         let encoded_mso = match wrapped {
@@ -3683,7 +3181,7 @@ mod tests {
 
     #[test]
     fn test_prepare_mdoc_rejects_every_private_holder_jwk_member() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let claims = CredentialClaims {
             subject_id: None,
             credential_type: "org.iso.18013.5.1.mDL".into(),
@@ -3711,7 +3209,7 @@ mod tests {
                 .insert(member.to_owned(), serde_json::json!("secret"));
 
             let error = prepare_mdoc_with_credential_id_and_device_key(
-                &key,
+                &signer,
                 &claims,
                 None,
                 Some(&holder_jwk),
@@ -3724,7 +3222,7 @@ mod tests {
 
     #[test]
     fn test_prepare_mdoc_rejects_incomplete_holder_public_jwk() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let claims = CredentialClaims {
             subject_id: None,
             credential_type: "org.iso.18013.5.1.mDL".into(),
@@ -3744,17 +3242,21 @@ mod tests {
             "x": "ERERERERERERERERERERERERERERERERERERERERERE"
         });
 
-        let error =
-            prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&incomplete))
-                .err()
-                .expect("missing y must fail");
+        let error = prepare_mdoc_with_credential_id_and_device_key(
+            &signer,
+            &claims,
+            None,
+            Some(&incomplete),
+        )
+        .err()
+        .expect("missing y must fail");
 
         assert!(error.to_string().contains("missing y"));
     }
 
     #[test]
     fn test_prepare_mdoc_rejects_off_curve_holder_public_jwk() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let claims = CredentialClaims {
             subject_id: None,
             credential_type: "org.iso.18013.5.1.mDL".into(),
@@ -3783,10 +3285,14 @@ mod tests {
                 ),
             });
 
-            let error =
-                prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&invalid))
-                    .err()
-                    .expect("off-curve holder key must fail");
+            let error = prepare_mdoc_with_credential_id_and_device_key(
+                &signer,
+                &claims,
+                None,
+                Some(&invalid),
+            )
+            .err()
+            .expect("off-curve holder key must fail");
 
             assert!(error.to_string().contains("not a valid"));
         }
@@ -3794,7 +3300,7 @@ mod tests {
 
     #[test]
     fn test_prepare_mdoc_accepts_valid_p384_holder_public_jwk() {
-        let key = test_p256_key();
+        let signer = PreparationOnlySigner(SigningAlgorithm::ES256);
         let claims = CredentialClaims {
             subject_id: None,
             credential_type: "org.iso.18013.5.1.mDL".into(),
@@ -3815,106 +3321,7 @@ mod tests {
             "y": "NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f",
         });
 
-        prepare_mdoc_with_credential_id_and_device_key(&key, &claims, None, Some(&holder_jwk))
+        prepare_mdoc_with_credential_id_and_device_key(&signer, &claims, None, Some(&holder_jwk))
             .expect("valid P-384 holder key must prepare");
-    }
-
-    #[test]
-    fn test_sign_mdoc_includes_x5chain_header_when_present() {
-        let key = test_p256_key();
-        let cert_a = vec![0x30, 0x82, 0x01, 0x0a];
-        let cert_b = vec![0x30, 0x82, 0x01, 0x0b];
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "mDL".into(),
-            claims: [
-                ("family_name".into(), serde_json::json!("Smith")),
-                (
-                    MDOC_X5C_CLAIM_KEY.into(),
-                    serde_json::json!([
-                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &cert_a),
-                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &cert_b),
-                    ]),
-                ),
-            ]
-            .into(),
-            expiration_seconds: Some(365 * 86400),
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: Some("org.iso.18013.5.1".into()),
-            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        let result = sign_mdoc(&key, &claims).unwrap();
-        let issuer_signed_b64 = match result {
-            SignedCredential::MsoMdoc {
-                issuer_signed_b64, ..
-            } => issuer_signed_b64,
-            _ => panic!("Expected MsoMdoc"),
-        };
-
-        let bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &issuer_signed_b64,
-        )
-        .unwrap();
-        let top: CborValue = ciborium::from_reader(&bytes[..]).unwrap();
-
-        let issuer_auth = match top {
-            CborValue::Map(entries) => entries
-                .into_iter()
-                .find_map(|(k, v)| match k {
-                    CborValue::Text(key) if key == "issuerAuth" => Some(v),
-                    _ => None,
-                })
-                .expect("issuerAuth present"),
-            _ => panic!("Expected top-level map"),
-        };
-
-        let parts = match issuer_auth {
-            CborValue::Array(parts) => parts,
-            CborValue::Tag(_, boxed) => match *boxed {
-                CborValue::Array(parts) => parts,
-                _ => panic!("issuerAuth tagged value should wrap a COSE array"),
-            },
-            _ => panic!("issuerAuth should be a COSE array"),
-        };
-        let protected_bstr = match parts.first() {
-            Some(CborValue::Bytes(b)) => b,
-            _ => panic!("COSE protected header bytes missing"),
-        };
-        let unprotected = match parts.get(1) {
-            Some(CborValue::Map(headers)) => headers,
-            _ => panic!("COSE unprotected header map missing"),
-        };
-
-        let protected: CborValue = ciborium::from_reader(&protected_bstr[..]).unwrap();
-        let mut protected_has_alg = false;
-        if let CborValue::Map(headers) = protected {
-            for (k, v) in headers {
-                if k == CborValue::Integer(1.into()) {
-                    protected_has_alg = true;
-                    assert_eq!(v, CborValue::Integer((-7).into()));
-                }
-                if k == CborValue::Integer(COSE_HEADER_X5CHAIN_LABEL.into()) {
-                    panic!("ISO 18013-5 x5chain must not be in the protected header");
-                }
-            }
-        }
-        assert!(protected_has_alg, "Expected alg in protected COSE header");
-
-        let x5chain = unprotected
-            .iter()
-            .find_map(|(key, value)| {
-                (key == &CborValue::Integer(COSE_HEADER_X5CHAIN_LABEL.into())).then_some(value)
-            })
-            .expect("Expected x5chain in unprotected COSE header");
-        assert_eq!(
-            x5chain,
-            &CborValue::Array(vec![CborValue::Bytes(cert_a), CborValue::Bytes(cert_b),])
-        );
     }
 }
