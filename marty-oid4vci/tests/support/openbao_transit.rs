@@ -169,7 +169,7 @@ impl ScopedEs256Signer {
         p256::ecdsa::VerifyingKey::from_sec1_bytes(&point).unwrap()
     }
 
-    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
+    pub fn sign_der(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
         let response: Value = self
             .client
             .post(format!("{}/v1/transit/sign/{}", self.base, self.name))
@@ -187,7 +187,11 @@ impl ScopedEs256Signer {
             .as_str()
             .and_then(|value| value.rsplit(':').next())
             .ok_or(())?;
-        let signature = STANDARD.decode(encoded).map_err(|_| ())?;
+        STANDARD.decode(encoded).map_err(|_| ())
+    }
+
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
+        let signature = self.sign_der(message)?;
         marty_crypto::ecdsa::normalize_signature(&signature, "ES256").map_err(|_| ())
     }
 }

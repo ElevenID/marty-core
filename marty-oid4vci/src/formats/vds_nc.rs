@@ -228,33 +228,45 @@ fn normalize_signature_bytes(algorithm: &str, signature: &[u8]) -> Oid4vciResult
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_family = "wasm"))]
+    mod openbao_transit {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/openbao_transit.rs"
+        ));
+    }
+
     use super::*;
     use crate::signer::CredentialSigner;
     use crate::types::SigningAlgorithm;
 
+    #[cfg(not(target_family = "wasm"))]
     struct TestSigner {
-        signing_key: p256::ecdsa::SigningKey,
+        backend: openbao_transit::ScopedEs256Signer,
     }
 
+    #[cfg(not(target_family = "wasm"))]
     impl TestSigner {
         fn new() -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap(),
+                backend: openbao_transit::DisposableOpenBao::from_marked_env().create_es256(),
             }
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     impl std::fmt::Debug for TestSigner {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("TestSigner([redacted])")
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     impl CredentialSigner for TestSigner {
         fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-            use p256::ecdsa::signature::Signer as _;
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-            Ok(signature.to_bytes().to_vec())
+            self.backend
+                .sign(message)
+                .map_err(|_| Oid4vciError::SigningError("remote signer unavailable".into()))
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -266,13 +278,11 @@ mod tests {
         }
 
         fn kid_url(&self) -> String {
-            "did:example:vdsnc-issuer#key-1".to_string()
+            self.backend.key_id(self.issuer_id())
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
+            Ok(self.backend.public_jwk().to_owned())
         }
     }
 
@@ -305,7 +315,9 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn signs_vds_nc_with_signer() {
         let signer = TestSigner::new();
 
@@ -321,7 +333,9 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn prepare_and_assemble_vds_nc_round_trip() {
         let signer = TestSigner::new();
 
@@ -342,18 +356,25 @@ mod tests {
 
     #[test]
     fn prepared_vds_diagnostics_redact_signing_payload() {
-        let signing_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
-        let prepared = make_prepared(
-            "AUS",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&signing_key),
-        );
+        use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+
+        let public_point = p256::AffinePoint::GENERATOR.to_encoded_point(false);
+        let public_jwk = serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_point.x().unwrap()),
+            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public_point.y().unwrap()),
+        })
+        .to_string();
+        let prepared = make_prepared("AUS", "ES256", public_jwk);
         let diagnostic = format!("{prepared:?}");
         assert_eq!(diagnostic, "PreparedVdsNc([redacted])");
         assert!(!diagnostic.contains("CMC"));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn rejects_invalid_country() {
         let signer = TestSigner::new();
 
@@ -414,22 +435,20 @@ mod tests {
             .expect("base64 decode")
     }
 
-    /// Mock KMS: returns a DER-encoded P-256 ECDSA signature.
+    /// OpenBao Transit returns a DER-encoded P-256 ECDSA signature.
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn kms_p256_der_signature_is_normalized_to_raw() {
-        use p256::ecdsa::{signature::Signer as _, SigningKey};
-        use rand::rngs::OsRng;
+        let signer = TestSigner::new();
+        let prepared = make_prepared("AUS", "ES256", signer.public_jwk().unwrap());
+        let signing_input = prepared.signing_input.clone();
+        let sig_der = signer
+            .backend
+            .sign_der(prepared.signing_input.as_bytes())
+            .unwrap();
 
-        let signing_key = SigningKey::random(&mut OsRng);
-        let prepared = make_prepared(
-            "AUS",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&signing_key),
-        );
-        let sig_der: p256::ecdsa::DerSignature =
-            signing_key.sign(prepared.signing_input.as_bytes());
-
-        let assembled = assemble_vds_nc(prepared, sig_der.as_bytes()).unwrap();
+        let assembled = assemble_vds_nc(prepared, &sig_der).unwrap();
         let sig_bytes = match assembled {
             SignedCredential::VdsNc {
                 ref barcode_data, ..
@@ -444,26 +463,31 @@ mod tests {
             "P-256 raw signature must be 64 bytes, got {}",
             sig_bytes.len()
         );
-        let expected = p256::ecdsa::Signature::from_der(sig_der.as_bytes())
+        let expected = p256::ecdsa::Signature::from_der(&sig_der)
             .expect("valid P-256 DER signature")
             .to_bytes();
         assert_eq!(sig_bytes, expected.as_slice());
+        let verifying_key = signer.backend.verifying_key();
+        use p256::ecdsa::signature::Verifier as _;
+        verifying_key
+            .verify(
+                signing_input.as_bytes(),
+                &p256::ecdsa::Signature::from_slice(&sig_bytes).unwrap(),
+            )
+            .unwrap();
     }
 
-    /// Mock KMS: returns a raw P-256 signature (already in r || s format).
+    /// A normalized remote P-256 signature passes through unchanged.
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn kms_p256_raw_signature_passes_through_unchanged() {
-        use p256::ecdsa::{signature::Signer as _, SigningKey};
-        use rand::rngs::OsRng;
-
-        let signing_key = SigningKey::random(&mut OsRng);
-        let prepared = make_prepared(
-            "GBR",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&signing_key),
-        );
-        let sig: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input.as_bytes());
-        let raw_bytes = sig.to_bytes().to_vec();
+        let signer = TestSigner::new();
+        let prepared = make_prepared("GBR", "ES256", signer.public_jwk().unwrap());
+        let raw_bytes = signer
+            .backend
+            .sign(prepared.signing_input.as_bytes())
+            .unwrap();
 
         let assembled = assemble_vds_nc(prepared, &raw_bytes).unwrap();
         let sig_bytes = match assembled {
@@ -527,53 +551,34 @@ mod tests {
         assert_eq!(sig_bytes, raw_ed25519_sig);
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn malformed_signature_is_rejected_and_valid_signature_assembles() {
-        use p256::ecdsa::{signature::Signer as _, SigningKey};
-        let signing_key = SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
-        let prepared = make_prepared(
-            "AUS",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&signing_key),
-        );
+        let signer = TestSigner::new();
+        let prepared = make_prepared("AUS", "ES256", signer.public_jwk().unwrap());
         assert!(assemble_vds_nc(prepared, &[0u8; 64]).is_err());
 
-        let prepared = make_prepared(
-            "AUS",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&signing_key),
-        );
-        let valid: p256::ecdsa::Signature = signing_key.sign(prepared.signing_payload());
-        assert!(assemble_vds_nc(prepared, valid.to_bytes().as_slice()).is_ok());
+        let prepared = make_prepared("AUS", "ES256", signer.public_jwk().unwrap());
+        let valid = signer.backend.sign(prepared.signing_payload()).unwrap();
+        assert!(assemble_vds_nc(prepared, &valid).is_ok());
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn assembly_rejects_signature_for_wrong_payload_and_wrong_key() {
-        use p256::ecdsa::{signature::Signer as _, SigningKey};
+        let signer = TestSigner::new();
+        let wrong_signer = TestSigner::new();
+        let prepared = make_prepared("AUS", "ES256", signer.public_jwk().unwrap());
+        let signature = signer.backend.sign(prepared.signing_payload()).unwrap();
 
-        let signing_key = SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
-        let wrong_key = SigningKey::from_bytes((&[8u8; 32]).into()).unwrap();
-        let prepared = make_prepared(
-            "AUS",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&signing_key),
-        );
-        let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_payload());
-
-        let mut wrong_payload = make_prepared(
-            "AUS",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&signing_key),
-        );
+        let mut wrong_payload = make_prepared("AUS", "ES256", signer.public_jwk().unwrap());
         wrong_payload.signing_input.push(' ');
-        assert!(assemble_vds_nc(wrong_payload, signature.to_bytes().as_slice()).is_err());
+        assert!(assemble_vds_nc(wrong_payload, &signature).is_err());
 
-        let wrong_key_prepared = make_prepared(
-            "AUS",
-            "ES256",
-            crate::signer::test_es256_public_jwk_for_key(&wrong_key),
-        );
-        assert!(assemble_vds_nc(wrong_key_prepared, signature.to_bytes().as_slice()).is_err());
+        let wrong_key_prepared = make_prepared("AUS", "ES256", wrong_signer.public_jwk().unwrap());
+        assert!(assemble_vds_nc(wrong_key_prepared, &signature).is_err());
     }
 
     #[cfg(not(target_family = "wasm"))]
