@@ -92,7 +92,6 @@ sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "82143d6883
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { workspace = true, features = ["ecdsa", "sha256"] }
-ssi-crypto = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]

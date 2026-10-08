@@ -489,67 +489,9 @@ pub struct LogoEntry {
     pub alt_text: Option<String>,
 }
 
-// =============================================================================
-// Signing Key Material
-// =============================================================================
-
-/// Issuer key material for credential signing.
 #[cfg(test)]
-#[derive(Clone)]
-pub struct IssuerKey {
-    /// The DID or key identifier for the issuer.
-    pub issuer_id: String,
-    /// JWK JSON string (contains private key for signing).
-    pub jwk_json: String,
-    /// Key algorithm hint.
-    pub algorithm: SigningAlgorithm,
-}
-
-#[cfg(test)]
-const REDACTED_ISSUER_KEY_DIAGNOSTIC: &str = "IssuerKey([redacted])";
-
-#[cfg(test)]
-impl std::fmt::Debug for IssuerKey {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
-    }
-}
-
-#[cfg(test)]
-impl std::fmt::Display for IssuerKey {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(REDACTED_ISSUER_KEY_DIAGNOSTIC)
-    }
-}
-
-#[cfg(test)]
-impl IssuerKey {
-    /// Returns the `kid` value to use in JWT/SD-JWT headers.
-    ///
-    /// For `did:key:` DIDs the kid is the full DID URL with verification-method
-    /// fragment, e.g. `did:key:z6Mk…#z6Mk…`.  The fragment equals the
-    /// multibase-encoded key identifier per the did:key specification (§2.2).
-    ///
-    /// For all other DID methods the issuer ID is returned unchanged.
-    pub fn kid_url(&self) -> String {
-        if let Some(key_part) = self.issuer_id.strip_prefix("did:key:") {
-            format!("{}#{}", self.issuer_id, key_part)
-        } else {
-            self.issuer_id.clone()
-        }
-    }
-}
-
-#[cfg(test)]
-mod issuer_key_diagnostic_tests {
-    use super::{
-        AuthorizationSession, IssuerKey, SigningAlgorithm, REDACTED_ISSUER_KEY_DIAGNOSTIC,
-    };
-    use crate::signer::CredentialSigner;
-
-    struct TestSigningExecutor<'a> {
-        _signer: &'a dyn CredentialSigner,
-    }
+mod authorization_session_tests {
+    use super::AuthorizationSession;
 
     #[test]
     fn authorization_session_expiry_overflow_fails_closed() {
@@ -570,100 +512,7 @@ mod issuer_key_diagnostic_tests {
         boundary.created_at = u64::MAX - 1;
         assert!(!boundary.is_expired(u64::MAX));
     }
-
-    impl std::fmt::Debug for TestSigningExecutor<'_> {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("SigningExecutor([redacted])")
-        }
-    }
-
-    impl std::fmt::Display for TestSigningExecutor<'_> {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("SigningExecutor([redacted])")
-        }
-    }
-
-    #[test]
-    fn issuer_key_display_and_debug_are_stably_redacted() {
-        const PRIVATE_VALUE_CANARIES: &[&str] = &[
-            "private-d-canary",
-            "private-p-canary",
-            "private-q-canary",
-            "private-dp-canary",
-            "private-dq-canary",
-            "private-qi-canary",
-            "private-oth-canary",
-            "private-k-canary",
-        ];
-        let jwk_json = serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": "public-x-canary",
-            "y": "public-y-canary",
-            "d": PRIVATE_VALUE_CANARIES[0],
-            "p": PRIVATE_VALUE_CANARIES[1],
-            "q": PRIVATE_VALUE_CANARIES[2],
-            "dp": PRIVATE_VALUE_CANARIES[3],
-            "dq": PRIVATE_VALUE_CANARIES[4],
-            "qi": PRIVATE_VALUE_CANARIES[5],
-            "oth": PRIVATE_VALUE_CANARIES[6],
-            "k": PRIVATE_VALUE_CANARIES[7],
-        })
-        .to_string();
-        let issuer_key = IssuerKey {
-            issuer_id: "did:example:issuer-diagnostic-canary".to_owned(),
-            jwk_json: jwk_json.clone(),
-            algorithm: SigningAlgorithm::ES256,
-        };
-        let credential_signer: &dyn CredentialSigner = &issuer_key;
-
-        let issuer_key_diagnostics = [
-            issuer_key.to_string(),
-            format!("{issuer_key:?}"),
-            format!("{issuer_key:#?}"),
-        ];
-
-        for diagnostic in &issuer_key_diagnostics {
-            assert_eq!(diagnostic, REDACTED_ISSUER_KEY_DIAGNOSTIC);
-        }
-
-        let executor = TestSigningExecutor {
-            _signer: credential_signer,
-        };
-        let signer_and_executor_diagnostics = [
-            format!("{credential_signer:?}"),
-            format!("{credential_signer:#?}"),
-            executor.to_string(),
-            format!("{executor:?}"),
-            format!("{executor:#?}"),
-        ];
-        assert_eq!(
-            signer_and_executor_diagnostics[0],
-            REDACTED_ISSUER_KEY_DIAGNOSTIC
-        );
-        assert_eq!(
-            signer_and_executor_diagnostics[1],
-            REDACTED_ISSUER_KEY_DIAGNOSTIC
-        );
-        for diagnostic in &signer_and_executor_diagnostics[2..] {
-            assert_eq!(diagnostic, "SigningExecutor([redacted])");
-        }
-
-        for diagnostic in issuer_key_diagnostics
-            .iter()
-            .chain(signer_and_executor_diagnostics.iter())
-        {
-            assert!(!diagnostic.contains(&jwk_json));
-            for canary in PRIVATE_VALUE_CANARIES {
-                assert!(
-                    !diagnostic.contains(canary),
-                    "signing diagnostic exposed a private JWK member"
-                );
-            }
-        }
-    }
 }
-
 /// Supported signing algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SigningAlgorithm {
