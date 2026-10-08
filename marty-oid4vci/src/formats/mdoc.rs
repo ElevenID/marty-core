@@ -1323,12 +1323,16 @@ mod stage_evidence;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_family = "wasm"))]
+    use std::collections::BTreeMap;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
     };
 
     use super::*;
+    #[cfg(not(target_family = "wasm"))]
+    use crate::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
     use crate::types::SigningAlgorithm;
     use isomdl::digest_executor::DigestExecutionError;
     use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
@@ -1355,6 +1359,100 @@ mod tests {
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
             Ok(crate::signer::test_public_jwk(self.0))
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    type CachedRemoteSignatures = BTreeMap<(&'static str, Vec<u8>), Vec<u8>>;
+
+    #[cfg(not(target_family = "wasm"))]
+    struct RemoteMdocKeys {
+        es256: ScopedTransitSigner,
+        es384: ScopedTransitSigner,
+        signatures: Mutex<CachedRemoteSignatures>,
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl RemoteMdocKeys {
+        fn new() -> Self {
+            let provider = DisposableOpenBao::from_marked_env();
+            Self {
+                es256: provider.create_es256(),
+                es384: provider.create_es384(),
+                signatures: Mutex::new(BTreeMap::new()),
+            }
+        }
+
+        fn key(&self, algorithm: SigningAlgorithm) -> &ScopedTransitSigner {
+            match algorithm {
+                SigningAlgorithm::ES256 => &self.es256,
+                SigningAlgorithm::ES384 => &self.es384,
+                _ => panic!("mdoc fixture has no {algorithm} key"),
+            }
+        }
+
+        fn public_jwk(&self, algorithm: SigningAlgorithm) -> String {
+            self.key(algorithm).public_jwk().to_owned()
+        }
+
+        fn sign(&self, algorithm: SigningAlgorithm, message: &[u8]) -> Vec<u8> {
+            let cache_key = (algorithm.as_str(), message.to_vec());
+            let mut signatures = self.signatures.lock().unwrap();
+            if let Some(signature) = signatures.get(&cache_key) {
+                return signature.clone();
+            }
+            let signer = self.key(algorithm);
+            let signature = match algorithm {
+                SigningAlgorithm::ES256 => signer.sign(message),
+                SigningAlgorithm::ES384 => signer.sign_es384(message),
+                _ => unreachable!(),
+            }
+            .expect("scoped OpenBao signing");
+            crate::signer::verify_remote_signature(
+                algorithm,
+                signer.public_jwk(),
+                message,
+                &signature,
+            )
+            .expect("remote signature binds the prepared payload and public key");
+            signatures.insert(cache_key, signature.clone());
+            signature
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    struct RemoteMdocSigner<'a> {
+        keys: &'a RemoteMdocKeys,
+        algorithm: SigningAlgorithm,
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl std::fmt::Debug for RemoteMdocSigner<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("RemoteMdocSigner([redacted])")
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl CredentialSigner for RemoteMdocSigner<'_> {
+        fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            Ok(self.keys.sign(self.algorithm, message))
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            self.algorithm
+        }
+
+        fn issuer_id(&self) -> &str {
+            "did:example:issuer"
+        }
+
+        fn kid_url(&self) -> String {
+            "did:example:issuer#key-1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(self.keys.public_jwk(self.algorithm))
         }
     }
 
@@ -1706,6 +1804,7 @@ mod tests {
         assert_eq!(message, "redacted validation fixture");
     }
 
+    #[cfg(not(target_family = "wasm"))]
     struct BatchReplayItem {
         batch_id: u64,
         credential_id: String,
@@ -1715,6 +1814,7 @@ mod tests {
         holder_public_jwk: Option<serde_json::Value>,
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn batch_replay_fixture() -> Vec<BatchReplayItem> {
         let signed_at = |second| {
             chrono::DateTime::parse_from_rfc3339(&format!("2026-08-29T12:34:{second:02}Z"))
@@ -1766,13 +1866,18 @@ mod tests {
         ]
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn replay_salts(item_count: usize) -> Vec<[u8; 32]> {
         (0..item_count)
             .map(|item| std::array::from_fn(|index| (item * 37 + index) as u8))
             .collect()
     }
 
-    fn replay_batch_inputs(fixture: &[BatchReplayItem]) -> Vec<MdocBatchPreparationInput> {
+    #[cfg(not(target_family = "wasm"))]
+    fn replay_batch_inputs(
+        fixture: &[BatchReplayItem],
+        keys: &RemoteMdocKeys,
+    ) -> Vec<MdocBatchPreparationInput> {
         fixture
             .iter()
             .map(|item| {
@@ -1782,7 +1887,7 @@ mod tests {
                     item.signed_at,
                     validate_mdoc_preparation(
                         item.signing_algorithm,
-                        crate::signer::test_public_jwk(item.signing_algorithm),
+                        keys.public_jwk(item.signing_algorithm),
                         &item.claims,
                         item.holder_public_jwk.as_ref(),
                     )
@@ -1793,6 +1898,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn replay_item_count(fixture: &[BatchReplayItem]) -> usize {
         fixture
             .iter()
@@ -1806,14 +1912,16 @@ mod tests {
             .sum()
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn prepare_replay_batch(
         fixture: &[BatchReplayItem],
         executor: &dyn DigestExecutor,
+        keys: &RemoteMdocKeys,
     ) -> Oid4vciResult<Vec<PreparedMdocBatchPreparation>> {
         let salts = replay_salts(replay_item_count(fixture));
         let mut salt_tape = salts.into_iter();
         let prepared = prepare_validated_mdoc_batch_with_digest_executor(
-            replay_batch_inputs(fixture),
+            replay_batch_inputs(fixture, keys),
             || salt_tape.next().expect("one salt per batch item digest"),
             executor,
         )?;
@@ -1821,13 +1929,15 @@ mod tests {
         Ok(prepared)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn prepared_fingerprint(
         batch_id: u64,
         prepared: PreparedMdoc,
+        keys: &RemoteMdocKeys,
     ) -> (u64, String, Vec<u8>, String) {
         let credential_id = prepared.credential_id.clone();
         let tbs_data = prepared.tbs_data.clone();
-        let signature = crate::signer::test_signature(prepared.algorithm(), &prepared.tbs_data);
+        let signature = keys.sign(prepared.algorithm(), &prepared.tbs_data);
         let SignedCredential::MsoMdoc {
             issuer_signed_b64,
             credential_id: assembled_id,
@@ -1839,16 +1949,22 @@ mod tests {
         (batch_id, credential_id, tbs_data, issuer_signed_b64)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn batch_fingerprints(
         prepared: Vec<PreparedMdocBatchPreparation>,
+        keys: &RemoteMdocKeys,
     ) -> Vec<(u64, String, Vec<u8>, String)> {
         prepared
             .into_iter()
-            .map(|item| prepared_fingerprint(item.batch_id, item.prepared_mdoc))
+            .map(|item| prepared_fingerprint(item.batch_id, item.prepared_mdoc, keys))
             .collect()
     }
 
-    fn scalar_fingerprints(fixture: &[BatchReplayItem]) -> Vec<(u64, String, Vec<u8>, String)> {
+    #[cfg(not(target_family = "wasm"))]
+    fn scalar_fingerprints(
+        fixture: &[BatchReplayItem],
+        keys: &RemoteMdocKeys,
+    ) -> Vec<(u64, String, Vec<u8>, String)> {
         let salts = replay_salts(replay_item_count(fixture));
         let mut salt_tape = salts.into_iter();
         let prepared = fixture
@@ -1861,7 +1977,10 @@ mod tests {
                     .filter(|(name, _)| name.as_str() != MDOC_X5C_CLAIM_KEY)
                     .map(|(name, value)| (name.as_str(), value));
                 let prepared = prepare_mdoc_with_inputs(
-                    &PreparationOnlySigner(item.signing_algorithm),
+                    &RemoteMdocSigner {
+                        keys,
+                        algorithm: item.signing_algorithm,
+                    },
                     &item.claims,
                     item.credential_id.clone(),
                     item.holder_public_jwk.as_ref(),
@@ -1870,7 +1989,7 @@ mod tests {
                     || salt_tape.next().expect("one salt per scalar item digest"),
                 )
                 .unwrap();
-                prepared_fingerprint(item.batch_id, prepared)
+                prepared_fingerprint(item.batch_id, prepared, keys)
             })
             .collect();
         assert!(salt_tape.next().is_none());
@@ -2115,8 +2234,15 @@ mod tests {
             .unwrap_or_else(|| panic!("missing CBOR map key {key}"))
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn deterministic_nested_claims_round_trip_with_exact_commitments() {
+        let keys = RemoteMdocKeys::new();
+        let signer = RemoteMdocSigner {
+            keys: &keys,
+            algorithm: SigningAlgorithm::ES256,
+        };
         let namespace = "org.example.characterization";
         let claims = CredentialClaims {
             mdoc_namespace: Some(namespace.into()),
@@ -2143,7 +2269,7 @@ mod tests {
             .with_timezone(&chrono::Utc);
         let mut salt_tape = salts.into_iter();
         let prepared = prepare_mdoc_with_inputs(
-            &PreparationOnlySigner(SigningAlgorithm::ES256),
+            &signer,
             &claims,
             "urn:uuid:00000000-0000-0000-0000-000000000123".into(),
             None,
@@ -2217,8 +2343,7 @@ mod tests {
             issuer_signed_b64,
             credential_id,
         } = ({
-            let signature =
-                crate::signer::test_signature(prepared.algorithm(), prepared.signing_payload());
+            let signature = signer.sign(prepared.signing_payload()).unwrap();
             assemble_mdoc(prepared, &signature).unwrap()
         })
         else {
@@ -2278,8 +2403,15 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn public_nested_claim_prepare_assemble_decode_preserves_values() {
+        let keys = RemoteMdocKeys::new();
+        let signer = RemoteMdocSigner {
+            keys: &keys,
+            algorithm: SigningAlgorithm::ES256,
+        };
         let namespace = "org.example.public-nested";
         let expected = [
             ("array", serde_json::json!([1, {"enabled": true}])),
@@ -2295,7 +2427,7 @@ mod tests {
         );
         claims.mdoc_namespace = Some(namespace.into());
         let prepared = prepare_mdoc_with_credential_id(
-            &PreparationOnlySigner(SigningAlgorithm::ES256),
+            &signer,
             &claims,
             Some("urn:uuid:00000000-0000-0000-0000-000000000125"),
         )
@@ -2304,8 +2436,7 @@ mod tests {
             issuer_signed_b64,
             credential_id,
         } = ({
-            let signature =
-                crate::signer::test_signature(prepared.algorithm(), prepared.signing_payload());
+            let signature = signer.sign(prepared.signing_payload()).unwrap();
             assemble_mdoc(prepared, &signature).unwrap()
         })
         else {
@@ -2404,7 +2535,9 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn nested_batch_matches_scalar_bytes_and_preserves_caller_identity_order() {
         let signed_at = chrono::DateTime::parse_from_rfc3339("2026-08-29T12:34:56Z")
             .unwrap()
@@ -2436,9 +2569,13 @@ mod tests {
                 holder_public_jwk: None,
             },
         ];
+        let keys = RemoteMdocKeys::new();
         let executor = RecordingDigestExecutor::default();
-        let actual = batch_fingerprints(prepare_replay_batch(&fixture, &executor).unwrap());
-        let expected = scalar_fingerprints(&fixture);
+        let actual = batch_fingerprints(
+            prepare_replay_batch(&fixture, &executor, &keys).unwrap(),
+            &keys,
+        );
+        let expected = scalar_fingerprints(&fixture, &keys);
 
         assert_eq!(actual, expected);
         assert_eq!(
@@ -2897,12 +3034,18 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn remote_mdoc_batch_matches_scalar_bytes_and_uses_one_flattened_call() {
         let fixture = batch_replay_fixture();
+        let keys = RemoteMdocKeys::new();
         let executor = RecordingDigestExecutor::default();
-        let actual = batch_fingerprints(prepare_replay_batch(&fixture, &executor).unwrap());
-        let expected = scalar_fingerprints(&fixture);
+        let actual = batch_fingerprints(
+            prepare_replay_batch(&fixture, &executor, &keys).unwrap(),
+            &keys,
+        );
+        let expected = scalar_fingerprints(&fixture, &keys);
 
         assert_eq!(actual, expected);
         assert_eq!(
@@ -2920,14 +3063,20 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn remote_mdoc_batch_is_independent_of_sixty_four_result_schedules() {
         let fixture = batch_replay_fixture();
-        let expected = scalar_fingerprints(&fixture);
+        let keys = RemoteMdocKeys::new();
+        let expected = scalar_fingerprints(&fixture, &keys);
 
         for seed in 0..64 {
             let executor = SeededShufflingDigestExecutor(0x4344_4c41_4241_5443 ^ seed);
-            let actual = batch_fingerprints(prepare_replay_batch(&fixture, &executor).unwrap());
+            let actual = batch_fingerprints(
+                prepare_replay_batch(&fixture, &executor, &keys).unwrap(),
+                &keys,
+            );
             assert_eq!(
                 actual, expected,
                 "batch bytes changed for shuffle seed {seed}"
@@ -2935,9 +3084,12 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn remote_mdoc_batch_fails_closed_for_every_global_result_fault() {
         let fixture = batch_replay_fixture();
+        let keys = RemoteMdocKeys::new();
         let faults = [
             DigestExecutorFault::Execution,
             DigestExecutorFault::Missing,
@@ -2950,7 +3102,8 @@ mod tests {
         ];
 
         for fault in faults {
-            let error = match prepare_replay_batch(&fixture, &FaultingDigestExecutor(fault)) {
+            let error = match prepare_replay_batch(&fixture, &FaultingDigestExecutor(fault), &keys)
+            {
                 Ok(_) => panic!("faulty batch digest execution must return no prepared prefix"),
                 Err(error) => error,
             };

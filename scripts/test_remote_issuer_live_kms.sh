@@ -64,6 +64,10 @@ fi
   -- --ignored
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
+  formats::mdoc::tests \
+  -- --ignored
+"$cargo" test --locked -p marty-oid4vci --lib \
+  --no-default-features --features "$features" \
   jose::tests \
   -- --ignored
 "$cargo" test --locked -p marty-oid4vci --lib \

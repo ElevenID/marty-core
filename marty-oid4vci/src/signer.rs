@@ -269,25 +269,6 @@ pub(crate) fn test_public_jwk(algorithm: SigningAlgorithm) -> String {
     }
 }
 
-#[cfg(all(test, feature = "issuer"))]
-pub(crate) fn test_signature(algorithm: SigningAlgorithm, message: &[u8]) -> Vec<u8> {
-    match algorithm {
-        SigningAlgorithm::ES256 => {
-            use p256::ecdsa::signature::Signer as _;
-            let key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
-            let signature: p256::ecdsa::Signature = key.sign(message);
-            signature.to_bytes().to_vec()
-        }
-        SigningAlgorithm::ES384 => {
-            use p384::ecdsa::signature::Signer as _;
-            let key = p384::ecdsa::SigningKey::from_bytes((&[7u8; 48]).into()).unwrap();
-            let signature: p384::ecdsa::Signature = key.sign(message);
-            signature.to_bytes().to_vec()
-        }
-        _ => panic!("no fixed signing test key for {algorithm}"),
-    }
-}
-
 fn ec_public_key(params: &ssi_jwk::ECParams, coordinate_len: usize) -> Oid4vciResult<Vec<u8>> {
     let x = params
         .x_coordinate
