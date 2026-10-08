@@ -54,11 +54,29 @@ fi
 if [[ "${MARTY_TEST_ZK_MDOC:-0}" == '1' ]]; then
   features+=',zk_mdoc'
 fi
-if [[ "${MARTY_TEST_BENCH_SMOKE:-0}" == '1' ]]; then
+run_bench_smoke() {
   for bench in mdoc_issuance sd_jwt_issuance mdoc_allocation_evidence mdoc_tail_evidence es256_signing_batch; do
     "$cargo" test --locked -p marty-oid4vci --bench "$bench" \
       --no-default-features --features "$features" -- --test
   done
+  if [[ "${MARTY_TEST_BENCH_MATRIX:-0}" == '1' ]]; then
+    MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all \
+      MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 \
+      MARTY_ES256_MATRIX_BATCH_SIZES=1 \
+      "$cargo" test --locked -p marty-oid4vci --bench es256_signing_batch \
+      --no-default-features --features "$features" -- --test
+    MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=all \
+      MARTY_MDOC_MATRIX_ITEM_COUNTS=1,512 MARTY_MDOC_MATRIX_BATCH_SIZES=1 \
+      "$cargo" test --locked -p marty-oid4vci --bench mdoc_issuance \
+      --no-default-features --features "$features" -- --test
+    MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=small_primitive \
+      MARTY_MDOC_MATRIX_ITEM_COUNTS=1 MARTY_MDOC_MATRIX_BATCH_SIZES=256 \
+      "$cargo" test --locked -p marty-oid4vci --bench mdoc_issuance \
+      --no-default-features --features "$features" -- --test
+  fi
+}
+if [[ "${MARTY_TEST_BENCH_SMOKE:-0}" == '1' ]]; then
+  run_bench_smoke
   exit 0
 fi
 if [[ -n "${MARTY_TEST_BENCH_RUN:-}" ]]; then
@@ -116,3 +134,6 @@ fi
 "$cargo" test --locked -p marty-oid4vci --test oid4vp_conformance \
   --no-default-features --features "$features" \
   -- --ignored --skip siop_v2
+if [[ "${MARTY_TEST_BENCH_AFTER_LIVE:-0}" == '1' ]]; then
+  run_bench_smoke
+fi
