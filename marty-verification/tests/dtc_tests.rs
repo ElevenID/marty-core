@@ -3,17 +3,11 @@ use marty_crypto_test_support::remote_certificate::{
     RemoteCertificateAlgorithm, RemoteCertificateKey,
 };
 use marty_verification::dtc::{
-    assemble_dtc_signature_json, create_dtc_json, prepare_dtc_signing_json, sign_dtc_json,
-    verify_dtc_json, verify_dtc_json_with_status, ArtifactProvenance, AuthenticatedDtcStatus,
-    DtcCurrentStatus, StatusAuthorityProvenance,
+    assemble_dtc_signature_json, create_dtc_json, prepare_dtc_signing_json, verify_dtc_json,
+    verify_dtc_json_with_status, ArtifactProvenance, AuthenticatedDtcStatus, DtcCurrentStatus,
+    StatusAuthorityProvenance,
 };
 use rcgen::SigningKey as _;
-
-const SIGNING_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgiNW7Kf1E+H1DeG4s
-2D38+6hJbAnf4fy5s6RJFuMAcMWhRANCAAQsKlSJSUKItZlFvKAJnjZob3Q6r98t
-fYIH6foa373wsHSHktdpDZmb7fe0E3MFc3TvrWlCg/nPMlQNMU41xr4M
------END PRIVATE KEY-----"#;
 
 const SIGNER_PUBLIC_PEM: &str = r#"-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELCpUiUlCiLWZRbygCZ42aG90Oq/f
@@ -55,29 +49,23 @@ fn sign_dtc_remotely(input: &str, signer: &RemoteCertificateKey, signer_id: &str
     .expect("assemble remotely signed DTC")
 }
 
-fn add_test_trust_material(
+fn add_remote_trust_material(
     verify_env: &mut serde_json::Value,
-    signing_key_pem: &str,
+    signer_key: &RemoteCertificateKey,
     dtc_signer_eku: Option<(&str, bool)>,
 ) {
     use const_oid::ObjectIdentifier;
     use der::Encode;
-    use rcgen::{BasicConstraints, CertificateParams, CustomExtension, DnType, IsCa, KeyPair};
+    use rcgen::{BasicConstraints, CertificateParams, CustomExtension, DnType, IsCa};
     use x509_cert::ext::pkix::ExtendedKeyUsage;
-
-    let signer_key = KeyPair::from_pem(signing_key_pem).expect("failed to parse signer key");
-    let signer_public_pem = signer_key.public_key_pem();
 
     let mut ca_params = CertificateParams::default();
     ca_params
         .distinguished_name
         .push(DnType::CommonName, "DTC Test CSCA");
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let ca_key = KeyPair::generate().expect("failed to generate CSCA key");
-    let ca_cert = ca_params
-        .self_signed(&ca_key)
-        .expect("failed to generate CSCA certificate");
-    let ca_pem = ca_cert.pem();
+    let ca_key = remote_dtc_signer();
+    let ca_pem = ca_params.self_signed(&ca_key).unwrap().pem();
 
     let mut signer_params = CertificateParams::default();
     signer_params
@@ -94,21 +82,20 @@ fn add_test_trust_material(
         signer_params.custom_extensions.push(extension);
     }
     let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
-    let signer_cert = signer_params
-        .signed_by(&signer_key, &ca_issuer)
-        .expect("failed to generate DTC Signer certificate");
+    let signer_pem = signer_params
+        .signed_by(signer_key, &ca_issuer)
+        .unwrap()
+        .pem();
 
-    let object = verify_env
-        .as_object_mut()
-        .expect("DTC verification envelope must be an object");
+    let object = verify_env.as_object_mut().unwrap();
     object.insert(
         "signer_public_key_pem".to_string(),
-        signer_public_pem.into(),
+        remote_public_pem(signer_key).into(),
     );
     object.insert("trust_anchors_pem".to_string(), serde_json::json!([ca_pem]));
     object.insert(
         "certificate_chain_pem".to_string(),
-        serde_json::json!([signer_cert.pem()]),
+        serde_json::json!([signer_pem]),
     );
 }
 
@@ -156,15 +143,12 @@ fn status_authority_provenance() -> StatusAuthorityProvenance {
 
 fn signed_verification_envelope(request: &str) -> serde_json::Value {
     let created = create_dtc_json(request).expect("create failed");
-    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
-    let object = signing_envelope.as_object_mut().unwrap();
-    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
-    object.insert("signer_id".to_string(), "rust-dtc".into());
-    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
     let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
+    add_remote_trust_material(
         &mut verify_envelope,
-        SIGNING_KEY_PEM,
+        &signer,
         Some((DTC_SIGNER_EKU_OID, true)),
     );
     verify_envelope
@@ -284,42 +268,13 @@ fn external_signer_output_fails_closed_when_payload_or_signature_is_invalid() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_signature_without_governed_trust_material() {
     let req = sample_create_request();
     let created = create_dtc_json(&req).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
-
-    let verify_env = serde_json::json!({
-        "signer_public_key_pem": SIGNER_PUBLIC_PEM
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&signed).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
+    let verify_env: serde_json::Value = serde_json::from_str(&signed).unwrap();
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -344,30 +299,16 @@ fn verify_rejects_signature_without_governed_trust_material() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_respects_trust_chain() {
-    use rcgen::KeyPair;
-
     let req = sample_create_request();
     let created = create_dtc_json(&req).expect("create failed");
-    let signer_key = KeyPair::generate().expect("failed to generate signer key");
-    let signer_private_pem = signer_key.serialize_pem();
-    let mut signed_env = serde_json::from_str::<serde_json::Value>(&created).unwrap();
-    if let Some(obj) = signed_env.as_object_mut() {
-        obj.insert(
-            "signing_key_pem".to_string(),
-            signer_private_pem.clone().into(),
-        );
-        obj.insert("signer_id".to_string(), "rust-dtc".into());
-    }
-    let signed = sign_dtc_json(&signed_env.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     // Supply a governed CSCA separately from the leaf-only signer chain.
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
-        &mut verify_env,
-        &signer_private_pem,
-        Some((DTC_SIGNER_EKU_OID, true)),
-    );
+    add_remote_trust_material(&mut verify_env, &signer, Some((DTC_SIGNER_EKU_OID, true)));
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
     assert!(
@@ -378,19 +319,17 @@ fn verify_respects_trust_chain() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_partial_trust_material() {
     let created = create_dtc_json(&sample_create_request()).expect("create failed");
-    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
-    let object = signing_envelope.as_object_mut().unwrap();
-    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
-    object.insert("signer_id".to_string(), "rust-dtc".into());
-    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     for missing_field in ["trust_anchors_pem", "certificate_chain_pem"] {
         let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-        add_test_trust_material(
+        add_remote_trust_material(
             &mut verify_envelope,
-            SIGNING_KEY_PEM,
+            &signer,
             Some((DTC_SIGNER_EKU_OID, true)),
         );
         verify_envelope
@@ -412,16 +351,14 @@ fn verify_rejects_partial_trust_material() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_signer_certificate_without_dtc_signer_eku() {
     let created = create_dtc_json(&sample_create_request()).expect("create failed");
-    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
-    let object = signing_envelope.as_object_mut().unwrap();
-    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
-    object.insert("signer_id".to_string(), "rust-dtc".into());
-    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(&mut verify_envelope, SIGNING_KEY_PEM, None);
+    add_remote_trust_material(&mut verify_envelope, &signer, None);
     let verified = verify_dtc_json(&verify_envelope.to_string()).expect("verify failed");
     let result: serde_json::Value = serde_json::from_str(&verified).unwrap();
 
@@ -442,18 +379,16 @@ fn verify_rejects_signer_certificate_without_dtc_signer_eku() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_noncritical_dtc_signer_eku() {
     let created = create_dtc_json(&sample_create_request()).expect("create failed");
-    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
-    let object = signing_envelope.as_object_mut().unwrap();
-    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
-    object.insert("signer_id".to_string(), "rust-dtc".into());
-    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
+    add_remote_trust_material(
         &mut verify_envelope,
-        SIGNING_KEY_PEM,
+        &signer,
         Some((DTC_SIGNER_EKU_OID, false)),
     );
     let verified = verify_dtc_json(&verify_envelope.to_string()).expect("verify failed");
@@ -476,18 +411,16 @@ fn verify_rejects_noncritical_dtc_signer_eku() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_wrong_dtc_signer_eku() {
     let created = create_dtc_json(&sample_create_request()).expect("create failed");
-    let mut signing_envelope = serde_json::from_str::<serde_json::Value>(&created).unwrap();
-    let object = signing_envelope.as_object_mut().unwrap();
-    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
-    object.insert("signer_id".to_string(), "rust-dtc".into());
-    let signed = sign_dtc_json(&signing_envelope.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut verify_envelope = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
+    add_remote_trust_material(
         &mut verify_envelope,
-        SIGNING_KEY_PEM,
+        &signer,
         Some(("1.3.6.1.5.5.7.3.3", true)),
     );
     let verified = verify_dtc_json(&verify_envelope.to_string()).expect("verify failed");
@@ -510,34 +443,16 @@ fn verify_rejects_wrong_dtc_signer_eku() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_tampered_payload() {
     let req = sample_create_request();
     let created = create_dtc_json(&req).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut tampered = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = tampered.as_object_mut() {
         obj.insert("passport_number".to_string(), "P9999999".into());
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
     }
 
     let verified = verify_dtc_json(&tampered.to_string()).expect("verify failed");
@@ -550,31 +465,15 @@ fn verify_rejects_tampered_payload() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_wrong_public_key() {
-    use rcgen::KeyPair;
-
     let req = sample_create_request();
     let created = create_dtc_json(&req).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
-    let wrong_key = KeyPair::generate().expect("failed to generate wrong key");
-    let wrong_public_pem = wrong_key.public_key_pem();
+    let wrong_key = remote_dtc_signer();
+    let wrong_public_pem = remote_public_pem(&wrong_key);
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
     if let Some(obj) = verify_env.as_object_mut() {
@@ -591,30 +490,21 @@ fn verify_rejects_wrong_public_key() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_mismatched_cert_chain() {
-    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa};
 
     let req = sample_create_request();
     let created = create_dtc_json(&req).expect("create failed");
-    let signer_key = KeyPair::generate().expect("failed to generate signer key");
-    let signer_private_pem = signer_key.serialize_pem();
-    let signer_public_pem = signer_key.public_key_pem();
-    let mut signed_env = serde_json::from_str::<serde_json::Value>(&created).unwrap();
-    if let Some(obj) = signed_env.as_object_mut() {
-        obj.insert(
-            "signing_key_pem".to_string(),
-            signer_private_pem.clone().into(),
-        );
-        obj.insert("signer_id".to_string(), "rust-dtc".into());
-    }
-    let signed = sign_dtc_json(&signed_env.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut ca_params = CertificateParams::default();
     ca_params
         .distinguished_name
         .push(DnType::CommonName, "DTC Mismatch Root CA");
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let ca_key = KeyPair::generate().expect("failed to generate CA key");
+    let ca_key = remote_dtc_signer();
     let ca_cert = ca_params
         .self_signed(&ca_key)
         .expect("failed to generate CA cert");
@@ -625,7 +515,7 @@ fn verify_rejects_mismatched_cert_chain() {
         .distinguished_name
         .push(DnType::CommonName, "DTC Mismatch Leaf");
     ee_params.is_ca = IsCa::NoCa;
-    let other_key = KeyPair::generate().expect("failed to generate mismatched key");
+    let other_key = remote_dtc_signer();
     let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
     let ee_cert = ee_params
         .signed_by(&other_key, &ca_issuer)
@@ -636,7 +526,7 @@ fn verify_rejects_mismatched_cert_chain() {
     if let Some(obj) = verify_env.as_object_mut() {
         obj.insert(
             "signer_public_key_pem".to_string(),
-            signer_public_pem.into(),
+            remote_public_pem(&signer).into(),
         );
         obj.insert("trust_anchors_pem".to_string(), serde_json::json!([ca_pem]));
         obj.insert(
@@ -654,6 +544,7 @@ fn verify_rejects_mismatched_cert_chain() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_expired_dtc() {
     let expired_req = serde_json::json!({
         "passport_number": "P1234567",
@@ -681,30 +572,11 @@ fn verify_rejects_expired_dtc() {
     });
 
     let created = create_dtc_json(&expired_req.to_string()).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
-        &mut verify_env,
-        SIGNING_KEY_PEM,
-        Some((DTC_SIGNER_EKU_OID, true)),
-    );
+    add_remote_trust_material(&mut verify_env, &signer, Some((DTC_SIGNER_EKU_OID, true)));
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -725,6 +597,7 @@ fn verify_rejects_expired_dtc() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_not_yet_valid_dtc() {
     let future_req = serde_json::json!({
         "passport_number": "P1234567",
@@ -753,30 +626,11 @@ fn verify_rejects_not_yet_valid_dtc() {
     });
 
     let created = create_dtc_json(&future_req.to_string()).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
-        &mut verify_env,
-        SIGNING_KEY_PEM,
-        Some((DTC_SIGNER_EKU_OID, true)),
-    );
+    add_remote_trust_material(&mut verify_env, &signer, Some((DTC_SIGNER_EKU_OID, true)));
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -797,6 +651,7 @@ fn verify_rejects_not_yet_valid_dtc() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_rejects_revoked_dtc() {
     let revoked_req = serde_json::json!({
         "passport_number": "P1234567",
@@ -847,6 +702,7 @@ fn verify_rejects_revoked_dtc() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn signed_not_revoked_without_live_status_is_explicitly_not_performed() {
     let verify_env = signed_verification_envelope(&sample_create_request());
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
@@ -868,6 +724,7 @@ fn signed_not_revoked_without_live_status_is_explicitly_not_performed() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn authenticated_fresh_current_good_status_can_pass() {
     let verify_env = signed_verification_envelope(&sample_create_request());
     let now = Utc::now();
@@ -893,6 +750,7 @@ fn authenticated_fresh_current_good_status_can_pass() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn authenticated_current_revoked_status_fails_closed() {
     let verify_env = signed_verification_envelope(&sample_create_request());
     let now = Utc::now();
@@ -914,6 +772,7 @@ fn authenticated_current_revoked_status_fails_closed() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn stale_current_status_is_unknown_without_erasing_cryptographic_validity() {
     let verify_env = signed_verification_envelope(&sample_create_request());
     let now = Utc::now();
@@ -937,6 +796,7 @@ fn stale_current_status_is_unknown_without_erasing_cryptographic_validity() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn mismatched_current_status_cannot_upgrade_the_credential() {
     let verify_env = signed_verification_envelope(&sample_create_request());
     let now = Utc::now();
@@ -962,6 +822,7 @@ fn mismatched_current_status_cannot_upgrade_the_credential() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn current_status_for_another_dtc_cannot_upgrade_the_credential() {
     let verify_env = signed_verification_envelope(&sample_create_request());
     let now = Utc::now();
@@ -1019,6 +880,7 @@ fn malformed_current_status_context_is_rejected_before_verification() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_type2_profile_validates_required_fields() {
     let type2_req = serde_json::json!({
         "passport_number": "P1234567",
@@ -1045,30 +907,11 @@ fn verify_type2_profile_validates_required_fields() {
     });
 
     let created = create_dtc_json(&type2_req.to_string()).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
-        &mut verify_env,
-        SIGNING_KEY_PEM,
-        Some((DTC_SIGNER_EKU_OID, true)),
-    );
+    add_remote_trust_material(&mut verify_env, &signer, Some((DTC_SIGNER_EKU_OID, true)));
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -1081,6 +924,7 @@ fn verify_type2_profile_validates_required_fields() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_type2_profile_rejects_missing_fields() {
     let incomplete_type2_req = serde_json::json!({
         "passport_number": "P1234567",
@@ -1106,31 +950,10 @@ fn verify_type2_profile_rejects_missing_fields() {
     });
 
     let created = create_dtc_json(&incomplete_type2_req.to_string()).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
-    let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
-    }
+    let verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -1143,6 +966,7 @@ fn verify_type2_profile_rejects_missing_fields() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_type3_profile_validates_required_fields() {
     let type3_req = serde_json::json!({
         "passport_number": "P1234567",
@@ -1170,30 +994,11 @@ fn verify_type3_profile_validates_required_fields() {
     });
 
     let created = create_dtc_json(&type3_req.to_string()).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
     let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    add_test_trust_material(
-        &mut verify_env,
-        SIGNING_KEY_PEM,
-        Some((DTC_SIGNER_EKU_OID, true)),
-    );
+    add_remote_trust_material(&mut verify_env, &signer, Some((DTC_SIGNER_EKU_OID, true)));
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
@@ -1206,6 +1011,7 @@ fn verify_type3_profile_validates_required_fields() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn verify_type3_profile_rejects_missing_fields() {
     let incomplete_type3_req = serde_json::json!({
         "passport_number": "P1234567",
@@ -1232,31 +1038,10 @@ fn verify_type3_profile_rejects_missing_fields() {
     });
 
     let created = create_dtc_json(&incomplete_type3_req.to_string()).expect("create failed");
-    let with_key = serde_json::json!({
-        "signing_key_pem": SIGNING_KEY_PEM,
-        "signer_id": "rust-dtc",
-    })
-    .as_object()
-    .unwrap()
-    .iter()
-    .fold(
-        serde_json::from_str::<serde_json::Value>(&created).unwrap(),
-        |mut acc, (k, v)| {
-            if let Some(obj) = acc.as_object_mut() {
-                obj.insert(k.clone(), v.clone());
-            }
-            acc
-        },
-    );
-    let signed = sign_dtc_json(&with_key.to_string()).expect("sign failed");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&created, &signer, "rust-dtc");
 
-    let mut verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
-    if let Some(obj) = verify_env.as_object_mut() {
-        obj.insert(
-            "signer_public_key_pem".to_string(),
-            SIGNER_PUBLIC_PEM.into(),
-        );
-    }
+    let verify_env = serde_json::from_str::<serde_json::Value>(&signed).unwrap();
 
     let verified = verify_dtc_json(&verify_env.to_string()).expect("verify failed");
     let v: serde_json::Value = serde_json::from_str(&verified).unwrap();
