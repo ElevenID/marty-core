@@ -739,8 +739,10 @@ pub fn verify_lti_launch_jwt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_family = "wasm"))]
+    use crate::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
+    #[cfg(not(target_family = "wasm"))]
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use serde_json::json;
 
     const LTI_DEPLOYMENT_ID_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/deployment_id";
@@ -751,24 +753,23 @@ mod tests {
     const LTI_MESSAGE_TYPE_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/message_type";
     const LTI_VERSION_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/version";
 
-    fn make_test_jwk(kid: &str, verifying_key: &VerifyingKey) -> Value {
-        json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "kid": kid,
-            "alg": "EdDSA",
-            "use": "sig",
-            "x": URL_SAFE_NO_PAD.encode(verifying_key.as_bytes()),
-        })
+    #[cfg(not(target_family = "wasm"))]
+    fn make_test_jwk(kid: &str, signer: &ScopedTransitSigner) -> Value {
+        let mut jwk: Value = serde_json::from_str(signer.public_jwk()).unwrap();
+        jwk["kid"] = json!(kid);
+        jwk["alg"] = json!("EdDSA");
+        jwk["use"] = json!("sig");
+        jwk
     }
 
-    fn encode_jwt(signing_key: &SigningKey, kid: &str, claims: &Value) -> String {
+    #[cfg(not(target_family = "wasm"))]
+    fn encode_jwt(signer: &ScopedTransitSigner, kid: &str, claims: &Value) -> String {
         let header = json!({"alg": "EdDSA", "typ": "JWT", "kid": kid});
         let header_b64 = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
         let claims_b64 = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
         let signing_input = format!("{header_b64}.{claims_b64}");
-        let signature = signing_key.sign(signing_input.as_bytes());
-        let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+        let signature = signer.sign_ed25519(signing_input.as_bytes()).unwrap();
+        let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
         format!("{signing_input}.{signature_b64}")
     }
 
@@ -933,12 +934,13 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn verify_lti_launch_jwt_accepts_valid_ed25519_token() {
         let kid = "canvas-lti-test";
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let verifying_key = signing_key.verifying_key();
-        let jwks = json!({"keys": [make_test_jwk(kid, &verifying_key)]});
+        let signer = DisposableOpenBao::from_marked_env().create_ed25519();
+        let jwks = json!({"keys": [make_test_jwk(kid, &signer)]});
         let claims = json!({
             "iss": "https://canvas.example.edu",
             "sub": "student-123",
@@ -954,7 +956,7 @@ mod tests {
             LTI_VERSION_CLAIM: "1.3.0"
         });
 
-        let token = encode_jwt(&signing_key, kid, &claims);
+        let token = encode_jwt(&signer, kid, &claims);
         let verified = verify_lti_launch_jwt(
             &token,
             "https://canvas.example.edu",
@@ -975,12 +977,13 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn verify_lti_launch_jwt_rejects_wrong_deployment() {
         let kid = "canvas-lti-test";
-        let signing_key = SigningKey::from_bytes(&[9u8; 32]);
-        let verifying_key = signing_key.verifying_key();
-        let jwks = json!({"keys": [make_test_jwk(kid, &verifying_key)]});
+        let signer = DisposableOpenBao::from_marked_env().create_ed25519();
+        let jwks = json!({"keys": [make_test_jwk(kid, &signer)]});
         let claims = json!({
             "iss": "https://canvas.example.edu",
             "sub": "student-123",
@@ -989,7 +992,7 @@ mod tests {
             LTI_DEPLOYMENT_ID_CLAIM: "other-deployment"
         });
 
-        let token = encode_jwt(&signing_key, kid, &claims);
+        let token = encode_jwt(&signer, kid, &claims);
         let err = verify_lti_launch_jwt(
             &token,
             "https://canvas.example.edu",

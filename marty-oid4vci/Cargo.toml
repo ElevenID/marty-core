@@ -90,7 +90,6 @@ reqwest = { workspace = true, features = ["blocking"] }
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "82143d688355315f22297b40ca18050a94cd2525" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
-ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { workspace = true, features = ["ecdsa", "sha256"] }
 ssi-jwk = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 

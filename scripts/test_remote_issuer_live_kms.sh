@@ -43,7 +43,7 @@ curl --silent --show-error --fail \
 export MARTY_TEST_OPENBAO_URL="$base"
 export MARTY_TEST_OPENBAO_TOKEN="$token"
 export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
-features='kms-only,issuer,verifier,wallet,jwt_vc_json,sd_jwt,mso_mdoc'
+features='kms-only,issuer,verifier,wallet,jwt_vc_json,sd_jwt,mso_mdoc,lti'
 cargo="${MARTY_TEST_CARGO:-cargo}"
 if [[ "$cargo" == *.exe ]]; then
   # WSL does not forward newly created environment variables to Windows
@@ -85,6 +85,10 @@ fi
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
   proof::tests \
+  -- --ignored
+"$cargo" test --locked -p marty-oid4vci --lib \
+  --no-default-features --features "$features" \
+  lti::tests \
   -- --ignored
 "$cargo" test --locked -p marty-oid4vci --test remote_issuer_live_kms \
   --no-default-features --features "$features" \
