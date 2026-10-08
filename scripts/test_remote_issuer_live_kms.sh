@@ -109,6 +109,8 @@ fi
 "$cargo" test --locked -p marty-verification --lib \
   mdoc::authentication::tests::direct_pin_requires_a_valid_mdoc_document_signer_profile -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
+  asn1::master_list::tests::strict_master_list_round_trip_and_signature_binding -- --ignored
+"$cargo" test --locked -p marty-verification --lib \
   oid4vp::tests -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
   trust_sync::tests -- --ignored
