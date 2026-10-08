@@ -1,9 +1,13 @@
 use chrono::{Duration, Utc};
+use marty_crypto_test_support::remote_certificate::{
+    RemoteCertificateAlgorithm, RemoteCertificateKey,
+};
 use marty_verification::dtc::{
     assemble_dtc_signature_json, create_dtc_json, prepare_dtc_signing_json, sign_dtc_json,
     verify_dtc_json, verify_dtc_json_with_status, ArtifactProvenance, AuthenticatedDtcStatus,
     DtcCurrentStatus, StatusAuthorityProvenance,
 };
+use rcgen::SigningKey as _;
 
 const SIGNING_KEY_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgiNW7Kf1E+H1DeG4s
@@ -17,6 +21,39 @@ LX2CB+n6Gt+98LB0h5LXaQ2Zm+33tBNzBXN0761pQoP5zzJUDTFONca+DA==
 -----END PUBLIC KEY-----"#;
 
 const DTC_SIGNER_EKU_OID: &str = "2.23.136.1.1.12.1";
+
+fn remote_dtc_signer() -> RemoteCertificateKey {
+    RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256)
+}
+
+fn remote_public_pem(signer: &RemoteCertificateKey) -> String {
+    marty_crypto::serialization::save_public_key_pem(signer.public_key_spki_der())
+        .unwrap()
+        .trim_end_matches(['\r', '\n'])
+        .to_owned()
+}
+
+fn sign_dtc_remotely(input: &str, signer: &RemoteCertificateKey, signer_id: &str) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let prepared = prepare_dtc_signing_json(input).expect("prepare DTC signing input");
+    let prepared: serde_json::Value = serde_json::from_str(&prepared).unwrap();
+    let signing_input = STANDARD
+        .decode(prepared["signing_input_base64"].as_str().unwrap())
+        .unwrap();
+    let signature = signer.sign(&signing_input).expect("remote DTC signature");
+    assemble_dtc_signature_json(
+        &serde_json::json!({
+            "dtc": prepared["dtc"],
+            "signature_base64": STANDARD.encode(signature),
+            "signer_id": signer_id,
+            "signer_public_key_pem": format!("{}\n", remote_public_pem(signer)),
+            "signature_date": "2026-08-11T00:00:00Z"
+        })
+        .to_string(),
+    )
+    .expect("assemble remotely signed DTC")
+}
 
 fn add_test_trust_material(
     verify_env: &mut serde_json::Value,
@@ -176,14 +213,10 @@ fn create_normalizes_and_fills_sod_hash() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn sign_persists_the_exact_normalized_record_that_was_signed() {
-    let mut envelope: serde_json::Value =
-        serde_json::from_str(&sample_create_request()).expect("sample request");
-    let object = envelope.as_object_mut().expect("DTC object");
-    object.insert("signing_key_pem".to_string(), SIGNING_KEY_PEM.into());
-    object.insert("signer_id".to_string(), "normalization-test".into());
-
-    let signed = sign_dtc_json(&envelope.to_string()).expect("sign raw DTC");
+    let signer = remote_dtc_signer();
+    let signed = sign_dtc_remotely(&sample_create_request(), &signer, "normalization-test");
     let signed: serde_json::Value = serde_json::from_str(&signed).expect("signed DTC JSON");
 
     assert!(signed["dtc_id"]
@@ -198,10 +231,10 @@ fn sign_persists_the_exact_normalized_record_that_was_signed() {
 }
 
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped DTC signer"]
 fn external_signer_round_trip_uses_canonical_rust_payload() {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
-    use p256::pkcs8::DecodePrivateKey;
+    let signer = remote_dtc_signer();
+    let signer_public_pem = remote_public_pem(&signer);
 
     let created = create_dtc_json(&sample_create_request()).expect("create failed");
     let prepared = prepare_dtc_signing_json(&created).expect("prepare failed");
@@ -212,22 +245,7 @@ fn external_signer_round_trip_uses_canonical_rust_payload() {
         serde_json::json!(["ES256", "ES384"])
     );
 
-    let signing_input = STANDARD
-        .decode(prepared["signing_input_base64"].as_str().unwrap())
-        .unwrap();
-    let signing_key = SigningKey::from_pkcs8_pem(SIGNING_KEY_PEM).unwrap();
-    let signature: Signature = signing_key.sign(&signing_input);
-    let assembled = assemble_dtc_signature_json(
-        &serde_json::json!({
-            "dtc": prepared["dtc"],
-            "signature_base64": STANDARD.encode(signature.to_der().as_bytes()),
-            "signer_id": "external-test-signer",
-            "signer_public_key_pem": format!("{SIGNER_PUBLIC_PEM}\n"),
-            "signature_date": "2026-08-11T00:00:00Z"
-        })
-        .to_string(),
-    )
-    .expect("assemble failed");
+    let assembled = sign_dtc_remotely(&created, &signer, "external-test-signer");
     let assembled: serde_json::Value = serde_json::from_str(&assembled).unwrap();
 
     assert_eq!(assembled["is_signed"], true);
@@ -238,7 +256,7 @@ fn external_signer_round_trip_uses_canonical_rust_payload() {
     );
     assert_eq!(
         assembled["signature_info"]["signer_public_key_pem"],
-        SIGNER_PUBLIC_PEM
+        signer_public_pem
     );
 }
 

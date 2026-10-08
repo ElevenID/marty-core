@@ -42,6 +42,10 @@ impl RemoteCertificateKey {
             public_key,
         }
     }
+
+    pub fn public_key_spki_der(&self) -> &[u8] {
+        self.signer.public_key_spki_der()
+    }
 }
 
 impl PublicKeyData for RemoteCertificateKey {
