@@ -3848,6 +3848,7 @@ dependencies = [
 name = "marty-crypto-test-support"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "der 0.7.10",
  "ed25519-dalek",
  "marty-crypto",
@@ -3856,9 +3857,11 @@ dependencies = [
  "pem-rfc7468 0.7.0",
  "pkcs8",
  "rand 0.8.7",
+ "reqwest",
  "rsa",
  "serde_json",
  "sha2 0.10.9",
+ "uuid",
 ]
 
 [[package]]
@@ -3890,15 +3893,11 @@ dependencies = [
  "cms",
  "const-oid",
  "der 0.7.10",
- "ed25519-dalek",
  "marty-crypto",
+ "marty-crypto-test-support",
  "marty-verification",
- "p256",
- "p384",
  "rcgen",
- "rsa",
  "sha2 0.10.9",
- "signature",
  "spki",
  "thiserror 2.0.20",
  "x509-cert",

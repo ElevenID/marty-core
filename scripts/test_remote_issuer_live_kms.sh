@@ -138,6 +138,7 @@ fi
 "$cargo" test --locked -p marty-oid4vci --test oid4vp_conformance \
   --no-default-features --features "$features" \
   -- --ignored --skip siop_v2
+"$cargo" test --locked -p marty-emrtd-issuance --test remote_sod -- --ignored
 if [[ "${MARTY_TEST_BENCH_AFTER_LIVE:-0}" == '1' ]]; then
   run_bench_smoke
 fi

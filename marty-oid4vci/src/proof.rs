@@ -891,7 +891,7 @@ pub(crate) fn base58btc_encode(data: &[u8]) -> String {
 mod tests {
     use super::*;
     #[cfg(not(target_family = "wasm"))]
-    use crate::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
+    use crate::openbao_transit::{DisposableOpenBao, ScopedTransitSigner, TransitError};
 
     #[cfg(not(target_family = "wasm"))]
     fn embedded_ed25519_jwk(signer: &ScopedTransitSigner) -> serde_json::Value {
@@ -940,7 +940,7 @@ mod tests {
         signer: &ScopedTransitSigner,
         header: serde_json::Value,
         payload: serde_json::Value,
-        sign: fn(&ScopedTransitSigner, &[u8]) -> Result<Vec<u8>, ()>,
+        sign: fn(&ScopedTransitSigner, &[u8]) -> Result<Vec<u8>, TransitError>,
     ) -> String {
         let header_b64 = B64.encode(serde_json::to_vec(&header).unwrap());
         let payload_b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
