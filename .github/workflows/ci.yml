@@ -229,6 +229,8 @@ jobs:
           version: v0.16.0
       - name: Install native cryptography dependencies
         run: sudo apt-get update && sudo apt-get install --yes binutils cmake libbenchmark-dev libgtest-dev libssl-dev libzstd-dev zlib1g-dev
+      - name: Prove ZK mDoc issuance with disposable non-exportable OpenBao key
+        run: MARTY_TEST_ZK_MDOC=1 bash scripts/test_remote_issuer_live_kms.sh
       - name: Test vendored Longfellow security regressions
         run: |
           set -euo pipefail

@@ -8,6 +8,8 @@ use base64::{
     Engine,
 };
 use ciborium::Value as CborValue;
+#[cfg(feature = "zk_mdoc")]
+use marty_oid4vci::{formats::zk_mdoc::sign_zk_mdoc_with_signer, types::ZkPredicateBinding};
 use marty_oid4vci::{
     formats::{
         jwt_vc::sign_jwt_vc_with_signer,
@@ -767,4 +769,53 @@ fn remote_eddsa_holder_proof_binds_ietf_sd_jwt() {
     assert_eq!(verified_credential["cnf"], json!({"jwk": holder_public}));
     assert_eq!(verified_credential["given_name"], "Alice");
     assert_eq!(issuer.payloads.lock().unwrap().len(), 1);
+}
+
+#[cfg(feature = "zk_mdoc")]
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn zk_mdoc_issuance_uses_remote_non_exportable_issuer_key() {
+    let (client, base, root_token) = disposable_openbao();
+    let issuer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let mut claims = claims(CredentialPayloadFormat::default());
+    claims.credential_type = "org.iso.18013.5.1.mDL".into();
+    claims.mdoc_namespace = Some("org.iso.18013.5.1".into());
+    claims.mdoc_doctype = Some("org.iso.18013.5.1.mDL".into());
+    claims.claims.insert("age_over_18".into(), json!(true));
+    claims
+        .claims
+        .insert("birth_date".into(), json!("1985-07-04"));
+    claims.zk_predicate_claims = vec![ZkPredicateBinding::single("age_over_18", "age_over_18")];
+    let signed = sign_zk_mdoc_with_signer(&issuer, &claims).unwrap();
+    let SignedCredential::ZkMdoc {
+        issuer_signed_b64,
+        zk_predicate_bindings,
+        zk_proof_type,
+        credential_id,
+    } = signed
+    else {
+        panic!("expected ZK-enabled mDoc")
+    };
+    assert!(credential_id.starts_with("urn:uuid:"));
+    assert_eq!(zk_proof_type, marty_oid4vci::formats::ZK_PROOF_TYPE_LIGERO);
+    assert_eq!(zk_predicate_bindings, claims.zk_predicate_claims);
+    let encoded = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
+    let issuer_signed: isomdl::definitions::IssuerSigned =
+        isomdl::cbor::from_slice(&encoded).unwrap();
+    let items = &issuer_signed.namespaces.as_ref().unwrap()["org.iso.18013.5.1"];
+    assert!(items
+        .iter()
+        .any(|item| item.as_ref().element_identifier == "age_over_18"));
+    let payloads = issuer.payloads.lock().unwrap();
+    let signatures = issuer.signatures.lock().unwrap();
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(signatures.len(), 1);
+    assert_eq!(issuer_signed.issuer_auth.tbs_data(&[]), payloads[0]);
+    assert_eq!(issuer_signed.issuer_auth.signature, signatures[0]);
 }

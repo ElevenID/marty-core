@@ -43,6 +43,10 @@ curl --silent --show-error --fail \
 export MARTY_TEST_OPENBAO_URL="$base"
 export MARTY_TEST_OPENBAO_TOKEN="$token"
 export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
+features='kms-only,issuer,verifier,wallet,jwt_vc_json,sd_jwt,mso_mdoc'
+if [[ "${MARTY_TEST_ZK_MDOC:-0}" == '1' ]]; then
+  features+=',zk_mdoc'
+fi
 cargo test --locked -p marty-oid4vci --test remote_issuer_live_kms \
-  --no-default-features --features kms-only,issuer,verifier,wallet,jwt_vc_json,sd_jwt,mso_mdoc \
+  --no-default-features --features "$features" \
   -- --ignored

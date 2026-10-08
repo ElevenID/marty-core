@@ -79,11 +79,6 @@ fn validate_zk_predicate_claims(claims: &CredentialClaims) -> Oid4vciResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ssi_jwk::JWK;
-
-    fn age_over_18_binding() -> ZkPredicateBinding {
-        ZkPredicateBinding::single("age_over_18", "age_over_18")
-    }
 
     #[test]
     fn rejects_legacy_birth_date_derivation_and_unregistered_thresholds() {
@@ -114,115 +109,27 @@ mod tests {
         assert!(error.to_string().contains("registered"));
     }
 
-    // -------------------------------------------------------------------------
-    // Remote-signer interface tests
-    // -------------------------------------------------------------------------
-
-    /// A minimal CredentialSigner backed by a fresh P-256 JWK, used to test
-    /// the external-signer path without pulling in KMS infrastructure.
-    struct TestP256Signer {
-        jwk: JWK,
-    }
-
-    impl std::fmt::Debug for TestP256Signer {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("TestP256Signer([redacted])")
-        }
-    }
-
-    impl TestP256Signer {
-        fn new() -> Self {
-            Self {
-                jwk: JWK::generate_p256(),
-            }
-        }
-    }
-
-    impl crate::signer::CredentialSigner for TestP256Signer {
-        fn sign(&self, message: &[u8]) -> crate::error::Oid4vciResult<Vec<u8>> {
-            crate::signer::sign_with_jwk(&self.jwk, message)
-        }
-
-        fn algorithm(&self) -> crate::types::SigningAlgorithm {
-            crate::types::SigningAlgorithm::ES256
-        }
-
-        fn issuer_id(&self) -> &str {
-            "did:example:kms-issuer"
-        }
-
-        fn kid_url(&self) -> String {
-            "did:example:kms-issuer#key-1".into()
-        }
-
-        fn public_jwk(&self) -> crate::error::Oid4vciResult<String> {
-            serde_json::to_string(&self.jwk.to_public()).map_err(Into::into)
-        }
-    }
-
     #[test]
-    fn test_p256_signer_debug_is_stably_redacted() {
-        let signer = TestP256Signer::new();
-        let private_jwk = serde_json::to_value(&signer.jwk).unwrap();
-        let private_d = private_jwk
-            .get("d")
-            .and_then(serde_json::Value::as_str)
-            .unwrap();
-        let diagnostic = format!("{signer:#?}");
-
-        assert_eq!(diagnostic, "TestP256Signer([redacted])");
-        assert!(!diagnostic.contains(private_d));
-    }
-
-    #[test]
-    fn test_sign_zk_mdoc_with_signer_produces_zk_mdoc() {
-        let signer = TestP256Signer::new();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
+    fn accepts_registered_boolean_binding() {
+        let mut claims = CredentialClaims {
+            subject_id: None,
             credential_type: "org.iso.18013.5.1.mDL".into(),
-            claims: [
-                ("birth_date".into(), serde_json::json!("1985-07-04")),
-                ("age_over_18".into(), serde_json::json!(true)),
-                ("family_name".into(), serde_json::json!("KmsUser")),
-            ]
-            .into(),
-            expiration_seconds: Some(86400),
+            claims: [("age_over_18".into(), serde_json::json!(true))].into(),
+            expiration_seconds: None,
             selective_disclosure_claims: vec![],
-            mdoc_namespace: Some("org.iso.18013.5.1".into()),
-            mdoc_doctype: Some("org.iso.18013.5.1.mDL".into()),
-            zk_predicate_claims: vec![age_over_18_binding()],
+            mdoc_namespace: None,
+            mdoc_doctype: None,
+            zk_predicate_claims: vec![],
             credential_payload_format: Default::default(),
             w3c_context: vec![],
             w3c_types: vec![],
         };
-
-        let result = sign_zk_mdoc_with_signer(&signer, &claims).unwrap();
-        match result {
-            SignedCredential::ZkMdoc {
-                issuer_signed_b64,
-                zk_predicate_bindings,
-                zk_proof_type,
-                credential_id,
-            } => {
-                assert!(
-                    !issuer_signed_b64.is_empty(),
-                    "issuer_signed_b64 should not be empty"
-                );
-                assert_eq!(zk_predicate_bindings.len(), 1);
-                assert_eq!(zk_predicate_bindings[0].claim_name, "age_over_18");
-                assert!(zk_predicate_bindings[0]
-                    .supported_predicates
-                    .contains(&"age_over_18".to_string()));
-                assert_eq!(zk_proof_type, ZK_PROOF_TYPE_LIGERO);
-                assert!(credential_id.starts_with("urn:uuid:"));
-            }
-            _ => panic!("Expected ZkMdoc, got a different SignedCredential variant"),
-        }
+        claims.zk_predicate_claims = vec![ZkPredicateBinding::single("age_over_18", "age_over_18")];
+        assert!(validate_zk_predicate_claims(&claims).is_ok());
     }
 
     #[test]
-    fn test_sign_zk_mdoc_with_signer_rejects_missing_claim() {
-        let signer = TestP256Signer::new();
+    fn rejects_missing_claim() {
         let claims = CredentialClaims {
             subject_id: None,
             credential_type: "TestCred".into(),
@@ -237,13 +144,12 @@ mod tests {
             w3c_types: vec![],
         };
 
-        let err = sign_zk_mdoc_with_signer(&signer, &claims).unwrap_err();
+        let err = validate_zk_predicate_claims(&claims).unwrap_err();
         assert!(err.to_string().contains("age_over_18"));
     }
 
     #[test]
-    fn test_sign_zk_mdoc_with_signer_rejects_empty_bindings() {
-        let signer = TestP256Signer::new();
+    fn rejects_empty_bindings() {
         let claims = CredentialClaims {
             subject_id: None,
             credential_type: "GenericCred".into(),
@@ -258,7 +164,7 @@ mod tests {
             w3c_types: vec![],
         };
 
-        let err = sign_zk_mdoc_with_signer(&signer, &claims).unwrap_err();
+        let err = validate_zk_predicate_claims(&claims).unwrap_err();
         assert!(err.to_string().contains("at least one ZkPredicateBinding"));
     }
 }
