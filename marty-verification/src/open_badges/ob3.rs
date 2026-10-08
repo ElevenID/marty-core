@@ -705,12 +705,15 @@ mod tests {
     use super::*;
 
     fn authorization_method(method_id: &str, controller: &str) -> Value {
-        let jwk = JWK::generate_ed25519().expect("generate test key");
         json!({
             "id": method_id,
             "type": "JsonWebKey2020",
             "controller": controller,
-            "publicKeyJwk": serde_json::to_value(jwk.to_public()).expect("serialize public key")
+            "publicKeyJwk": {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": marty_crypto_test_support::ED25519_PUBLIC_JWK_X
+            }
         })
     }
 

@@ -6,6 +6,9 @@
 pub mod openbao_transit;
 pub mod remote_certificate;
 
+/// Public Ed25519 JWK coordinate for tests that only need a valid key point.
+pub const ED25519_PUBLIC_JWK_X: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
+
 pub mod ecdsa {
     use marty_crypto::{CryptoError, CryptoResult};
     use p256::ecdsa::signature::Signer;
