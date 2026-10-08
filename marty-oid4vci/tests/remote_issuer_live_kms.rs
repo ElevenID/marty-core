@@ -11,11 +11,16 @@ use marty_oid4vci::{
     formats::{
         jwt_vc::sign_jwt_vc_with_signer,
         mdoc::sign_mdoc_with_signer,
-        sd_jwt::{sign_sd_jwt_with_signer, verify_sd_jwt},
+        sd_jwt::{
+            assemble_sd_jwt, prepare_sd_jwt_with_options, sign_sd_jwt_with_signer, verify_sd_jwt,
+            SdJwtPreparationOptions,
+        },
     },
     jose::verify_compact_jwt_with_public_jwk,
+    proof::verify_jwt_proof,
     signer::CredentialSigner,
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
+    wallet::WalletEngine,
     Oid4vciError, Oid4vciResult,
 };
 use reqwest::{blocking::Client, Url};
@@ -429,4 +434,74 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         assert_eq!(verified["given_name"], "Alice");
         assert_eq!(verified["family_name"], "Smith");
     }
+}
+
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn holder_proof_binds_remote_issuer_sd_jwt_without_private_key_transfer() {
+    let (client, base, root_token) = disposable_openbao();
+    let issuer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    assert_ne!(issuer.public_jwk, holder.public_jwk);
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let audience = "https://issuer.example.test";
+    let prepared_proof = WalletEngine::new()
+        .prepare_proof_jwt(
+            "did:example:remote-holder",
+            &nonce,
+            audience,
+            &holder.public_jwk,
+        )
+        .unwrap();
+    let holder_signature = holder.sign(prepared_proof.signing_input()).unwrap();
+    let proof = prepared_proof.complete(&holder_signature).unwrap();
+    assert!(verify_jwt_proof(&proof, audience, Some("wrong-nonce"), 300).is_err());
+    let mut tampered = proof.split('.').map(str::to_owned).collect::<Vec<_>>();
+    let mut signature = URL_SAFE_NO_PAD.decode(&tampered[2]).unwrap();
+    signature[0] ^= 1;
+    tampered[2] = URL_SAFE_NO_PAD.encode(signature);
+    assert!(verify_jwt_proof(&tampered.join("."), audience, Some(&nonce), 300).is_err());
+    assert!(issuer.payloads.lock().unwrap().is_empty());
+
+    let verified = verify_jwt_proof(&proof, audience, Some(&nonce), 300).unwrap();
+    let holder_public = serde_json::to_value(verified.holder_jwk.unwrap().to_public()).unwrap();
+    assert_eq!(holder_public["kty"], "EC");
+    assert!(holder_public.get("d").is_none());
+    let mut bound_claims = claims(CredentialPayloadFormat::W3cVcdmV2SdJwt);
+    bound_claims.selective_disclosure_claims = vec!["given_name".into()];
+    bound_claims.w3c_types = vec!["EmployeeCredential".into()];
+    let prepared = prepare_sd_jwt_with_options(
+        &issuer,
+        &bound_claims,
+        SdJwtPreparationOptions {
+            confirmation: Some(json!({"jwk":holder_public})),
+            ..SdJwtPreparationOptions::default()
+        },
+    )
+    .unwrap();
+    let issuer_signature = issuer.sign(prepared.signing_payload()).unwrap();
+    let SignedCredential::SdJwt { compact, .. } =
+        assemble_sd_jwt(prepared, &issuer_signature).unwrap()
+    else {
+        panic!("expected proof-bound SD-JWT")
+    };
+    let verified_credential = verify_sd_jwt(&compact, &issuer.public_jwk, None, None).unwrap();
+    assert_eq!(verified_credential["cnf"], json!({"jwk":holder_public}));
+    assert_eq!(
+        verified_credential["credentialSubject"]["given_name"],
+        "Alice"
+    );
+    assert_eq!(issuer.payloads.lock().unwrap().len(), 1);
 }

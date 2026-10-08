@@ -166,7 +166,7 @@ required-features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
 [[test]]
 name = "remote_issuer_live_kms"
 path = "tests/remote_issuer_live_kms.rs"
-required-features = ["issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
+required-features = ["issuer", "verifier", "wallet", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
 
 [[test]]
 name = "benchmark_support"
