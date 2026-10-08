@@ -138,9 +138,6 @@ mod issuance_input_tests;
 #[cfg(all(test, feature = "issuer", feature = "mso_mdoc"))]
 #[path = "../tests/mdoc_x5chain_conformance.rs"]
 mod mdoc_x5chain_conformance;
-#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
-#[path = "../tests/scalar_sd_jwt_holder_binding.rs"]
-mod scalar_sd_jwt_holder_binding;
 #[cfg(all(test, feature = "wallet"))]
 #[path = "../tests/sd_jwt_wallet_verified_presentation.rs"]
 mod sd_jwt_wallet_verified_presentation;

@@ -296,6 +296,7 @@ fn issuer_formats_use_remote_non_exportable_keys() {
             verified.claims["vc"]["credentialSubject"]["given_name"],
             "Alice"
         );
+        assert!(verified.claims.get("cnf").is_none());
         let other_algorithm = if signer.algorithm == SigningAlgorithm::ES256 {
             "EdDSA"
         } else {
@@ -375,6 +376,7 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
         assert_eq!(verified["given_name"], "Alice");
         assert_eq!(verified["family_name"], "Smith");
+        assert!(verified.get("cnf").is_none());
 
         let mut tampered_signature = URL_SAFE_NO_PAD.decode(segments[2]).unwrap();
         tampered_signature[0] ^= 0x01;
