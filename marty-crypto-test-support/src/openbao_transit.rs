@@ -12,6 +12,7 @@ use std::time::Duration;
 pub struct DisposableOpenBao {
     client: Client,
     base: String,
+    port: u16,
     root_token: String,
 }
 
@@ -63,6 +64,7 @@ impl DisposableOpenBao {
         Self {
             client,
             base,
+            port: url.port().unwrap(),
             root_token,
         }
     }
@@ -191,7 +193,7 @@ impl DisposableOpenBao {
         );
         ScopedTransitSigner {
             client: self.client.clone(),
-            base: self.base.clone(),
+            port: self.port,
             token,
             name,
             public_jwk,
@@ -212,7 +214,7 @@ enum TestKeyType {
 #[derive(Clone)]
 pub struct ScopedTransitSigner {
     client: Client,
-    base: String,
+    port: u16,
     token: String,
     name: String,
     public_jwk: String,
@@ -340,7 +342,10 @@ impl ScopedTransitSigner {
     fn request_signature(&self, body: Value) -> Result<Vec<u8>, TransitError> {
         let response: Value = self
             .client
-            .post(format!("{}/v1/transit/sign/{}", self.base, self.name))
+            .post(format!(
+                "https://127.0.0.1:{}/v1/transit/sign/{}",
+                self.port, self.name
+            ))
             .header("X-Vault-Token", &self.token)
             .json(&body)
             .send()
