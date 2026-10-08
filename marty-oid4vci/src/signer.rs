@@ -380,9 +380,6 @@ mod remote_signature_tests {
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
-    #[cfg(not(target_family = "wasm"))]
-    const RSA_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC8rUj8OT3yKej3\nmQFlOO8ZYGNBcWUzdpPotih5ogCMnUA+kekZ9wbvw8m4YTpwlD/S3g/hdbUBHRDx\nxIHG0xmmTM+vfQVb2xgXZCgriXmX/eBhWIGpv/r7R7YWDhhVCmc55KcJivSbh3E7\nzehccigOIWTJ9AVoaFRGYxp8hN4saMv9hNVojxVgizFKg+yFFvVLOjO78WX0i3RJ\nRXJf7g5UeP/Bs0TAMbkVO/fBpUjOJKcT59jdl1/7u0WCTMTfpyt3eLXTtivhh6QE\n6zNWZ3TaB1FFP4SQ8+B8UpoVub4SoUsUpt1kytM5lI1+8BBuwO1izF+awnMts9sg\n5SzvjE63AgMBAAECggEAOhUiRbsdbcInHKm2e0G2oVpB0/Cjld8oE1iYRzFu99qk\n314tozefpAnivGb6BZQtva1suBxzNz+KatLynJF58O7udHiJQMjGttS3ZQeyLe8S\ntwT3DZmzGs3tqQZ3yR4lvvW70j07pfFhE2cE5Aikeg0fqOf9DjIn129ExRZmCsdD\nR7NnblNhDdqmkFiPgbhBqxxDOFPiQyFH2PvR1Pj8b7p6nlCZSrmqesHmTYjFOAEv\nNNz48OuRVV1pGxaEwyT5PaOkW0OKZvlibyaeuFr8jbdtSA4Vh+yePmfExsol0L1I\nvoPYTRjVCxkAGRq0KgkeRwysMk2tQbIvf8vjWQumwQKBgQD/Q4a8Gl3VliK2F9yL\nTwlC6XjAcBLrXc4cL4lttvgB7YyoQB8UvHAySbJoDgBPaPaqbofws6YieMsd1oeY\nVMSzTeXJkMQC3VkKYUaO5IlMFT5PD2F967fJZV/q2V+BL6s6Vsl1PqnHyP1w54qk\n4s02qoJBU+FuFCeUGZyXnar5lwKBgQC9OJgt6m8g49pvguj1TPKJmEfzBBySOmuj\n4C52XlbvrYaVpYyhQnckJUgZIWcx2fA9W/D4PfwFzsiItbxep9GgULIMix9C1PTV\ns7go3gHHQfmOgZpmJH2Tand1qKdhDTOWjKZJzDNdo81rAgYsW+Hx+anquM1bi4cC\nUWHYXoS34QKBgHmMxxC1IW9+QWMiM6OmbAuPry87btbi4S1suW0kDi6k1jCb7/Do\n1igsDacc26r0mViIr3S/puGNUXMQ35p66vtSoZP8ukl+61JVBcsvKe2vw+7TrSHP\n58Ef46+p+J9Eeq2Z++43e5MlswFbUBq54Owh/0pqTdMkB8Cu/XD45BxbAoGBAId0\ncyQzdZgi5KT9Hs0zZ1Bujdr+r4FShunKOxiLUkrDetu3piNulCFw+tramagLLrqO\nDcN3g+mYbN/I0W8lTaApBDyMfzV1g0tUG1pOCxHcPczxJFlIeAjGp3u33xJPxAVa\n7FNZ9c9rykp3KXop0GZLZoLcBk4pZN2Y6qVcjD+hAoGBANXlp2ZCuCYws17lCT+I\nxHlUJDu9t6o6rJGYezXFyrzrZDDS6CrrqARXqOFSKpfZN1f8dHsdaLafqBb9iADe\noqLZ4c0NyDjyxLBhiht/NDrMcfxf5FLrwmdO/iV6Hn6GWVvS8s3x4mYKuns5sJ6b\nYTa2y89NkNgCn0f1CWNdFbJk\n-----END PRIVATE KEY-----\n";
-
     fn p256_public_jwk(key: &p256::ecdsa::SigningKey) -> String {
         let point = key.verifying_key().to_encoded_point(false);
         serde_json::json!({
@@ -550,7 +547,7 @@ mod remote_signature_tests {
     }
 
     #[test]
-    fn every_remote_algorithm_accepts_valid_and_rejects_substituted_bindings() {
+    fn es384_es256k_and_eddsa_reject_substituted_bindings() {
         let payload = b"canonical prepared credential payload";
 
         {
@@ -620,45 +617,23 @@ mod remote_signature_tests {
                 &signature.to_bytes(),
             );
         }
+    }
 
-        #[cfg(not(target_family = "wasm"))]
-        {
-            use aws_lc_rs::signature::KeyPair as _;
-            let encoding_key =
-                jsonwebtoken::EncodingKey::from_rsa_pem(RSA_PRIVATE_KEY.as_bytes()).unwrap();
-            let key_pair =
-                aws_lc_rs::signature::RsaKeyPair::from_der(encoding_key.inner()).unwrap();
-            let public = aws_lc_rs::signature::RsaPublicKeyComponents::<Vec<u8>>::from(
-                key_pair.public_key(),
-            );
-            let mut signature = vec![0u8; key_pair.public_modulus_len()];
-            key_pair
-                .sign(
-                    &aws_lc_rs::signature::RSA_PKCS1_SHA256,
-                    &aws_lc_rs::rand::SystemRandom::new(),
-                    payload,
-                    &mut signature,
-                )
-                .unwrap();
-            let public_jwk = serde_json::json!({
-                "kty": "RSA", "alg": "RS256",
-                "n": URL_SAFE_NO_PAD.encode(&public.n),
-                "e": URL_SAFE_NO_PAD.encode(&public.e),
-            });
-            let mut wrong_n = public.n.clone();
-            *wrong_n.last_mut().unwrap() ^= 1;
-            let wrong_public_jwk = serde_json::json!({
-                "kty": "RSA", "alg": "RS256",
-                "n": URL_SAFE_NO_PAD.encode(wrong_n),
-                "e": URL_SAFE_NO_PAD.encode(&public.e),
-            });
-            assert_binding(
-                SigningAlgorithm::RS256,
-                &public_jwk.to_string(),
-                &wrong_public_jwk.to_string(),
-                payload,
-                &signature,
-            );
-        }
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn rsa_remote_signature_binds_payload_and_public_key() {
+        let provider = crate::openbao_transit::DisposableOpenBao::from_marked_env();
+        let signer = provider.create_rsa2048();
+        let wrong_signer = provider.create_rsa2048();
+        let payload = b"canonical prepared credential payload";
+        let signature = signer.sign_rsa_pkcs1(payload).unwrap();
+        assert_binding(
+            SigningAlgorithm::RS256,
+            signer.public_jwk(),
+            wrong_signer.public_jwk(),
+            payload,
+            &signature,
+        );
     }
 }

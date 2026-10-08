@@ -215,14 +215,14 @@ impl ScopedTransitSigner {
         if self.algorithm != TestKeyType::Es256 {
             return Err(());
         }
-        self.sign_hashed(Sha256::digest(message).as_slice(), "sha2-256", false)
+        self.sign_hashed(Sha256::digest(message).as_slice(), "sha2-256", None)
     }
 
     pub fn sign_es384_der(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
         if self.algorithm != TestKeyType::Es384 {
             return Err(());
         }
-        self.sign_hashed(Sha384::digest(message).as_slice(), "sha2-384", false)
+        self.sign_hashed(Sha384::digest(message).as_slice(), "sha2-384", None)
     }
 
     pub fn sign_ed25519(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
@@ -237,28 +237,47 @@ impl ScopedTransitSigner {
             return Err(());
         }
         match algorithm {
-            "PS256" => self.sign_hashed(Sha256::digest(message).as_slice(), "sha2-256", true),
-            "PS384" => self.sign_hashed(Sha384::digest(message).as_slice(), "sha2-384", true),
-            "PS512" => self.sign_hashed(Sha512::digest(message).as_slice(), "sha2-512", true),
+            "PS256" => {
+                self.sign_hashed(Sha256::digest(message).as_slice(), "sha2-256", Some("pss"))
+            }
+            "PS384" => {
+                self.sign_hashed(Sha384::digest(message).as_slice(), "sha2-384", Some("pss"))
+            }
+            "PS512" => {
+                self.sign_hashed(Sha512::digest(message).as_slice(), "sha2-512", Some("pss"))
+            }
             _ => Err(()),
         }
+    }
+
+    pub fn sign_rsa_pkcs1(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
+        if self.algorithm != TestKeyType::Rsa2048 {
+            return Err(());
+        }
+        self.sign_hashed(
+            Sha256::digest(message).as_slice(),
+            "sha2-256",
+            Some("pkcs1v15"),
+        )
     }
 
     fn sign_hashed(
         &self,
         digest: &[u8],
         hash_algorithm: &str,
-        rsa_pss: bool,
+        rsa_signature_algorithm: Option<&str>,
     ) -> Result<Vec<u8>, ()> {
         let mut body = json!({
             "input": STANDARD.encode(digest),
             "prehashed": true,
             "hash_algorithm": hash_algorithm
         });
-        if rsa_pss {
-            body["signature_algorithm"] = json!("pss");
-            // JOSE PS* uses a hash-length salt; OpenBao's "auto" default is maximal.
-            body["salt_length"] = json!("hash");
+        if let Some(signature_algorithm) = rsa_signature_algorithm {
+            body["signature_algorithm"] = json!(signature_algorithm);
+            if signature_algorithm == "pss" {
+                // JOSE PS* uses a hash-length salt; OpenBao's "auto" default is maximal.
+                body["salt_length"] = json!("hash");
+            }
         }
         self.request_signature(body)
     }

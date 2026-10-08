@@ -78,6 +78,10 @@ fi
   --no-default-features --features "$features" \
   wallet::tests \
   -- --ignored
+"$cargo" test --locked -p marty-oid4vci --lib \
+  --no-default-features --features "$features" \
+  signer::remote_signature_tests \
+  -- --ignored
 "$cargo" test --locked -p marty-oid4vci --test remote_issuer_live_kms \
   --no-default-features --features "$features" \
   -- --ignored
