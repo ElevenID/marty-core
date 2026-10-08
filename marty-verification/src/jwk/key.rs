@@ -1072,22 +1072,6 @@ pub fn generate_ec_p256() -> VerificationResult<Jwk> {
     })
 }
 
-/// Generate a new Ed25519 JWK.
-#[cfg(test)]
-pub fn generate_ed25519() -> VerificationResult<Jwk> {
-    use ed25519_dalek::SigningKey;
-
-    let keypair = SigningKey::generate(&mut rand::rngs::OsRng);
-
-    Ok(Jwk {
-        kty: "OKP".to_string(),
-        crv: Some("Ed25519".to_string()),
-        x: Some(URL_SAFE_NO_PAD.encode(keypair.verifying_key().to_bytes())),
-        d: Some(URL_SAFE_NO_PAD.encode(keypair.to_bytes())),
-        ..Default::default()
-    })
-}
-
 /// Generate a new X25519 JWK.
 #[cfg(test)]
 pub fn generate_x25519() -> VerificationResult<Jwk> {
@@ -1102,21 +1086,6 @@ pub fn generate_x25519() -> VerificationResult<Jwk> {
         crv: Some("X25519".to_string()),
         x: Some(URL_SAFE_NO_PAD.encode(public.as_bytes())),
         d: Some(URL_SAFE_NO_PAD.encode(secret.to_bytes())),
-        ..Default::default()
-    })
-}
-
-/// Generate a new symmetric key JWK.
-#[cfg(test)]
-pub fn generate_symmetric(size: usize) -> VerificationResult<Jwk> {
-    use rand::RngCore;
-
-    let mut key = vec![0u8; size];
-    rand::rngs::OsRng.fill_bytes(&mut key);
-
-    Ok(Jwk {
-        kty: "oct".to_string(),
-        k: Some(URL_SAFE_NO_PAD.encode(&key)),
         ..Default::default()
     })
 }
@@ -1203,14 +1172,6 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_symmetric() {
-        let jwk = generate_symmetric(32).unwrap();
-        assert_eq!(jwk.kty, "oct");
-        assert!(jwk.k.is_some());
-        assert!(jwk.is_symmetric());
-    }
-
-    #[test]
     fn test_to_public() {
         let mut private = public_ec_p256();
         private.d = Some("synthetic-private-marker".to_string());
@@ -1289,8 +1250,13 @@ mod tests {
         let ed = public_ed25519();
         assert_eq!(ed.key_type(), KeyType::Ed25519);
 
-        let sym = generate_symmetric(32).unwrap();
+        let sym = Jwk {
+            kty: "oct".to_string(),
+            k: Some("synthetic-symmetric-marker".to_string()),
+            ..Default::default()
+        };
         assert_eq!(sym.key_type(), KeyType::Symmetric);
+        assert!(sym.is_symmetric());
     }
 
     #[test]

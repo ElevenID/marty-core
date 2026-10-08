@@ -116,33 +116,6 @@ impl JwsHeader {
 // JWS Compact Serialization
 // ============================================================================
 
-/// Create a JWS in compact serialization format.
-///
-/// # Arguments
-///
-/// * `header` - JWS header
-/// * `payload` - Payload bytes
-/// * `key` - Signing key (JWK)
-///
-/// # Returns
-///
-/// JWS in compact serialization: BASE64URL(header).BASE64URL(payload).BASE64URL(signature)
-#[cfg(test)]
-pub fn jws_sign(header: &JwsHeader, payload: &[u8], key: &Jwk) -> VerificationResult<String> {
-    // Encode header and payload
-    let header_b64 = base64url_encode(&header.to_json()?);
-    let payload_b64 = base64url_encode(payload);
-
-    // Create signing input
-    let signing_input = format!("{}.{}", header_b64, payload_b64);
-
-    // Sign based on algorithm
-    let signature = sign_message(&header.alg, signing_input.as_bytes(), key)?;
-    let signature_b64 = base64url_encode(&signature);
-
-    Ok(format!("{}.{}", signing_input, signature_b64))
-}
-
 /// Verify a JWS in compact serialization format.
 ///
 /// # Arguments
@@ -253,27 +226,6 @@ fn validate_jws_header_policy(header: &JwsHeader) -> VerificationResult<()> {
 // Signature Operations
 // ============================================================================
 
-/// Sign a message using the specified algorithm and key.
-#[cfg(test)]
-fn sign_message(alg: &str, message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    match alg {
-        "ES256" => sign_es256(message, key),
-        "ES384" => sign_es384(message, key),
-        "EdDSA" => sign_eddsa(message, key),
-        "HS256" => sign_hs256(message, key),
-        "HS384" => sign_hs384(message, key),
-        "HS512" => sign_hs512(message, key),
-        "RS256" => sign_rs256(message, key),
-        "RS384" => sign_rs384(message, key),
-        "RS512" => sign_rs512(message, key),
-        "PS256" => sign_ps256(message, key),
-        _ => Err(VerificationError::internal(format!(
-            "Unsupported JWS algorithm: {}",
-            alg
-        ))),
-    }
-}
-
 /// Verify a message signature.
 fn verify_message(
     alg: &str,
@@ -302,23 +254,6 @@ fn verify_message(
 // ============================================================================
 // ECDSA Signatures
 // ============================================================================
-
-#[cfg(test)]
-fn sign_es256(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
-
-    let d = key
-        .d
-        .as_ref()
-        .ok_or_else(|| VerificationError::internal("ES256 requires private key (d)".to_string()))?;
-    let d_bytes = base64url_decode(d)?;
-
-    let signing_key = SigningKey::from_slice(&d_bytes)
-        .map_err(|e| VerificationError::internal(format!("Invalid ES256 key: {}", e)))?;
-
-    let signature: Signature = signing_key.sign(message);
-    Ok(signature.to_bytes().to_vec())
-}
 
 fn verify_es256(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
     use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
@@ -353,23 +288,6 @@ fn verify_es256(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
     verifying_key
         .verify(message, &sig)
         .map_err(|e| VerificationError::internal(format!("ES256 verification failed: {}", e)))
-}
-
-#[cfg(test)]
-fn sign_es384(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    use p384::ecdsa::{signature::Signer, Signature, SigningKey};
-
-    let d = key
-        .d
-        .as_ref()
-        .ok_or_else(|| VerificationError::internal("ES384 requires private key (d)".to_string()))?;
-    let d_bytes = base64url_decode(d)?;
-
-    let signing_key = SigningKey::from_slice(&d_bytes)
-        .map_err(|e| VerificationError::internal(format!("Invalid ES384 key: {}", e)))?;
-
-    let signature: Signature = signing_key.sign(message);
-    Ok(signature.to_bytes().to_vec())
 }
 
 fn verify_es384(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
@@ -409,31 +327,6 @@ fn verify_es384(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
 // ============================================================================
 // EdDSA Signatures
 // ============================================================================
-
-#[cfg(test)]
-fn sign_eddsa(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    use ed25519_dalek::{Signer, SigningKey};
-
-    if key.crv.as_deref() != Some("Ed25519") {
-        return Err(VerificationError::internal(
-            "EdDSA only supports Ed25519 curve".to_string(),
-        ));
-    }
-
-    let d = key
-        .d
-        .as_ref()
-        .ok_or_else(|| VerificationError::internal("EdDSA requires private key (d)".to_string()))?;
-    let d_bytes = base64url_decode(d)?;
-
-    let secret: [u8; 32] = d_bytes.try_into().map_err(|_| {
-        VerificationError::internal("Ed25519 private key must be 32 bytes".to_string())
-    })?;
-    Ok(SigningKey::from_bytes(&secret)
-        .sign(message)
-        .to_bytes()
-        .to_vec())
-}
 
 fn verify_eddsa(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
     use marty_crypto::ed25519::Ed25519VerifyingKey;
@@ -525,27 +418,12 @@ fn verify_hmac(
     Ok(())
 }
 
-#[cfg(test)]
-fn sign_hs256(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    sign_hmac(message, key, 256)
-}
-
 fn verify_hs256(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
     verify_hmac(message, signature, key, 256)
 }
 
-#[cfg(test)]
-fn sign_hs384(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    sign_hmac(message, key, 384)
-}
-
 fn verify_hs384(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
     verify_hmac(message, signature, key, 384)
-}
-
-#[cfg(test)]
-fn sign_hs512(message: &[u8], key: &Jwk) -> VerificationResult<Vec<u8>> {
-    sign_hmac(message, key, 512)
 }
 
 fn verify_hs512(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
@@ -556,23 +434,9 @@ fn verify_hs512(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResu
 // RSA Signatures (placeholder - needs RSA key import)
 // ============================================================================
 
-#[cfg(test)]
-fn sign_rs256(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
-    Err(VerificationError::internal(
-        "RS256 signing not yet implemented".to_string(),
-    ))
-}
-
 fn verify_rs256(_message: &[u8], _signature: &[u8], _key: &Jwk) -> VerificationResult<()> {
     Err(VerificationError::internal(
         "RS256 verification not yet implemented".to_string(),
-    ))
-}
-
-#[cfg(test)]
-fn sign_rs384(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
-    Err(VerificationError::internal(
-        "RS384 signing not yet implemented".to_string(),
     ))
 }
 
@@ -582,23 +446,9 @@ fn verify_rs384(_message: &[u8], _signature: &[u8], _key: &Jwk) -> VerificationR
     ))
 }
 
-#[cfg(test)]
-fn sign_rs512(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
-    Err(VerificationError::internal(
-        "RS512 signing not yet implemented".to_string(),
-    ))
-}
-
 fn verify_rs512(_message: &[u8], _signature: &[u8], _key: &Jwk) -> VerificationResult<()> {
     Err(VerificationError::internal(
         "RS512 verification not yet implemented".to_string(),
-    ))
-}
-
-#[cfg(test)]
-fn sign_ps256(_message: &[u8], _key: &Jwk) -> VerificationResult<Vec<u8>> {
-    Err(VerificationError::internal(
-        "PS256 signing not yet implemented".to_string(),
     ))
 }
 
@@ -614,16 +464,69 @@ fn verify_ps256(_message: &[u8], _signature: &[u8], _key: &Jwk) -> VerificationR
 
 #[cfg(test)]
 mod tests {
-    use super::super::generate_ec_p256;
     use super::*;
+    use marty_crypto_test_support::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
+
+    fn public_es256_jwk() -> Jwk {
+        Jwk {
+            kty: "EC".to_string(),
+            crv: Some("P-256".to_string()),
+            x: Some(marty_crypto_test_support::P256_PUBLIC_JWK_X.to_string()),
+            y: Some(marty_crypto_test_support::P256_PUBLIC_JWK_Y.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn remote_es256() -> (ScopedTransitSigner, Jwk) {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
+        let public = Jwk::from_json(signer.public_jwk()).expect("remote ES256 public JWK");
+        (signer, public)
+    }
+
+    fn remote_eddsa() -> (ScopedTransitSigner, Jwk) {
+        let signer = DisposableOpenBao::from_marked_env().create_ed25519();
+        let public = Jwk::from_json(signer.public_jwk()).expect("remote EdDSA public JWK");
+        (signer, public)
+    }
+
+    fn remotely_signed_jws(
+        header: &JwsHeader,
+        payload: &[u8],
+        signer: &ScopedTransitSigner,
+    ) -> String {
+        let signing_input = format!(
+            "{}.{}",
+            base64url_encode(&header.to_json().unwrap()),
+            base64url_encode(payload)
+        );
+        let signature = match header.alg.as_str() {
+            "ES256" => marty_crypto::ecdsa::normalize_signature(
+                &signer.sign_der(signing_input.as_bytes()).unwrap(),
+                "ES256",
+            )
+            .unwrap(),
+            "EdDSA" => signer.sign_ed25519(signing_input.as_bytes()).unwrap(),
+            _ => panic!("unsupported remote JWS test algorithm"),
+        };
+        format!("{}.{}", signing_input, base64url_encode(&signature))
+    }
+
+    fn compact_with_placeholder_signature(header: &JwsHeader, payload: &[u8]) -> String {
+        format!(
+            "{}.{}.AA",
+            base64url_encode(&header.to_json().unwrap()),
+            base64url_encode(payload)
+        )
+    }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped JWS signer"]
     fn test_jws_es256_roundtrip() {
-        let key = generate_ec_p256().unwrap();
+        let (signer, key) = remote_es256();
         let header = JwsHeader::new("ES256");
         let payload = b"Hello, JWS!";
 
-        let jws = jws_sign(&header, payload, &key).unwrap();
+        let jws = remotely_signed_jws(&header, payload, &signer);
 
         // Should be three base64url parts separated by dots
         assert_eq!(jws.split('.').count(), 3);
@@ -635,14 +538,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped JWS signer"]
     fn test_jws_eddsa_roundtrip() {
-        use super::super::generate_ed25519;
-
-        let key = generate_ed25519().unwrap();
+        let (signer, key) = remote_eddsa();
         let header = JwsHeader::new("EdDSA");
         let payload = b"Hello, EdDSA!";
 
-        let jws = jws_sign(&header, payload, &key).unwrap();
+        let jws = remotely_signed_jws(&header, payload, &signer);
         let (_, verified_payload) = jws_verify(&jws, &key).unwrap();
 
         assert_eq!(verified_payload, payload);
@@ -650,38 +552,42 @@ mod tests {
 
     #[test]
     fn test_jws_hs256_roundtrip() {
-        use super::super::generate_symmetric;
-
-        let key = generate_symmetric(32).unwrap();
-        let header = JwsHeader::new("HS256");
+        let key = Jwk {
+            kty: "oct".to_string(),
+            k: Some("MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY".to_string()),
+            ..Default::default()
+        };
         let payload = b"Hello, HMAC!";
-
-        let jws = jws_sign(&header, payload, &key).unwrap();
-        let (_, verified_payload) = jws_verify(&jws, &key).unwrap();
+        let jws =
+            "eyJhbGciOiJIUzI1NiJ9.SGVsbG8sIEhNQUMh.86Od18GLG_-oP5WLzPAyRpRgJkG26CThNkT9bJkoZWY";
+        let (_, verified_payload) = jws_verify(jws, &key).unwrap();
 
         assert_eq!(verified_payload, payload);
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped JWS signer"]
     fn test_jws_wrong_key() {
-        let key1 = generate_ec_p256().unwrap();
-        let key2 = generate_ec_p256().unwrap();
+        let (signer, key1) = remote_es256();
+        let (_, key2) = remote_es256();
         let header = JwsHeader::new("ES256");
         let payload = b"Secret message";
 
-        let jws = jws_sign(&header, payload, &key1).unwrap();
+        let jws = remotely_signed_jws(&header, payload, &signer);
+        assert!(jws_verify(&jws, &key1).is_ok());
 
         // Verification with wrong key should fail
         assert!(jws_verify(&jws, &key2).is_err());
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped JWS signer"]
     fn test_jws_tampered_payload() {
-        let key = generate_ec_p256().unwrap();
+        let (signer, key) = remote_es256();
         let header = JwsHeader::new("ES256");
         let payload = b"Original";
 
-        let jws = jws_sign(&header, payload, &key).unwrap();
+        let jws = remotely_signed_jws(&header, payload, &signer);
 
         // Tamper with the payload
         let parts: Vec<&str> = jws.split('.').collect();
@@ -697,11 +603,9 @@ mod tests {
 
     #[test]
     fn test_jws_decode_unverified() {
-        let key = generate_ec_p256().unwrap();
         let header = JwsHeader::new("ES256");
         let payload = b"Test payload";
-
-        let jws = jws_sign(&header, payload, &key).unwrap();
+        let jws = compact_with_placeholder_signature(&header, payload);
 
         let (decoded_header, decoded_payload) = jws_decode_unverified(&jws).unwrap();
         assert_eq!(decoded_header.alg, "ES256");
@@ -710,12 +614,10 @@ mod tests {
 
     #[test]
     fn test_jws_get_header() {
-        let key = generate_ec_p256().unwrap();
         let mut header = JwsHeader::new("ES256");
         header.kid = Some("my-key-id".to_string());
         let payload = b"Test";
-
-        let jws = jws_sign(&header, payload, &key).unwrap();
+        let jws = compact_with_placeholder_signature(&header, payload);
 
         let parsed_header = jws_get_header(&jws).unwrap();
         assert_eq!(parsed_header.kid, Some("my-key-id".to_string()));
@@ -723,7 +625,7 @@ mod tests {
 
     #[test]
     fn public_jws_parsers_reject_many_segments_and_oversized_segments() {
-        let key = generate_ec_p256().unwrap().to_public();
+        let key = public_es256_jwk();
         for malformed in ["a.b.c.d", "a.b.c.d.e"] {
             assert!(jws_get_header(malformed).is_err());
             assert!(jws_decode_unverified(malformed).is_err());
