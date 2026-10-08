@@ -6,7 +6,14 @@ import tempfile
 import unittest
 from unittest import mock
 
-from ci_affected_packages import affected_packages, git_changed_paths
+from ci_affected_packages import (
+    CROSS_PACKAGE_TEST_INPUT_OWNERS,
+    affected_packages,
+    git_changed_paths,
+)
+
+
+JWK_FIXTURE = "marty-verification/tests/fixtures/public_key_jwk_vectors.json"
 
 
 class AffectedPackagesTests(unittest.TestCase):
@@ -34,6 +41,107 @@ class AffectedPackagesTests(unittest.TestCase):
                 },
             ],
         }
+
+    def jwk_metadata(self, root: pathlib.Path) -> dict[str, object]:
+        return {
+            "workspace_members": [
+                "crypto-id", "verification-id", "bindings-id", "wallet-id"
+            ],
+            "packages": [
+                {
+                    "id": "crypto-id", "name": "marty-crypto",
+                    "manifest_path": str(root / "marty-crypto" / "Cargo.toml"),
+                    "dependencies": [],
+                },
+                {
+                    "id": "verification-id", "name": "marty-verification",
+                    "manifest_path": str(root / "marty-verification" / "Cargo.toml"),
+                    "dependencies": [{"name": "marty-crypto"}],
+                },
+                {
+                    "id": "bindings-id", "name": "marty-bindings",
+                    "manifest_path": str(root / "marty-bindings" / "Cargo.toml"),
+                    "dependencies": [{"name": "marty-verification"}],
+                },
+                {
+                    "id": "wallet-id", "name": "marty-wallet",
+                    "manifest_path": str(root / "marty-wallet" / "Cargo.toml"),
+                    "dependencies": [{"name": "marty-crypto"}],
+                },
+            ],
+        }
+
+    def test_jwk_cross_package_input_matches_its_source_import(self) -> None:
+        root = pathlib.Path(__file__).resolve().parent.parent
+        source = (root / "marty-crypto/tests/public_jwk_vectors.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(
+            source,
+            r'include_str!\(\s*"\.\./\.\./marty-verification/tests/fixtures/'
+            r'public_key_jwk_vectors\.json"\s*\)',
+        )
+        self.assertRegex(
+            (root / "marty-crypto/Cargo.toml").read_text(encoding="utf-8"),
+            r'\[\[test\]\]\s*name = "public_jwk_vectors"\s*'
+            r'required-features = \["jwk"\]',
+        )
+        self.assertTrue((root / JWK_FIXTURE).is_file())
+        self.assertEqual({"marty-crypto"}, CROSS_PACKAGE_TEST_INPUT_OWNERS[JWK_FIXTURE])
+
+    def test_changed_or_deleted_jwk_fixture_selects_crypto_test_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+
+            def git(*args: str) -> str:
+                return subprocess.check_output(
+                    ["git", "-c", "commit.gpgsign=false", "-c", "user.name=Selector Test",
+                     "-c", "user.email=selector@example.invalid", *args],
+                    cwd=root, text=True, encoding="utf-8", stderr=subprocess.PIPE,
+                ).strip()
+
+            git("init")
+            fixture = root / JWK_FIXTURE
+            fixture.parent.mkdir(parents=True)
+            fixture.write_text("original fixture\n", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            real_run = subprocess.run
+
+            def run_in_repo(*args, **kwargs):
+                return real_run(*args, cwd=root, **kwargs)
+
+            for change in ("modify", "delete"):
+                with self.subTest(change=change):
+                    if change == "modify":
+                        fixture.write_text("changed fixture\n", encoding="utf-8")
+                    else:
+                        fixture.unlink()
+                    git("add", "-A")
+                    git("commit", "-m", change)
+                    with mock.patch(
+                        "ci_affected_packages.subprocess.run", side_effect=run_in_repo
+                    ):
+                        changed = git_changed_paths(base, "HEAD")
+                    self.assertEqual([JWK_FIXTURE], changed)
+                    with mock.patch.object(pathlib.Path, "cwd", return_value=root):
+                        self.assertEqual(
+                            (False, ["marty-bindings", "marty-crypto", "marty-verification"]),
+                            affected_packages(changed, self.jwk_metadata(root)),
+                        )
+                    base = git("rev-parse", "HEAD")
+
+    def test_missing_cross_package_owner_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            metadata = self.jwk_metadata(root)
+            metadata["workspace_members"].remove("crypto-id")
+            with mock.patch.object(pathlib.Path, "cwd", return_value=root):
+                self.assertEqual((True, []), affected_packages([JWK_FIXTURE], metadata))
+                self.assertEqual(
+                    (True, []), affected_packages(["unknown/fixture.json"], metadata)
+                )
 
     def test_root_lockfile_invalidates_the_workspace(self) -> None:
         self.assertEqual((True, []), affected_packages(["Cargo.lock"], {}))
