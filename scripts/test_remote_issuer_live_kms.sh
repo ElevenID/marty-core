@@ -44,9 +44,20 @@ export MARTY_TEST_OPENBAO_URL="$base"
 export MARTY_TEST_OPENBAO_TOKEN="$token"
 export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
 features='kms-only,issuer,verifier,wallet,jwt_vc_json,sd_jwt,mso_mdoc'
+cargo="${MARTY_TEST_CARGO:-cargo}"
+if [[ "$cargo" == *.exe ]]; then
+  # WSL does not forward newly created environment variables to Windows
+  # executables unless they are named in WSLENV. This is local probe wiring;
+  # Linux CI continues to use its native cargo and inherited environment.
+  export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w"
+fi
 if [[ "${MARTY_TEST_ZK_MDOC:-0}" == '1' ]]; then
   features+=',zk_mdoc'
 fi
-cargo test --locked -p marty-oid4vci --test remote_issuer_live_kms \
+"$cargo" test --locked -p marty-oid4vci --lib \
+  --no-default-features --features "$features" \
+  signing_batch::tests \
+  -- --ignored
+"$cargo" test --locked -p marty-oid4vci --test remote_issuer_live_kms \
   --no-default-features --features "$features" \
   -- --ignored

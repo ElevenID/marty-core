@@ -1180,6 +1180,14 @@ fn assemble_credentials(
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_family = "wasm"))]
+    mod openbao_transit {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/openbao_transit.rs"
+        ));
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     use std::cell::Cell;
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1265,16 +1273,18 @@ mod tests {
         }
     }
 
-    struct RecordingSigner {
-        signing_key: p256::ecdsa::SigningKey,
+    #[cfg(not(target_family = "wasm"))]
+    struct RemoteRecordingSigner {
+        backend: openbao_transit::ScopedEs256Signer,
         calls: Mutex<Vec<Vec<u8>>>,
         signatures: Mutex<Vec<Vec<u8>>>,
     }
 
-    impl RecordingSigner {
+    #[cfg(not(target_family = "wasm"))]
+    impl RemoteRecordingSigner {
         fn es256() -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
+                backend: openbao_transit::DisposableOpenBao::from_marked_env().create_es256(),
                 calls: Mutex::new(Vec::new()),
                 signatures: Mutex::new(Vec::new()),
             }
@@ -1289,19 +1299,21 @@ mod tests {
         }
     }
 
-    impl fmt::Debug for RecordingSigner {
+    #[cfg(not(target_family = "wasm"))]
+    impl fmt::Debug for RemoteRecordingSigner {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("RecordingSigner([redacted])")
+            formatter.write_str("RemoteRecordingSigner([redacted])")
         }
     }
 
-    impl CredentialSigner for RecordingSigner {
+    #[cfg(not(target_family = "wasm"))]
+    impl CredentialSigner for RemoteRecordingSigner {
         fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-            let mut calls = self.calls.lock().unwrap();
-            calls.push(message.to_vec());
-            use p256::ecdsa::signature::Signer as _;
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-            let signature = signature.to_bytes().to_vec();
+            self.calls.lock().unwrap().push(message.to_vec());
+            let signature = self
+                .backend
+                .sign(message)
+                .map_err(|_| Oid4vciError::SigningError("remote signer unavailable".into()))?;
             self.signatures.lock().unwrap().push(signature.clone());
             Ok(signature)
         }
@@ -1315,13 +1327,11 @@ mod tests {
         }
 
         fn kid_url(&self) -> String {
-            KID_SECRET.into()
+            self.backend.key_id(ISSUER_SECRET)
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
+            Ok(self.backend.public_jwk().to_owned())
         }
     }
 
@@ -2241,9 +2251,11 @@ mod tests {
         assert_eq!(format!("{input:?}"), "SdJwtSigningBatchInput([redacted])");
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn jwt_sd_jwt_and_mdoc_sign_complete_payloads_and_preserve_raw_p1363_bytes() {
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let holder_jwk = fixed_public_ed25519_jwk();
         let credentials = scope
@@ -2285,7 +2297,7 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
         assert_eq!(header["alg"], "ES256");
-        assert_eq!(header["kid"], KID_SECRET);
+        assert_eq!(header["kid"], signer.kid_url());
         assert_eq!(payload["iss"], ISSUER_SECRET);
 
         let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
@@ -2328,6 +2340,70 @@ mod tests {
             isomdl::cbor::from_slice(&issuer_signed_bytes).unwrap();
         assert_eq!(issuer_signed.issuer_auth.tbs_data(&[]), payloads[2]);
         assert_eq!(issuer_signed.issuer_auth.signature, signer.signature_at(2));
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn remote_batch_signer_preserves_fresh_payloads_and_raw_signatures() {
+        let signer = RemoteRecordingSigner::es256();
+        let scope = Es256SignerScope::new(&signer).unwrap();
+        let credentials = scope
+            .sign_batch(vec![
+                jwt_input(1, "remote-jwt"),
+                sd_jwt_input(2, "remote-sd-jwt"),
+                mdoc_input(3, "remote-mdoc"),
+            ])
+            .unwrap();
+        assert_eq!(credentials.len(), 3);
+        let calls = signer.calls.lock().unwrap();
+        let signatures = signer.signatures.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(signatures.len(), 3);
+        let public: serde_json::Value = serde_json::from_str(signer.backend.public_jwk()).unwrap();
+        let mut point = vec![0x04];
+        point.extend(
+            URL_SAFE_NO_PAD
+                .decode(public["x"].as_str().unwrap())
+                .unwrap(),
+        );
+        point.extend(
+            URL_SAFE_NO_PAD
+                .decode(public["y"].as_str().unwrap())
+                .unwrap(),
+        );
+        let verifying_key = p256::ecdsa::VerifyingKey::from_sec1_bytes(&point).unwrap();
+        for credential in &credentials {
+            verify_signed_credential(credential, &verifying_key);
+        }
+        let SignedCredential::JwtVcJson { jwt, .. } = &credentials[0] else {
+            panic!("JWT caller order changed")
+        };
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(jwt.split('.').nth(2).unwrap())
+                .unwrap(),
+            signatures[0]
+        );
+        let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
+            panic!("SD-JWT caller order changed")
+        };
+        let signed_jwt = compact.split('~').next().unwrap();
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(signed_jwt.split('.').nth(2).unwrap())
+                .unwrap(),
+            signatures[1]
+        );
+        let SignedCredential::MsoMdoc {
+            issuer_signed_b64, ..
+        } = &credentials[2]
+        else {
+            panic!("mDoc caller order changed")
+        };
+        let issuer_signed: isomdl::definitions::IssuerSigned =
+            isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap()).unwrap();
+        assert_eq!(issuer_signed.issuer_auth.signature, signatures[2]);
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -3033,9 +3109,11 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn reordered_executor_results_restore_caller_order() {
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let credentials = scope
             .sign_batch_with_components(
@@ -3068,8 +3146,13 @@ mod tests {
                 Some(0),
             );
         }
+    }
 
-        let signer = RecordingSigner::es256();
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn signature_validation_rejects_later_ordinals_with_remote_signer() {
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch_with_components(
@@ -3081,7 +3164,7 @@ mod tests {
             Some(1),
         );
 
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch_with_components(
@@ -3119,9 +3202,11 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn assembly_reports_lowest_ordinal_and_returns_no_partial_outputs() {
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let assembler = FailingAssembler {
             fail_at: [1, 2].into(),
