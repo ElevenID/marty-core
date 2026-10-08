@@ -17,8 +17,8 @@ use marty_oid4vci::{
             assemble_mdoc, prepare_mdoc_with_credential_id_and_device_key, sign_mdoc_with_signer,
         },
         sd_jwt::{
-            assemble_sd_jwt, prepare_sd_jwt_with_options, sign_sd_jwt_with_signer, verify_sd_jwt,
-            SdJwtPreparationOptions,
+            assemble_sd_jwt, create_sd_jwt_presentation, prepare_sd_jwt_with_options,
+            sign_sd_jwt_with_signer, verify_sd_jwt, SdJwtPreparationOptions,
         },
     },
     jose::verify_compact_jwt_with_public_jwk,
@@ -451,6 +451,9 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         assert!(!disclosure.is_empty());
         let segments: Vec<_> = jws.split('.').collect();
         assert_eq!(segments.len(), 3);
+        let issued_header: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[0]).unwrap()).unwrap();
+        assert_eq!(issued_header["typ"], "vc+sd-jwt");
         let issued_payload: Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
         assert_eq!(issued_payload["jti"], credential_id);
@@ -538,6 +541,43 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         let verified = verify_sd_jwt(&compact, &signer.public_jwk, None, None).unwrap();
         assert_eq!(verified["given_name"], "Alice");
         assert_eq!(verified["family_name"], "Smith");
+        let presentation = create_sd_jwt_presentation(&compact, &["given_name".into()]).unwrap();
+        let disclosed = presentation
+            .split('~')
+            .skip(1)
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(disclosed.len(), 1);
+        let disclosure: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(disclosed[0]).unwrap()).unwrap();
+        assert_eq!(disclosure[1], "given_name");
+        let partial = verify_sd_jwt(&presentation, &signer.public_jwk, None, None).unwrap();
+        assert_eq!(partial["given_name"], "Alice");
+        assert!(partial.get("family_name").is_none());
+        assert!(create_sd_jwt_presentation(&compact, &["missing".into()]).is_err());
+
+        if signer.algorithm == SigningAlgorithm::ES256 {
+            let issued_at = chrono::Utc::now();
+            let expiration_seconds = chrono::DateTime::<chrono::Utc>::MAX_UTC
+                .timestamp()
+                .checked_sub(issued_at.timestamp())
+                .and_then(|seconds| seconds.checked_add(2))
+                .unwrap();
+            let mut far_future = claims(CredentialPayloadFormat::IetfSdJwt);
+            far_future.expiration_seconds = Some(expiration_seconds);
+            let SignedCredential::SdJwt { compact, .. } =
+                sign_sd_jwt_with_signer(signer, &far_future).unwrap()
+            else {
+                panic!("expected far-future SD-JWT")
+            };
+            let payload_segment = compact.split('.').nth(1).unwrap();
+            let payload: Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload_segment).unwrap()).unwrap();
+            assert!(
+                payload["exp"].as_i64().unwrap()
+                    > chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp()
+            );
+        }
     }
 
     let certificates = vec![vec![0x30, 0x82, 0x01, 0x0a], vec![0x30, 0x82, 0x01, 0x0b]];
