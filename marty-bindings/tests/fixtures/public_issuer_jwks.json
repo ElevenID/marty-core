@@ -1,0 +1,17 @@
+{
+    "provenance":  "Public-only JWKs from marty-verification public_key_jwk_vectors.json; no private scalars retained",
+    "ES256":  {
+                  "alg":  "ES256",
+                  "kty":  "EC",
+                  "crv":  "P-256",
+                  "x":  "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                  "y":  "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+              },
+    "ES384":  {
+                  "alg":  "ES384",
+                  "kty":  "EC",
+                  "crv":  "P-384",
+                  "x":  "qofKIr6LBTeOscce8yCtdG4dO2KLp5uYWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3",
+                  "y":  "NhfeSpYmLG9dnpi_kpLcKfj0Hb0omhR86doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f"
+              }
+}

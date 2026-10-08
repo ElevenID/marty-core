@@ -1597,12 +1597,11 @@ fn vds_nc_validate_profile(
     .map_err(vds_nc_error)
 }
 
-/// Create and sign a canonical VDS-NC profile with a PEM private key.
-#[pyfunction]
+/// Exercise canonical VDS-NC preparation and assembly with a remote test signer.
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
-fn vds_nc_sign_profile(
-    private_key_pem: &str,
+fn vds_nc_sign_profile_for_test(
+    signer: &marty_crypto_test_support::openbao_transit::ScopedTransitSigner,
     signer_id: &str,
     certificate_reference: &str,
     document_type: &str,
@@ -1612,28 +1611,6 @@ fn vds_nc_sign_profile(
 ) -> PyResult<String> {
     use marty_oid4vci::types::{CredentialClaims, SignedCredential};
 
-    let private_key_der =
-        marty_crypto_test_support::serialization::load_private_key_pem(private_key_pem)
-            .map_err(vds_nc_error)?;
-    let key_type =
-        marty_crypto_test_support::serialization::detect_private_key_type(&private_key_der)
-            .map_err(vds_nc_error)?;
-    let expected_key_type = match algorithm {
-        "ES256" => "EC_P256",
-        "ES384" => "EC_P384",
-        "EdDSA" => "Ed25519",
-        "PS256" | "PS384" | "PS512" => "RSA",
-        other => {
-            return Err(vds_nc_error(format!(
-                "unsupported VDS-NC algorithm: {other}"
-            )))
-        }
-    };
-    if key_type != expected_key_type {
-        return Err(vds_nc_error(format!(
-            "VDS_NC.KEY_ALGORITHM_MISMATCH: {key_type} key cannot sign with {algorithm}"
-        )));
-    }
     let mut claims: std::collections::HashMap<String, serde_json::Value> =
         serde_json::from_str(document_data_json).map_err(|error| {
             vds_nc_error(format!(
@@ -1669,44 +1646,25 @@ fn vds_nc_sign_profile(
         w3c_context: vec![],
         w3c_types: vec![],
     };
-    let public_key_der =
-        marty_crypto_test_support::serialization::extract_public_key(&private_key_der)
-            .map_err(vds_nc_error)?;
-    let public_jwk = serde_json::to_string(
-        &marty_crypto::jwk::public_key_der_to_jwk(&public_key_der).map_err(vds_nc_error)?,
-    )
-    .map_err(vds_nc_error)?;
     let prepared = marty_oid4vci::formats::vds_nc::prepare_vds_nc_profile(
         signer_id,
         certificate_reference,
         algorithm,
-        &public_jwk,
+        signer.public_jwk(),
         &credential_claims,
     )
     .map_err(vds_nc_error)?;
     let message = prepared.signing_payload();
     let signature = match algorithm {
-        "ES256" | "ES384" | "EdDSA" => {
-            let (raw_private_key, _) =
-                marty_crypto_test_support::serialization::pkcs8_to_raw_private_key(
-                    &private_key_der,
-                )
-                .map_err(vds_nc_error)?;
-            match algorithm {
-                "ES256" => {
-                    marty_crypto_test_support::ecdsa::sign_p256_sha256(&raw_private_key, message)
-                }
-                "ES384" => {
-                    marty_crypto_test_support::ecdsa::sign_p384_sha384(&raw_private_key, message)
-                }
-                "EdDSA" => marty_crypto_test_support::ed25519::sign(&raw_private_key, message),
-                _ => unreachable!(),
-            }
+        "ES256" => signer.sign(message),
+        "ES384" => signer.sign_es384(message),
+        "EdDSA" => signer.sign_ed25519(message),
+        "PS256" | "PS384" | "PS512" => signer.sign_rsa_pss(message, algorithm),
+        other => {
+            return Err(vds_nc_error(format!(
+                "unsupported VDS-NC algorithm: {other}"
+            )))
         }
-        "PS256" => marty_crypto_test_support::rsa::sign_pss_sha256(&private_key_der, message),
-        "PS384" => marty_crypto_test_support::rsa::sign_pss_sha384(&private_key_der, message),
-        "PS512" => marty_crypto_test_support::rsa::sign_pss_sha512(&private_key_der, message),
-        _ => unreachable!(),
     }
     .map_err(vds_nc_error)?;
     let signed = marty_oid4vci::formats::vds_nc::assemble_vds_nc_raw(prepared, &signature)
@@ -2248,35 +2206,16 @@ mod tests {
     }
 
     fn remote_issuer_public_jwk(algorithm: &str) -> String {
-        use base64::Engine as _;
-
-        if algorithm == "ES384" {
-            let mut scalar = [0u8; 48];
-            scalar[47] = 1;
-            let key = p384::ecdsa::SigningKey::from_slice(&scalar).unwrap();
-            let point = key.verifying_key().to_encoded_point(false);
-            serde_json::json!({
-                "alg": algorithm,
-                "crv": "P-384",
-                "kty": "EC",
-                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-            })
-            .to_string()
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/public_issuer_jwks.json"))
+                .unwrap();
+        let mut key = if algorithm == "ES384" {
+            vectors["ES384"].clone()
         } else {
-            let mut scalar = [0u8; 32];
-            scalar[31] = 1;
-            let key = p256::ecdsa::SigningKey::from_slice(&scalar).unwrap();
-            let point = key.verifying_key().to_encoded_point(false);
-            serde_json::json!({
-                "alg": algorithm,
-                "crv": "P-256",
-                "kty": "EC",
-                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-            })
-            .to_string()
-        }
+            vectors["ES256"].clone()
+        };
+        key["alg"] = serde_json::json!(algorithm);
+        key.to_string()
     }
 
     fn remote_mdoc_batch_input(
@@ -2454,12 +2393,17 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped mdoc signer"]
     fn remote_mdoc_batch_handle_uses_existing_single_use_sign_and_assemble_route() {
-        let input = serde_json::json!([remote_mdoc_batch_input(
+        let signer =
+            marty_crypto_test_support::openbao_transit::DisposableOpenBao::from_marked_env()
+                .create_es256();
+        let mut input = serde_json::json!([remote_mdoc_batch_input(
             91,
             "urn:uuid:00000000-0000-0000-0000-000000000091",
             "ES256"
         )]);
+        input[0]["issuer_public_jwk"] = serde_json::json!(signer.public_jwk());
         let mut prepared = oid4vci_prepare_mdoc_batch(&input.to_string())
             .expect("native batch preparation")
             .pop()
@@ -2470,12 +2414,7 @@ mod tests {
         assert!(oid4vci_assemble_mdoc(&mut prepared, vec![0; 63]).is_err());
         assert!(prepared.tbs_data().is_ok());
         assert!(prepared.credential_id().is_ok());
-        use p256::ecdsa::signature::Signer as _;
-        let mut scalar = [0u8; 32];
-        scalar[31] = 1;
-        let signing_key = p256::ecdsa::SigningKey::from_slice(&scalar).unwrap();
-        let signature: p256::ecdsa::Signature = signing_key.sign(&tbs_data);
-        let signature = signature.to_bytes().to_vec();
+        let signature = signer.sign(&tbs_data).expect("remote mdoc signature");
 
         let (issuer_signed, assembled_credential_id) =
             oid4vci_assemble_mdoc(&mut prepared, signature).expect("native mDoc assembly");
@@ -2910,19 +2849,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn vds_nc_profile_binding_signs_and_verifies_in_rust() {
-        let (private_key, public_key) =
-            marty_crypto_test_support::ecdsa::generate_p256_keypair().unwrap();
-        let private_der = marty_crypto_test_support::serialization::raw_private_key_to_pkcs8(
-            &private_key,
-            "EC_P256",
-        )
-        .unwrap();
-        let public_der =
-            marty_crypto::serialization::raw_public_key_to_spki(&public_key, "EC_P256").unwrap();
-        let private_pem =
-            marty_crypto_test_support::serialization::save_private_key_pem(&private_der).unwrap();
-        let public_pem = marty_crypto::serialization::save_public_key_pem(&public_der).unwrap();
+        let provider =
+            marty_crypto_test_support::openbao_transit::DisposableOpenBao::from_marked_env();
+        let signer = provider.create_es256();
+        let public_pem =
+            marty_crypto::serialization::save_public_key_pem(signer.public_key_spki_der()).unwrap();
         let document = serde_json::json!({
             "documentNumber": "X123456",
             "surname": "Example",
@@ -2934,8 +2867,8 @@ mod tests {
             "dateOfExpiry": "20300101"
         });
         let signed: serde_json::Value = serde_json::from_str(
-            &vds_nc_sign_profile(
-                &private_pem,
+            &vds_nc_sign_profile_for_test(
+                &signer,
                 "TESTSGN",
                 "TESTCERT001",
                 "CMC",
@@ -2973,13 +2906,10 @@ mod tests {
         assert_eq!(tampered_result["signature_valid"], false);
         assert_eq!(tampered_result["is_valid"], false);
 
-        let (_, wrong_public_key) =
-            marty_crypto_test_support::ecdsa::generate_p256_keypair().unwrap();
-        let wrong_public_der =
-            marty_crypto::serialization::raw_public_key_to_spki(&wrong_public_key, "EC_P256")
-                .unwrap();
+        let wrong_signer = provider.create_es256();
         let wrong_public_pem =
-            marty_crypto::serialization::save_public_key_pem(&wrong_public_der).unwrap();
+            marty_crypto::serialization::save_public_key_pem(wrong_signer.public_key_spki_der())
+                .unwrap();
         let wrong_key_result: serde_json::Value = serde_json::from_str(
             &vds_nc_verify_profile(
                 signed["barcode_data"].as_str().unwrap(),
@@ -3010,16 +2940,13 @@ mod tests {
             .unwrap()
             .contains("FIELD_MISMATCH"));
 
-        let (rsa_private_der, rsa_public_der) =
-            marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
-        let rsa_private_pem =
-            marty_crypto_test_support::serialization::save_private_key_pem(&rsa_private_der)
-                .unwrap();
+        let rsa_signer = provider.create_rsa2048();
         let rsa_public_pem =
-            marty_crypto::serialization::save_public_key_pem(&rsa_public_der).unwrap();
+            marty_crypto::serialization::save_public_key_pem(rsa_signer.public_key_spki_der())
+                .unwrap();
         let rsa_signed: serde_json::Value = serde_json::from_str(
-            &vds_nc_sign_profile(
-                &rsa_private_pem,
+            &vds_nc_sign_profile_for_test(
+                &rsa_signer,
                 "TESTSGN",
                 "TESTRSA001",
                 "CMC",
@@ -3055,10 +2982,11 @@ mod tests {
         assert_eq!(rsa_tampered_result["signature_valid"], false);
         assert_eq!(rsa_tampered_result["is_valid"], false);
 
-        let (_, wrong_rsa_public_der) =
-            marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
-        let wrong_rsa_public_pem =
-            marty_crypto::serialization::save_public_key_pem(&wrong_rsa_public_der).unwrap();
+        let wrong_rsa_signer = provider.create_rsa2048();
+        let wrong_rsa_public_pem = marty_crypto::serialization::save_public_key_pem(
+            wrong_rsa_signer.public_key_spki_der(),
+        )
+        .unwrap();
         let rsa_wrong_key_result: serde_json::Value = serde_json::from_str(
             &vds_nc_verify_profile(
                 rsa_signed["barcode_data"].as_str().unwrap(),

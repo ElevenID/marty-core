@@ -138,6 +138,12 @@ fi
 "$cargo" test --locked -p marty-oid4vci --test oid4vp_conformance \
   --no-default-features --features "$features" \
   -- --ignored --skip siop_v2
+"$cargo" test --locked -p marty-bindings --lib \
+  vds_nc_profile_binding_signs_and_verifies_in_rust -- --ignored
+"$cargo" test --locked -p marty-bindings --lib \
+  remote_mdoc_batch_handle_uses_existing_single_use_sign_and_assemble_route -- --ignored
+"$cargo" test --locked -p marty-bindings --lib \
+  remote_credential::tests -- --ignored
 "$cargo" test --locked -p marty-emrtd-issuance --test remote_sod -- --ignored
 if [[ "${MARTY_TEST_BENCH_AFTER_LIVE:-0}" == '1' ]]; then
   run_bench_smoke

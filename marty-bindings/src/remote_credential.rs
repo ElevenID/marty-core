@@ -439,30 +439,18 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_signing_key() -> p256::ecdsa::SigningKey {
-        let mut scalar = [0u8; 32];
-        scalar[31] = 1;
-        p256::ecdsa::SigningKey::from_slice(&scalar).unwrap()
-    }
+    use marty_crypto_test_support::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
 
     fn issuer_public_jwk() -> String {
-        let point = test_signing_key().verifying_key().to_encoded_point(false);
-        serde_json::json!({
-            "alg": "ES256",
-            "crv": "P-256",
-            "kty": "EC",
-            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-        })
-        .to_string()
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/public_issuer_jwks.json"))
+                .unwrap();
+        vectors["ES256"].to_string()
     }
 
-    fn sign_payload(payload: &[u8]) -> String {
-        use p256::ecdsa::signature::Signer as _;
-
-        let signature: p256::ecdsa::Signature = test_signing_key().sign(payload);
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    fn sign_payload(signer: &ScopedTransitSigner, payload: &[u8]) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signer.sign(payload).expect("remote test signature"))
     }
 
     fn decode_segment(segment: &str) -> serde_json::Value {
@@ -527,8 +515,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped issuer signer"]
     fn remote_sd_jwt_batch_binding_preserves_route_and_assembly_handle() {
         Python::initialize();
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
         let contract: serde_json::Value = serde_json::from_str(include_str!(
             "../../marty-oid4vci/tests/contracts/sd_jwt_remote_batch_v1.json"
         ))
@@ -539,7 +529,7 @@ mod tests {
                 "issuer_id": contract["issuer_id"],
                 "verification_method_id": contract["verification_method_id"],
                 "algorithm": contract["algorithm"],
-                "issuer_public_jwk": contract["issuer_public_jwk"].to_string(),
+                "issuer_public_jwk": signer.public_jwk(),
                 "subject_id": contract["subject_id"],
                 "credential_type": contract["credential_type"],
                 "claims": contract["claims"],
@@ -574,8 +564,11 @@ mod tests {
             let payload = decode_segment(signing_input.split('.').nth(1).unwrap());
             assert_eq!(header["kid"], contract["verification_method_id"]);
             assert_eq!(payload["iss"], contract["issuer_id"]);
-            let (compact, credential_id) =
-                assemble_sd_jwt_impl(&mut handle, &sign_payload(signing_input.as_bytes())).unwrap();
+            let (compact, credential_id) = assemble_sd_jwt_impl(
+                &mut handle,
+                &sign_payload(&signer, signing_input.as_bytes()),
+            )
+            .unwrap();
             assert!(compact.starts_with(&format!("{signing_input}.")));
             assert_eq!(credential_id, case["credential_id"].as_str().unwrap());
         }
@@ -677,12 +670,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped issuer signer"]
     fn malformed_remote_signature_does_not_consume_sd_jwt_state() {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
         let mut prepared = oid4vci_prepare_sd_jwt(
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
-            &issuer_public_jwk(),
+            signer.public_jwk(),
             None,
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -700,7 +695,7 @@ mod tests {
         assert!(prepared.inner.is_some());
 
         let signature = match prepared.inner.as_ref().unwrap() {
-            PreparedCredential::SdJwt(state) => sign_payload(state.signing_payload()),
+            PreparedCredential::SdJwt(state) => sign_payload(&signer, state.signing_payload()),
             _ => unreachable!(),
         };
         assert!(assemble_sd_jwt_impl(&mut prepared, &signature).is_ok());
@@ -708,12 +703,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped issuer signer"]
     fn malformed_remote_signature_does_not_consume_jwt_vc_state() {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
         let mut prepared = oid4vci_prepare_jwt_vc(
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
-            &issuer_public_jwk(),
+            signer.public_jwk(),
             None,
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -730,7 +727,7 @@ mod tests {
         assert!(prepared.inner.is_some());
 
         let signature = match prepared.inner.as_ref().unwrap() {
-            PreparedCredential::JwtVc(state) => sign_payload(state.signing_payload()),
+            PreparedCredential::JwtVc(state) => sign_payload(&signer, state.signing_payload()),
             _ => unreachable!(),
         };
         assert!(assemble_jwt_vc_impl(&mut prepared, &signature).is_ok());
