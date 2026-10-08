@@ -26,7 +26,7 @@ use marty_oid4vci::{
     signer::CredentialSigner,
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     wallet::WalletEngine,
-    Oid4vciError, Oid4vciResult,
+    Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
 };
 use reqwest::{blocking::Client, Url};
 use serde_json::{json, Value};
@@ -335,6 +335,104 @@ fn claims(format: CredentialPayloadFormat) -> CredentialClaims {
         w3c_context: vec![],
         w3c_types: vec![],
     }
+}
+
+struct PublicIssuerResolver {
+    key: ResolvedSdJwtIssuerKey,
+}
+
+impl SdJwtIssuerKeyResolver for PublicIssuerResolver {
+    fn resolve(
+        &self,
+        _issuer: &str,
+        _key_id: Option<&str>,
+        _algorithm: SigningAlgorithm,
+    ) -> Oid4vciResult<ResolvedSdJwtIssuerKey> {
+        Ok(self.key.clone())
+    }
+}
+
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
+    let (client, base, root_token) = disposable_openbao();
+    let issuer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let mut credential_claims = claims(CredentialPayloadFormat::IetfSdJwt);
+    credential_claims.selective_disclosure_claims = vec!["given_name".into()];
+    credential_claims.claims.insert(
+        "cnf".into(),
+        json!({"jwk": serde_json::from_str::<Value>(&holder.public_jwk).unwrap()}),
+    );
+    let SignedCredential::SdJwt { compact, .. } =
+        sign_sd_jwt_with_signer(&issuer, &credential_claims).unwrap()
+    else {
+        panic!("expected issuer-signed SD-JWT")
+    };
+    let resolver = PublicIssuerResolver {
+        key: ResolvedSdJwtIssuerKey::new(
+            ISSUER_DID,
+            Some(issuer.kid_url()),
+            SigningAlgorithm::ES256,
+            issuer.public_jwk.clone(),
+        ),
+    };
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let prepare = |credential: &str, holder_public_jwk: &str| {
+        WalletEngine::new().prepare_verified_sd_jwt_presentation(
+            credential,
+            &["given_name".into()],
+            &nonce,
+            "https://verifier.example",
+            holder_public_jwk,
+            &resolver,
+        )
+    };
+    let prepared = prepare(&compact, &holder.public_jwk).unwrap();
+    assert_eq!(prepared.algorithm(), SigningAlgorithm::ES256);
+    let signature = holder.sign(prepared.signing_input()).unwrap();
+    let presentation = prepared.complete(&signature).unwrap();
+    let verified = verify_sd_jwt(
+        &presentation,
+        &issuer.public_jwk,
+        Some("https://verifier.example".into()),
+        Some(nonce.clone()),
+    )
+    .unwrap();
+    assert_eq!(verified["given_name"], "Alice");
+    assert_eq!(verified["family_name"], "Smith");
+    assert_eq!(holder.payloads.lock().unwrap().len(), 1);
+
+    let (jws, suffix) = compact.split_once('~').unwrap();
+    let mut parts = jws.split('.').map(str::to_owned).collect::<Vec<_>>();
+    let replacement = if parts[2].starts_with('A') { "B" } else { "A" };
+    parts[2].replace_range(..1, replacement);
+    let tampered = format!("{}~{suffix}", parts.join("."));
+    assert!(prepare(&tampered, &holder.public_jwk).is_err());
+    let unrelated_holder = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    assert!(prepare(&compact, &unrelated_holder.public_jwk).is_err());
+    let prepared = prepare(&compact, &holder.public_jwk).unwrap();
+    let wrong_signature = unrelated_holder.sign(prepared.signing_input()).unwrap();
+    assert!(prepared.complete(&wrong_signature).is_err());
+    assert_eq!(holder.payloads.lock().unwrap().len(), 1);
 }
 
 #[test]
