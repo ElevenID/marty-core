@@ -1189,7 +1189,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     use std::cell::Cell;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -1203,7 +1203,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use p256::ecdsa::signature::{Signer as _, Verifier as _};
+    use p256::ecdsa::signature::Verifier as _;
 
     use super::*;
     use crate::error::{Oid4vciError, Oid4vciResult};
@@ -1412,8 +1412,14 @@ mod tests {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    type TestSignatureCache = Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>;
+
+    #[cfg(not(target_family = "wasm"))]
     struct ConcurrentTestSigner {
-        signing_key: p256::ecdsa::SigningKey,
+        // Reqwest's blocking client is not RefUnwindSafe; the concurrent
+        // executor catches worker panics, then joins workers before reuse.
+        backend: std::panic::AssertUnwindSafe<openbao_transit::ScopedEs256Signer>,
+        signature_cache: Option<TestSignatureCache>,
         calls: Mutex<Vec<Vec<u8>>>,
         active_calls: AtomicUsize,
         peak_calls: AtomicUsize,
@@ -1430,8 +1436,18 @@ mod tests {
     #[cfg(not(target_family = "wasm"))]
     impl ConcurrentTestSigner {
         fn new(max_workers: usize, schedule_seed: u64) -> Self {
+            let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+            Self::with_backend(max_workers, schedule_seed, backend)
+        }
+
+        fn with_backend(
+            max_workers: usize,
+            schedule_seed: u64,
+            backend: openbao_transit::ScopedEs256Signer,
+        ) -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x24; 32]).unwrap(),
+                backend: std::panic::AssertUnwindSafe(backend),
+                signature_cache: None,
                 calls: Mutex::new(Vec::new()),
                 active_calls: AtomicUsize::new(0),
                 peak_calls: AtomicUsize::new(0),
@@ -1444,6 +1460,11 @@ mod tests {
                 drift_on_call: None,
                 call_rendezvous: None,
             }
+        }
+
+        fn with_signature_cache(mut self, cache: TestSignatureCache) -> Self {
+            self.signature_cache = Some(cache);
+            self
         }
 
         fn with_fail_labels(mut self, labels: impl IntoIterator<Item = &'static str>) -> Self {
@@ -1559,8 +1580,21 @@ mod tests {
                 return Err(Oid4vciError::SigningError(BACKEND_SECRET.into()));
             }
 
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-            Ok(signature.to_bytes().to_vec())
+            if let Some(cache) = &self.signature_cache {
+                let mut cache = cache.lock().unwrap();
+                if let Some(signature) = cache.get(message) {
+                    return Ok(signature.clone());
+                }
+                let signature = self
+                    .backend
+                    .sign(message)
+                    .map_err(|_| Oid4vciError::SigningError("remote signer unavailable".into()))?;
+                cache.insert(message.to_vec(), signature.clone());
+                return Ok(signature);
+            }
+            self.backend
+                .sign(message)
+                .map_err(|_| Oid4vciError::SigningError("remote signer unavailable".into()))
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -1583,14 +1617,12 @@ mod tests {
             if self.metadata_state.load(Ordering::SeqCst) == 3 {
                 "did:example:changed#key-2".into()
             } else {
-                KID_SECRET.into()
+                self.backend.key_id(ISSUER_SECRET)
             }
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
+            Ok(self.backend.public_jwk().to_owned())
         }
     }
 
@@ -2360,19 +2392,7 @@ mod tests {
         let signatures = signer.signatures.lock().unwrap();
         assert_eq!(calls.len(), 3);
         assert_eq!(signatures.len(), 3);
-        let public: serde_json::Value = serde_json::from_str(signer.backend.public_jwk()).unwrap();
-        let mut point = vec![0x04];
-        point.extend(
-            URL_SAFE_NO_PAD
-                .decode(public["x"].as_str().unwrap())
-                .unwrap(),
-        );
-        point.extend(
-            URL_SAFE_NO_PAD
-                .decode(public["y"].as_str().unwrap())
-                .unwrap(),
-        );
-        let verifying_key = p256::ecdsa::VerifyingKey::from_sec1_bytes(&point).unwrap();
+        let verifying_key = signer.backend.verifying_key();
         for credential in &credentials {
             verify_signed_credential(credential, &verifying_key);
         }
@@ -2408,20 +2428,25 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn randomized_serial_concurrent_jwt_differential_covers_required_batch_sizes() {
+        let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let verifying_key = backend.verifying_key();
         for (batch_size, schedule_seed) in [
             (1, 0x0123_4567_89ab_cdef),
             (8, 0xfedc_ba98_7654_3210),
             (32, 0x55aa_0ff0_33cc_9696),
             (256, 0xdead_beef_cafe_babe),
         ] {
-            let serial_signer = ConcurrentTestSigner::new(1, schedule_seed);
+            let serial_signer =
+                ConcurrentTestSigner::with_backend(1, schedule_seed, backend.clone());
             let serial_credentials = Es256SignerScope::new(&serial_signer)
                 .unwrap()
                 .sign_batch(jwt_inputs(batch_size, "differential"))
                 .unwrap();
 
-            let mut concurrent_signer = ConcurrentTestSigner::new(8, schedule_seed);
+            let mut concurrent_signer =
+                ConcurrentTestSigner::with_backend(8, schedule_seed, backend.clone());
             let concurrent_credentials = {
                 let scope = ConcurrentEs256SignerScope::new(&mut concurrent_signer).unwrap();
                 scope
@@ -2437,8 +2462,8 @@ mod tests {
                     normalized_jwt_semantics(concurrent),
                     "serial and concurrent paths must preserve the same caller-ordered semantics"
                 );
-                verify_signed_credential(serial, serial_signer.signing_key.verifying_key());
-                verify_signed_credential(concurrent, concurrent_signer.signing_key.verifying_key());
+                verify_signed_credential(serial, &verifying_key);
+                verify_signed_credential(concurrent, &verifying_key);
             }
 
             assert_eq!(serial_signer.call_count(), batch_size);
@@ -2456,20 +2481,25 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn randomized_serial_concurrent_sd_jwt_differential_covers_required_batch_sizes() {
+        let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let verifying_key = backend.verifying_key();
         for (batch_size, schedule_seed) in [
             (1, 0x1123_4567_89ab_cdef),
             (8, 0x2edc_ba98_7654_3210),
             (32, 0x35aa_0ff0_33cc_9696),
             (256, 0x4ead_beef_cafe_babe),
         ] {
-            let serial_signer = ConcurrentTestSigner::new(1, schedule_seed);
+            let serial_signer =
+                ConcurrentTestSigner::with_backend(1, schedule_seed, backend.clone());
             let serial_credentials = Es256SignerScope::new(&serial_signer)
                 .unwrap()
                 .sign_batch(sd_jwt_inputs(batch_size, "sd-differential"))
                 .unwrap();
 
-            let mut concurrent_signer = ConcurrentTestSigner::new(8, schedule_seed);
+            let mut concurrent_signer =
+                ConcurrentTestSigner::with_backend(8, schedule_seed, backend.clone());
             let concurrent_credentials = {
                 let scope = ConcurrentEs256SignerScope::new(&mut concurrent_signer).unwrap();
                 scope
@@ -2485,8 +2515,8 @@ mod tests {
                     normalized_sd_jwt_semantics(concurrent),
                     "serial and concurrent paths must preserve proof-bound SD-JWT semantics"
                 );
-                verify_signed_credential(serial, serial_signer.signing_key.verifying_key());
-                verify_signed_credential(concurrent, concurrent_signer.signing_key.verifying_key());
+                verify_signed_credential(serial, &verifying_key);
+                verify_signed_credential(concurrent, &verifying_key);
             }
 
             assert_eq!(serial_signer.call_count(), batch_size);
@@ -2504,6 +2534,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn fixed_source_proof_bound_sd_jwt_is_byte_exact_across_repeated_schedules() {
         const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
         const SCHEDULES: [(usize, u64); 3] = [
@@ -2512,6 +2543,12 @@ mod tests {
             (8, 0x55aa_0ff0_33cc_9696),
         ];
 
+        let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        // OpenBao ECDSA signatures can vary for identical input. Cache only the
+        // first remotely produced signature per payload so this test can still
+        // compare assembly bytes across worker schedules.
+        let signature_cache = Arc::new(Mutex::new(HashMap::new()));
+        let verifying_key = backend.verifying_key();
         for payload_format in [
             CredentialPayloadFormat::IetfSdJwt,
             CredentialPayloadFormat::W3cVcdmV2SdJwt,
@@ -2522,7 +2559,12 @@ mod tests {
                 let mut schedule_baseline: Option<Vec<(Vec<u8>, Vec<u8>)>> = None;
 
                 for (worker_limit, schedule_seed) in SCHEDULES {
-                    let mut signer = ConcurrentTestSigner::new(worker_limit, schedule_seed);
+                    let mut signer = ConcurrentTestSigner::with_backend(
+                        worker_limit,
+                        schedule_seed,
+                        backend.clone(),
+                    )
+                    .with_signature_cache(Arc::clone(&signature_cache));
                     let serial_credentials = sign_fixed_sd_jwt_batch_serially(&signer, &fixture);
                     let concurrent_credentials =
                         sign_fixed_sd_jwt_batch_concurrently(&mut signer, &fixture);
@@ -2548,7 +2590,7 @@ mod tests {
                         .iter()
                         .chain(concurrent_credentials.iter())
                     {
-                        verify_signed_credential(credential, signer.signing_key.verifying_key());
+                        verify_signed_credential(credential, &verifying_key);
                         assert_fixed_sd_jwt_protocol_boundary(
                             credential,
                             &payload_format,
@@ -2572,6 +2614,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_mixed_formats_restore_order_and_preserve_valid_signatures() {
         let inputs = (0..9)
             .map(|ordinal| match ordinal % 3 {
@@ -2581,6 +2624,7 @@ mod tests {
             })
             .collect();
         let mut signer = ConcurrentTestSigner::new(4, 0x1357_9bdf_2468_ace0);
+        let verifying_key = signer.backend.verifying_key();
         let credentials = {
             let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
             scope.sign_batch_concurrently(inputs).unwrap()
@@ -2593,7 +2637,7 @@ mod tests {
                 1 => assert!(matches!(credential, SignedCredential::SdJwt { .. })),
                 _ => assert!(matches!(credential, SignedCredential::MsoMdoc { .. })),
             }
-            verify_signed_credential(credential, signer.signing_key.verifying_key());
+            verify_signed_credential(credential, &verifying_key);
         }
         assert_eq!(signer.call_count(), 9);
         assert_eq!(signer.unique_call_count(), 9);
@@ -2603,6 +2647,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_worker_bounds_cover_empty_single_one_and_library_ceiling() {
         let mut empty_signer = ConcurrentTestSigner::new(8, 1);
         let empty = {
@@ -2658,6 +2703,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_errors_finish_all_jobs_and_choose_lowest_caller_ordinal() {
         let mut signer = ConcurrentTestSigner::new(4, 0xa5a5_5a5a_f0f0_0f0f)
             .with_fail_labels(["failure-2", "failure-7"]);
@@ -2765,6 +2811,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn post_join_metadata_drift_precedes_a_returned_backend_error() {
         let mut failing_signer = ConcurrentTestSigner::new(4, 0x1212_3434_5656_7878)
             .with_fail_labels(["failure-2"])
@@ -2783,6 +2830,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_duplicate_preparation_and_metadata_drift_fail_closed() {
         let mut duplicate_signer = ConcurrentTestSigner::new(4, 11);
         {

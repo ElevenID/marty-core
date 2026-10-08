@@ -136,6 +136,7 @@ impl DisposableOpenBao {
     }
 }
 
+#[derive(Clone)]
 pub struct ScopedEs256Signer {
     client: Client,
     base: String,
@@ -157,6 +158,15 @@ impl ScopedEs256Signer {
 
     pub fn public_jwk(&self) -> &str {
         &self.public_jwk
+    }
+
+    pub fn verifying_key(&self) -> p256::ecdsa::VerifyingKey {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let public: Value = serde_json::from_str(&self.public_jwk).unwrap();
+        let mut point = vec![0x04];
+        point.extend(URL_SAFE_NO_PAD.decode(public["x"].as_str().unwrap()).unwrap());
+        point.extend(URL_SAFE_NO_PAD.decode(public["y"].as_str().unwrap()).unwrap());
+        p256::ecdsa::VerifyingKey::from_sec1_bytes(&point).unwrap()
     }
 
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
