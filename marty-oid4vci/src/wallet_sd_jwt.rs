@@ -202,37 +202,6 @@ pub(crate) fn prepare_verified_presentation(
     Ok(PreparedSdJwtPresentation { inner })
 }
 
-#[cfg(test)]
-pub(crate) fn create_verified_presentation(
-    credential: &str,
-    claims_to_disclose: &[String],
-    nonce: &str,
-    audience: &str,
-    holder_private_jwk_json: &str,
-    issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
-) -> Oid4vciResult<String> {
-    use p256::ecdsa::signature::Signer as _;
-
-    let signing_key =
-        crate::holder_key::p256_signing_key_from_private_jwk(holder_private_jwk_json)?;
-    let mut public_jwk: serde_json::Value = serde_json::from_str(holder_private_jwk_json)
-        .map_err(|error| Oid4vciError::KeyError(error.to_string()))?;
-    public_jwk
-        .as_object_mut()
-        .ok_or_else(|| Oid4vciError::KeyError("Holder JWK must be an object".into()))?
-        .remove("d");
-    let prepared = prepare_verified_presentation(
-        credential,
-        claims_to_disclose,
-        nonce,
-        audience,
-        &public_jwk.to_string(),
-        issuer_key_resolver,
-    )?;
-    let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
-    prepared.complete(signature.to_bytes().as_slice())
-}
-
 fn parse_sd_jwt_issuer_context(credential: &str) -> Oid4vciResult<SdJwtIssuerContext> {
     let issuer_jws = credential
         .split('~')

@@ -941,26 +941,6 @@ impl WalletEngine {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn create_verified_sd_jwt_presentation(
-        &self,
-        credential: &str,
-        claims_to_disclose: &[String],
-        nonce: &str,
-        audience: &str,
-        holder_private_jwk_json: &str,
-        issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
-    ) -> Oid4vciResult<String> {
-        wallet_sd_jwt::create_verified_presentation(
-            credential,
-            claims_to_disclose,
-            nonce,
-            audience,
-            holder_private_jwk_json,
-            issuer_key_resolver,
-        )
-    }
-
     // ──────────────────────────────────────────────────────────────────────
     // Credential request (§8)
     // ──────────────────────────────────────────────────────────────────────

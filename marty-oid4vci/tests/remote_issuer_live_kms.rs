@@ -352,6 +352,31 @@ impl SdJwtIssuerKeyResolver for PublicIssuerResolver {
     }
 }
 
+fn resign_sd_jwt_with_remote_issuer(
+    credential: &str,
+    issuer: &OpenBaoSigner,
+    mutate: impl FnOnce(&mut Value, &mut Value),
+) -> String {
+    let (jws, suffix) = credential.split_once('~').unwrap();
+    let segments = jws.split('.').collect::<Vec<_>>();
+    assert_eq!(segments.len(), 3);
+    let mut header: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[0]).unwrap()).unwrap();
+    let mut payload: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
+    mutate(&mut header, &mut payload);
+    let signing_input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+    );
+    let signature = issuer.sign(signing_input.as_bytes()).unwrap();
+    format!(
+        "{signing_input}.{}~{suffix}",
+        URL_SAFE_NO_PAD.encode(signature)
+    )
+}
+
 #[test]
 #[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
 fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
@@ -371,7 +396,13 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
         SigningAlgorithm::ES256,
     );
     let mut credential_claims = claims(CredentialPayloadFormat::IetfSdJwt);
-    credential_claims.selective_disclosure_claims = vec!["given_name".into()];
+    credential_claims.credential_type = "VerifiedWalletCredential".into();
+    credential_claims.expiration_seconds = None;
+    credential_claims.claims = HashMap::from([
+        ("email".into(), json!("member@example.com")),
+        ("role".into(), json!("member")),
+    ]);
+    credential_claims.selective_disclosure_claims = vec!["email".into()];
     credential_claims.claims.insert(
         "cnf".into(),
         json!({"jwk": serde_json::from_str::<Value>(&holder.public_jwk).unwrap()}),
@@ -393,7 +424,7 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
     let prepare = |credential: &str, holder_public_jwk: &str| {
         WalletEngine::new().prepare_verified_sd_jwt_presentation(
             credential,
-            &["given_name".into()],
+            &["email".into()],
             &nonce,
             "https://verifier.example",
             holder_public_jwk,
@@ -411,8 +442,8 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
         Some(nonce.clone()),
     )
     .unwrap();
-    assert_eq!(verified["given_name"], "Alice");
-    assert_eq!(verified["family_name"], "Smith");
+    assert_eq!(verified["email"], "member@example.com");
+    assert_eq!(verified["role"], "member");
     assert_eq!(holder.payloads.lock().unwrap().len(), 1);
 
     let (jws, suffix) = compact.split_once('~').unwrap();
@@ -433,6 +464,56 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
     let wrong_signature = unrelated_holder.sign(prepared.signing_input()).unwrap();
     assert!(prepared.complete(&wrong_signature).is_err());
     assert_eq!(holder.payloads.lock().unwrap().len(), 1);
+
+    let transitional = resign_sd_jwt_with_remote_issuer(&compact, &issuer, |header, _| {
+        header["typ"] = json!("dc+sd-jwt");
+    });
+    assert!(prepare(&transitional, &holder.public_jwk).is_ok());
+
+    let private_cnf = resign_sd_jwt_with_remote_issuer(&compact, &issuer, |_, payload| {
+        payload["cnf"]["jwk"]["d"] = json!("rejected-private-member");
+    });
+    let error = prepare(&private_cnf, &holder.public_jwk).err().unwrap();
+    assert!(error
+        .to_string()
+        .contains("contains private key material: d"));
+
+    let no_kid = resign_sd_jwt_with_remote_issuer(&compact, &issuer, |header, _| {
+        header.as_object_mut().unwrap().remove("kid");
+    });
+    let resolver_without_kid = PublicIssuerResolver {
+        key: ResolvedSdJwtIssuerKey::new(
+            ISSUER_DID,
+            None,
+            SigningAlgorithm::ES256,
+            issuer.public_jwk.clone(),
+        ),
+    };
+    let prepare_without_kid = |resolver: &PublicIssuerResolver| {
+        WalletEngine::new().prepare_verified_sd_jwt_presentation(
+            &no_kid,
+            &["email".into()],
+            &nonce,
+            "https://verifier.example",
+            &holder.public_jwk,
+            resolver,
+        )
+    };
+    assert!(prepare_without_kid(&resolver_without_kid).is_ok());
+    for malformed_kid in [Value::Null, json!("")] {
+        let mut malformed_public: Value = serde_json::from_str(&issuer.public_jwk).unwrap();
+        malformed_public["kid"] = malformed_kid;
+        let resolver = PublicIssuerResolver {
+            key: ResolvedSdJwtIssuerKey::new(
+                ISSUER_DID,
+                None,
+                SigningAlgorithm::ES256,
+                malformed_public.to_string(),
+            ),
+        };
+        let error = prepare_without_kid(&resolver).err().unwrap();
+        assert!(error.to_string().contains("non-empty string when present"));
+    }
 }
 
 #[test]
