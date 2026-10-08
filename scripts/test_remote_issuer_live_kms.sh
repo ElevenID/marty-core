@@ -114,6 +114,10 @@ fi
   dtc_behavior_tests -- --ignored
 "$cargo" test --locked -p marty-verification --test mdl_conformance -- --ignored
 "$cargo" test --locked -p marty-verification --test chain_validation_tests -- --ignored
+if [[ "$(uname -s)" == "Linux" && "$cargo" != *.exe ]]; then
+  "$cargo" test --locked -p marty-verification --test cross_validation \
+    --features cross-validation -- --include-ignored
+fi
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
   formats::mdoc::tests \
