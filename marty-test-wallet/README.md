@@ -42,6 +42,20 @@ the agent-owned `{ algorithm, key_id }` policy plus `signing_input` and returns
 `{ "signature": "<base64url raw ES256>" }`. Neither Marty process loads a
 private key: the agent is only a policy and transport bridge to the KMS.
 
+For a non-exportable OpenBao Transit ECDSA P-256 key, set
+`MARTY_TEST_SIGNER_AGENT_KMS_PROVIDER=openbao-transit` and point
+`MARTY_TEST_SIGNER_AGENT_KMS_URL` at the exact HTTPS
+`/v1/transit/sign/<key-name>` route. Set
+`MARTY_TEST_SIGNER_AGENT_KMS_BEARER_TOKEN` to an agent-scoped OpenBao token;
+the agent sends it as `X-Vault-Token`. The optional
+`MARTY_TEST_SIGNER_AGENT_KMS_CA_CERT_PEM` names a trusted CA PEM for a
+disposable or private TLS endpoint. The agent sends SHA-256 of the exact
+signing input with `prehashed=true` and `hash_algorithm=sha2-256`, then
+normalizes OpenBao's versioned DER signature to raw ES256. Give issuer and
+holder agents different Transit keys and tokens whose policies allow only
+their respective sign routes. The existing generic HTTPS contract remains
+the default when the provider variable is omitted.
+
 The browser API returns display metadata only. Run it after configuring those
 values:
 
@@ -73,8 +87,8 @@ endpoint, authentication key, `MARTY_TEST_SIGNER_AGENT_ALLOWED_KEY_ID`, HTTPS
 KMS URL and provider authorization. The producer needs:
 
 - `MARTY_POSITIVE_GATE_ISSUER_PUBLIC_JWK`: public P-256 JWK with `kid` set to
-  `did:example:verifier-runtime-gate-issuer` and `alg` set to `ES256`;
-- `MARTY_POSITIVE_GATE_ISSUER_KID`: that same issuer identifier;
+  `did:example:verifier-runtime-gate-issuer#key-1` and `alg` set to `ES256`;
+- `MARTY_POSITIVE_GATE_ISSUER_KID`: that same verification-method ID;
 - `MARTY_POSITIVE_GATE_ISSUER_SIGNER_ENDPOINT` and
   `MARTY_POSITIVE_GATE_ISSUER_SIGNER_AUTHENTICATION_KEY`: the issuer agent's
   authenticated IPC configuration;

@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
 const ISSUER: &str = "did:example:verifier-runtime-gate-issuer";
+const ISSUER_KID: &str = "did:example:verifier-runtime-gate-issuer#key-1";
 const HOLDER: &str = "did:example:runtime-gate-holder";
 const NONCE: &str = "runtime-gate-nonce-with-at-least-32-bytes";
 const AUDIENCE: &str = "https://verifier.runtime-gate.invalid";
@@ -35,14 +36,14 @@ impl SdJwtIssuerKeyResolver for FixedIssuerResolver {
         key_id: Option<&str>,
         algorithm: SigningAlgorithm,
     ) -> Oid4vciResult<ResolvedSdJwtIssuerKey> {
-        if issuer != ISSUER || key_id != Some(ISSUER) || algorithm != SigningAlgorithm::ES256 {
+        if issuer != ISSUER || key_id != Some(ISSUER_KID) || algorithm != SigningAlgorithm::ES256 {
             return Err(marty_oid4vci::Oid4vciError::KeyError(
                 "positive gate issuer identity mismatch".into(),
             ));
         }
         Ok(ResolvedSdJwtIssuerKey::new(
             ISSUER,
-            Some(ISSUER.into()),
+            Some(ISSUER_KID.into()),
             SigningAlgorithm::ES256,
             self.public_jwk_json.clone(),
         ))
@@ -77,7 +78,7 @@ fn public_jwk(name: &'static str, issuer: bool) -> Result<Value, &'static str> {
     if value["kty"] != "EC" || value["crv"] != "P-256" {
         return Err("public JWK must be P-256");
     }
-    if issuer && (value["kid"] != ISSUER || value["alg"] != "ES256") {
+    if issuer && (value["kid"] != ISSUER_KID || value["alg"] != "ES256") {
         return Err("issuer public JWK identity mismatch");
     }
     for coordinate in ["x", "y"] {
@@ -130,7 +131,7 @@ async fn remote_sign(
 async fn produce() -> Result<Value, &'static str> {
     let issuer_public = public_jwk("MARTY_POSITIVE_GATE_ISSUER_PUBLIC_JWK", true)?;
     let holder_public = public_jwk("MARTY_TEST_WALLET_HOLDER_PUBLIC_JWK", false)?;
-    if required_env("MARTY_POSITIVE_GATE_ISSUER_KID")? != ISSUER {
+    if required_env("MARTY_POSITIVE_GATE_ISSUER_KID")? != ISSUER_KID {
         return Err("issuer signer key identifier mismatch");
     }
     let holder_kid = required_env("MARTY_TEST_WALLET_HOLDER_KID")?;
@@ -143,7 +144,7 @@ async fn produce() -> Result<Value, &'static str> {
 
     let prepared = prepare_remote_sd_jwt(RemoteSdJwtRequest {
         issuer_id: ISSUER.into(),
-        verification_method_id: ISSUER.into(),
+        verification_method_id: ISSUER_KID.into(),
         algorithm: "ES256".into(),
         issuer_public_jwk: issuer_public.to_string(),
         subject_id: Some(HOLDER.into()),
@@ -208,5 +209,17 @@ async fn main() {
             eprintln!("KMS positive verifier input unavailable: {message}");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marty_oid4vci::remote_credential::RemoteSignerMetadata;
+
+    #[test]
+    fn issuer_signer_identity_is_a_key_under_the_issuer_did() {
+        assert!(RemoteSignerMetadata::new(ISSUER, ISSUER_KID, "ES256", "{}".into()).is_ok());
+        assert!(RemoteSignerMetadata::new(ISSUER, ISSUER, "ES256", "{}".into()).is_err());
     }
 }
