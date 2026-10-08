@@ -241,22 +241,14 @@ fn strict_ed25519_verifying_key(bytes: &[u8]) -> Oid4vciResult<ed25519_dalek::Ve
 
 #[cfg(test)]
 pub(crate) fn test_es256_public_jwk() -> String {
-    let signing_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into())
-        .expect("fixed P-256 test key must be valid");
-    test_es256_public_jwk_for_key(&signing_key)
-}
-
-#[cfg(test)]
-pub(crate) fn test_es256_public_jwk_for_key(signing_key: &p256::ecdsa::SigningKey) -> String {
-    use base64::Engine as _;
-
-    let point = signing_key.verifying_key().to_encoded_point(false);
+    // Public half of the historical fixed test vector. Preparation-only
+    // fixtures do not need access to its private scalar.
     serde_json::json!({
         "alg": "ES256",
         "crv": "P-256",
         "kty": "EC",
-        "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-        "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        "x": "HhhTL9R1TALzBB2cdc6zO4P_2BrHzk_ogsyxyYvFiW4",
+        "y": "pGwxHE4v9A3ZajZT5uRURdMt_khuztdcepDGoYiBwKM",
     })
     .to_string()
 }
@@ -265,21 +257,14 @@ pub(crate) fn test_es256_public_jwk_for_key(signing_key: &p256::ecdsa::SigningKe
 pub(crate) fn test_public_jwk(algorithm: SigningAlgorithm) -> String {
     match algorithm {
         SigningAlgorithm::ES256 => test_es256_public_jwk(),
-        SigningAlgorithm::ES384 => {
-            use base64::Engine as _;
-
-            let signing_key = p384::ecdsa::SigningKey::from_bytes((&[7u8; 48]).into())
-                .expect("fixed P-384 test key must be valid");
-            let point = signing_key.verifying_key().to_encoded_point(false);
-            serde_json::json!({
-                "alg": "ES384",
-                "crv": "P-384",
-                "kty": "EC",
-                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-            })
-            .to_string()
-        }
+        SigningAlgorithm::ES384 => serde_json::json!({
+            "alg": "ES384",
+            "crv": "P-384",
+            "kty": "EC",
+            "x": "sBv8Si1_4gleZifMXK-avRU9W1Uf5_baYV2p0b_RAejRkehZAsCjTqo6FuZmiAtz",
+            "y": "BZ9ljE1qblfAlZ3oAQmw-mtWvWPR1XAak9FTIvImehVSZkHGDNB8kSpt9Yqpk9ib",
+        })
+        .to_string(),
         _ => panic!("no fixed public test key for {algorithm}"),
     }
 }
