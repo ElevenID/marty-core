@@ -7,6 +7,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine,
 };
+use ciborium::Value as CborValue;
 use marty_oid4vci::{
     formats::{
         jwt_vc::sign_jwt_vc_with_signer,
@@ -30,6 +31,104 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 const ISSUER_DID: &str = "did:web:issuer.example";
+const COSE_HEADER_ALG: i64 = 1;
+const COSE_HEADER_X5CHAIN: i64 = 33;
+
+fn assert_iso_18013_x5chain_location(credential: SignedCredential, certificates: &[Vec<u8>]) {
+    let SignedCredential::MsoMdoc {
+        issuer_signed_b64, ..
+    } = credential
+    else {
+        panic!("expected mso_mdoc credential")
+    };
+    let bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
+    let typed: isomdl::definitions::IssuerSigned = isomdl::cbor::from_slice(&bytes).unwrap();
+    let namespaces = typed.namespaces.as_ref().expect("nameSpaces present");
+    let items = namespaces
+        .get("org.iso.18013.5.1")
+        .expect("mDL namespace present");
+    assert_eq!(items.len(), 1, "x5chain metadata must not be issued");
+    assert_eq!(items[0].as_ref().element_identifier, "family_name");
+
+    let encoded_mso: CborValue =
+        isomdl::cbor::from_slice(typed.issuer_auth.payload.as_ref().expect("MSO payload")).unwrap();
+    let CborValue::Tag(24, encoded_mso) = encoded_mso else {
+        panic!("issuerAuth payload must be MobileSecurityObjectBytes")
+    };
+    let CborValue::Bytes(encoded_mso) = *encoded_mso else {
+        panic!("MobileSecurityObjectBytes must contain a byte string")
+    };
+    let CborValue::Map(mso) = isomdl::cbor::from_slice(&encoded_mso).unwrap() else {
+        panic!("MobileSecurityObject must be a map")
+    };
+    let CborValue::Map(value_digests) = mso
+        .iter()
+        .find_map(|(key, value)| (key == &CborValue::Text("valueDigests".into())).then_some(value))
+        .expect("valueDigests present")
+    else {
+        panic!("valueDigests must be a map")
+    };
+    let CborValue::Map(namespace_digests) = value_digests
+        .iter()
+        .find_map(|(key, value)| {
+            (key == &CborValue::Text("org.iso.18013.5.1".into())).then_some(value)
+        })
+        .expect("mDL namespace digests present")
+    else {
+        panic!("namespace valueDigests must be a map")
+    };
+    assert_eq!(
+        namespace_digests.len(),
+        1,
+        "x5chain metadata must not have a valueDigest"
+    );
+
+    let issuer_signed: CborValue = ciborium::from_reader(&bytes[..]).unwrap();
+    let issuer_auth = match issuer_signed {
+        CborValue::Map(entries) => entries
+            .into_iter()
+            .find_map(|(key, value)| (key == CborValue::Text("issuerAuth".into())).then_some(value))
+            .expect("issuerAuth"),
+        _ => panic!("IssuerSigned must be a map"),
+    };
+    let parts = match issuer_auth {
+        CborValue::Array(parts) => parts,
+        _ => panic!("issuerAuth must be a COSE_Sign1 array"),
+    };
+    let protected_bytes = match parts.first() {
+        Some(CborValue::Bytes(bytes)) => bytes,
+        _ => panic!("protected header must be a byte string"),
+    };
+    let CborValue::Map(protected) = ciborium::from_reader(&protected_bytes[..]).unwrap() else {
+        panic!("protected header must decode to a map")
+    };
+    assert!(protected.iter().any(|(key, value)| {
+        key == &CborValue::Integer(COSE_HEADER_ALG.into())
+            && value == &CborValue::Integer((-7).into())
+    }));
+    assert!(!protected
+        .iter()
+        .any(|(key, _)| key == &CborValue::Integer(COSE_HEADER_X5CHAIN.into())));
+    let unprotected = match parts.get(1) {
+        Some(CborValue::Map(headers)) => headers,
+        _ => panic!("unprotected header must be a map"),
+    };
+    let x5chain = unprotected
+        .iter()
+        .find_map(|(key, value)| {
+            (key == &CborValue::Integer(COSE_HEADER_X5CHAIN.into())).then_some(value)
+        })
+        .expect("x5chain must be unprotected");
+    assert_eq!(
+        x5chain,
+        &CborValue::Array(
+            certificates
+                .iter()
+                .map(|certificate| CborValue::Bytes(certificate.clone()))
+                .collect()
+        )
+    );
+}
 
 struct OpenBaoSigner {
     client: Client,
@@ -438,6 +537,21 @@ fn issuer_formats_use_remote_non_exportable_keys() {
         assert_eq!(verified["given_name"], "Alice");
         assert_eq!(verified["family_name"], "Smith");
     }
+
+    let certificates = vec![vec![0x30, 0x82, 0x01, 0x0a], vec![0x30, 0x82, 0x01, 0x0b]];
+    let mut x5chain_claims = mdoc_claims.clone();
+    x5chain_claims.claims = HashMap::from([
+        ("family_name".into(), json!("Mustermann")),
+        (
+            "_mdoc_x5c".into(),
+            json!(certificates
+                .iter()
+                .map(|der| STANDARD.encode(der))
+                .collect::<Vec<_>>()),
+        ),
+    ]);
+    let signed_x5chain = sign_mdoc_with_signer(&es256, &x5chain_claims).unwrap();
+    assert_iso_18013_x5chain_location(signed_x5chain, &certificates);
 }
 
 #[test]

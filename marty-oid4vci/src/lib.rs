@@ -135,9 +135,6 @@ mod local_issuer_key_compile_boundary {}
 #[cfg(test)]
 #[path = "../tests/issuance_input.rs"]
 mod issuance_input_tests;
-#[cfg(all(test, feature = "issuer", feature = "mso_mdoc"))]
-#[path = "../tests/mdoc_x5chain_conformance.rs"]
-mod mdoc_x5chain_conformance;
 #[cfg(all(test, feature = "wallet"))]
 #[path = "../tests/sd_jwt_wallet_verified_presentation.rs"]
 mod sd_jwt_wallet_verified_presentation;
