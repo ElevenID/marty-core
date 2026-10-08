@@ -49,6 +49,10 @@
 #[cfg(test)]
 extern crate self as marty_oid4vci;
 
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "../tests/support/openbao_transit.rs"]
+mod openbao_transit;
+
 mod bounded_jwt;
 pub mod discovery;
 pub mod error;

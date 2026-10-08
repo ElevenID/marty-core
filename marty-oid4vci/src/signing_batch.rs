@@ -1180,12 +1180,7 @@ fn assemble_credentials(
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_family = "wasm"))]
-    mod openbao_transit {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/support/openbao_transit.rs"
-        ));
-    }
+    use crate::openbao_transit;
 
     #[cfg(not(target_family = "wasm"))]
     use std::cell::Cell;
@@ -1275,7 +1270,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     struct RemoteRecordingSigner {
-        backend: openbao_transit::ScopedEs256Signer,
+        backend: openbao_transit::ScopedTransitSigner,
         calls: Mutex<Vec<Vec<u8>>>,
         signatures: Mutex<Vec<Vec<u8>>>,
     }
@@ -1418,7 +1413,7 @@ mod tests {
     struct ConcurrentTestSigner {
         // Reqwest's blocking client is not RefUnwindSafe; the concurrent
         // executor catches worker panics, then joins workers before reuse.
-        backend: std::panic::AssertUnwindSafe<openbao_transit::ScopedEs256Signer>,
+        backend: std::panic::AssertUnwindSafe<openbao_transit::ScopedTransitSigner>,
         signature_cache: Option<TestSignatureCache>,
         calls: Mutex<Vec<Vec<u8>>>,
         active_calls: AtomicUsize,
@@ -1443,7 +1438,7 @@ mod tests {
         fn with_backend(
             max_workers: usize,
             schedule_seed: u64,
-            backend: openbao_transit::ScopedEs256Signer,
+            backend: openbao_transit::ScopedTransitSigner,
         ) -> Self {
             Self {
                 backend: std::panic::AssertUnwindSafe(backend),

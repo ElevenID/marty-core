@@ -229,12 +229,7 @@ fn normalize_signature_bytes(algorithm: &str, signature: &[u8]) -> Oid4vciResult
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_family = "wasm"))]
-    mod openbao_transit {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/support/openbao_transit.rs"
-        ));
-    }
+    use crate::openbao_transit;
 
     use super::*;
     use crate::signer::CredentialSigner;
@@ -242,7 +237,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     struct TestSigner {
-        backend: openbao_transit::ScopedEs256Signer,
+        backend: openbao_transit::ScopedTransitSigner,
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -405,29 +400,6 @@ mod tests {
         }
     }
 
-    fn p384_public_jwk(signing_key: &p384::ecdsa::SigningKey) -> String {
-        let point = signing_key.verifying_key().to_encoded_point(false);
-        serde_json::json!({
-            "alg": "ES384",
-            "crv": "P-384",
-            "kty": "EC",
-            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-        })
-        .to_string()
-    }
-
-    fn ed25519_public_jwk(signing_key: &ed25519_dalek::SigningKey) -> String {
-        serde_json::json!({
-            "alg": "EdDSA",
-            "crv": "Ed25519",
-            "kty": "OKP",
-            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(signing_key.verifying_key().to_bytes()),
-        })
-        .to_string()
-    }
-
     fn barcode_signature_bytes(barcode_data: &str) -> Vec<u8> {
         let sig_b64 = barcode_data.split('~').nth(2).expect("segment 3");
         base64::engine::general_purpose::STANDARD
@@ -500,18 +472,18 @@ mod tests {
         assert_eq!(sig_bytes, raw_bytes);
     }
 
-    /// Mock KMS: returns a DER-encoded P-384 ECDSA signature.
+    /// OpenBao Transit returns a DER-encoded P-384 ECDSA signature.
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn kms_p384_der_signature_is_normalized_to_raw() {
-        use p384::ecdsa::{signature::Signer as _, SigningKey};
-        use rand::rngs::OsRng;
+        let signer = openbao_transit::DisposableOpenBao::from_marked_env().create_es384();
+        let prepared = make_prepared("DEU", "ES384", signer.public_jwk().to_owned());
+        let sig_der = signer
+            .sign_es384_der(prepared.signing_input.as_bytes())
+            .unwrap();
 
-        let signing_key = SigningKey::random(&mut OsRng);
-        let prepared = make_prepared("DEU", "ES384", p384_public_jwk(&signing_key));
-        let sig_der: p384::ecdsa::DerSignature =
-            signing_key.sign(prepared.signing_input.as_bytes());
-
-        let assembled = assemble_vds_nc(prepared, sig_der.as_bytes()).unwrap();
+        let assembled = assemble_vds_nc(prepared, &sig_der).unwrap();
         let sig_bytes = match assembled {
             SignedCredential::VdsNc {
                 ref barcode_data, ..
@@ -526,21 +498,22 @@ mod tests {
             "P-384 raw signature must be 96 bytes, got {}",
             sig_bytes.len()
         );
-        let expected = p384::ecdsa::Signature::from_der(sig_der.as_bytes())
+        let expected = p384::ecdsa::Signature::from_der(&sig_der)
             .expect("valid P-384 DER signature")
             .to_bytes();
         assert_eq!(sig_bytes, expected.as_slice());
     }
 
     /// Ed25519 signatures are 64 bytes and never DER-encoded; pass through unchanged.
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn ed25519_signature_passes_through_unchanged() {
-        use ed25519_dalek::{Signer as _, SigningKey};
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let prepared = make_prepared("FRA", "EdDSA", ed25519_public_jwk(&signing_key));
-        let raw_ed25519_sig = signing_key
-            .sign(prepared.signing_input.as_bytes())
-            .to_bytes();
+        let signer = openbao_transit::DisposableOpenBao::from_marked_env().create_ed25519();
+        let prepared = make_prepared("FRA", "EdDSA", signer.public_jwk().to_owned());
+        let raw_ed25519_sig = signer
+            .sign_ed25519(prepared.signing_input.as_bytes())
+            .unwrap();
         let assembled = assemble_vds_nc(prepared, &raw_ed25519_sig).unwrap();
         let sig_bytes = match assembled {
             SignedCredential::VdsNc {
@@ -583,45 +556,33 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn rsa_pss_profile_signatures_bind_every_algorithm_to_payload_and_public_key() {
-        type Signer = fn(&[u8], &[u8]) -> marty_crypto::CryptoResult<Vec<u8>>;
-
-        let (private_key, _) = marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
-        let (wrong_private_key, _) =
-            marty_crypto_test_support::rsa::generate_rsa_keypair(2048).unwrap();
-        let cases: [(&str, Signer); 3] = [
-            ("PS256", marty_crypto_test_support::rsa::sign_pss_sha256),
-            ("PS384", marty_crypto_test_support::rsa::sign_pss_sha384),
-            ("PS512", marty_crypto_test_support::rsa::sign_pss_sha512),
-        ];
-
-        for (algorithm, sign) in cases {
-            let issuer_jwk = marty_crypto_test_support::serialization::public_jwk_from_private_key(
-                &private_key,
-                algorithm,
-            )
-            .unwrap();
-            let wrong_jwk = marty_crypto_test_support::serialization::public_jwk_from_private_key(
-                &wrong_private_key,
-                algorithm,
-            )
-            .unwrap();
+        let provider = openbao_transit::DisposableOpenBao::from_marked_env();
+        let signer = provider.create_rsa2048();
+        let wrong_signer = provider.create_rsa2048();
+        for algorithm in ["PS256", "PS384", "PS512"] {
+            let issuer_jwk = signer.public_jwk();
+            let wrong_jwk = wrong_signer.public_jwk();
             let prepared = prepare_vds_nc_profile(
                 "TESTSGN",
                 "TESTCERT001",
                 algorithm,
-                &issuer_jwk,
+                issuer_jwk,
                 &cmc_claims("AUS"),
             )
             .unwrap();
-            let signature = sign(&private_key, prepared.signing_payload()).unwrap();
-            assert!(assemble_vds_nc_raw(prepared, &signature).is_ok());
+            let signature = signer
+                .sign_rsa_pss(prepared.signing_payload(), algorithm)
+                .unwrap();
+            assemble_vds_nc_raw(prepared, &signature)
+                .unwrap_or_else(|error| panic!("{algorithm} remote signature rejected: {error}"));
 
             let mut wrong_payload = prepare_vds_nc_profile(
                 "TESTSGN",
                 "TESTCERT001",
                 algorithm,
-                &issuer_jwk,
+                issuer_jwk,
                 &cmc_claims("AUS"),
             )
             .unwrap();
@@ -632,7 +593,7 @@ mod tests {
                 "TESTSGN",
                 "TESTCERT001",
                 algorithm,
-                &wrong_jwk,
+                wrong_jwk,
                 &cmc_claims("AUS"),
             )
             .unwrap();

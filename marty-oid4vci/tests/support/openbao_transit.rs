@@ -1,9 +1,12 @@
-// Test-only scoped ES256 signer for the marked disposable OpenBao runner.
+// Test-only scoped signers for the marked disposable OpenBao runner.
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use reqwest::{blocking::Client, Url};
 use serde_json::{json, Value};
-use sha2::{Digest as _, Sha256};
+use sha2::{Digest as _, Sha256, Sha384, Sha512};
 use std::time::Duration;
 
 pub struct DisposableOpenBao {
@@ -21,10 +24,9 @@ impl DisposableOpenBao {
         assert!(url.port().is_some());
         assert_eq!(url.path(), "/");
         assert!(url.username().is_empty() && url.password().is_none());
-        let root_token =
-            std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable root token");
-        let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
-            .expect("disposable marker nonce");
+        let root_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable root token");
+        let nonce =
+            std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("disposable marker nonce");
         assert!(nonce.len() >= 16);
         let client = Client::builder()
             .no_proxy()
@@ -48,13 +50,29 @@ impl DisposableOpenBao {
         }
     }
 
-    pub fn create_es256(&self) -> ScopedEs256Signer {
+    pub fn create_es256(&self) -> ScopedTransitSigner {
+        self.create_key("ecdsa-p256", TestKeyType::Es256)
+    }
+
+    pub fn create_es384(&self) -> ScopedTransitSigner {
+        self.create_key("ecdsa-p384", TestKeyType::Es384)
+    }
+
+    pub fn create_ed25519(&self) -> ScopedTransitSigner {
+        self.create_key("ed25519", TestKeyType::Ed25519)
+    }
+
+    pub fn create_rsa2048(&self) -> ScopedTransitSigner {
+        self.create_key("rsa-2048", TestKeyType::Rsa2048)
+    }
+
+    fn create_key(&self, key_type: &str, algorithm: TestKeyType) -> ScopedTransitSigner {
         let name = format!("marty-core-batch-{}", uuid::Uuid::new_v4().simple());
         self.client
             .post(format!("{}/v1/transit/keys/{name}", self.base))
             .header("X-Vault-Token", &self.root_token)
             .json(&json!({
-                "type": "ecdsa-p256",
+                "type": key_type,
                 "exportable": false,
                 "allow_plaintext_backup": false
             }))
@@ -74,13 +92,19 @@ impl DisposableOpenBao {
             .unwrap();
         assert_eq!(metadata["data"]["exportable"], false);
         assert_eq!(metadata["data"]["allow_plaintext_backup"], false);
-        let public_pem = metadata["data"]["keys"]["1"]["public_key"]
+        let public_key = metadata["data"]["keys"]["1"]["public_key"]
             .as_str()
             .expect("OpenBao public key");
-        let public_jwk = marty_crypto::jwk::public_key_pem_to_jwk(public_pem)
-            .unwrap()
-            .to_json()
-            .unwrap();
+        let public_jwk = if algorithm == TestKeyType::Ed25519 {
+            let raw = STANDARD.decode(public_key).unwrap();
+            assert_eq!(raw.len(), 32);
+            json!({"kty": "OKP", "crv": "Ed25519", "x": URL_SAFE_NO_PAD.encode(raw)}).to_string()
+        } else {
+            marty_crypto::jwk::public_key_pem_to_jwk(public_key)
+                .unwrap()
+                .to_json()
+                .unwrap()
+        };
         let export_path = format!("{}/v1/transit/export/signing-key/{name}", self.base);
         assert!(!self
             .client
@@ -126,32 +150,42 @@ impl DisposableOpenBao {
                 .as_u16(),
             403
         );
-        ScopedEs256Signer {
+        ScopedTransitSigner {
             client: self.client.clone(),
             base: self.base.clone(),
             token,
             name,
             public_jwk,
+            algorithm,
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TestKeyType {
+    Es256,
+    Es384,
+    Ed25519,
+    Rsa2048,
+}
+
 #[derive(Clone)]
-pub struct ScopedEs256Signer {
+pub struct ScopedTransitSigner {
     client: Client,
     base: String,
     token: String,
     name: String,
     public_jwk: String,
+    algorithm: TestKeyType,
 }
 
-impl std::fmt::Debug for ScopedEs256Signer {
+impl std::fmt::Debug for ScopedTransitSigner {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ScopedEs256Signer([redacted])")
+        formatter.write_str("ScopedTransitSigner([redacted])")
     }
 }
 
-impl ScopedEs256Signer {
+impl ScopedTransitSigner {
     pub fn key_id(&self, issuer_did: &str) -> String {
         format!("{issuer_did}#{}", self.name)
     }
@@ -161,24 +195,80 @@ impl ScopedEs256Signer {
     }
 
     pub fn verifying_key(&self) -> p256::ecdsa::VerifyingKey {
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        assert_eq!(self.algorithm, TestKeyType::Es256);
         let public: Value = serde_json::from_str(&self.public_jwk).unwrap();
         let mut point = vec![0x04];
-        point.extend(URL_SAFE_NO_PAD.decode(public["x"].as_str().unwrap()).unwrap());
-        point.extend(URL_SAFE_NO_PAD.decode(public["y"].as_str().unwrap()).unwrap());
+        point.extend(
+            URL_SAFE_NO_PAD
+                .decode(public["x"].as_str().unwrap())
+                .unwrap(),
+        );
+        point.extend(
+            URL_SAFE_NO_PAD
+                .decode(public["y"].as_str().unwrap())
+                .unwrap(),
+        );
         p256::ecdsa::VerifyingKey::from_sec1_bytes(&point).unwrap()
     }
 
     pub fn sign_der(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
+        if self.algorithm != TestKeyType::Es256 {
+            return Err(());
+        }
+        self.sign_hashed(Sha256::digest(message).as_slice(), "sha2-256", false)
+    }
+
+    pub fn sign_es384_der(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
+        if self.algorithm != TestKeyType::Es384 {
+            return Err(());
+        }
+        self.sign_hashed(Sha384::digest(message).as_slice(), "sha2-384", false)
+    }
+
+    pub fn sign_ed25519(&self, message: &[u8]) -> Result<Vec<u8>, ()> {
+        if self.algorithm != TestKeyType::Ed25519 {
+            return Err(());
+        }
+        self.request_signature(json!({"input": STANDARD.encode(message)}))
+    }
+
+    pub fn sign_rsa_pss(&self, message: &[u8], algorithm: &str) -> Result<Vec<u8>, ()> {
+        if self.algorithm != TestKeyType::Rsa2048 {
+            return Err(());
+        }
+        match algorithm {
+            "PS256" => self.sign_hashed(Sha256::digest(message).as_slice(), "sha2-256", true),
+            "PS384" => self.sign_hashed(Sha384::digest(message).as_slice(), "sha2-384", true),
+            "PS512" => self.sign_hashed(Sha512::digest(message).as_slice(), "sha2-512", true),
+            _ => Err(()),
+        }
+    }
+
+    fn sign_hashed(
+        &self,
+        digest: &[u8],
+        hash_algorithm: &str,
+        rsa_pss: bool,
+    ) -> Result<Vec<u8>, ()> {
+        let mut body = json!({
+            "input": STANDARD.encode(digest),
+            "prehashed": true,
+            "hash_algorithm": hash_algorithm
+        });
+        if rsa_pss {
+            body["signature_algorithm"] = json!("pss");
+            // JOSE PS* uses a hash-length salt; OpenBao's "auto" default is maximal.
+            body["salt_length"] = json!("hash");
+        }
+        self.request_signature(body)
+    }
+
+    fn request_signature(&self, body: Value) -> Result<Vec<u8>, ()> {
         let response: Value = self
             .client
             .post(format!("{}/v1/transit/sign/{}", self.base, self.name))
             .header("X-Vault-Token", &self.token)
-            .json(&json!({
-                "input": STANDARD.encode(Sha256::digest(message)),
-                "prehashed": true,
-                "hash_algorithm": "sha2-256"
-            }))
+            .json(&body)
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .and_then(reqwest::blocking::Response::json)
