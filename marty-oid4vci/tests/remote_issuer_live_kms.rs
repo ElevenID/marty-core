@@ -554,3 +554,101 @@ fn holder_proof_binds_remote_issuer_sd_jwt_without_private_key_transfer() {
     assert!(mso.device_key_info.key_authorizations.is_none());
     assert!(mso.device_key_info.key_info.is_none());
 }
+
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn remote_eddsa_holder_proof_binds_ietf_sd_jwt() {
+    let (client, base, root_token) = disposable_openbao();
+    let issuer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ed25519",
+        SigningAlgorithm::EdDSA,
+    );
+    let holder_did = WalletEngine::ed25519_did_key_from_public_jwk(&holder.public_jwk).unwrap();
+    assert!(holder_did.starts_with("did:key:z6Mk"));
+    let mut forbidden_private: Value = serde_json::from_str(&holder.public_jwk).unwrap();
+    forbidden_private["d"] = json!("not-accepted");
+    assert!(WalletEngine::ed25519_did_key_from_public_jwk(&forbidden_private.to_string()).is_err());
+    assert!(WalletEngine::new()
+        .prepare_proof_jwt(
+            &holder_did,
+            "nonce",
+            "https://issuer.example.test",
+            &forbidden_private.to_string()
+        )
+        .is_err());
+    let mut wrong_algorithm: Value = serde_json::from_str(&holder.public_jwk).unwrap();
+    wrong_algorithm["alg"] = json!("ES256");
+    assert!(WalletEngine::new()
+        .prepare_proof_jwt(
+            &holder_did,
+            "nonce",
+            "https://issuer.example.test",
+            &wrong_algorithm.to_string()
+        )
+        .is_err());
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let audience = "https://issuer.example.test";
+    let wallet = WalletEngine::new();
+    let prepared = wallet
+        .prepare_proof_jwt(&holder_did, &nonce, audience, &holder.public_jwk)
+        .unwrap();
+    assert_eq!(prepared.algorithm(), SigningAlgorithm::EdDSA);
+    let signature = holder.sign(prepared.signing_input()).unwrap();
+    let mut wrong_signature = signature.clone();
+    wrong_signature[0] ^= 1;
+    assert!(prepared.complete(&wrong_signature).is_err());
+
+    let prepared = wallet
+        .prepare_proof_jwt(&holder_did, &nonce, audience, &holder.public_jwk)
+        .unwrap();
+    let signature = holder.sign(prepared.signing_input()).unwrap();
+    let proof = prepared.complete(&signature).unwrap();
+    assert!(verify_jwt_proof(&proof, audience, Some("wrong-nonce"), 300).is_err());
+    let wrong_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    assert_ne!(holder_did, wrong_did);
+    let wrong_identity = wallet
+        .prepare_proof_jwt(wrong_did, &nonce, audience, &holder.public_jwk)
+        .unwrap();
+    let wrong_identity_signature = holder.sign(wrong_identity.signing_input()).unwrap();
+    let wrong_identity_proof = wrong_identity.complete(&wrong_identity_signature).unwrap();
+    assert!(verify_jwt_proof(&wrong_identity_proof, audience, Some(&nonce), 300).is_err());
+    assert!(issuer.payloads.lock().unwrap().is_empty());
+    let verified_proof = verify_jwt_proof(&proof, audience, Some(&nonce), 300).unwrap();
+    assert_eq!(verified_proof.holder_id, holder_did);
+    let holder_public =
+        serde_json::to_value(verified_proof.holder_jwk.unwrap().to_public()).unwrap();
+    assert_eq!(holder_public["crv"], "Ed25519");
+    assert!(holder_public.get("d").is_none());
+
+    let mut claims = claims(CredentialPayloadFormat::IetfSdJwt);
+    claims.selective_disclosure_claims = vec!["given_name".into()];
+    let prepared_credential = prepare_sd_jwt_with_options(
+        &issuer,
+        &claims,
+        SdJwtPreparationOptions {
+            confirmation: Some(json!({"jwk": holder_public})),
+            ..SdJwtPreparationOptions::default()
+        },
+    )
+    .unwrap();
+    let issuer_signature = issuer.sign(prepared_credential.signing_payload()).unwrap();
+    let SignedCredential::SdJwt { compact, .. } =
+        assemble_sd_jwt(prepared_credential, &issuer_signature).unwrap()
+    else {
+        panic!("expected holder-bound IETF SD-JWT")
+    };
+    let verified_credential = verify_sd_jwt(&compact, &issuer.public_jwk, None, None).unwrap();
+    assert_eq!(verified_credential["cnf"], json!({"jwk": holder_public}));
+    assert_eq!(verified_credential["given_name"], "Alice");
+    assert_eq!(issuer.payloads.lock().unwrap().len(), 1);
+}

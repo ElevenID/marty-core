@@ -871,8 +871,8 @@ pub fn extract_proof_jwts(request: &crate::types::CredentialRequest) -> Oid4vciR
 // ---------------------------------------------------------------------------
 
 /// Base58btc encoder using the Bitcoin alphabet (no multibase prefix).
-#[cfg(test)]
-fn base58btc_encode(data: &[u8]) -> String {
+#[cfg(any(test, feature = "wallet"))]
+pub(crate) fn base58btc_encode(data: &[u8]) -> String {
     const ALPHA: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let n_leading = data.iter().take_while(|&&b| b == 0).count();
     let mut digits: Vec<u8> = Vec::new();

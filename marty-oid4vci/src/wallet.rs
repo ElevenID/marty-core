@@ -188,13 +188,14 @@ pub struct HolderKeyMaterial {
 pub struct PreparedHolderProof {
     signing_input: String,
     public_jwk_json: String,
+    algorithm: crate::types::SigningAlgorithm,
 }
 
 impl std::fmt::Debug for PreparedHolderProof {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PreparedHolderProof")
-            .field("algorithm", &"ES256")
+            .field("algorithm", &self.algorithm.as_str())
             .field("contents", &"[redacted]")
             .finish()
     }
@@ -203,7 +204,7 @@ impl std::fmt::Debug for PreparedHolderProof {
 impl PreparedHolderProof {
     /// Algorithm the KMS, secure enclave, or platform keystore must use.
     pub const fn algorithm(&self) -> crate::types::SigningAlgorithm {
-        crate::types::SigningAlgorithm::ES256
+        self.algorithm
     }
 
     /// Exact ASCII JWS signing input to send to the opaque signer.
@@ -211,28 +212,29 @@ impl PreparedHolderProof {
         self.signing_input.as_bytes()
     }
 
-    /// Assemble the compact proof JWT from a raw 64-byte ES256 signature.
+    /// Assemble the compact proof JWT from a raw ES256 or EdDSA signature.
     pub fn complete(self, signature: &[u8]) -> Oid4vciResult<String> {
-        p256::ecdsa::Signature::from_slice(signature).map_err(|_| {
-            Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            )
-        })?;
+        let invalid_signature = || {
+            Oid4vciError::SigningError(format!(
+                "opaque holder signer returned an invalid {} signature",
+                self.algorithm
+            ))
+        };
+        if signature.len() != 64 {
+            return Err(invalid_signature());
+        }
+        if self.algorithm == crate::types::SigningAlgorithm::ES256 {
+            p256::ecdsa::Signature::from_slice(signature).map_err(|_| invalid_signature())?;
+        }
         let verified = crate::jose::verify_detached_signature_with_public_jwk(
             self.signing_input.as_bytes(),
             signature,
             &self.public_jwk_json,
-            "ES256",
+            self.algorithm.as_str(),
         )
-        .map_err(|_| {
-            Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            )
-        })?;
+        .map_err(|_| invalid_signature())?;
         if !verified {
-            return Err(Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            ));
+            return Err(invalid_signature());
         }
         Ok(format!(
             "{}.{}",
@@ -278,7 +280,10 @@ impl WalletEngine {
                 .to_encoded_point(true)
                 .as_bytes(),
         );
-        let holder_id = format!("did:key:z{}", base58btc_encode(&multicodec_key));
+        let holder_id = format!(
+            "did:key:z{}",
+            crate::proof::base58btc_encode(&multicodec_key)
+        );
         let private_jwk = serde_json::json!({
             "kty": "EC",
             "crv": "P-256",
@@ -711,7 +716,7 @@ impl WalletEngine {
     /// * `holder_kid`   — the holder DID or key URL to use as the proof issuer
     /// * `c_nonce`      — the nonce from the issuer's Nonce Endpoint
     /// * `issuer_url`   — the credential issuer URL (goes in `aud`)
-    /// * `public_jwk_json` — holder's public-only P-256 JWK
+    /// * `public_jwk_json` — holder's public-only P-256 or Ed25519 JWK
     pub fn prepare_proof_jwt(
         &self,
         holder_kid: &str,
@@ -728,15 +733,26 @@ impl WalletEngine {
         }
         let public_jwk =
             crate::jose::parse_unique_object(public_jwk_json.as_bytes(), "holder public JWK")?;
-        let header_jwk = crate::jose::validate_public_jwk(&public_jwk, "ES256")?;
-        let object = public_jwk.as_object().expect("validated JWK is an object");
-        if object.get("kty").and_then(serde_json::Value::as_str) != Some("EC")
-            || object.get("crv").and_then(serde_json::Value::as_str) != Some("P-256")
-        {
-            return Err(Oid4vciError::KeyError(
-                "Holder public JWK must be an EC P-256 key".into(),
-            ));
-        }
+        let object = public_jwk
+            .as_object()
+            .ok_or_else(|| Oid4vciError::KeyError("Holder public JWK must be an object".into()))?;
+        let (algorithm, jose_algorithm) = match (
+            object.get("kty").and_then(serde_json::Value::as_str),
+            object.get("crv").and_then(serde_json::Value::as_str),
+        ) {
+            (Some("EC"), Some("P-256")) => {
+                (crate::types::SigningAlgorithm::ES256, Algorithm::ES256)
+            }
+            (Some("OKP"), Some("Ed25519")) => {
+                (crate::types::SigningAlgorithm::EdDSA, Algorithm::EdDSA)
+            }
+            _ => {
+                return Err(Oid4vciError::KeyError(
+                    "Holder public JWK must be P-256 or Ed25519".into(),
+                ))
+            }
+        };
+        let header_jwk = crate::jose::validate_public_jwk(&public_jwk, algorithm.as_str())?;
 
         let now = chrono::Utc::now().timestamp() as u64;
         let holder_id = holder_kid.split('#').next().unwrap_or(holder_kid);
@@ -748,7 +764,7 @@ impl WalletEngine {
             nonce: c_nonce.to_string(),
         };
 
-        let mut header = Header::new(Algorithm::ES256);
+        let mut header = Header::new(jose_algorithm);
         header.typ = Some("openid4vci-proof+jwt".into());
         header.jwk = Some(header_jwk);
 
@@ -757,6 +773,7 @@ impl WalletEngine {
         let claims = serde_json::to_vec(&claims)
             .map_err(|error| Oid4vciError::SigningError(error.to_string()))?;
         Ok(PreparedHolderProof {
+            algorithm,
             public_jwk_json: serde_json::to_string(&public_jwk)
                 .map_err(|error| Oid4vciError::KeyError(error.to_string()))?,
             signing_input: format!(
@@ -765,6 +782,49 @@ impl WalletEngine {
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims)
             ),
         })
+    }
+
+    /// Derive a self-certifying `did:key` from an Ed25519 public JWK.
+    /// Private key members and invalid public encodings are rejected.
+    pub fn ed25519_did_key_from_public_jwk(public_jwk_json: &str) -> Oid4vciResult<String> {
+        if public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+            return Err(Oid4vciError::KeyError(
+                "Holder public JWK exceeds its size limit".into(),
+            ));
+        }
+        let public_jwk =
+            crate::jose::parse_unique_object(public_jwk_json.as_bytes(), "holder public JWK")?;
+        let object = public_jwk
+            .as_object()
+            .ok_or_else(|| Oid4vciError::KeyError("Holder public JWK must be an object".into()))?;
+        if object.get("kty").and_then(serde_json::Value::as_str) != Some("OKP")
+            || object.get("crv").and_then(serde_json::Value::as_str) != Some("Ed25519")
+        {
+            return Err(Oid4vciError::KeyError(
+                "Holder public JWK must be Ed25519".into(),
+            ));
+        }
+        crate::jose::validate_public_jwk(&public_jwk, "EdDSA")?;
+        let encoded = object
+            .get("x")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| Oid4vciError::KeyError("Ed25519 public JWK x is missing".into()))?;
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| Oid4vciError::KeyError("Ed25519 public JWK x is invalid".into()))?;
+        if decoded.len() != 32 {
+            return Err(Oid4vciError::KeyError(
+                "Ed25519 public JWK x must be 32 bytes".into(),
+            ));
+        }
+        marty_crypto::ed25519::Ed25519VerifyingKey::from_bytes(&decoded)
+            .map_err(|_| Oid4vciError::KeyError("Ed25519 public JWK x is invalid".into()))?;
+        let mut multicodec_key = vec![0xed, 0x01];
+        multicodec_key.extend_from_slice(&decoded);
+        Ok(format!(
+            "did:key:z{}",
+            crate::proof::base58btc_encode(&multicodec_key)
+        ))
     }
 
     #[cfg(test)]
@@ -1583,31 +1643,6 @@ fn generate_random_state() -> String {
     let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-#[cfg(test)]
-fn base58btc_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    let leading_zeroes = data.iter().take_while(|&&byte| byte == 0).count();
-    let mut digits: Vec<u8> = Vec::new();
-    for &byte in data {
-        let mut carry = byte as u32;
-        for digit in &mut digits {
-            carry += (*digit as u32) * 256;
-            *digit = (carry % 58) as u8;
-            carry /= 58;
-        }
-        while carry > 0 {
-            digits.push((carry % 58) as u8);
-            carry /= 58;
-        }
-    }
-    digits.extend(std::iter::repeat_n(0, leading_zeroes));
-    digits.reverse();
-    digits
-        .iter()
-        .map(|&digit| ALPHABET[digit as usize] as char)
-        .collect()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
