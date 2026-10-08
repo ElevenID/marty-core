@@ -100,6 +100,8 @@ fi
   --no-default-features --features "$features" \
   formats::vds_nc::tests \
   -- --ignored
+"$cargo" test --locked -p marty-verification --lib \
+  verification::vds_nc::tests -- --ignored
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
   formats::mdoc::tests \
