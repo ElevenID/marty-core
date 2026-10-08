@@ -57,8 +57,6 @@ mod bounded_jwt;
 pub mod discovery;
 pub mod error;
 pub mod formats;
-#[cfg(test)]
-pub mod holder_key;
 pub mod issuance_input;
 #[cfg(feature = "issuer")]
 pub mod issuer;
@@ -100,11 +98,6 @@ pub mod wallet;
 mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
-#[cfg(test)]
-pub use holder_key::{
-    generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
-    DidJwkHolderKeyMaterial,
-};
 
 /// The default issuer surface cannot construct or use an in-process issuer key.
 ///

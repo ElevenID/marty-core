@@ -749,6 +749,20 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
     assert_eq!(prepared.algorithm(), SigningAlgorithm::ES256);
     let signature = holder.sign(prepared.signing_input()).unwrap();
     let presentation = prepared.complete(&signature).unwrap();
+    assert!(presentation.contains('~'));
+    let kb_jwt = presentation
+        .split('~')
+        .rfind(|part| !part.is_empty())
+        .expect("key-binding JWT");
+    let kb_payload: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(kb_jwt.split('.').nth(1).expect("KB-JWT payload"))
+            .expect("KB-JWT base64url"),
+    )
+    .expect("KB-JWT JSON");
+    assert_eq!(kb_payload["nonce"], nonce);
+    assert_eq!(kb_payload["aud"], "https://verifier.example");
+    assert!(kb_payload["sd_hash"].as_str().is_some());
     let verified = verify_sd_jwt(
         &presentation,
         &issuer.public_jwk,
