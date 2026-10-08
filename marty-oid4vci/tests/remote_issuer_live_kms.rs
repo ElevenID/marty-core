@@ -1135,6 +1135,7 @@ fn holder_proof_binds_remote_issuer_sd_jwt_without_private_key_transfer() {
         .unwrap();
     let holder_signature = holder.sign(prepared_proof.signing_input()).unwrap();
     let proof = prepared_proof.complete(&holder_signature).unwrap();
+    assert_eq!(proof.split('.').count(), 3);
     assert!(verify_jwt_proof(&proof, audience, Some("wrong-nonce"), 300).is_err());
     let mut tampered = proof.split('.').map(str::to_owned).collect::<Vec<_>>();
     let mut signature = URL_SAFE_NO_PAD.decode(&tampered[2]).unwrap();
@@ -1144,6 +1145,8 @@ fn holder_proof_binds_remote_issuer_sd_jwt_without_private_key_transfer() {
     assert!(issuer.payloads.lock().unwrap().is_empty());
 
     let verified = verify_jwt_proof(&proof, audience, Some(&nonce), 300).unwrap();
+    assert!(verified.holder_id.starts_with("did:jwk:"));
+    assert_eq!(verified.nonce.as_deref(), Some(nonce.as_str()));
     let holder_public = serde_json::to_value(verified.holder_jwk.unwrap().to_public()).unwrap();
     assert_eq!(holder_public["kty"], "EC");
     assert!(holder_public.get("d").is_none());

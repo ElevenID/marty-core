@@ -2644,148 +2644,18 @@ mod tests {
         );
     }
 
-    // ====================================================================
-    // Proof JWT round-trip (pure Rust)
-    // ====================================================================
-
-    fn test_proof_jwt(aud: &str, c_nonce: &str) -> String {
-        use p256::ecdsa::signature::Signer as _;
-
-        let signing_key = p256::ecdsa::SigningKey::from_slice(&[7u8; 32]).unwrap();
-        let point = signing_key.verifying_key().to_encoded_point(false);
-        let public_jwk = serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": base64_url_encode(point.x().unwrap()),
-            "y": base64_url_encode(point.y().unwrap()),
-        });
-        let public_jwk_json = public_jwk.to_string();
-        let holder_id = format!("did:jwk:{}", base64_url_encode(public_jwk_json.as_bytes()));
-        let prepared = marty_oid4vci::WalletEngine::new()
-            .prepare_proof_jwt(&holder_id, c_nonce, aud, &public_jwk_json)
-            .unwrap();
-        let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
-        prepared.complete(signature.to_bytes().as_slice()).unwrap()
-    }
-
-    #[test]
-    fn test_proof_jwt_create_and_verify() {
-        let aud = "https://issuer.example.com";
-        let c_nonce = "test-nonce-12345";
-
-        let jwt = test_proof_jwt(aud, c_nonce);
-
-        // JWT should have 3 dot-separated parts
-        assert_eq!(
-            jwt.split('.').count(),
-            3,
-            "JWT must have header.payload.signature"
-        );
-
-        // Verify it round-trips
-        let verified = marty_oid4vci::proof::verify_jwt_proof(&jwt, aud, Some(c_nonce), 300)
-            .expect("proof JWT verification should succeed");
-
-        assert!(
-            verified.holder_id.starts_with("did:jwk:"),
-            "holder_did should be a did:jwk, got: {}",
-            verified.holder_id
-        );
-        assert_eq!(verified.nonce.as_deref(), Some(c_nonce));
-    }
-
-    #[test]
-    fn test_proof_jwt_wrong_nonce_fails() {
-        let jwt = test_proof_jwt("https://issuer.example.com", "nonce-a");
-
-        let result = marty_oid4vci::proof::verify_jwt_proof(&jwt, "", Some("nonce-b"), 300);
-        assert!(result.is_err(), "wrong nonce must fail verification");
-    }
-
     #[test]
     fn test_sd_jwt_binding_verifies_and_returns_reconstructed_claims() {
-        use base64::Engine as _;
-        use marty_oid4vci::formats::sd_jwt::{assemble_sd_jwt, prepare_sd_jwt};
-        use marty_oid4vci::signer::CredentialSigner;
-        use marty_oid4vci::types::{
-            CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm,
-        };
-
-        struct TestEd25519Signer([u8; 32]);
-
-        impl std::fmt::Debug for TestEd25519Signer {
-            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("TestEd25519Signer([redacted])")
-            }
-        }
-
-        impl CredentialSigner for TestEd25519Signer {
-            fn sign(&self, message: &[u8]) -> marty_oid4vci::Oid4vciResult<Vec<u8>> {
-                marty_crypto_test_support::ed25519::sign(&self.0, message)
-                    .map_err(|error| marty_oid4vci::Oid4vciError::SigningError(error.to_string()))
-            }
-
-            fn algorithm(&self) -> SigningAlgorithm {
-                SigningAlgorithm::EdDSA
-            }
-
-            fn issuer_id(&self) -> &str {
-                "https://issuer.example.test"
-            }
-
-            fn kid_url(&self) -> String {
-                "https://issuer.example.test#signing-key".to_string()
-            }
-
-            fn public_jwk(&self) -> marty_oid4vci::Oid4vciResult<String> {
-                Ok(r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#.into())
-            }
-        }
-
-        let issuer_jwk = r#"{
-            "kty":"OKP",
-            "crv":"Ed25519",
-            "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
-            "d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
-        }"#;
-        let issuer_public_jwk = r#"{
-            "kty":"OKP",
-            "crv":"Ed25519",
-            "x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
-        }"#;
-        let issuer_jwk: serde_json::Value = serde_json::from_str(issuer_jwk).unwrap();
-        let issuer_secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(issuer_jwk["d"].as_str().unwrap())
-            .unwrap();
-        let issuer = TestEd25519Signer(issuer_secret.try_into().unwrap());
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".to_string()),
-            credential_type: "IdentityCredential".to_string(),
-            claims: [("given_name".to_string(), serde_json::json!("Alice"))]
-                .into_iter()
-                .collect(),
-            expiration_seconds: Some(3600),
-            selective_disclosure_claims: vec!["given_name".to_string()],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: Vec::new(),
-            credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
-            w3c_context: Vec::new(),
-            w3c_types: Vec::new(),
-        };
-        let prepared = prepare_sd_jwt(&issuer, &claims).expect("SD-JWT preparation");
-        let signature = issuer
-            .sign(prepared.signing_input().as_bytes())
-            .expect("test signer");
-        let compact = match assemble_sd_jwt(prepared, &signature).expect("SD-JWT assembly") {
-            SignedCredential::SdJwt { compact, .. } => compact,
-            _ => panic!("expected SD-JWT credential"),
-        };
-
-        let verified = verify_sd_jwt(&compact, issuer_public_jwk, None, None)
+        let vector: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/remote_sd_jwt_public.json"))
+                .expect("public remote-issued SD-JWT vector");
+        let compact = vector["credential"].as_str().expect("compact SD-JWT");
+        let issuer_public_jwk = vector["issuer_public_jwk"].to_string();
+        let verified = verify_sd_jwt(compact, &issuer_public_jwk, None, None)
             .expect("binding must verify a valid SD-JWT");
         let payload: serde_json::Value = serde_json::from_str(&verified).expect("verified JSON");
-        assert_eq!(payload["given_name"], "Alice");
+        assert_eq!(payload["email"], "member@example.com");
+        assert_eq!(payload["role"], "member");
     }
 
     // ====================================================================
