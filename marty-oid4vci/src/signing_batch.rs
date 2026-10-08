@@ -1269,7 +1269,6 @@ mod tests {
         signing_key: p256::ecdsa::SigningKey,
         calls: Mutex<Vec<Vec<u8>>>,
         signatures: Mutex<Vec<Vec<u8>>>,
-        fail_at: Option<usize>,
     }
 
     impl RecordingSigner {
@@ -1278,16 +1277,6 @@ mod tests {
                 signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
                 signatures: Mutex::new(Vec::new()),
-                fail_at: None,
-            }
-        }
-
-        fn failing_at(ordinal: usize) -> Self {
-            Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
-                calls: Mutex::new(Vec::new()),
-                signatures: Mutex::new(Vec::new()),
-                fail_at: Some(ordinal),
             }
         }
 
@@ -1309,11 +1298,7 @@ mod tests {
     impl CredentialSigner for RecordingSigner {
         fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
             let mut calls = self.calls.lock().unwrap();
-            let ordinal = calls.len();
             calls.push(message.to_vec());
-            if self.fail_at == Some(ordinal) {
-                return Err(Oid4vciError::SigningError(BACKEND_SECRET.into()));
-            }
             use p256::ecdsa::signature::Signer as _;
             let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
             let signature = signature.to_bytes().to_vec();
@@ -1337,6 +1322,38 @@ mod tests {
             Ok(crate::signer::test_es256_public_jwk_for_key(
                 &self.signing_key,
             ))
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct SimulatedBackendFailureSigner {
+        calls: AtomicUsize,
+    }
+
+    impl CredentialSigner for SimulatedBackendFailureSigner {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                Err(Oid4vciError::SigningError(BACKEND_SECRET.into()))
+            } else {
+                // The batch fails at the next KMS call, before signature validation.
+                Ok(vec![0xA5; ES256_SIGNATURE_LENGTH])
+            }
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::ES256
+        }
+
+        fn issuer_id(&self) -> &str {
+            ISSUER_SECRET
+        }
+
+        fn kid_url(&self) -> String {
+            KID_SECRET.into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 
@@ -1583,7 +1600,6 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     struct PanickingConcurrentSigner {
-        signing_key: p256::ecdsa::SigningKey,
         calls: Mutex<Vec<Vec<u8>>>,
         active_calls: AtomicUsize,
         peak_calls: AtomicUsize,
@@ -1599,7 +1615,6 @@ mod tests {
     impl PanickingConcurrentSigner {
         fn new(panicking_worker: PanickingWorker, max_workers: usize) -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x35; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
                 active_calls: AtomicUsize::new(0),
                 peak_calls: AtomicUsize::new(0),
@@ -1679,9 +1694,8 @@ mod tests {
             // unwound into the executor boundary. The API must join this call
             // before it resumes the selected panic.
             std::thread::sleep(Duration::from_millis(25));
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
             self.peer_completed.store(true, Ordering::SeqCst);
-            Ok(signature.to_bytes().to_vec())
+            Ok(vec![0xA5; ES256_SIGNATURE_LENGTH])
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -1697,9 +1711,7 @@ mod tests {
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 
@@ -2838,7 +2850,7 @@ mod tests {
 
     #[test]
     fn backend_failure_is_redacted_and_returns_no_partial_outputs() {
-        let signer = RecordingSigner::failing_at(1);
+        let signer = SimulatedBackendFailureSigner::default();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let error = assert_error(
             scope.sign_batch(three_format_inputs()),
@@ -2846,7 +2858,11 @@ mod tests {
             Some(1),
         );
 
-        assert_eq!(signer.call_count(), 2, "the serial executor must not retry");
+        assert_eq!(
+            signer.calls.load(Ordering::SeqCst),
+            2,
+            "the serial executor must not retry"
+        );
         let display = error.to_string();
         let debug = format!("{error:?}");
         for secret in [BACKEND_SECRET, CLAIM_SECRET, ISSUER_SECRET, KID_SECRET] {
