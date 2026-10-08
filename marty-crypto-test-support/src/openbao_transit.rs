@@ -257,6 +257,11 @@ impl ScopedTransitSigner {
         self.sign_hashed(Sha256::digest(message).as_slice(), "sha2-256", None)
     }
 
+    pub fn sign_es256(&self, message: &[u8]) -> Result<Vec<u8>, TransitError> {
+        let signature = self.sign_der(message)?;
+        marty_crypto::ecdsa::normalize_signature(&signature, "ES256").map_err(|_| TransitError)
+    }
+
     pub fn sign_es384_der(&self, message: &[u8]) -> Result<Vec<u8>, TransitError> {
         if self.algorithm != TestKeyType::Es384 {
             return Err(TransitError);

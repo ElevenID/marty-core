@@ -500,11 +500,7 @@ mod tests {
             base64url_encode(payload)
         );
         let signature = match header.alg.as_str() {
-            "ES256" => marty_crypto::ecdsa::normalize_signature(
-                &signer.sign_der(signing_input.as_bytes()).unwrap(),
-                "ES256",
-            )
-            .unwrap(),
+            "ES256" => signer.sign_es256(signing_input.as_bytes()).unwrap(),
             "EdDSA" => signer.sign_ed25519(signing_input.as_bytes()).unwrap(),
             _ => panic!("unsupported remote JWS test algorithm"),
         };

@@ -1570,12 +1570,52 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use marty_crypto_test_support::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
     use serde_json::json;
-    use ssi_jws::encode_sign;
 
     const OFFICIAL_SUITE_PRESENTATION: &str =
         include_str!("../tests/fixtures/w3c_vcdm_v2_official_suite_presentation.json");
     const ISSUANCE_BEHAVIOR: &str = include_str!("../tests/fixtures/vcdm_issuance_behavior.json");
+
+    fn public_ed25519_jwk() -> JWK {
+        serde_json::from_value(json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": marty_crypto_test_support::ED25519_PUBLIC_JWK_X
+        }))
+        .expect("valid public Ed25519 test JWK")
+    }
+
+    fn remote_ed25519_jwk() -> (ScopedTransitSigner, JWK) {
+        let signer = DisposableOpenBao::from_marked_env().create_ed25519();
+        let public = serde_json::from_str(signer.public_jwk())
+            .expect("OpenBao Ed25519 public JWK must parse");
+        (signer, public)
+    }
+
+    fn remote_es256_jwk() -> (ScopedTransitSigner, JWK) {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
+        let public =
+            serde_json::from_str(signer.public_jwk()).expect("OpenBao ES256 public JWK must parse");
+        (signer, public)
+    }
+
+    fn remotely_signed_jwt(
+        signer: &ScopedTransitSigner,
+        algorithm: &str,
+        kid: &str,
+        claims: &Value,
+    ) -> String {
+        let protected = URL_SAFE_NO_PAD.encode(json!({"alg": algorithm, "kid": kid}).to_string());
+        let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
+        let signing_input = format!("{protected}.{payload}");
+        let signature = match algorithm {
+            "EdDSA" => signer.sign_ed25519(signing_input.as_bytes()).unwrap(),
+            "ES256" => signer.sign_es256(signing_input.as_bytes()).unwrap(),
+            _ => panic!("unsupported remote VC-JWT test algorithm"),
+        };
+        format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+    }
 
     #[test]
     fn issuance_boundary_matches_language_neutral_behavior_vectors() {
@@ -1677,13 +1717,15 @@ mod tests {
     }
 
     fn remotely_sign_prepared_credential(
-        private_key: &JWK,
+        signer: &ScopedTransitSigner,
         prepared: &Value,
     ) -> Result<String, String> {
         let signing_input = URL_SAFE_NO_PAD
             .decode(prepared["signing_input_b64"].as_str().unwrap())
             .unwrap();
-        let signature = ssi_jws::sign_bytes(Algorithm::EdDSA, &signing_input, private_key).unwrap();
+        let signature = signer
+            .sign_ed25519(&signing_input)
+            .expect("scoped OpenBao Ed25519 signing");
         complete_vcdm_data_integrity_credential_json(
             &json!({
                 "prepared": prepared,
@@ -1694,8 +1736,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped Data Integrity signer"]
     fn prepares_completes_and_verifies_remote_eddsa_rdfc_credential() {
-        let key = JWK::generate_ed25519().unwrap();
+        let (signer, key) = remote_ed25519_jwk();
         let prepared_json = prepare_vcdm_data_integrity_credential_json(
             &remote_data_integrity_prepare_request(&key).to_string(),
         )
@@ -1712,7 +1755,7 @@ mod tests {
             prepared["verification_method_id"]
         );
 
-        let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+        let completed = remotely_sign_prepared_credential(&signer, &prepared).unwrap();
         let credential: Value = serde_json::from_str(&completed).unwrap();
         assert!(credential["proof"]["proofValue"]
             .as_str()
@@ -1728,7 +1771,7 @@ mod tests {
 
     #[test]
     fn prepares_vcdm_v2_credential_with_standard_related_resource() {
-        let key = JWK::generate_ed25519().unwrap();
+        let key = public_ed25519_jwk();
         let mut request = remote_data_integrity_prepare_request(&key);
         request["credential"]["relatedResource"] = json!({
             "id": "https://www.w3.org/ns/credentials/v2",
@@ -1750,13 +1793,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped Data Integrity signer"]
     fn verifies_did_web_credential_with_resolver_owned_public_method() {
-        let key = JWK::generate_ed25519().unwrap();
+        let (signer, key) = remote_ed25519_jwk();
         let request = remote_data_integrity_prepare_request_for_did_web(&key);
         let prepared_json =
             prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
         let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
-        let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+        let completed = remotely_sign_prepared_credential(&signer, &prepared).unwrap();
         let credential: Value = serde_json::from_str(&completed).unwrap();
         let issuer_did = request["issuer_did"].as_str().unwrap();
         let method_id = request["verification_method_id"].as_str().unwrap();
@@ -1784,17 +1828,20 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped Data Integrity signer"]
     fn resolved_did_method_fails_closed_on_controller_private_key_and_wrong_key() {
-        let key = JWK::generate_ed25519().unwrap();
-        let wrong_key = JWK::generate_ed25519().unwrap();
+        let (signer, key) = remote_ed25519_jwk();
+        let wrong_key = public_ed25519_jwk();
         let request = remote_data_integrity_prepare_request_for_did_web(&key);
         let prepared_json =
             prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
         let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
-        let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+        let completed = remotely_sign_prepared_credential(&signer, &prepared).unwrap();
         let credential: Value = serde_json::from_str(&completed).unwrap();
         let issuer_did = request["issuer_did"].as_str().unwrap();
         let method_id = request["verification_method_id"].as_str().unwrap();
+        let mut private_method_jwk = serde_json::to_value(key.to_public()).unwrap();
+        private_method_jwk["d"] = json!("synthetic-private-marker");
 
         let cases = [
             json!({
@@ -1805,7 +1852,7 @@ mod tests {
             json!({
                 "id": method_id,
                 "controller": issuer_did,
-                "public_jwk": serde_json::to_value(key.clone()).unwrap()
+                "public_jwk": private_method_jwk
             }),
             json!({
                 "id": method_id,
@@ -1828,6 +1875,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped Data Integrity signer"]
     fn remote_data_integrity_signing_accepts_noncurrent_validity_but_verification_denies_it() {
         let cases = [
             ("2023-02-26T01:19:19Z", "2023-02-26T01:19:20Z", "expired"),
@@ -1835,7 +1883,7 @@ mod tests {
         ];
 
         for (valid_from, valid_until, expected_error) in cases {
-            let key = JWK::generate_ed25519().unwrap();
+            let (signer, key) = remote_ed25519_jwk();
             let mut request = remote_data_integrity_prepare_request(&key);
             request["credential"]["validFrom"] = json!(valid_from);
             request["credential"]["validUntil"] = json!(valid_until);
@@ -1843,7 +1891,7 @@ mod tests {
             let prepared_json =
                 prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
             let prepared: Value = serde_json::from_str(&prepared_json).unwrap();
-            let completed = remotely_sign_prepared_credential(&key, &prepared).unwrap();
+            let completed = remotely_sign_prepared_credential(&signer, &prepared).unwrap();
             let credential: Value = serde_json::from_str(&completed).unwrap();
 
             let verification: Value = serde_json::from_str(&verify_vcdm_data_integrity_json(
@@ -1865,7 +1913,7 @@ mod tests {
 
     #[test]
     fn data_integrity_preparation_is_repeatable_and_thread_safe_with_status() {
-        let key = JWK::generate_ed25519().unwrap();
+        let key = public_ed25519_jwk();
         let mut request = remote_data_integrity_prepare_request_for_did_web(&key);
         request["credential"] = json!({
             "@context": ["https://www.w3.org/ns/credentials/v2"],
@@ -1906,7 +1954,7 @@ mod tests {
 
     #[test]
     fn remote_data_integrity_signing_rejects_invalid_or_reversed_validity() {
-        let key = JWK::generate_ed25519().unwrap();
+        let key = public_ed25519_jwk();
         let mut malformed = remote_data_integrity_prepare_request(&key);
         malformed["credential"]["validUntil"] = json!("not-a-date");
         let error =
@@ -1925,9 +1973,9 @@ mod tests {
 
     #[test]
     fn remote_data_integrity_rejects_private_jwk_at_prepare_boundary() {
-        let key = JWK::generate_ed25519().unwrap();
+        let key = public_ed25519_jwk();
         let mut request = remote_data_integrity_prepare_request(&key);
-        request["public_jwk"] = serde_json::to_value(key).unwrap();
+        request["public_jwk"]["d"] = json!("synthetic-private-marker");
 
         let error = prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap_err();
         assert!(
@@ -1937,8 +1985,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped Data Integrity signer"]
     fn remote_data_integrity_completion_rejects_tampered_credential() {
-        let key = JWK::generate_ed25519().unwrap();
+        let (signer, key) = remote_ed25519_jwk();
         let prepared_json = prepare_vcdm_data_integrity_credential_json(
             &remote_data_integrity_prepare_request(&key).to_string(),
         )
@@ -1946,7 +1995,7 @@ mod tests {
         let mut prepared: Value = serde_json::from_str(&prepared_json).unwrap();
         prepared["credential"]["credentialSubject"]["id"] = json!("did:example:attacker");
 
-        let error = remotely_sign_prepared_credential(&key, &prepared).unwrap_err();
+        let error = remotely_sign_prepared_credential(&signer, &prepared).unwrap_err();
         assert!(
             error.contains("credential proof is invalid")
                 || error.contains("credential proof verification failed"),
@@ -1956,7 +2005,7 @@ mod tests {
 
     #[test]
     fn remote_data_integrity_completion_rejects_invalid_signature() {
-        let key = JWK::generate_ed25519().unwrap();
+        let key = public_ed25519_jwk();
         let prepared_json = prepare_vcdm_data_integrity_credential_json(
             &remote_data_integrity_prepare_request(&key).to_string(),
         )
@@ -1985,7 +2034,7 @@ mod tests {
             "Data Integrity completion request exceeds the safe size limit"
         );
 
-        let key = JWK::generate_ed25519().unwrap();
+        let key = public_ed25519_jwk();
         let prepared_json = prepare_vcdm_data_integrity_credential_json(
             &remote_data_integrity_prepare_request(&key).to_string(),
         )
@@ -2115,16 +2164,17 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VC-JWT signer"]
     fn verifies_open_badge_v3_vc_jwt_as_one_authenticated_profile() {
-        let mut key = JWK::generate_p256();
+        let (signer, mut key) = remote_es256_jwk();
         let issuer = "did:web:issuer.example";
         key.key_id = Some(format!("{issuer}#key-1"));
-        let token = encode_sign(
-            Algorithm::ES256,
-            &open_badge_jwt_claims(issuer).to_string(),
-            &key,
-        )
-        .unwrap();
+        let token = remotely_signed_jwt(
+            &signer,
+            "ES256",
+            key.key_id.as_deref().unwrap(),
+            &open_badge_jwt_claims(issuer),
+        );
         let public_jwk = serde_json::to_value(key.to_public()).unwrap();
 
         let result: Value = serde_json::from_str(&verify_open_badge_v3_jwt_json(
@@ -2145,13 +2195,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VC-JWT signer"]
     fn open_badge_v3_vc_jwt_rejects_valid_signature_over_invalid_profile() {
-        let mut key = JWK::generate_p256();
+        let (signer, mut key) = remote_es256_jwk();
         let issuer = "did:web:issuer.example";
         key.key_id = Some(format!("{issuer}#key-1"));
         let mut claims = open_badge_jwt_claims(issuer);
         claims["vc"]["credentialSubject"]["achievement"]["name"] = Value::Null;
-        let token = encode_sign(Algorithm::ES256, &claims.to_string(), &key).unwrap();
+        let token = remotely_signed_jwt(&signer, "ES256", key.key_id.as_deref().unwrap(), &claims);
         let public_jwk = serde_json::to_value(key.to_public()).unwrap();
         let request = json!({
             "token": token,
@@ -2173,12 +2224,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VC-JWT signer"]
     fn verifies_eddsa_vc_jwt_using_offline_did_key_resolution() {
-        let mut key = JWK::generate_ed25519().unwrap();
+        let (signer, mut key) = remote_ed25519_jwk();
         let kid = DIDKey::generate_url(&key).unwrap().to_string();
         let issuer = kid.split_once('#').unwrap().0.to_string();
-        key.key_id = Some(kid);
-        let token = encode_sign(Algorithm::EdDSA, &jwt_claims(&issuer).to_string(), &key).unwrap();
+        key.key_id = Some(kid.clone());
+        let token = remotely_signed_jwt(&signer, "EdDSA", &kid, &jwt_claims(&issuer));
 
         let result: Value =
             serde_json::from_str(&verify_vcdm_jwt_json(&json!({"token": token}).to_string()))
@@ -2189,11 +2241,17 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VC-JWT signer"]
     fn verifies_es256_vc_jwt_with_public_profile_did_material() {
-        let mut key = JWK::generate_p256();
+        let (signer, mut key) = remote_es256_jwk();
         let issuer = "did:web:issuer.example";
         key.key_id = Some(format!("{issuer}#key-1"));
-        let token = encode_sign(Algorithm::ES256, &jwt_claims(issuer).to_string(), &key).unwrap();
+        let token = remotely_signed_jwt(
+            &signer,
+            "ES256",
+            key.key_id.as_deref().unwrap(),
+            &jwt_claims(issuer),
+        );
         let public_jwk = serde_json::to_value(key.to_public()).unwrap();
 
         let result: Value = serde_json::from_str(&verify_vcdm_jwt_json(
@@ -2210,13 +2268,19 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VC-JWT signer"]
     fn rejects_tampered_vc_jwt_and_private_profile_material() {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
-        let mut key = JWK::generate_p256();
+        let (signer, mut key) = remote_es256_jwk();
         let issuer = "did:web:issuer.example";
         key.key_id = Some(format!("{issuer}#key-1"));
-        let token = encode_sign(Algorithm::ES256, &jwt_claims(issuer).to_string(), &key).unwrap();
+        let token = remotely_signed_jwt(
+            &signer,
+            "ES256",
+            key.key_id.as_deref().unwrap(),
+            &jwt_claims(issuer),
+        );
         let segments: Vec<&str> = token.split('.').collect();
         assert_eq!(segments.len(), 3);
         let mut signature = URL_SAFE_NO_PAD.decode(segments[2]).unwrap();
@@ -2243,10 +2307,12 @@ mod tests {
             .unwrap()
             .contains("signature is invalid"));
 
+        let mut private_jwk = serde_json::to_value(key.to_public()).unwrap();
+        private_jwk["d"] = json!("synthetic-private-marker");
         let private_material: Value = serde_json::from_str(&verify_vcdm_jwt_json(
             &json!({
                 "token": token,
-                "issuer_public_jwk": serde_json::to_value(key).unwrap()
+                "issuer_public_jwk": private_jwk
             })
             .to_string(),
         ))
