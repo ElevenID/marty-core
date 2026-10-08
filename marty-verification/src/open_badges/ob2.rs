@@ -2,26 +2,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
-#[cfg(test)]
-use crate::jwk::{jws_sign, JwsHeader};
 use crate::jwk::{jws_verify, public_key_pem_to_jwk, Jwk};
 
 use super::contexts::ob2_context_uri;
-#[cfg(test)]
-use super::types::OpenBadgesIssueResult;
 use super::types::{DocumentStore, OpenBadgesVerificationResult};
 
 const DEFAULT_HASH_ALG: &str = "sha256";
-
-#[derive(Debug, Deserialize)]
-#[cfg(test)]
-struct IssueOb2Request {
-    assertion: Value,
-    #[serde(default)]
-    recipient: Option<Ob2RecipientInput>,
-    #[serde(default)]
-    signing: Option<Ob2SigningOptions>,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyOb2Request {
@@ -44,55 +30,6 @@ struct Ob2RecipientInput {
     salt: Option<String>,
     #[serde(default)]
     hash_alg: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg(test)]
-struct Ob2SigningOptions {
-    jwk: Value,
-    #[serde(default)]
-    alg: Option<String>,
-    #[serde(default)]
-    kid: Option<String>,
-    #[serde(default)]
-    creator: Option<String>,
-    #[serde(default)]
-    verification_type: Option<String>,
-}
-
-#[cfg(test)]
-pub fn issue_ob2_json(request_json: &str) -> VerificationResult<String> {
-    let req: IssueOb2Request = serde_json::from_str(request_json)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid OB2 issue request: {}", e)))?;
-
-    let mut assertion = req.assertion;
-    let mut warnings = Vec::new();
-
-    if let Some(recipient) = req.recipient {
-        let recipient_value = build_recipient(recipient, &mut warnings)?;
-        set_value(&mut assertion, "recipient", recipient_value);
-    }
-
-    if let Some(signing) = req.signing {
-        let signature = sign_assertion(&assertion, &signing, &mut warnings)?;
-        set_value(&mut assertion, "signature", Value::String(signature));
-
-        let verification = build_verification(&signing, &mut warnings);
-        if !verification.is_null() {
-            set_value(&mut assertion, "verification", verification);
-        }
-    }
-
-    let result = OpenBadgesIssueResult {
-        issued: true,
-        version: "2.0".to_string(),
-        credential: assertion,
-        warnings,
-    };
-
-    serde_json::to_string(&result).map_err(|e| {
-        VerificationError::open_badges(format!("Failed to serialize OB2 issue result: {}", e))
-    })
 }
 
 pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
@@ -223,65 +160,6 @@ fn build_recipient(
     recipient.insert("hash".to_string(), Value::String(hash_alg));
 
     Ok(Value::Object(recipient))
-}
-
-#[cfg(test)]
-fn sign_assertion(
-    assertion: &Value,
-    signing: &Ob2SigningOptions,
-    warnings: &mut Vec<String>,
-) -> VerificationResult<String> {
-    let jwk_json = serde_json::to_string(&signing.jwk)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid signing JWK: {}", e)))?;
-    let jwk = Jwk::from_json(&jwk_json)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid signing JWK: {}", e)))?;
-
-    let alg = signing
-        .alg
-        .clone()
-        .or_else(|| jwk.alg.clone())
-        .unwrap_or_else(|| default_alg_for_jwk(&jwk));
-
-    let mut header = JwsHeader::new(&alg);
-    if let Some(kid) = signing.kid.clone().or_else(|| jwk.kid.clone()) {
-        header.kid = Some(kid);
-    }
-
-    let mut payload = assertion.clone();
-    if let Value::Object(ref mut obj) = payload {
-        obj.remove("signature");
-    }
-
-    let payload_bytes = serde_json::to_vec(&payload).map_err(|e| {
-        VerificationError::open_badges(format!("Failed to serialize assertion for signing: {}", e))
-    })?;
-
-    let signature = jws_sign(&header, &payload_bytes, &jwk)
-        .map_err(|e| VerificationError::open_badges(format!("OB2 signing failed: {}", e)))?;
-
-    if signing.creator.is_none() {
-        warnings.push("Signed assertion missing verification.creator".to_string());
-    }
-
-    Ok(signature)
-}
-
-#[cfg(test)]
-fn build_verification(signing: &Ob2SigningOptions, warnings: &mut Vec<String>) -> Value {
-    let mut verification = serde_json::Map::new();
-    let verification_type = signing
-        .verification_type
-        .clone()
-        .unwrap_or_else(|| "signed".to_string());
-    verification.insert("type".to_string(), Value::String(verification_type));
-
-    if let Some(creator) = signing.creator.clone().or_else(|| signing.kid.clone()) {
-        verification.insert("creator".to_string(), Value::String(creator));
-    } else {
-        warnings.push("verification.creator missing for signed assertion".to_string());
-    }
-
-    Value::Object(verification)
 }
 
 fn verify_signature(
@@ -521,25 +399,6 @@ fn normalize_ob2(assertion: &Value, badge: Option<&Value>, issuer: Option<&Value
         "issuer_id": issuer.and_then(|i| i.get("id")).cloned().unwrap_or(Value::Null),
         "recipient": assertion.get("recipient").cloned().unwrap_or(Value::Null),
     })
-}
-
-#[cfg(test)]
-fn set_value(target: &mut Value, key: &str, value: Value) {
-    if let Value::Object(ref mut map) = target {
-        map.insert(key.to_string(), value);
-    }
-}
-
-#[cfg(test)]
-fn default_alg_for_jwk(jwk: &Jwk) -> String {
-    match jwk.key_type() {
-        crate::jwk::KeyType::EcP256 => "ES256".to_string(),
-        crate::jwk::KeyType::EcP384 => "ES384".to_string(),
-        crate::jwk::KeyType::EcP521 => "ES512".to_string(),
-        crate::jwk::KeyType::Ed25519 => "EdDSA".to_string(),
-        crate::jwk::KeyType::Rsa => "RS256".to_string(),
-        _ => "ES256".to_string(),
-    }
 }
 
 #[cfg(test)]

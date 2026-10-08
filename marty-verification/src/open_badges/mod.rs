@@ -61,8 +61,6 @@ pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
 /// }
 /// ```
 const _: () = ();
-#[cfg(test)]
-pub use ob2::issue_ob2_json;
 pub use ob2::{verify_ob2, verify_ob2_json, VerifyOb2Request};
 #[cfg(all(not(target_arch = "wasm32"), test))]
 pub use ob3::issue_ob3_json;
