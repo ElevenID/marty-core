@@ -51,22 +51,34 @@ impl DisposableOpenBao {
     }
 
     pub fn create_es256(&self) -> ScopedTransitSigner {
-        self.create_key("ecdsa-p256", TestKeyType::Es256)
+        self.create_key("ecdsa-p256", TestKeyType::Es256, "10m")
+    }
+
+    // This shared support module also compiles in unit-test binaries, where
+    // the benchmark-only longer lease is intentionally unused.
+    #[allow(dead_code)]
+    pub fn create_es256_for_benchmark(&self) -> ScopedTransitSigner {
+        self.create_key("ecdsa-p256", TestKeyType::Es256, "1h")
     }
 
     pub fn create_es384(&self) -> ScopedTransitSigner {
-        self.create_key("ecdsa-p384", TestKeyType::Es384)
+        self.create_key("ecdsa-p384", TestKeyType::Es384, "10m")
     }
 
     pub fn create_ed25519(&self) -> ScopedTransitSigner {
-        self.create_key("ed25519", TestKeyType::Ed25519)
+        self.create_key("ed25519", TestKeyType::Ed25519, "10m")
     }
 
     pub fn create_rsa2048(&self) -> ScopedTransitSigner {
-        self.create_key("rsa-2048", TestKeyType::Rsa2048)
+        self.create_key("rsa-2048", TestKeyType::Rsa2048, "10m")
     }
 
-    fn create_key(&self, key_type: &str, algorithm: TestKeyType) -> ScopedTransitSigner {
+    fn create_key(
+        &self,
+        key_type: &str,
+        algorithm: TestKeyType,
+        token_ttl: &str,
+    ) -> ScopedTransitSigner {
         let name = format!("marty-core-batch-{}", uuid::Uuid::new_v4().simple());
         self.client
             .post(format!("{}/v1/transit/keys/{name}", self.base))
@@ -129,7 +141,7 @@ impl DisposableOpenBao {
             .client
             .post(format!("{}/v1/auth/token/create", self.base))
             .header("X-Vault-Token", &self.root_token)
-            .json(&json!({"policies": [policy_name], "no_default_policy": true, "ttl": "10m"}))
+            .json(&json!({"policies": [policy_name], "no_default_policy": true, "ttl": token_ttl}))
             .send()
             .unwrap()
             .error_for_status()

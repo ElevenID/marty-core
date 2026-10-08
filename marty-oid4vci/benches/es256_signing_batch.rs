@@ -1,4 +1,6 @@
 mod es256_signing_matrix;
+#[path = "support/openbao_signer.rs"]
+mod openbao_signer;
 #[path = "support/signed_preparation.rs"]
 mod signed_preparation;
 
@@ -31,7 +33,7 @@ use marty_oid4vci::{
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     Oid4vciResult,
 };
-use p256::ecdsa::signature::{Signer as _, Verifier as _};
+use p256::ecdsa::signature::Verifier as _;
 use sha2::{Digest as _, Sha256};
 use ssi_jwk::JWK;
 
@@ -96,16 +98,18 @@ impl BenchmarkComposition {
 }
 
 struct BenchmarkSigner {
-    signing_key: p256::ecdsa::SigningKey,
     max_workers: NonZeroUsize,
 }
 
 impl BenchmarkSigner {
     fn new(max_workers: usize) -> Self {
         Self {
-            signing_key: p256::ecdsa::SigningKey::from_slice(&[0x31; 32]).unwrap(),
             max_workers: NonZeroUsize::new(max_workers).unwrap(),
         }
+    }
+
+    fn verifying_key(&self) -> &'static p256::ecdsa::VerifyingKey {
+        openbao_signer::verifying_key()
     }
 }
 
@@ -117,8 +121,7 @@ impl fmt::Debug for BenchmarkSigner {
 
 impl CredentialSigner for BenchmarkSigner {
     fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-        let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-        Ok(signature.to_bytes().to_vec())
+        Ok(openbao_signer::sign(message))
     }
 
     fn algorithm(&self) -> SigningAlgorithm {
@@ -134,15 +137,7 @@ impl CredentialSigner for BenchmarkSigner {
     }
 
     fn public_jwk(&self) -> Oid4vciResult<String> {
-        let point = self.signing_key.verifying_key().to_encoded_point(false);
-        Ok(serde_json::json!({
-            "alg": "ES256",
-            "crv": "P-256",
-            "kty": "EC",
-            "x": URL_SAFE_NO_PAD.encode(point.x().expect("uncompressed P-256 x coordinate")),
-            "y": URL_SAFE_NO_PAD.encode(point.y().expect("uncompressed P-256 y coordinate")),
-        })
-        .to_string())
+        Ok(openbao_signer::public_jwk().to_owned())
     }
 }
 
@@ -792,7 +787,7 @@ fn preflight_payload_matrix(selection: &MatrixSelection) {
                     item_count,
                     0,
                     &serial[0],
-                    serial_signer.signing_key.verifying_key(),
+                    serial_signer.verifying_key(),
                 );
 
                 let mut concurrent_signer = BenchmarkSigner::new(worker_limit);
@@ -807,7 +802,7 @@ fn preflight_payload_matrix(selection: &MatrixSelection) {
                     item_count,
                     0,
                     &concurrent[0],
-                    concurrent_signer.signing_key.verifying_key(),
+                    concurrent_signer.verifying_key(),
                 );
             }
         }
@@ -835,7 +830,7 @@ fn preflight() {
                     composition.format_at(ordinal),
                     ordinal,
                     credential,
-                    serial_signer.signing_key.verifying_key(),
+                    serial_signer.verifying_key(),
                 );
             }
 
@@ -850,7 +845,7 @@ fn preflight() {
                     composition.format_at(ordinal),
                     ordinal,
                     credential,
-                    concurrent_signer.signing_key.verifying_key(),
+                    concurrent_signer.verifying_key(),
                 );
             }
         }
