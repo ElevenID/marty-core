@@ -258,6 +258,13 @@ impl OcspRequestBuilder {
     }
 }
 
+/// Build an unsigned OCSP request from public certificate data.
+pub fn build_ocsp_request(cert_der: &[u8], issuer_cert_der: &[u8]) -> CryptoResult<Vec<u8>> {
+    OcspRequestBuilder::new()
+        .add_certificate(cert_der, issuer_cert_der)
+        .build()
+}
+
 // ============================================================================
 // OCSP Response Parsing
 // ============================================================================
@@ -1287,6 +1294,11 @@ mod tests_with_public_responses {
             .add_certificate(&leaf_cert_der, &ca_cert_der)
             .build()
             .expect("Failed to build OCSP request");
+        assert_eq!(
+            build_ocsp_request(&leaf_cert_der, &ca_cert_der).unwrap(),
+            request_der
+        );
+        assert!(build_ocsp_request(b"invalid", &ca_cert_der).is_err());
 
         assert!(!request_der.is_empty());
 
