@@ -40,7 +40,15 @@ impl std::fmt::Display for OpenBadgeKeySource {
 pub fn contains_private_key_material(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(object) => object.iter().any(|(key, nested)| {
-            if key.starts_with("privateKey") || key.starts_with("secretKey") {
+            let normalized: String = key
+                .chars()
+                .filter(|character| character.is_ascii_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect();
+            if normalized.starts_with("privatekey") || normalized.starts_with("secretkey") {
+                return true;
+            }
+            if key == "kty" && nested.as_str() == Some("oct") {
                 return true;
             }
             if key == "publicKeyJwk" {
@@ -151,7 +159,10 @@ mod admission_tests {
         }
         for invalid in [
             json!({"privateKeyPem": "private"}),
+            json!({"private_key_pem": "private"}),
             json!({"secretKeyHex": "secret"}),
+            json!({"secret_key_hex": "secret"}),
+            json!({"extension": {"kty": "oct", "k": "secret"}}),
             json!({"publicKeyJwk": {"kty": "oct"}}),
             json!({"publicKeyJwk": {}}),
             json!({"publicKeyJwk": null}),

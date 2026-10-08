@@ -25,6 +25,9 @@ pub enum StorageError {
     #[error("Invalid offline queue batch: {0}")]
     InvalidQueueBatch(String),
 
+    #[error("Invalid public verification method: {0}")]
+    InvalidPublicKey(String),
+
     #[error("Invalid trust package: {0}")]
     InvalidTrustPackage(String),
 
