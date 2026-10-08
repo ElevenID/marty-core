@@ -87,7 +87,7 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 marty-crypto = { workspace = true, default-features = false, features = ["jwk", "ecdsa-verification"] }
 reqwest = { workspace = true, features = ["blocking"] }
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e", features = ["issuer-planning"] }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "82143d688355315f22297b40ca18050a94cd2525" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 k256 = { workspace = true, features = ["ecdsa", "sha256"] }
@@ -168,6 +168,7 @@ required-features = ["issuer", "verifier", "wallet", "jwt_vc_json", "sd_jwt", "m
 [[test]]
 name = "benchmark_support"
 path = "tests/benchmark_support.rs"
+required-features = ["issuer", "mso_mdoc", "sd_jwt"]
 
 [[test]]
 name = "wasm_crypto_provider"

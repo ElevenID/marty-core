@@ -368,7 +368,7 @@ pub fn prepare_sd_jwt(
 /// Proof verification, including nonce, audience, age, signature, and optional
 /// key-attestation policy, must complete before this boundary. The input must
 /// already be public; private or symmetric keys are rejected rather than projected.
-#[cfg(any(test, feature = "issuer"))]
+#[cfg(feature = "issuer")]
 pub(crate) fn prepare_sd_jwt_with_holder_public_jwk(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
@@ -977,7 +977,7 @@ fn prepare_sd_jwt_disclosures(
 }
 
 /// A validated remote preparation with its final credential identity and time.
-#[cfg(any(test, feature = "issuer"))]
+#[cfg(feature = "issuer")]
 pub(crate) struct SdJwtBatchPreparationInput {
     pub(crate) batch_id: u64,
     pub(crate) signer: Box<dyn CredentialSigner>,
@@ -987,7 +987,7 @@ pub(crate) struct SdJwtBatchPreparationInput {
 }
 
 /// Check fields that cannot depend on generated time, identity or salts.
-#[cfg(any(test, feature = "issuer"))]
+#[cfg(feature = "issuer")]
 pub(crate) fn validate_sd_jwt_batch_claims(
     claims: &CredentialClaims,
     options: &SdJwtPreparationOptions,
@@ -1006,7 +1006,7 @@ pub(crate) fn validate_sd_jwt_batch_claims(
     Ok(())
 }
 
-#[cfg(any(test, feature = "issuer"))]
+#[cfg(feature = "issuer")]
 pub(crate) fn validate_sd_jwt_batch_time(
     now: chrono::DateTime<chrono::Utc>,
     expiration_seconds: Option<i64>,
@@ -1016,7 +1016,7 @@ pub(crate) fn validate_sd_jwt_batch_time(
 
 /// Reuse the scalar planning and assembly stages, digesting every disclosure
 /// through one executor call and restoring results by routing identity.
-#[cfg(any(test, feature = "issuer"))]
+#[cfg(feature = "issuer")]
 pub(crate) fn prepare_sd_jwt_batch_with_digest_executor(
     batch: Vec<SdJwtBatchPreparationInput>,
     mut next_salt: impl FnMut() -> [u8; 16],

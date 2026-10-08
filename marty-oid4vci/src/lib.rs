@@ -127,8 +127,8 @@ pub use error::{Oid4vciError, Oid4vciResult};
 /// ```
 mod local_issuer_key_compile_boundary {}
 
-// Remaining legacy local-signing tests are crate-internal until their
-// assertions move to KMS-only integration targets or public signed vectors.
+// These suites stay crate-internal because automatic integration tests are
+// disabled. Wallet verification uses a public vector signed by remote keys.
 #[cfg(test)]
 #[path = "../tests/issuance_input.rs"]
 mod issuance_input_tests;
