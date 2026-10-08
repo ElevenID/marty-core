@@ -103,6 +103,8 @@ fi
 "$cargo" test --locked -p marty-verification --lib \
   verification::vds_nc::tests -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
+  verification::chain::tests -- --ignored
+"$cargo" test --locked -p marty-verification --lib \
   oid4vp::tests -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
   trust_sync::tests -- --ignored
