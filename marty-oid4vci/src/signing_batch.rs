@@ -1212,13 +1212,64 @@ mod tests {
     const ISSUER_SECRET: &str = "did:example:issuer-private-canary";
     const KID_SECRET: &str = "did:example:issuer-private-canary#key-private-canary";
 
+    #[derive(Debug)]
+    struct PreSignMetadataSigner {
+        algorithm: SigningAlgorithm,
+        metadata_state: AtomicUsize,
+    }
+
+    impl PreSignMetadataSigner {
+        fn new(algorithm: SigningAlgorithm) -> Self {
+            Self {
+                algorithm,
+                metadata_state: AtomicUsize::new(0),
+            }
+        }
+
+        fn drift(&self, metadata_state: usize) {
+            self.metadata_state.store(metadata_state, Ordering::SeqCst);
+        }
+    }
+
+    impl CredentialSigner for PreSignMetadataSigner {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            panic!("pre-sign failure must not call a signer")
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            if self.metadata_state.load(Ordering::SeqCst) == 1 {
+                SigningAlgorithm::EdDSA
+            } else {
+                self.algorithm
+            }
+        }
+
+        fn issuer_id(&self) -> &str {
+            if self.metadata_state.load(Ordering::SeqCst) == 2 {
+                "did:example:changed"
+            } else {
+                ISSUER_SECRET
+            }
+        }
+
+        fn kid_url(&self) -> String {
+            if self.metadata_state.load(Ordering::SeqCst) == 3 {
+                "did:example:changed#key-2".into()
+            } else {
+                KID_SECRET.into()
+            }
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
+        }
+    }
+
     struct RecordingSigner {
         signing_key: p256::ecdsa::SigningKey,
         calls: Mutex<Vec<Vec<u8>>>,
         signatures: Mutex<Vec<Vec<u8>>>,
-        metadata_state: AtomicUsize,
         fail_at: Option<usize>,
-        initial_algorithm: SigningAlgorithm,
     }
 
     impl RecordingSigner {
@@ -1227,9 +1278,7 @@ mod tests {
                 signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
                 signatures: Mutex::new(Vec::new()),
-                metadata_state: AtomicUsize::new(0),
                 fail_at: None,
-                initial_algorithm: SigningAlgorithm::ES256,
             }
         }
 
@@ -1238,25 +1287,8 @@ mod tests {
                 signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
                 signatures: Mutex::new(Vec::new()),
-                metadata_state: AtomicUsize::new(0),
                 fail_at: Some(ordinal),
-                initial_algorithm: SigningAlgorithm::ES256,
             }
-        }
-
-        fn with_algorithm(algorithm: SigningAlgorithm) -> Self {
-            Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
-                calls: Mutex::new(Vec::new()),
-                signatures: Mutex::new(Vec::new()),
-                metadata_state: AtomicUsize::new(0),
-                fail_at: None,
-                initial_algorithm: algorithm,
-            }
-        }
-
-        fn drift(&self, metadata_state: usize) {
-            self.metadata_state.store(metadata_state, Ordering::SeqCst);
         }
 
         fn call_count(&self) -> usize {
@@ -1290,27 +1322,15 @@ mod tests {
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
-            if self.metadata_state.load(Ordering::SeqCst) == 1 {
-                SigningAlgorithm::EdDSA
-            } else {
-                self.initial_algorithm
-            }
+            SigningAlgorithm::ES256
         }
 
         fn issuer_id(&self) -> &str {
-            if self.metadata_state.load(Ordering::SeqCst) == 2 {
-                "did:example:changed"
-            } else {
-                ISSUER_SECRET
-            }
+            ISSUER_SECRET
         }
 
         fn kid_url(&self) -> String {
-            if self.metadata_state.load(Ordering::SeqCst) == 3 {
-                "did:example:changed#key-2".into()
-            } else {
-                KID_SECRET.into()
-            }
+            KID_SECRET.into()
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
@@ -2728,33 +2748,31 @@ mod tests {
 
     #[test]
     fn empty_batch_is_a_noop() {
-        let signer = RecordingSigner::failing_at(0);
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert!(scope.sign_batch(vec![]).unwrap().is_empty());
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn invalid_scope_and_duplicate_routes_precede_preparation() {
-        let wrong_algorithm = RecordingSigner::with_algorithm(SigningAlgorithm::EdDSA);
+        let wrong_algorithm = PreSignMetadataSigner::new(SigningAlgorithm::EdDSA);
         let error =
             Es256SignerScope::new(&wrong_algorithm).expect_err("non-ES256 signer must be rejected");
         assert_eq!(error.kind(), SigningBatchErrorKind::InvalidScope);
 
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         let error = assert_error(
             scope.sign_batch(vec![invalid_sd_jwt_input(7), jwt_input(7, "duplicate")]),
             SigningBatchErrorKind::DuplicateRoute,
             Some(0),
         );
-        assert_eq!(signer.call_count(), 0);
         assert!(!format!("{error:?}").contains(CLAIM_SECRET));
     }
 
     #[test]
     fn duplicate_routes_report_the_lowest_first_affected_ordinal() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
 
         assert_error(
@@ -2768,12 +2786,11 @@ mod tests {
             SigningBatchErrorKind::DuplicateRoute,
             Some(0),
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn all_preparation_completes_before_signing_and_lowest_failure_wins() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch(vec![
@@ -2784,12 +2801,11 @@ mod tests {
             SigningBatchErrorKind::PreparationFailed,
             Some(1),
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn preparation_failure_precedes_pre_sign_metadata_drift() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         signer.drift(1);
 
@@ -2803,13 +2819,12 @@ mod tests {
             SigningBatchErrorKind::SignerMetadataChanged,
             None,
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn algorithm_issuer_and_kid_drift_are_all_rejected_before_signing() {
         for metadata_state in 1..=3 {
-            let signer = RecordingSigner::es256();
+            let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
             let scope = Es256SignerScope::new(&signer).unwrap();
             signer.drift(metadata_state);
 
@@ -2818,7 +2833,6 @@ mod tests {
                 SigningBatchErrorKind::SignerMetadataChanged,
                 None,
             );
-            assert_eq!(signer.call_count(), 0);
         }
     }
 
@@ -2855,7 +2869,7 @@ mod tests {
 
     #[test]
     fn genuinely_batch_wide_executor_failure_has_no_item_ordinal() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch_with_components(
@@ -2866,7 +2880,6 @@ mod tests {
             SigningBatchErrorKind::ExecutorFailed,
             None,
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[derive(Clone, Copy)]
@@ -3088,7 +3101,7 @@ mod tests {
 
     #[test]
     fn public_diagnostics_are_fixed_and_redacted() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         let route = SigningRouteId::new(91);
         let jwt = JwtVcSigningBatchInput::new(route, jwt_claims(CLAIM_SECRET));
