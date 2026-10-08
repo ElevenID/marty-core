@@ -1,16 +1,13 @@
 //! VDS-NC credential format (`vds_nc`).
 //!
 //! This module provides a signer-agnostic VDS-NC construction path. Production
-//! callers delegate through the `CredentialSigner` trait to an external KMS/HSM;
-//! local JWK signing is fixture-only under `cfg(test)`.
+//! callers delegate through the `CredentialSigner` trait to an external KMS/HSM.
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::signer::{
     validate_remote_signature, validate_rsa_signature_encoding,
     validate_signer_public_jwk_for_algorithm, CredentialSigner,
 };
-#[cfg(test)]
-use crate::types::IssuerKey;
 use crate::types::{CredentialClaims, SignedCredential};
 
 use base64::Engine;
@@ -34,35 +31,6 @@ impl std::fmt::Debug for PreparedVdsNc {
 }
 
 impl PreparedVdsNc {
-    /// Reconstruct a prepared envelope from a `header~payload_json` signing input.
-    #[cfg(test)]
-    pub fn from_signing_input(
-        signing_input: String,
-        credential_id: String,
-        issuer_public_jwk: String,
-    ) -> Oid4vciResult<Self> {
-        let (_header, payload_json) =
-            super::vds_nc_profile::validate_signing_input(&signing_input)?;
-        let payload: serde_json::Value = serde_json::from_str(&payload_json)?;
-        let algorithm = payload
-            .get("_vds")
-            .and_then(|metadata| metadata.get("algorithm"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                Oid4vciError::SigningError(
-                    "VDS-NC signing input is missing its protected algorithm".into(),
-                )
-            })?
-            .to_owned();
-
-        Ok(Self {
-            signing_input,
-            credential_id,
-            algorithm,
-            issuer_public_jwk,
-        })
-    }
-
     /// Protected profile algorithm that the remote signer must use.
     pub fn algorithm(&self) -> &str {
         &self.algorithm
@@ -106,15 +74,6 @@ impl PreparedVdsNc {
 /// let _ = marty_oid4vci::formats::vds_nc::PreparedVdsNc::from_signing_input;
 /// ```
 pub struct NoPreparedVdsNcReconstruction;
-
-/// Sign a VDS-NC credential using a local issuer key.
-#[cfg(test)]
-pub fn sign_vds_nc(
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-) -> Oid4vciResult<SignedCredential> {
-    sign_vds_nc_with_signer(issuer_key, claims)
-}
 
 /// Sign a VDS-NC credential using any [`CredentialSigner`].
 ///
