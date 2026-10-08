@@ -809,9 +809,10 @@ fn zk_mdoc_issuance_uses_remote_non_exportable_issuer_key() {
     let issuer_signed: isomdl::definitions::IssuerSigned =
         isomdl::cbor::from_slice(&encoded).unwrap();
     let items = &issuer_signed.namespaces.as_ref().unwrap()["org.iso.18013.5.1"];
-    assert!(items
-        .iter()
-        .any(|item| item.as_ref().element_identifier == "age_over_18"));
+    assert!(items.iter().any(|item| {
+        let item = item.as_ref();
+        item.element_identifier == "age_over_18" && item.element_value == CborValue::Bool(true)
+    }));
     let payloads = issuer.payloads.lock().unwrap();
     let signatures = issuer.signatures.lock().unwrap();
     assert_eq!(payloads.len(), 1);
