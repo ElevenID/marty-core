@@ -10,7 +10,9 @@ use base64::{
 use marty_oid4vci::{
     formats::{
         jwt_vc::sign_jwt_vc_with_signer,
-        mdoc::sign_mdoc_with_signer,
+        mdoc::{
+            assemble_mdoc, prepare_mdoc_with_credential_id_and_device_key, sign_mdoc_with_signer,
+        },
         sd_jwt::{
             assemble_sd_jwt, prepare_sd_jwt_with_options, sign_sd_jwt_with_signer, verify_sd_jwt,
             SdJwtPreparationOptions,
@@ -504,4 +506,51 @@ fn holder_proof_binds_remote_issuer_sd_jwt_without_private_key_transfer() {
         "Alice"
     );
     assert_eq!(issuer.payloads.lock().unwrap().len(), 1);
+
+    let mut mdoc_claims = claims(CredentialPayloadFormat::default());
+    mdoc_claims.credential_type = "org.iso.18013.5.1.mDL".into();
+    mdoc_claims.mdoc_namespace = Some("org.iso.18013.5.1".into());
+    mdoc_claims.mdoc_doctype = Some("org.iso.18013.5.1.mDL".into());
+    let prepared_mdoc = prepare_mdoc_with_credential_id_and_device_key(
+        &issuer,
+        &mdoc_claims,
+        None,
+        Some(&holder_public),
+    )
+    .unwrap();
+    let mdoc_signature = issuer.sign(prepared_mdoc.signing_payload()).unwrap();
+    let SignedCredential::MsoMdoc {
+        issuer_signed_b64, ..
+    } = assemble_mdoc(prepared_mdoc, &mdoc_signature).unwrap()
+    else {
+        panic!("expected holder-bound mDoc")
+    };
+    let bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
+    let issuer_signed: isomdl::definitions::IssuerSigned =
+        isomdl::cbor::from_slice(&bytes).unwrap();
+    assert_eq!(issuer_signed.issuer_auth.signature, mdoc_signature);
+    let payloads = issuer.payloads.lock().unwrap();
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(issuer_signed.issuer_auth.tbs_data(&[]), payloads[1]);
+    drop(payloads);
+
+    let tagged_mso: isomdl::definitions::helpers::Tag24<isomdl::definitions::Mso> =
+        isomdl::cbor::from_slice(issuer_signed.issuer_auth.payload.as_ref().unwrap()).unwrap();
+    let mso = tagged_mso.into_inner();
+    assert_eq!(
+        mso.device_key_info.device_key,
+        isomdl::definitions::CoseKey::EC2 {
+            crv: isomdl::definitions::EC2Curve::P256,
+            x: URL_SAFE_NO_PAD
+                .decode(holder_public["x"].as_str().unwrap())
+                .unwrap(),
+            y: isomdl::definitions::EC2Y::Value(
+                URL_SAFE_NO_PAD
+                    .decode(holder_public["y"].as_str().unwrap())
+                    .unwrap()
+            ),
+        }
+    );
+    assert!(mso.device_key_info.key_authorizations.is_none());
+    assert!(mso.device_key_info.key_info.is_none());
 }
