@@ -7,17 +7,29 @@ image='quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c31
 name="marty-core-issuer-kms-${GITHUB_RUN_ID:-local}-$$"
 token='core-issuer-test-only'
 nonce="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+ca_cert="$(mktemp)"
+trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -f "$ca_cert"' EXIT
 
 docker run --rm -d --name "$name" \
+  --tmpfs /tmp/certs:mode=0777 \
   -e "BAO_DEV_ROOT_TOKEN_ID=$token" \
   -p 127.0.0.1::8200 \
-  "$image" server -dev '-dev-listen-address=0.0.0.0:8200' >/dev/null
-trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+  "$image" server -dev-tls -dev-tls-cert-dir=/tmp/certs '-dev-listen-address=:8200' >/dev/null
 
 binding="$(docker port "$name" 8200/tcp)"
-base="http://127.0.0.1:${binding##*:}"
+base="https://127.0.0.1:${binding##*:}"
 for attempt in {1..30}; do
-  if curl --silent --fail "$base/v1/sys/health" >/dev/null; then
+  if docker exec "$name" cat /tmp/certs/vault-ca.pem > "$ca_cert" 2>/dev/null && [[ -s "$ca_cert" ]]; then
+    break
+  fi
+  if (( attempt == 30 )); then
+    docker logs "$name" >&2
+    exit 1
+  fi
+  sleep 1
+done
+for attempt in {1..30}; do
+  if curl --silent --fail --cacert "$ca_cert" "$base/v1/sys/health" >/dev/null; then
     break
   fi
   if (( attempt == 30 )); then
@@ -28,12 +40,14 @@ for attempt in {1..30}; do
 done
 
 curl --silent --show-error --fail \
+  --cacert "$ca_cert" \
   --header "X-Vault-Token: $token" \
   --header 'Content-Type: application/json' \
   --request POST \
   --data "{\"data\":{\"nonce\":\"$nonce\"}}" \
   "$base/v1/secret/data/marty-test-disposable-guard" >/dev/null
 curl --silent --show-error --fail \
+  --cacert "$ca_cert" \
   --header "X-Vault-Token: $token" \
   --header 'Content-Type: application/json' \
   --request POST \
@@ -43,13 +57,14 @@ curl --silent --show-error --fail \
 export MARTY_TEST_OPENBAO_URL="$base"
 export MARTY_TEST_OPENBAO_TOKEN="$token"
 export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
+export MARTY_TEST_OPENBAO_CA_CERT="$ca_cert"
 features='kms-only,issuer,verifier,wallet,jwt_vc_json,sd_jwt,mso_mdoc,lti'
 cargo="${MARTY_TEST_CARGO:-cargo}"
 if [[ "$cargo" == *.exe ]]; then
   # WSL does not forward newly created environment variables to Windows
   # executables unless they are named in WSLENV. This is local probe wiring;
   # Linux CI continues to use its native cargo and inherited environment.
-  export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w"
+  export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
 fi
 if [[ "${MARTY_TEST_REMOTE_STATUS_ONLY:-0}" == '1' ]]; then
   "$cargo" test --locked -p marty-verification --lib \

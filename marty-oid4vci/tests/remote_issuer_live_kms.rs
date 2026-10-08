@@ -335,14 +335,23 @@ impl BoundedConcurrentCredentialSigner for HighSRemoteSigner<'_> {
 fn disposable_openbao() -> (Client, String, String) {
     let base = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = Url::parse(&base).expect("OpenBao URL syntax");
-    assert_eq!(parsed.scheme(), "http");
+    assert_eq!(parsed.scheme(), "https");
     assert_eq!(parsed.host_str(), Some("127.0.0.1"));
     assert!(parsed.port().is_some());
+    assert_eq!(parsed.path(), "/");
+    assert!(parsed.username().is_empty() && parsed.password().is_none());
+    let base = format!("https://127.0.0.1:{}", parsed.port().unwrap());
     let root_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable root token");
     let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
         .expect("disposable OpenBao marker nonce");
     assert!(nonce.len() >= 16);
-    let client = Client::builder().no_proxy().build().unwrap();
+    let ca_cert = std::env::var("MARTY_TEST_OPENBAO_CA_CERT").expect("disposable OpenBao CA");
+    let ca_cert = reqwest::Certificate::from_pem(&std::fs::read(ca_cert).unwrap()).unwrap();
+    let client = Client::builder()
+        .no_proxy()
+        .add_root_certificate(ca_cert)
+        .build()
+        .unwrap();
     let marker: Value = client
         .get(format!("{base}/v1/secret/data/marty-test-disposable-guard"))
         .header("X-Vault-Token", &root_token)
@@ -353,7 +362,7 @@ fn disposable_openbao() -> (Client, String, String) {
         .json()
         .unwrap();
     assert_eq!(marker["data"]["data"]["nonce"], nonce);
-    (client, base.trim_end_matches('/').into(), root_token)
+    (client, base, root_token)
 }
 
 fn create_signer(

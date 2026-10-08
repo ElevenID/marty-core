@@ -4,7 +4,7 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
 };
-use reqwest::{blocking::Client, Url};
+use reqwest::{blocking::Client, Certificate, Url};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256, Sha384, Sha512};
 use std::time::Duration;
@@ -30,17 +30,23 @@ impl DisposableOpenBao {
     pub fn from_marked_env() -> Self {
         let base = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
         let url = Url::parse(&base).expect("OpenBao URL syntax");
-        assert_eq!(url.scheme(), "http");
+        assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         assert!(url.port().is_some());
         assert_eq!(url.path(), "/");
         assert!(url.username().is_empty() && url.password().is_none());
+        let base = format!("https://127.0.0.1:{}", url.port().unwrap());
         let root_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable root token");
         let nonce =
             std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("disposable marker nonce");
         assert!(nonce.len() >= 16);
+        let ca_cert = std::env::var("MARTY_TEST_OPENBAO_CA_CERT").expect("disposable OpenBao CA");
+        let ca_cert =
+            Certificate::from_pem(&std::fs::read(ca_cert).expect("read disposable OpenBao CA"))
+                .expect("parse disposable OpenBao CA");
         let client = Client::builder()
             .no_proxy()
+            .add_root_certificate(ca_cert)
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap();
@@ -56,7 +62,7 @@ impl DisposableOpenBao {
         assert_eq!(marker["data"]["data"]["nonce"], nonce);
         Self {
             client,
-            base: base.trim_end_matches('/').into(),
+            base,
             root_token,
         }
     }
