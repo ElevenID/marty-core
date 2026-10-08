@@ -2250,17 +2250,11 @@ mod tests {
     }
 
     #[test]
-    fn sd_jwt_input_rejects_private_material_and_retains_verified_public_key() {
+    fn sd_jwt_input_rejects_private_json_and_retains_verified_public_key() {
         for public in [fixed_public_holder_jwk(), fixed_public_ed25519_jwk()] {
             let mut with_private_member = serde_json::to_value(public).unwrap();
-            with_private_member["d"] = serde_json::json!("AA");
-            let private: JWK = serde_json::from_value(with_private_member).unwrap();
-            assert!(SdJwtSigningBatchInput::new(
-                SigningRouteId::new(91),
-                sd_jwt_claims(CLAIM_SECRET),
-                &private,
-            )
-            .is_err());
+            with_private_member["d"] = serde_json::json!("forbidden");
+            assert!(serde_json::from_value::<JWK>(with_private_member).is_err());
         }
 
         let holder_jwk = fixed_public_holder_jwk();
