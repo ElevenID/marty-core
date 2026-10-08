@@ -1,7 +1,7 @@
 //! Opt-in positive issuance against disposable OpenBao Transit.
 //! Issuer private keys are generated and retained only by OpenBao.
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{collections::HashMap, num::NonZeroUsize, sync::Mutex};
 
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -25,8 +25,9 @@ use marty_oid4vci::{
     proof::verify_jwt_proof,
     signer::CredentialSigner,
     signing_batch::{
-        Es256SignerScope, JwtVcSigningBatchInput, MdocSigningBatchInput, SdJwtSigningBatchInput,
-        SigningBatchErrorKind, SigningRouteId,
+        BoundedConcurrentCredentialSigner, ConcurrentEs256SignerScope, Es256SignerScope,
+        Es256SigningBatchInput, JwtVcSigningBatchInput, MdocSigningBatchInput,
+        SdJwtSigningBatchInput, SigningBatchErrorKind, SigningRouteId,
     },
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     wallet::WalletEngine,
@@ -274,6 +275,63 @@ impl CredentialSigner for OpenBaoSigner {
     }
 }
 
+struct HighSRemoteSigner<'a> {
+    // Serialize access to the test provider so this fixture meets the
+    // concurrent scope's unwind-safety contract without changing production.
+    inner: Mutex<&'a OpenBaoSigner>,
+    calls: Mutex<Vec<(Vec<u8>, Vec<u8>)>>,
+}
+
+impl std::fmt::Debug for HighSRemoteSigner<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HighSRemoteSigner([redacted])")
+    }
+}
+
+impl CredentialSigner for HighSRemoteSigner<'_> {
+    fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+        let remote = self.inner.lock().unwrap().sign(message)?;
+        let signature = p256::ecdsa::Signature::from_slice(&remote)
+            .map_err(|_| Oid4vciError::SigningError("remote signature is invalid".into()))?;
+        let high_s = if signature.normalize_s().is_some() {
+            signature
+        } else {
+            let (r, s) = signature.split_scalars();
+            p256::ecdsa::Signature::from_scalars(r.to_bytes(), (-s).to_bytes())
+                .map_err(|_| Oid4vciError::SigningError("remote signature is invalid".into()))?
+        };
+        assert!(high_s.normalize_s().is_some());
+        let raw = high_s.to_bytes().to_vec();
+        self.calls
+            .lock()
+            .unwrap()
+            .push((message.to_vec(), raw.clone()));
+        Ok(raw)
+    }
+
+    fn algorithm(&self) -> SigningAlgorithm {
+        SigningAlgorithm::ES256
+    }
+
+    fn issuer_id(&self) -> &str {
+        ISSUER_DID
+    }
+
+    fn kid_url(&self) -> String {
+        self.inner.lock().unwrap().kid_url()
+    }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        self.inner.lock().unwrap().public_jwk()
+    }
+}
+
+impl BoundedConcurrentCredentialSigner for HighSRemoteSigner<'_> {
+    fn max_concurrent_signing_workers(&self) -> NonZeroUsize {
+        NonZeroUsize::new(2).unwrap()
+    }
+}
+
 fn disposable_openbao() -> (Client, String, String) {
     let base = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = Url::parse(&base).expect("OpenBao URL syntax");
@@ -407,6 +465,122 @@ fn claims(format: CredentialPayloadFormat) -> CredentialClaims {
     }
 }
 
+fn mixed_batch_inputs(holder: &ssi_jwk::JWK) -> Vec<Es256SigningBatchInput> {
+    let mut mdoc_claims = claims(CredentialPayloadFormat::default());
+    mdoc_claims.credential_type = "org.iso.18013.5.1.mDL".into();
+    mdoc_claims.mdoc_namespace = Some("org.iso.18013.5.1".into());
+    mdoc_claims.mdoc_doctype = Some("org.iso.18013.5.1.mDL".into());
+    vec![
+        JwtVcSigningBatchInput::new(
+            SigningRouteId::new(1),
+            claims(CredentialPayloadFormat::W3cVcdmV2JwtVc),
+        )
+        .into(),
+        SdJwtSigningBatchInput::new(
+            SigningRouteId::new(2),
+            claims(CredentialPayloadFormat::IetfSdJwt),
+            holder,
+        )
+        .unwrap()
+        .into(),
+        MdocSigningBatchInput::new(SigningRouteId::new(3), mdoc_claims).into(),
+    ]
+}
+
+fn batch_emitted_signatures(credentials: &[SignedCredential]) -> Vec<Vec<u8>> {
+    credentials
+        .iter()
+        .map(|credential| match credential {
+            SignedCredential::JwtVcJson { jwt, .. } => URL_SAFE_NO_PAD
+                .decode(jwt.rsplit('.').next().unwrap())
+                .unwrap(),
+            SignedCredential::SdJwt { compact, .. } => URL_SAFE_NO_PAD
+                .decode(
+                    compact
+                        .split('~')
+                        .next()
+                        .unwrap()
+                        .rsplit('.')
+                        .next()
+                        .unwrap(),
+                )
+                .unwrap(),
+            SignedCredential::MsoMdoc {
+                issuer_signed_b64, ..
+            } => {
+                let issuer_signed: isomdl::definitions::IssuerSigned =
+                    isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap())
+                        .unwrap();
+                issuer_signed.issuer_auth.signature.clone()
+            }
+            _ => panic!("mixed ES256 batch returned an unexpected format"),
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn valid_remote_high_s_signatures_survive_serial_and_concurrent_batches() {
+    let (client, base, root_token) = disposable_openbao();
+    let issuer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder_public: ssi_jwk::JWK = serde_json::from_str(&holder.public_jwk).unwrap();
+    let serial_signer = HighSRemoteSigner {
+        inner: Mutex::new(&issuer),
+        calls: Mutex::new(Vec::new()),
+    };
+    let serial = Es256SignerScope::new(&serial_signer)
+        .unwrap()
+        .sign_batch(mixed_batch_inputs(&holder_public))
+        .unwrap();
+    let serial_calls = serial_signer.calls.lock().unwrap();
+    assert_eq!(serial_calls.len(), 3);
+    for (emitted, (_, returned)) in batch_emitted_signatures(&serial)
+        .iter()
+        .zip(serial_calls.iter())
+    {
+        assert_eq!(emitted, returned);
+        assert!(p256::ecdsa::Signature::from_slice(emitted)
+            .unwrap()
+            .normalize_s()
+            .is_some());
+    }
+    drop(serial_calls);
+
+    let mut concurrent_signer = HighSRemoteSigner {
+        inner: Mutex::new(&issuer),
+        calls: Mutex::new(Vec::new()),
+    };
+    let concurrent = ConcurrentEs256SignerScope::new(&mut concurrent_signer)
+        .unwrap()
+        .sign_batch_concurrently(mixed_batch_inputs(&holder_public))
+        .unwrap();
+    let concurrent_calls = concurrent_signer.calls.lock().unwrap();
+    assert_eq!(concurrent_calls.len(), 3);
+    for emitted in batch_emitted_signatures(&concurrent) {
+        assert!(concurrent_calls
+            .iter()
+            .any(|(_, returned)| returned == &emitted));
+        assert!(p256::ecdsa::Signature::from_slice(&emitted)
+            .unwrap()
+            .normalize_s()
+            .is_some());
+    }
+    assert!(holder.payloads.lock().unwrap().is_empty());
+}
+
 #[test]
 #[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
 fn mixed_format_batch_signs_only_with_remote_es256_key() {
@@ -426,28 +600,8 @@ fn mixed_format_batch_signs_only_with_remote_es256_key() {
         SigningAlgorithm::ES256,
     );
     let holder: ssi_jwk::JWK = serde_json::from_str(&holder_signer.public_jwk).unwrap();
-    let mut mdoc_claims = claims(CredentialPayloadFormat::default());
-    mdoc_claims.credential_type = "org.iso.18013.5.1.mDL".into();
-    mdoc_claims.mdoc_namespace = Some("org.iso.18013.5.1".into());
-    mdoc_claims.mdoc_doctype = Some("org.iso.18013.5.1.mDL".into());
     let scope = Es256SignerScope::new(&signer).unwrap();
-    let credentials = scope
-        .sign_batch(vec![
-            JwtVcSigningBatchInput::new(
-                SigningRouteId::new(1),
-                claims(CredentialPayloadFormat::W3cVcdmV2JwtVc),
-            )
-            .into(),
-            SdJwtSigningBatchInput::new(
-                SigningRouteId::new(2),
-                claims(CredentialPayloadFormat::IetfSdJwt),
-                &holder,
-            )
-            .unwrap()
-            .into(),
-            MdocSigningBatchInput::new(SigningRouteId::new(3), mdoc_claims).into(),
-        ])
-        .unwrap();
+    let credentials = scope.sign_batch(mixed_batch_inputs(&holder)).unwrap();
     let payloads = signer.payloads.lock().unwrap();
     let signatures = signer.signatures.lock().unwrap();
     assert_eq!(payloads.len(), 3);
