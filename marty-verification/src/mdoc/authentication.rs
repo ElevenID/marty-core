@@ -769,15 +769,19 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signer"]
     fn direct_pin_requires_a_valid_mdoc_document_signer_profile() {
-        use rcgen::{CertificateParams, DnType, KeyPair, KeyUsagePurpose};
+        use marty_crypto_test_support::remote_certificate::{
+            RemoteCertificateAlgorithm, RemoteCertificateKey,
+        };
+        use rcgen::{CertificateParams, DnType, KeyUsagePurpose};
 
         fn certificate(
             name: &str,
             is_ca: rcgen::IsCa,
             key_usages: Vec<KeyUsagePurpose>,
         ) -> (Vec<u8>, String) {
-            let key = KeyPair::generate().unwrap();
+            let key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
             let mut params = CertificateParams::default();
             params.distinguished_name.push(DnType::CommonName, name);
             params.is_ca = is_ca;
