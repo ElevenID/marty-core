@@ -14,6 +14,14 @@ ROOT_INVALIDATORS = {
     "rust-toolchain.toml",
 }
 
+# Cargo metadata cannot express test-source imports across workspace packages.
+# Crypto's JWK integration test embeds this Verification-owned contract directly.
+# This is a test-only edge, not a library change: its Cargo consumers need not
+# be added to the reverse dependency closure solely because the vector changes.
+CROSS_PACKAGE_TEST_INPUT_OWNERS = {
+    "marty-verification/tests/fixtures/public_key_jwk_vectors.json": {"marty-crypto"},
+}
+
 
 def affected_packages(
     changed_paths: list[str], metadata: dict[str, object]
@@ -33,6 +41,7 @@ def affected_packages(
     }
 
     directly_changed: set[str] = set()
+    extra_test_packages: set[str] = set()
     for path in normalized:
         # Fixtures, native sources, and embedded documentation are build/test
         # inputs too. Package ownership, not the extension, defines relevance.
@@ -43,6 +52,12 @@ def affected_packages(
         ]
         if matches:
             directly_changed.add(max(matches)[1])
+            extra_owners = CROSS_PACKAGE_TEST_INPUT_OWNERS.get(str(path), set())
+            if not extra_owners <= set(roots):
+                # A mapped package disappearing is not evidence that its test
+                # obligation vanished. Keep the workspace fallback.
+                return True, []
+            extra_test_packages.update(extra_owners)
         else:
             # Shared scripts/configuration and removed packages have no proven
             # owner in current metadata. Never turn uncertainty into no tests.
@@ -64,6 +79,7 @@ def affected_packages(
             if consumer not in affected:
                 affected.add(consumer)
                 queue.append(consumer)
+    affected.update(extra_test_packages)
     return False, sorted(affected)
 
 
