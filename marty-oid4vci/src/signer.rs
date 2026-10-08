@@ -380,18 +380,6 @@ mod remote_signature_tests {
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
-    fn p256_public_jwk(key: &p256::ecdsa::SigningKey) -> String {
-        let point = key.verifying_key().to_encoded_point(false);
-        serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "alg": "ES256",
-            "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-            "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-        })
-        .to_string()
-    }
-
     fn assert_binding(
         algorithm: SigningAlgorithm,
         public_jwk: &str,
@@ -447,36 +435,22 @@ mod remote_signature_tests {
         assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 1025]).is_err());
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn signature_binding_rejects_payload_and_public_key_substitution() {
-        use p256::ecdsa::signature::Signer as _;
-
-        let key = p256::ecdsa::SigningKey::from_slice(&[1u8; 32]).unwrap();
-        let other_key = p256::ecdsa::SigningKey::from_slice(&[2u8; 32]).unwrap();
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn es256_remote_signature_binds_payload_and_public_key() {
+        let provider = crate::openbao_transit::DisposableOpenBao::from_marked_env();
+        let signer = provider.create_es256();
+        let wrong_signer = provider.create_es256();
         let payload = b"canonical prepared credential payload";
-        let signature: p256::ecdsa::Signature = key.sign(payload);
-
-        assert!(verify_remote_signature(
+        let signature = signer.sign(payload).unwrap();
+        assert_binding(
             SigningAlgorithm::ES256,
-            &p256_public_jwk(&key),
+            signer.public_jwk(),
+            wrong_signer.public_jwk(),
             payload,
-            signature.to_bytes().as_slice(),
-        )
-        .is_ok());
-        assert!(verify_remote_signature(
-            SigningAlgorithm::ES256,
-            &p256_public_jwk(&key),
-            b"substituted payload",
-            signature.to_bytes().as_slice(),
-        )
-        .is_err());
-        assert!(verify_remote_signature(
-            SigningAlgorithm::ES256,
-            &p256_public_jwk(&other_key),
-            payload,
-            signature.to_bytes().as_slice(),
-        )
-        .is_err());
+            &signature,
+        );
     }
 
     #[test]
@@ -547,76 +521,59 @@ mod remote_signature_tests {
     }
 
     #[test]
-    fn es384_es256k_and_eddsa_reject_substituted_bindings() {
+    fn es256k_rejects_substituted_bindings() {
         let payload = b"canonical prepared credential payload";
+        // Public-only signed vector preserves ES256K verifier coverage until
+        // the remote provider exposes secp256k1 signing.
+        let public_jwk = serde_json::json!({
+            "kty": "EC", "crv": "secp256k1", "alg": "ES256K",
+            "x": "75ly36FbnJzTT6bZT4KR_aVx3AlzR7WF6YWBSoi-3lQ",
+            "y": "RswUWdEwFdU7zoC-Ov2YPYG7CrNKXjSMl6C2iwub97Y",
+        });
+        let wrong_public_jwk = serde_json::json!({
+            "kty": "EC", "crv": "secp256k1", "alg": "ES256K",
+            "x": "a3OraLg19-yg49xqGpakSsEf9os09-hDjt51hW-Rm8U",
+            "y": "HaxjsiGpFq2HaRl2anX_I7x2Brp8ZW65DbFcnlN507k",
+        });
+        let signature = URL_SAFE_NO_PAD
+            .decode("ldm8BHtz5gQ8LQsc87_KDMeLXk9rrR43mLneWXfEcZv58QcEDLRfNmHXnf3_cCHYFMTeYg5xGQDznvhmosUSQQ")
+            .unwrap();
+        assert_binding(
+            SigningAlgorithm::ES256K,
+            &public_jwk.to_string(),
+            &wrong_public_jwk.to_string(),
+            payload,
+            &signature,
+        );
+    }
 
-        {
-            use p384::ecdsa::signature::Signer as _;
-            let key = p384::ecdsa::SigningKey::from_slice(&[3u8; 48]).unwrap();
-            let wrong = p384::ecdsa::SigningKey::from_slice(&[4u8; 48]).unwrap();
-            let point = key.verifying_key().to_encoded_point(false);
-            let wrong_point = wrong.verifying_key().to_encoded_point(false);
-            let jwk = |point: &p384::EncodedPoint| {
-                serde_json::json!({
-                    "kty": "EC", "crv": "P-384", "alg": "ES384",
-                    "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                    "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-                })
-                .to_string()
-            };
-            let signature: p384::ecdsa::Signature = key.sign(payload);
-            assert_binding(
-                SigningAlgorithm::ES384,
-                &jwk(&point),
-                &jwk(&wrong_point),
-                payload,
-                signature.to_bytes().as_slice(),
-            );
-        }
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn es384_and_eddsa_remote_signatures_bind_payload_and_public_key() {
+        let provider = crate::openbao_transit::DisposableOpenBao::from_marked_env();
+        let payload = b"canonical prepared credential payload";
+        let es384 = provider.create_es384();
+        let wrong_es384 = provider.create_es384();
+        let es384_signature = es384.sign_es384(payload).unwrap();
+        assert_binding(
+            SigningAlgorithm::ES384,
+            es384.public_jwk(),
+            wrong_es384.public_jwk(),
+            payload,
+            &es384_signature,
+        );
 
-        {
-            use k256::ecdsa::signature::Signer as _;
-            let key = k256::ecdsa::SigningKey::from_slice(&[5u8; 32]).unwrap();
-            let wrong = k256::ecdsa::SigningKey::from_slice(&[6u8; 32]).unwrap();
-            let jwk = |key: &k256::ecdsa::SigningKey| {
-                let point = key.verifying_key().to_encoded_point(false);
-                serde_json::json!({
-                    "kty": "EC", "crv": "secp256k1", "alg": "ES256K",
-                    "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                    "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-                })
-                .to_string()
-            };
-            let signature: k256::ecdsa::Signature = key.sign(payload);
-            assert_binding(
-                SigningAlgorithm::ES256K,
-                &jwk(&key),
-                &jwk(&wrong),
-                payload,
-                signature.to_bytes().as_slice(),
-            );
-        }
-
-        {
-            use ed25519_dalek::Signer as _;
-            let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
-            let wrong = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
-            let jwk = |key: &ed25519_dalek::SigningKey| {
-                serde_json::json!({
-                    "kty": "OKP", "crv": "Ed25519", "alg": "EdDSA",
-                    "x": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
-                })
-                .to_string()
-            };
-            let signature = key.sign(payload);
-            assert_binding(
-                SigningAlgorithm::EdDSA,
-                &jwk(&key),
-                &jwk(&wrong),
-                payload,
-                &signature.to_bytes(),
-            );
-        }
+        let eddsa = provider.create_ed25519();
+        let wrong_eddsa = provider.create_ed25519();
+        let eddsa_signature = eddsa.sign_ed25519(payload).unwrap();
+        assert_binding(
+            SigningAlgorithm::EdDSA,
+            eddsa.public_jwk(),
+            wrong_eddsa.public_jwk(),
+            payload,
+            &eddsa_signature,
+        );
     }
 
     #[cfg(not(target_family = "wasm"))]
