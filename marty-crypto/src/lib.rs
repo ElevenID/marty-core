@@ -29,16 +29,6 @@
 pub mod algorithm_identifier;
 #[cfg(feature = "bbs-verification")]
 pub mod bbs;
-#[cfg(all(
-    test,
-    feature = "ecdh",
-    feature = "signature-verification",
-    feature = "crl",
-    feature = "ocsp",
-    feature = "public-key-codec"
-))]
-#[allow(dead_code)]
-mod cert_builder;
 #[cfg(feature = "x509-parsing")]
 pub mod certificate;
 #[cfg(feature = "crl")]
@@ -62,28 +52,8 @@ pub mod iso9796;
 pub mod jwk;
 #[cfg(feature = "kdf")]
 pub mod kdf;
-#[cfg(all(
-    test,
-    feature = "ecdh",
-    feature = "signature-verification",
-    feature = "crl",
-    feature = "ocsp",
-    feature = "public-key-codec"
-))]
-#[allow(dead_code)]
-mod keygen;
 #[cfg(feature = "ocsp")]
 pub mod ocsp;
-#[cfg(all(
-    test,
-    feature = "ecdh",
-    feature = "signature-verification",
-    feature = "crl",
-    feature = "ocsp",
-    feature = "public-key-codec"
-))]
-#[allow(dead_code)]
-mod pkcs12;
 #[cfg(feature = "rsa-verification")]
 pub mod rsa;
 #[cfg(any(
@@ -99,34 +69,21 @@ mod secret_buffer;
 mod secret_hash;
 #[cfg(feature = "public-key-codec")]
 pub mod serialization;
-#[cfg(all(
-    test,
-    feature = "ecdh",
-    feature = "signature-verification",
-    feature = "crl",
-    feature = "ocsp",
-    feature = "public-key-codec"
-))]
-#[allow(dead_code, unused_imports)]
-mod sod_builder;
 #[cfg(feature = "symmetric")]
 pub mod symmetric;
 
 pub use error::{CryptoError, CryptoResult};
 
-// Preserve the unchanged local-signing CAVP sources as crate-internal tests.
-// `cfg(test)` is controlled by rustc and cannot be selected by dependants.
+// Keep standards vectors and public signature verification vectors
+// crate-internal. `cfg(test)` cannot be selected by dependants.
 #[cfg(all(test, any(feature = "signature-verification", feature = "ecdh")))]
 extern crate self as marty_crypto;
 #[cfg(all(test, feature = "ecdh", feature = "kdf"))]
 #[path = "../tests/cavp_ecdh.rs"]
 mod cavp_ecdh;
-#[cfg(all(test, feature = "signature-verification", feature = "ecdh"))]
-#[path = "../tests/cavp_ecdsa.rs"]
-mod cavp_ecdsa;
 #[cfg(all(test, feature = "signature-verification"))]
-#[path = "../tests/cavp_rsa.rs"]
-mod cavp_rsa;
+#[path = "../tests/rsa_public_verification.rs"]
+mod rsa_public_verification;
 
 use serde::{Deserialize, Serialize};
 

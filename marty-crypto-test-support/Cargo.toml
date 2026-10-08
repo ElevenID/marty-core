@@ -7,21 +7,16 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Non-publishable remote and cryptographic conformance fixtures for Marty tests"
+description = "Non-publishable remote signing and public-key fixtures for Marty tests"
 
 [dependencies]
 base64 = { workspace = true }
 marty-crypto = { path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "jwk", "public-key-codec", "rsa-verification"] }
 der = { workspace = true }
-ed25519-dalek = { workspace = true, features = ["pkcs8"] }
-p256 = { workspace = true, features = ["arithmetic", "ecdsa", "pkcs8", "std"] }
-p384 = { workspace = true, features = ["arithmetic", "ecdsa", "pkcs8", "std"] }
-pem-rfc7468 = { workspace = true }
-pkcs8 = { workspace = true }
-rand = { workspace = true }
+p256 = { workspace = true, features = ["arithmetic", "sha256", "std"] }
+ecdsa-core = { workspace = true, features = ["verifying"] }
 rcgen = { workspace = true, features = ["aws_lc_rs"] }
 reqwest = { workspace = true, features = ["blocking"] }
-rsa = { workspace = true, features = ["pem"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 spki = { workspace = true }

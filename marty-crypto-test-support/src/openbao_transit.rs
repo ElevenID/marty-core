@@ -233,7 +233,7 @@ impl ScopedTransitSigner {
         &self.public_key_spki
     }
 
-    pub fn verifying_key(&self) -> p256::ecdsa::VerifyingKey {
+    pub fn verifying_key(&self) -> ecdsa_core::VerifyingKey<p256::NistP256> {
         assert_eq!(self.algorithm, TestKeyType::Es256);
         let public: Value = serde_json::from_str(&self.public_jwk).unwrap();
         let mut point = vec![0x04];
@@ -247,7 +247,7 @@ impl ScopedTransitSigner {
                 .decode(public["y"].as_str().unwrap())
                 .unwrap(),
         );
-        p256::ecdsa::VerifyingKey::from_sec1_bytes(&point).unwrap()
+        ecdsa_core::VerifyingKey::<p256::NistP256>::from_sec1_bytes(&point).unwrap()
     }
 
     pub fn sign_der(&self, message: &[u8]) -> Result<Vec<u8>, TransitError> {

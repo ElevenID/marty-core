@@ -24,6 +24,22 @@ fn vector(name: &str, field: &str) -> Vec<u8> {
 }
 
 #[test]
+fn normalizes_public_ecdsa_signatures_without_signing_keys() {
+    for (name, algorithm) in [
+        ("spki_p256", "ES256"),
+        ("spki_p384", "ES384"),
+        ("spki_p521", "ES512"),
+    ] {
+        let der = vector(name, "signature_der");
+        let raw = vector(name, "signature_raw");
+        assert_eq!(ecdsa::normalize_signature(&der, algorithm).unwrap(), raw);
+        assert_eq!(ecdsa::normalize_signature(&raw, algorithm).unwrap(), raw);
+    }
+    assert!(ecdsa::normalize_signature(&[0, 1, 2], "ES256").is_err());
+    assert!(ecdsa::normalize_signature(&vector("spki_p256", "signature_raw"), "RS256").is_err());
+}
+
+#[test]
 fn verifies_rfc6979_p256_sha256_vector() {
     let public_key = hex(concat!(
         "04",
@@ -57,6 +73,14 @@ fn verifies_rfc8032_ed25519_vector() {
 
     assert!(ed25519::verify(&public_key, b"", &signature).is_ok());
     assert!(ed25519::verify(&public_key, b"tampered", &signature).is_err());
+    assert!(ed25519::verify_bool(&public_key, b"", &signature));
+    assert!(!ed25519::verify_bool(&public_key, b"tampered", &signature));
+    let verifying_key = ed25519::Ed25519VerifyingKey::from_bytes(&public_key).unwrap();
+    assert_eq!(verifying_key.to_bytes().as_slice(), public_key);
+    assert!(verifying_key.verify_strict(b"", &signature));
+    assert!(verifying_key.verify(b"", &[0u8; 32]).is_err());
+    assert!(verifying_key.verify(b"", &[0u8; 128]).is_err());
+    assert!(ed25519::Ed25519VerifyingKey::from_bytes(&[0u8; 16]).is_err());
 }
 
 #[test]

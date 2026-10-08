@@ -25,10 +25,6 @@
 
 use crate::{CryptoError, CryptoResult};
 use zkryptium::bbsplus::keys::BBSplusPublicKey;
-#[cfg(test)]
-use zkryptium::bbsplus::keys::BBSplusSecretKey;
-#[cfg(test)]
-use zkryptium::keys::pair::KeyPair;
 use zkryptium::schemes::algorithms::{BbsBls12381Sha256, BbsBls12381Shake256};
 use zkryptium::schemes::generics::{PoKSignature, Signature};
 
@@ -59,101 +55,6 @@ impl BbsCiphersuite {
                 "Unknown BBS+ ciphersuite: {}",
                 name
             ))),
-        }
-    }
-}
-
-// ============================================================================
-// Key Types
-// ============================================================================
-
-/// BBS+ key pair for multi-message signing and selective disclosure.
-#[derive(Clone)]
-#[cfg(test)]
-pub struct BbsKeyPair {
-    secret_key: Vec<u8>,
-    public_key: Vec<u8>,
-    ciphersuite: BbsCiphersuite,
-}
-
-#[cfg(test)]
-impl BbsKeyPair {
-    /// Generate a new BBS+ key pair.
-    pub fn generate(ciphersuite: BbsCiphersuite) -> CryptoResult<Self> {
-        match ciphersuite {
-            BbsCiphersuite::Bls12381Sha256 => {
-                let kp = KeyPair::<BbsBls12381Sha256>::random()
-                    .map_err(|e| CryptoError::internal(format!("BBS+ keygen failed: {:?}", e)))?;
-                Ok(Self {
-                    secret_key: kp.private_key().to_bytes().to_vec(),
-                    public_key: kp.public_key().to_bytes().to_vec(),
-                    ciphersuite,
-                })
-            }
-            BbsCiphersuite::Bls12381Shake256 => {
-                let kp = KeyPair::<BbsBls12381Shake256>::random()
-                    .map_err(|e| CryptoError::internal(format!("BBS+ keygen failed: {:?}", e)))?;
-                Ok(Self {
-                    secret_key: kp.private_key().to_bytes().to_vec(),
-                    public_key: kp.public_key().to_bytes().to_vec(),
-                    ciphersuite,
-                })
-            }
-        }
-    }
-
-    /// Reconstruct a key pair from raw bytes.
-    pub fn from_bytes(
-        secret_key: &[u8],
-        public_key: &[u8],
-        ciphersuite: BbsCiphersuite,
-    ) -> CryptoResult<Self> {
-        if public_key.len() != 96 {
-            return Err(CryptoError::internal(
-                "BBS+ public key must be 96 bytes (BLS12-381 G2)".to_string(),
-            ));
-        }
-        Ok(Self {
-            secret_key: secret_key.to_vec(),
-            public_key: public_key.to_vec(),
-            ciphersuite,
-        })
-    }
-
-    /// Get the secret key bytes.
-    pub fn secret_key(&self) -> &[u8] {
-        &self.secret_key
-    }
-
-    /// Get the public key bytes (96 bytes, BLS12-381 G2 compressed).
-    pub fn public_key(&self) -> &[u8] {
-        &self.public_key
-    }
-
-    /// Get the ciphersuite this key pair uses.
-    pub fn ciphersuite(&self) -> BbsCiphersuite {
-        self.ciphersuite
-    }
-
-    /// Sign a list of messages, producing a single BBS+ signature.
-    ///
-    /// Each message is an arbitrary byte vector. The signature covers all
-    /// messages jointly — selective disclosure happens at proof generation time.
-    pub fn sign(&self, messages: &[Vec<u8>], header: &[u8]) -> CryptoResult<Vec<u8>> {
-        bbs_sign(
-            &self.secret_key,
-            &self.public_key,
-            messages,
-            header,
-            self.ciphersuite,
-        )
-    }
-
-    /// Get the verifying (public) key.
-    pub fn verifying_key(&self) -> BbsVerifyingKey {
-        BbsVerifyingKey {
-            public_key: self.public_key.clone(),
-            ciphersuite: self.ciphersuite,
         }
     }
 }
@@ -237,42 +138,9 @@ impl BbsVerifyingKey {
 // Standalone Functions
 // ============================================================================
 
-#[cfg(test)]
-fn parse_sk(bytes: &[u8]) -> CryptoResult<BBSplusSecretKey> {
-    BBSplusSecretKey::from_bytes(bytes)
-        .map_err(|e| CryptoError::internal(format!("Invalid BBS+ secret key: {:?}", e)))
-}
-
 fn parse_pk(bytes: &[u8]) -> CryptoResult<BBSplusPublicKey> {
     BBSplusPublicKey::from_bytes(bytes)
         .map_err(|e| CryptoError::internal(format!("Invalid BBS+ public key: {:?}", e)))
-}
-
-/// Sign multiple messages with BBS+.
-#[cfg(test)]
-pub fn bbs_sign(
-    secret_key: &[u8],
-    public_key: &[u8],
-    messages: &[Vec<u8>],
-    header: &[u8],
-    ciphersuite: BbsCiphersuite,
-) -> CryptoResult<Vec<u8>> {
-    let sk = parse_sk(secret_key)?;
-    let pk = parse_pk(public_key)?;
-
-    match ciphersuite {
-        BbsCiphersuite::Bls12381Sha256 => {
-            let sig = Signature::<BbsBls12381Sha256>::sign(Some(messages), &sk, &pk, Some(header))
-                .map_err(|e| CryptoError::internal(format!("BBS+ sign failed: {:?}", e)))?;
-            Ok(sig.to_bytes().to_vec())
-        }
-        BbsCiphersuite::Bls12381Shake256 => {
-            let sig =
-                Signature::<BbsBls12381Shake256>::sign(Some(messages), &sk, &pk, Some(header))
-                    .map_err(|e| CryptoError::internal(format!("BBS+ sign failed: {:?}", e)))?;
-            Ok(sig.to_bytes().to_vec())
-        }
-    }
 }
 
 /// Verify a BBS+ signature over multiple messages.
@@ -482,155 +350,127 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_keygen_sha256() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Sha256).unwrap();
-        assert_eq!(kp.public_key().len(), 96);
-        assert!(!kp.secret_key().is_empty());
+    struct DisclosureFixture {
+        key: BbsVerifyingKey,
+        signature: Vec<u8>,
+        messages: Vec<Vec<u8>>,
+        header: &'static [u8],
+        presentation_header: &'static [u8],
+        indices: Vec<usize>,
+        disclosed: Vec<Vec<u8>>,
     }
 
-    #[test]
-    fn test_keygen_shake256() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Shake256).unwrap();
-        assert_eq!(kp.public_key().len(), 96);
-    }
-
-    #[test]
-    fn test_sign_verify_roundtrip_sha256() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Sha256).unwrap();
-        let messages: Vec<Vec<u8>> =
-            vec![b"claim1".to_vec(), b"claim2".to_vec(), b"claim3".to_vec()];
-        let header = b"test-header";
-
-        let sig = kp.sign(&messages, header).unwrap();
-        assert_eq!(sig.len(), 80);
-        let vk = kp.verifying_key();
-        vk.verify(&messages, header, &sig).unwrap();
-    }
-
-    #[test]
-    fn test_sign_verify_roundtrip_shake256() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Shake256).unwrap();
-        let messages: Vec<Vec<u8>> = vec![
-            b"name:Alice".to_vec(),
-            b"age:30".to_vec(),
-            b"country:US".to_vec(),
-        ];
-        let header = b"credential-header";
-
-        let sig = kp.sign(&messages, header).unwrap();
-        kp.verifying_key().verify(&messages, header, &sig).unwrap();
-    }
-
-    #[test]
-    fn test_selective_disclosure_proof_sha256() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Sha256).unwrap();
-        let messages: Vec<Vec<u8>> = vec![
-            b"name:Alice".to_vec(),
-            b"age:30".to_vec(),
-            b"country:US".to_vec(),
-        ];
-        let header = b"test-header";
-        let presentation_header = b"verifier-nonce-12345";
-
-        // Sign all messages
-        let sig = kp.sign(&messages, header).unwrap();
-
-        // Create proof disclosing only message at index 1 (age)
-        let proof = bbs_create_proof(
-            kp.public_key(),
-            &sig,
-            &messages,
-            &[1],
+    fn disclosure_fixture(ciphersuite: BbsCiphersuite) -> DisclosureFixture {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/bbs_disclosure_public.json"))
+                .unwrap();
+        let (field, messages, header, presentation_header, indices, disclosed) = match ciphersuite {
+            BbsCiphersuite::Bls12381Sha256 => (
+                "sha256",
+                vec![
+                    b"name:Alice".to_vec(),
+                    b"age:30".to_vec(),
+                    b"country:US".to_vec(),
+                ],
+                b"test-header".as_slice(),
+                b"verifier-nonce-12345".as_slice(),
+                vec![1],
+                vec![b"age:30".to_vec()],
+            ),
+            BbsCiphersuite::Bls12381Shake256 => (
+                "shake256",
+                vec![
+                    b"given_name:Bob".to_vec(),
+                    b"family_name:Smith".to_vec(),
+                    b"dob:1990-01-15".to_vec(),
+                    b"country:DE".to_vec(),
+                ],
+                b"eudi-pid-header".as_slice(),
+                b"siopv2-nonce-xyz".as_slice(),
+                vec![0, 3],
+                vec![b"given_name:Bob".to_vec(), b"country:DE".to_vec()],
+            ),
+        };
+        let public_key = decode_hex(vectors[field]["public_key"].as_str().unwrap());
+        let signature = decode_hex(vectors[field]["signature"].as_str().unwrap());
+        let key = BbsVerifyingKey::from_bytes(&public_key, ciphersuite).unwrap();
+        DisclosureFixture {
+            key,
+            signature,
+            messages,
             header,
             presentation_header,
+            indices,
+            disclosed,
+        }
+    }
+
+    #[test]
+    fn public_multi_message_signatures_verify_and_reject_tampering() {
+        for ciphersuite in [
             BbsCiphersuite::Bls12381Sha256,
-        )
-        .unwrap();
-
-        // Verify the proof with only the disclosed message
-        let disclosed_msgs = vec![b"age:30".to_vec()];
-        kp.verifying_key()
-            .verify_proof(&proof, &disclosed_msgs, &[1], header, presentation_header)
-            .unwrap();
+            BbsCiphersuite::Bls12381Shake256,
+        ] {
+            let DisclosureFixture {
+                key,
+                signature,
+                messages,
+                header,
+                ..
+            } = disclosure_fixture(ciphersuite);
+            assert_eq!(key.as_bytes().len(), 96);
+            assert_eq!(signature.len(), 80);
+            key.verify(&messages, header, &signature).unwrap();
+            let mut tampered_messages = messages.clone();
+            tampered_messages[0].push(b'!');
+            assert!(key.verify(&tampered_messages, header, &signature).is_err());
+            let mut tampered_signature = signature;
+            tampered_signature[0] ^= 1;
+            assert!(key.verify(&messages, header, &tampered_signature).is_err());
+        }
     }
 
     #[test]
-    fn test_selective_disclosure_proof_shake256() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Shake256).unwrap();
-        let messages: Vec<Vec<u8>> = vec![
-            b"given_name:Bob".to_vec(),
-            b"family_name:Smith".to_vec(),
-            b"dob:1990-01-15".to_vec(),
-            b"country:DE".to_vec(),
-        ];
-        let header = b"eudi-pid-header";
-        let presentation_header = b"siopv2-nonce-xyz";
-
-        let sig = kp.sign(&messages, header).unwrap();
-
-        // Disclose given_name (0) and country (3), hide family_name and dob
-        let proof = bbs_create_proof(
-            kp.public_key(),
-            &sig,
-            &messages,
-            &[0, 3],
-            header,
-            presentation_header,
+    fn public_multi_message_signatures_create_selective_disclosure_proofs() {
+        for ciphersuite in [
+            BbsCiphersuite::Bls12381Sha256,
             BbsCiphersuite::Bls12381Shake256,
-        )
-        .unwrap();
-
-        let disclosed_msgs = vec![b"given_name:Bob".to_vec(), b"country:DE".to_vec()];
-        kp.verifying_key()
-            .verify_proof(
-                &proof,
-                &disclosed_msgs,
-                &[0, 3],
+        ] {
+            let DisclosureFixture {
+                key,
+                signature,
+                messages,
                 header,
                 presentation_header,
+                indices,
+                disclosed,
+            } = disclosure_fixture(ciphersuite);
+            let proof = bbs_create_proof(
+                key.as_bytes(),
+                &signature,
+                &messages,
+                &indices,
+                header,
+                presentation_header,
+                ciphersuite,
             )
             .unwrap();
-    }
-
-    #[test]
-    fn test_tampered_message_fails() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Sha256).unwrap();
-        let messages: Vec<Vec<u8>> = vec![b"claim1".to_vec(), b"claim2".to_vec()];
-        let header = b"h";
-
-        let sig = kp.sign(&messages, header).unwrap();
-
-        // Tamper with a message
-        let tampered: Vec<Vec<u8>> = vec![b"claim1".to_vec(), b"TAMPERED".to_vec()];
-        let result = kp.verifying_key().verify(&tampered, header, &sig);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_wrong_disclosed_message_fails_proof() {
-        let kp = BbsKeyPair::generate(BbsCiphersuite::Bls12381Shake256).unwrap();
-        let messages: Vec<Vec<u8>> = vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()];
-        let header = b"h";
-        let ph = b"nonce";
-
-        let sig = kp.sign(&messages, header).unwrap();
-        let proof = bbs_create_proof(
-            kp.public_key(),
-            &sig,
-            &messages,
-            &[0],
-            header,
-            ph,
-            BbsCiphersuite::Bls12381Shake256,
-        )
-        .unwrap();
-
-        // Try to verify with wrong disclosed message
-        let wrong_disclosed = vec![b"WRONG".to_vec()];
-        let result = kp
-            .verifying_key()
-            .verify_proof(&proof, &wrong_disclosed, &[0], header, ph);
-        assert!(result.is_err());
+            key.verify_proof(&proof, &disclosed, &indices, header, presentation_header)
+                .unwrap();
+            assert!(key
+                .verify_proof(&proof, &disclosed, &indices, header, b"wrong nonce")
+                .is_err());
+            let mut wrong_disclosed = disclosed;
+            wrong_disclosed[0].push(b'!');
+            assert!(key
+                .verify_proof(
+                    &proof,
+                    &wrong_disclosed,
+                    &indices,
+                    header,
+                    presentation_header
+                )
+                .is_err());
+        }
     }
 }

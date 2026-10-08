@@ -3805,7 +3805,6 @@ dependencies = [
  "chrono",
  "cipher",
  "cmac",
- "cms",
  "const-oid",
  "der 0.7.10",
  "des",
@@ -3816,7 +3815,6 @@ dependencies = [
  "ghash",
  "hex",
  "hmac",
- "p12",
  "p256",
  "p384",
  "p521",
@@ -3824,15 +3822,12 @@ dependencies = [
  "pkcs8",
  "polyval",
  "rand 0.8.7",
- "rcgen",
  "rsa",
  "serde",
  "serde_json",
  "sha1",
  "sha2 0.10.9",
- "signature",
  "spki",
- "tempfile",
  "thiserror 2.0.20",
  "wasm-bindgen-test",
  "x25519-dalek",
@@ -3848,16 +3843,11 @@ version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "der 0.7.10",
- "ed25519-dalek",
+ "ecdsa",
  "marty-crypto",
  "p256",
- "p384",
- "pem-rfc7468 0.7.0",
- "pkcs8",
- "rand 0.8.7",
  "rcgen",
  "reqwest",
- "rsa",
  "serde_json",
  "sha2 0.10.9",
  "spki",
@@ -4693,23 +4683,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "p12"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4873306de53fe82e7e484df31e1e947d61514b6ea2ed6cd7b45d63006fd9224"
-dependencies = [
- "cbc",
- "cipher",
- "des",
- "getrandom 0.2.17",
- "hmac",
- "lazy_static",
- "rc2",
- "sha1",
- "yasna 0.5.2",
-]
-
-[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4745,7 +4718,6 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "rand_core 0.6.4",
  "sha2 0.10.9",
 ]
 
@@ -5502,15 +5474,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rc2"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62c64daa8e9438b84aaae55010a93f396f8e60e3911590fcba770d04643fc1dd"
-dependencies = [
- "cipher",
-]
-
-[[package]]
 name = "rcgen"
 version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5522,7 +5485,7 @@ dependencies = [
  "rustls-pki-types",
  "time",
  "x509-parser",
- "yasna 0.6.0",
+ "yasna",
 ]
 
 [[package]]
@@ -8398,12 +8361,6 @@ dependencies = [
  "static-regular-grammar",
  "thiserror 1.0.69",
 ]
-
-[[package]]
-name = "yasna"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
 
 [[package]]
 name = "yasna"

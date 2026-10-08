@@ -187,7 +187,7 @@ jobs:
           cargo test --locked -p marty-iso18013 --no-default-features --features python --lib python_module_name_coexists_with_session_conformance_alias
           cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys
           cargo test --locked -p marty-bindings --no-default-features --features didcomm-encrypted-envelope encrypted_envelope_module_exposes_anoncrypt_only
-          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
+          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope
       - name: Smoke marty-oid4vci benchmarks
         if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-oid4vci')
         env:
@@ -405,7 +405,7 @@ jobs:
           USE_ZK_MOCK=1 cargo test --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib
           USE_ZK_MOCK=1 cargo clippy --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib -- -D warnings
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
-          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
+          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope
           cargo check --locked -p marty-bindings --no-default-features --features kms-only,extension-module
           if cargo check --locked -p marty-crypto --no-default-features --features kms-only,keygen; then exit 1; fi
           if cargo check --locked -p marty-verification --no-default-features --features kms-only,local-key-operations; then exit 1; fi
