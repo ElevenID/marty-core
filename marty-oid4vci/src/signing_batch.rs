@@ -2899,6 +2899,22 @@ mod tests {
         BackendFailureAndDuplicateIdentity,
     }
 
+    impl ResultFault {
+        fn corrupts_identity_envelope(self) -> bool {
+            matches!(
+                self,
+                Self::Missing
+                    | Self::Duplicate
+                    | Self::Unexpected
+                    | Self::WrongScope
+                    | Self::WrongBatch
+                    | Self::WrongRoute
+                    | Self::InvalidSignatureAndDuplicateIdentity
+                    | Self::BackendFailureAndDuplicateIdentity
+            )
+        }
+    }
+
     struct FaultingExecutor(ResultFault);
 
     fn signature_bytes_mut(result: &mut SigningResult) -> &mut Vec<u8> {
@@ -2914,7 +2930,18 @@ mod tests {
             signer: &dyn CredentialSigner,
             jobs: &[SigningJob<'_>],
         ) -> Result<Vec<SigningResult>, SigningExecutionError> {
-            let mut results = SerialSigningExecutor.execute(signer, jobs)?;
+            let mut results = if self.0.corrupts_identity_envelope() {
+                jobs.iter()
+                    .map(|job| SigningResult {
+                        identity: job.identity,
+                        // Deliberately invalid: the envelope must fail before
+                        // signature validation or any signer invocation.
+                        outcome: SigningOutcome::Signature(vec![0xA5; ES256_SIGNATURE_LENGTH]),
+                    })
+                    .collect()
+            } else {
+                SerialSigningExecutor.execute(signer, jobs)?
+            };
             match self.0 {
                 ResultFault::Missing => {
                     results.pop();
@@ -2974,7 +3001,7 @@ mod tests {
             ResultFault::InvalidSignatureAndDuplicateIdentity,
             ResultFault::BackendFailureAndDuplicateIdentity,
         ] {
-            let signer = RecordingSigner::es256();
+            let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
             let scope = Es256SignerScope::new(&signer).unwrap();
             assert_error(
                 scope.sign_batch_with_components(
