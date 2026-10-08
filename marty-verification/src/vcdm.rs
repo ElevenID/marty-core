@@ -867,7 +867,7 @@ fn validate_data_integrity_issuance_dates(credential: &Value) -> Result<(), Stri
     Ok(())
 }
 
-fn ed25519_multikey(
+pub(crate) fn ed25519_multikey(
     public_jwk: &JWK,
     issuer_did: &str,
     verification_method_id: &str,

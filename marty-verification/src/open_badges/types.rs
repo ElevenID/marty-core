@@ -364,11 +364,3 @@ pub enum OpenBadgeStatusOutcome {
     Suspended,
     Message,
 }
-
-#[derive(Debug, Serialize)]
-pub struct OpenBadgesIssueResult {
-    pub issued: bool,
-    pub version: String,
-    pub credential: Value,
-    pub warnings: Vec<String>,
-}

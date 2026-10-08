@@ -51,6 +51,11 @@ if [[ "$cargo" == *.exe ]]; then
   # Linux CI continues to use its native cargo and inherited environment.
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w"
 fi
+if [[ "${MARTY_TEST_REMOTE_STATUS_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked -p marty-verification --lib \
+    open_badges::status::tests -- --ignored
+  exit 0
+fi
 if [[ "${MARTY_TEST_ZK_MDOC:-0}" == '1' ]]; then
   features+=',zk_mdoc'
 fi
@@ -114,6 +119,8 @@ fi
   jwk::jws::tests -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
   vcdm::tests -- --ignored
+"$cargo" test --locked -p marty-verification --lib \
+  open_badges::status::tests -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
   oid4vp::tests -- --ignored
 "$cargo" test --locked -p marty-verification --lib \

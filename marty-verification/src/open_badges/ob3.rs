@@ -4,50 +4,18 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use iref::IriBuf;
-#[cfg(test)]
-use iref::UriBuf;
-#[cfg(test)]
-use ssi_claims::data_integrity::CryptographicSuite;
-#[cfg(test)]
-use ssi_claims::data_integrity::ProofOptions;
 use ssi_claims::data_integrity::{AnySuite, DataIntegrity};
 use ssi_claims::vc::syntax::AnyJsonCredential;
-#[cfg(test)]
-use ssi_claims::SignatureEnvironment;
 use ssi_claims::VerificationParameters;
-#[cfg(test)]
-use ssi_json_ld::syntax::{Context, ContextEntry};
-#[cfg(test)]
-use ssi_jwk::Params as JwkParams;
-#[cfg(test)]
-use ssi_jwk::JWK;
 use ssi_verification_methods::VerificationMethod;
 use ssi_verification_methods::{AnyMethod, GenericVerificationMethod};
-#[cfg(test)]
-use ssi_verification_methods::{
-    Ed25519VerificationKey2018, Ed25519VerificationKey2020, JsonWebKey2020, ProofPurpose,
-    ReferenceOrOwned, SingleSecretSigner,
-};
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
 
-#[cfg(test)]
-use super::contexts::security_v2_context_uri;
 use super::contexts::{ob3_context_uri, open_badges_context_loader};
 use super::method_wrapper::ensure_public_verification_method;
 use super::status::check_credential_status;
-#[cfg(test)]
-use super::types::OpenBadgesIssueResult;
 use super::types::{AuthenticatedStatusList, DocumentStore, OpenBadgesVerificationResult};
-#[cfg(test)]
-use super::x509_verification_method::X509VerificationKey2021;
-
-#[cfg(test)]
-#[derive(Debug, Deserialize)]
-struct IssueOb3Request {
-    credential: Value,
-    signing: Ob3SigningOptions,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyOb3Request {
@@ -56,115 +24,7 @@ pub struct VerifyOb3Request {
     pub document_store: Option<DocumentStore>,
 }
 
-#[cfg(test)]
-#[derive(Debug, Deserialize)]
-struct Ob3SigningOptions {
-    jwk: Value,
-    verification_method: String,
-    #[serde(default)]
-    verification_method_type: Option<String>,
-    #[serde(default)]
-    controller: Option<String>,
-    #[serde(default)]
-    proof_purpose: Option<String>,
-}
-
 pub(super) type AnyCredential = DataIntegrity<AnyJsonCredential, AnySuite>;
-
-#[cfg(test)]
-pub async fn issue_ob3_json_async(request_json: &str) -> VerificationResult<String> {
-    let req: IssueOb3Request = serde_json::from_str(request_json)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 issue request: {}", e)))?;
-
-    let credential: AnyJsonCredential = serde_json::from_value(req.credential.clone())
-        .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 credential: {}", e)))?;
-
-    let jwk: JWK = serde_json::from_value(req.signing.jwk.clone())
-        .map_err(|e| VerificationError::open_badges(format!("Invalid JWK: {}", e)))?;
-
-    let verification_method_iri =
-        IriBuf::new(req.signing.verification_method.clone()).map_err(|e| {
-            VerificationError::open_badges(format!("Invalid verification_method: {}", e))
-        })?;
-
-    let controller = req
-        .signing
-        .controller
-        .clone()
-        .or_else(|| credential_issuer(&req.credential))
-        .ok_or_else(|| {
-            VerificationError::open_badges("Missing controller for verification method".to_string())
-        })?;
-
-    let controller_bytes = controller.clone().into_bytes();
-    let controller_uri = UriBuf::new(controller_bytes).map_err(|e| {
-        VerificationError::open_badges(format!("Invalid controller URI {}: {:?}", controller, e))
-    })?;
-
-    let method_type = req
-        .signing
-        .verification_method_type
-        .clone()
-        .unwrap_or_else(|| "JsonWebKey2020".to_string());
-    let (method, suite) =
-        build_verification_method(&jwk, &verification_method_iri, controller_uri, &method_type)?;
-
-    let mut resolver: HashMap<IriBuf, AnyMethod> = HashMap::new();
-    resolver.insert(verification_method_iri.clone(), method);
-
-    let signer = SingleSecretSigner::new(jwk.clone()).into_local();
-
-    let proof_purpose = req
-        .signing
-        .proof_purpose
-        .as_deref()
-        .unwrap_or("assertionMethod");
-    if proof_purpose != "assertionMethod" {
-        return Err(VerificationError::open_badges_unsupported(format!(
-            "Open Badge credentials must use assertionMethod proof purpose, not {proof_purpose}"
-        )));
-    }
-
-    let mut proof_options =
-        ProofOptions::from_method(ReferenceOrOwned::Reference(verification_method_iri));
-    proof_options.proof_purpose = ProofPurpose::Assertion;
-    if method_type == "Ed25519VerificationKey2018" {
-        let context_iri = IriBuf::new(security_v2_context_uri().to_string()).map_err(|e| {
-            VerificationError::open_badges(format!("Invalid proof context URI: {}", e))
-        })?;
-        proof_options.context = Some(Context::One(ContextEntry::from(context_iri)));
-    }
-    let loader = open_badges_context_loader()?;
-    let env = SignatureEnvironment {
-        json_ld_loader: loader,
-        eip712_loader: (),
-    };
-
-    let signed = suite
-        .sign_with(
-            env,
-            credential,
-            &resolver,
-            &signer,
-            proof_options,
-            Default::default(),
-        )
-        .await
-        .map_err(|e| VerificationError::open_badges(format!("OB3 signing failed: {}", e)))?;
-
-    let result = OpenBadgesIssueResult {
-        issued: true,
-        version: "3.0".to_string(),
-        credential: serde_json::to_value(&signed).map_err(|e| {
-            VerificationError::open_badges(format!("Failed to serialize OB3 credential: {}", e))
-        })?,
-        warnings: Vec::new(),
-    };
-
-    serde_json::to_string(&result).map_err(|e| {
-        VerificationError::open_badges(format!("Failed to serialize OB3 issue result: {}", e))
-    })
-}
 
 pub async fn verify_ob3_json_async(request_json: &str) -> VerificationResult<String> {
     verify_ob3_json_with_status_lists_async(request_json, &[]).await
@@ -275,11 +135,6 @@ pub async fn verify_ob3_with_status_lists_async(
     Ok(result)
 }
 
-#[cfg(all(not(target_arch = "wasm32"), test))]
-pub fn issue_ob3_json(request_json: &str) -> VerificationResult<String> {
-    futures::executor::block_on(issue_ob3_json_async(request_json))
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 pub fn verify_ob3_json(request_json: &str) -> VerificationResult<String> {
     futures::executor::block_on(verify_ob3_json_async(request_json))
@@ -294,98 +149,6 @@ pub fn verify_ob3_json_with_status_lists(
         request_json,
         authenticated_status_lists,
     ))
-}
-
-#[cfg(test)]
-fn build_verification_method(
-    jwk: &JWK,
-    verification_method: &IriBuf,
-    controller: UriBuf,
-    method_type: &str,
-) -> VerificationResult<(AnyMethod, AnySuite)> {
-    match method_type {
-        "JsonWebKey2020" => {
-            let public_jwk = jwk.to_public();
-            let method = JsonWebKey2020 {
-                id: verification_method.clone(),
-                controller,
-                public_key: Box::new(public_jwk),
-            };
-            Ok((
-                AnyMethod::JsonWebKey2020(method),
-                AnySuite::JsonWebSignature2020,
-            ))
-        }
-        "Ed25519VerificationKey2018" => {
-            let public_key = ed25519_public_key_bytes(jwk)?;
-            let public_key_base58 = bs58::encode(public_key).into_string();
-            let method_value = json!({
-                "id": verification_method.to_string(),
-                "type": "Ed25519VerificationKey2018",
-                "controller": controller.to_string(),
-                "publicKeyBase58": public_key_base58
-            });
-            let method: Ed25519VerificationKey2018 =
-                serde_json::from_value(method_value).map_err(|e| {
-                    VerificationError::open_badges(format!(
-                        "Invalid Ed25519VerificationKey2018 method: {}",
-                        e
-                    ))
-                })?;
-            Ok((
-                AnyMethod::Ed25519VerificationKey2018(method),
-                AnySuite::Ed25519Signature2018,
-            ))
-        }
-        "Ed25519VerificationKey2020" => {
-            let verifying_key = ed25519_verifying_key(jwk)?;
-            let method = Ed25519VerificationKey2020::from_public_key(
-                verification_method.clone(),
-                controller,
-                verifying_key,
-            );
-            Ok((
-                AnyMethod::Ed25519VerificationKey2020(method),
-                AnySuite::Ed25519Signature2020,
-            ))
-        }
-        _ => Err(VerificationError::open_badges_unsupported(format!(
-            "Unsupported verification method type: {}",
-            method_type
-        ))),
-    }
-}
-
-// For X509 verification methods, this function extracts PEM from the credential's verificationMethod
-#[cfg(test)]
-#[allow(dead_code)]
-fn build_x509_verification_method(
-    pem: &str,
-    verification_method: &IriBuf,
-    controller: UriBuf,
-) -> VerificationResult<X509VerificationKey2021> {
-    Ok(X509VerificationKey2021::new(
-        verification_method.clone(),
-        controller.to_string(),
-        pem.to_string(),
-    ))
-}
-
-#[cfg(test)]
-fn ed25519_public_key_bytes(jwk: &JWK) -> VerificationResult<Vec<u8>> {
-    match &jwk.params {
-        JwkParams::OKP(params) if params.curve == "Ed25519" => Ok(params.public_key.0.clone()),
-        _ => Err(VerificationError::open_badges_unsupported(
-            "Ed25519 verification methods require an Ed25519 OKP JWK".to_string(),
-        )),
-    }
-}
-
-#[cfg(test)]
-fn ed25519_verifying_key(jwk: &JWK) -> VerificationResult<ed25519_dalek::VerifyingKey> {
-    let public_key = ed25519_public_key_bytes(jwk)?;
-    ed25519_dalek::VerifyingKey::try_from(public_key.as_slice())
-        .map_err(|e| VerificationError::open_badges(format!("Invalid Ed25519 public key: {}", e)))
 }
 
 pub(super) fn push_error(
