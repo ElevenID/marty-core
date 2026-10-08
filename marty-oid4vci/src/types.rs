@@ -959,9 +959,6 @@ pub struct IssuerConfig {
     pub issuer_name: String,
     /// Credential types this issuer supports.
     pub credential_types: Vec<CredentialTypeConfig>,
-    /// Development/migration-only in-process issuer signing key.
-    #[cfg(test)]
-    pub issuer_key: IssuerKey,
     /// Token endpoint URL (if different from default).
     pub token_endpoint: Option<String>,
     /// Credential endpoint URL (if different from default).
@@ -979,19 +976,12 @@ pub struct IssuerConfig {
 impl IssuerConfig {
     /// Construct a key-free configuration for stateless protocol helpers.
     ///
-    /// The compatibility key field, when compiled, is initialized internally
-    /// so downstream KMS-only crates never need to name `IssuerKey`.
+    /// Issuer signing is supplied separately through remote preparation APIs.
     pub fn stateless() -> Self {
         Self {
             credential_issuer_url: String::new(),
             issuer_name: String::new(),
             credential_types: Vec::new(),
-            #[cfg(test)]
-            issuer_key: IssuerKey {
-                issuer_id: String::new(),
-                jwk_json: String::new(),
-                algorithm: SigningAlgorithm::EdDSA,
-            },
             token_endpoint: None,
             credential_endpoint: None,
             authorization_endpoint: None,

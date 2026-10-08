@@ -32,24 +32,8 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 #[cfg(any(test, feature = "issuer"))]
 use crate::signer::CredentialSigner;
 use crate::types::CredentialFormat;
-#[cfg(test)]
-use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, SignedCredential};
-
-/// Sign a credential in the requested format.
-///
-/// This is the central dispatch function that routes to the correct signing
-/// pipeline based on the `format` parameter. All format-specific complexity
-/// is handled internally.
-#[cfg(test)]
-pub fn sign_credential(
-    format: &CredentialFormat,
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-) -> Oid4vciResult<SignedCredential> {
-    sign_credential_with_signer(format, issuer_key, claims)
-}
 
 /// Sign a credential using any [`CredentialSigner`] implementation.
 ///
