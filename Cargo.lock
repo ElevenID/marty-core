@@ -1680,8 +1680,7 @@ dependencies = [
 [[package]]
 name = "did-ethr"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f28d2272e4bf3454174482b51a1030b3e4192ceb2f188213aff242273e0be965"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "hex",
  "iref",
@@ -1696,8 +1695,7 @@ dependencies = [
 [[package]]
 name = "did-ion"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2927c9aa8b64707fdcab002b3dfbb701d42519a310751c1bba2bebe2c14d4bac"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "base64 0.22.1",
  "iref",
@@ -1710,7 +1708,6 @@ dependencies = [
  "ssi-dids-core",
  "ssi-jwk",
  "ssi-jws",
- "ssi-jwt",
  "ssi-verification-methods",
  "thiserror 2.0.20",
 ]
@@ -1718,8 +1715,7 @@ dependencies = [
 [[package]]
 name = "did-jwk"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46da6f25e148e54727851295ec7cb610f3da1d9ef3ef2a57d27db530368094bd"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "iref",
@@ -1737,8 +1733,7 @@ dependencies = [
 [[package]]
 name = "did-method-key"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8835113af094aa57ece6058d99e30ced5f2897be822782b925e20a18f9f882e"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "bs58 0.4.0",
  "iref",
@@ -1757,8 +1752,7 @@ dependencies = [
 [[package]]
 name = "did-pkh"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f54cb42511cabfd3087a237d863c203ff9b338ddb75f5a435cd2e16ca19326b2"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "bech32",
@@ -1778,8 +1772,7 @@ dependencies = [
 [[package]]
 name = "did-tz"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727b42a800a1fe30bfeca8432fa964bd8db6f58e96d52b540d6becb267fb2521"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "bs58 0.4.0",
@@ -1801,8 +1794,7 @@ dependencies = [
 [[package]]
 name = "did-web"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e6c3e262aabe7b1fb6373048f63b7e395221c83c8750bbb4a6784811a272673"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "http",
  "iref",
@@ -2455,6 +2447,10 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+dependencies = [
+ "ahash 0.8.12",
+ "allocator-api2",
+]
 
 [[package]]
 name = "hashbrown"
@@ -2470,11 +2466,6 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash",
-]
 
 [[package]]
 name = "hashlink"
@@ -4639,9 +4630,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "5.3.0"
+version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7d950ca161dc355eaf28f82b11345ed76c6e1f6eb1f4f4479e0323b9e2fbd0e"
+checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
 dependencies = [
  "num-traits",
  "rand 0.8.7",
@@ -6390,8 +6381,7 @@ dependencies = [
 [[package]]
 name = "ssi-caips"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b72537ab24b91065a01de3667b9fb2842b9e9574f44f4fbac7a4892b98adb16"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "bs58 0.4.0",
  "linked-data",
@@ -6404,8 +6394,7 @@ dependencies = [
 [[package]]
 name = "ssi-claims"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60851a11f7eb0e8fd241d91b7c254222d79092f0713708bc265eb5273aed61c7"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "educe 0.4.23",
  "iref",
@@ -6437,8 +6426,7 @@ dependencies = [
 [[package]]
 name = "ssi-claims-core"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6077d3e3cbfe8c034a704131cfcb51a7628f5ee940f7679b1f12202e280e468"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "chrono",
  "educe 0.4.23",
@@ -6453,14 +6441,12 @@ dependencies = [
 [[package]]
 name = "ssi-contexts"
 version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d0eda75b662bc3d7a9e751292c96a71a3d9bdcfb887e0b895032a5fd23c203e"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 
 [[package]]
 name = "ssi-core"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ce624bf36e40a13cbb7f7d375b0a2613346fbdb9fa6adb974a1b98bc85de512"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "pin-project",
@@ -6471,8 +6457,7 @@ dependencies = [
 [[package]]
 name = "ssi-cose"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "017f8840cbb91bf667da53aa38e4fea4667272e00b5fc192f7b9f1ec2e18db11"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "ciborium",
  "coset",
@@ -6485,8 +6470,7 @@ dependencies = [
 [[package]]
 name = "ssi-crypto"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53aded7b6dc3dabb004ee658fc46358c09623ad7aa61b99388ff734ae222d5d2"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "bs58 0.4.0",
@@ -6499,19 +6483,16 @@ dependencies = [
  "keccak-hash",
  "p256",
  "pin-project",
- "rand 0.8.7",
  "serde",
  "sha2 0.10.9",
  "static-iref",
- "thiserror 1.0.69",
- "zeroize",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "ssi-data-integrity"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "855626a8b1fbc28365ebee12937a0e67431e137b79ada96f531b86126627189e"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "chrono",
  "iref",
@@ -6539,8 +6520,7 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity-core"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd5112c7c66db195cc02524a435dbbce0c4665adaa6f6de10694460ea018d4b"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "chrono",
  "contextual",
@@ -6575,8 +6555,7 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity-suites"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8230c407d806a1b9503a7b7c5c53379f64a13643c7d9b47a54753efd20c7f1b"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6624,8 +6603,7 @@ dependencies = [
 [[package]]
 name = "ssi-di-sd-primitives"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "667bc1ce813620fed05e03ae13d4bf5c79277bbf5b13215003a6ea27649a13f3"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "base64 0.22.1",
  "digest 0.10.7",
@@ -6647,8 +6625,7 @@ dependencies = [
 [[package]]
 name = "ssi-dids"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "715bdd178535495da886b6444f79c1b2f2354d00cc96527a334886ea03123220"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "did-ethr",
  "did-ion",
@@ -6665,8 +6642,7 @@ dependencies = [
 [[package]]
 name = "ssi-dids-core"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "490c0fb68ff756edb02b61d0a2876299cbd9855b150c1f2c223fce9d5557f52b"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "iref",
@@ -6690,8 +6666,7 @@ dependencies = [
 [[package]]
 name = "ssi-eip712"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9bd7124d707688e6f5b0f42537978b461d0f8871a7e9a703a1a6ea378b6ddbe"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "hex",
  "indexmap 2.14.0",
@@ -6703,14 +6678,13 @@ dependencies = [
  "serde",
  "serde_jcs",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "ssi-json-ld"
 version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5980ec32521fbbb879c5ad90fc62f85d39a8b3b5d19ce3829250d515f7484aa5"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "combination",
  "iref",
@@ -6728,14 +6702,12 @@ dependencies = [
 [[package]]
 name = "ssi-jwk"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8661b5d6865c305d60d7f6cba252ee1f505461d439813c4e0725d46c0d6d4848"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "base64 0.22.1",
  "blake2b_simd",
  "bs58 0.4.0",
  "ed25519-dalek",
- "getrandom 0.2.17",
  "json-syntax",
  "k256",
  "lazy_static",
@@ -6746,7 +6718,6 @@ dependencies = [
  "num-traits",
  "p256",
  "p384",
- "rand 0.8.7",
  "serde",
  "serde_jcs",
  "serde_json",
@@ -6761,8 +6732,7 @@ dependencies = [
 [[package]]
 name = "ssi-jws"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49414f8049aa20a2d40ba23802e25d2a857eb1dbe0c291c7055726e2b6587117"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "base64 0.22.1",
  "blake2",
@@ -6785,14 +6755,14 @@ dependencies = [
 [[package]]
 name = "ssi-jwt"
 version = "0.6.0"
-source = "git+https://github.com/ElevenID/ssi-jwt-elevenid?rev=957c8b0fbf3e4b967fe73c858a22b38e907b3023#957c8b0fbf3e4b967fe73c858a22b38e907b3023"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "chrono",
- "hashbrown 0.17.1",
+ "hashbrown 0.14.5",
  "iref",
  "json-syntax",
- "ordered-float 5.3.0",
+ "ordered-float 4.6.0",
  "serde",
  "serde_json",
  "slab",
@@ -6801,29 +6771,27 @@ dependencies = [
  "ssi-crypto",
  "ssi-jwk",
  "ssi-jws",
- "thiserror 2.0.20",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "ssi-multicodec"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fec8cbdadfc90aec4839fd79f03aa887364f5f210c3aecbf9c6f7d76ab79055"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "csv",
  "ed25519-dalek",
  "k256",
  "p256",
  "p384",
- "thiserror 1.0.69",
+ "thiserror 2.0.20",
  "unsigned-varint",
 ]
 
 [[package]]
 name = "ssi-rdf"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c74d0aaccc80259913b4f2d456f2150ab2e8a4e8daf3b8edeaf527bb978e710b"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "combination",
  "indexmap 2.14.0",
@@ -6837,8 +6805,7 @@ dependencies = [
 [[package]]
 name = "ssi-sd-jwt"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eadfb39ff2554976db49985fd8b61ddf46829acc15ca528831efc5f175ba6ed"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "base64 0.22.1",
  "indexmap 2.14.0",
@@ -6857,8 +6824,7 @@ dependencies = [
 [[package]]
 name = "ssi-security"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f870a28eabccd4ae0e807122859bb83e36b87dd096ba01215abce524bddfc247"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "iref",
  "linked-data",
@@ -6870,9 +6836,8 @@ dependencies = [
 
 [[package]]
 name = "ssi-vc"
-version = "0.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d8edeebaa6f77f0ca218f0ef0e583c7ddae7cb884e6821dec1045758ebf9bd4"
+version = "0.9.1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "base64 0.22.1",
  "bitvec 0.20.4",
@@ -6902,8 +6867,7 @@ dependencies = [
 [[package]]
 name = "ssi-vc-jose-cose"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cae6f0130aed68a415486695668b3d8ae3df8004a9641847af572e5b355598c4"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -6923,8 +6887,7 @@ dependencies = [
 [[package]]
 name = "ssi-verification-methods"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e426fc72aad93d874b6fd36d7dff07449c0f51c2866a4ed9927027f89bf0fcb9"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "async-trait",
  "derivative",
@@ -6938,7 +6901,6 @@ dependencies = [
  "multibase 0.9.3",
  "p256",
  "pin-project",
- "rand_core 0.6.4",
  "rdf-types",
  "serde",
  "serde_json",
@@ -6958,8 +6920,7 @@ dependencies = [
 [[package]]
 name = "ssi-verification-methods-core"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f123cf7ab7fa230fd1f33aef9a3354d2e5b20fbffd946431b3a0e4cdf91538c9"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
 dependencies = [
  "bs58 0.4.0",
  "educe 0.4.23",
@@ -8652,3 +8613,43 @@ dependencies = [
  "syn 3.0.3",
  "winnow",
 ]
+
+[[patch.unused]]
+name = "ssi"
+version = "0.16.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+
+[[patch.unused]]
+name = "ssi-bbs"
+version = "0.2.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+
+[[patch.unused]]
+name = "ssi-did-test"
+version = "0.3.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+
+[[patch.unused]]
+name = "ssi-ssh"
+version = "0.3.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+
+[[patch.unused]]
+name = "ssi-status"
+version = "0.8.1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+
+[[patch.unused]]
+name = "ssi-tzkey"
+version = "0.4.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+
+[[patch.unused]]
+name = "ssi-ucan"
+version = "0.5.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+
+[[patch.unused]]
+name = "ssi-zcap-ld"
+version = "0.8.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
