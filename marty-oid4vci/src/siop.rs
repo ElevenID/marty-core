@@ -130,16 +130,12 @@ fn required_string<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::SecretKey;
     use serde_json::json;
 
     fn signed_token(subject_override: Option<&str>) -> String {
-        let secret = SecretKey::random(&mut rand::rngs::OsRng);
-        let public = secret.public_key().to_encoded_point(false);
-        let x = URL_SAFE_NO_PAD.encode(public.x().unwrap());
-        let y = URL_SAFE_NO_PAD.encode(public.y().unwrap());
-        let jwk = json!({"kty":"EC","crv":"P-256","alg":"ES256","x":x,"y":y});
+        let signer = crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let mut jwk: Value = serde_json::from_str(signer.public_jwk()).expect("public JWK");
+        jwk["alg"] = json!("ES256");
         let thumbprint = jwk_thumbprint(jwk.as_object().unwrap(), ("EC", "P-256")).unwrap();
         let subject = subject_override
             .map(str::to_owned)
@@ -153,10 +149,11 @@ mod tests {
             "iat": 1,
             "exp": 2
         });
-        crate::jose::sign_test_compact_es256(&secret, &json!({"alg":"ES256","typ":"JWT"}), &claims)
+        crate::jose::sign_test_compact_es256(&signer, &json!({"alg":"ES256","typ":"JWT"}), &claims)
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn verifies_signature_and_jwk_thumbprint_subject() {
         let result = verify_jwk_thumbprint_id_token(&signed_token(None)).unwrap();
         assert_eq!(result.signing_algorithm, "ES256");
@@ -164,6 +161,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn rejects_unsupported_subject_and_thumbprint_mismatch() {
         assert_eq!(
             verify_jwk_thumbprint_id_token(&signed_token(Some("did:key:holder"))).unwrap_err(),

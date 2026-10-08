@@ -17,23 +17,20 @@ use std::fmt;
 use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
 use crate::error::{Oid4vciError, Oid4vciResult};
 
-/// Construct an ES256 compact JWS fixture without installing a production
-/// local-signing provider.
+/// Construct an ES256 compact JWS with a scoped, non-exportable test KMS key.
 #[cfg(test)]
 pub(crate) fn sign_test_compact_es256(
-    secret: &p256::SecretKey,
+    signer: &crate::openbao_transit::ScopedTransitSigner,
     header: &serde_json::Value,
     payload: &serde_json::Value,
 ) -> String {
-    use p256::ecdsa::signature::Signer as _;
-
     let protected = B64.encode(serde_json::to_vec(header).expect("test header JSON"));
     let payload = B64.encode(serde_json::to_vec(payload).expect("test payload JSON"));
     let signing_input = format!("{protected}.{payload}");
-    let signing_key = p256::ecdsa::SigningKey::from_slice(secret.to_bytes().as_slice())
-        .expect("valid P-256 test key");
-    let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
-    format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
+    let signature = signer
+        .sign(signing_input.as_bytes())
+        .expect("remote ES256 signature");
+    format!("{signing_input}.{}", B64.encode(signature))
 }
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -369,18 +366,14 @@ pub fn normalize_ecdsa_signature(
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::SecretKey;
     use serde_json::json;
 
     fn signed_token() -> (String, String) {
-        let secret = SecretKey::random(&mut rand::rngs::OsRng);
-        let public = secret.public_key().to_encoded_point(false);
-        let x = URL_SAFE_NO_PAD.encode(public.x().expect("x coordinate"));
-        let y = URL_SAFE_NO_PAD.encode(public.y().expect("y coordinate"));
-        let jwk = json!({"kty":"EC","crv":"P-256","alg":"ES256","x":x,"y":y});
+        let signer = crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let mut jwk: Value = serde_json::from_str(signer.public_jwk()).expect("public JWK");
+        jwk["alg"] = json!("ES256");
         let token = sign_test_compact_es256(
-            &secret,
+            &signer,
             &json!({"alg":"ES256","typ":"JWT"}),
             &json!({"sub":"wallet","jti":"assertion-1"}),
         );
@@ -388,6 +381,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn verifies_public_jwk_and_returns_unique_json_objects() {
         let (token, jwk) = signed_token();
         let verified = verify_compact_jwt_with_public_jwk(&token, &jwk, "ES256")
@@ -404,28 +398,30 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn rejects_tampering_private_material_and_algorithm_confusion() {
         let (token, jwk) = signed_token();
-        let mut tampered = token.into_bytes();
-        let index = tampered.len() - 1;
-        tampered[index] = if tampered[index] == b'A' { b'B' } else { b'A' };
-        let tampered = String::from_utf8(tampered).expect("ASCII JWT");
+        let (input, encoded_signature) = token.rsplit_once('.').expect("compact JWS");
+        let mut signature = URL_SAFE_NO_PAD
+            .decode(encoded_signature)
+            .expect("signature encoding");
+        signature[0] ^= 1;
+        let tampered = format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature));
         assert!(verify_compact_jwt_with_public_jwk(&tampered, &jwk, "ES256").is_err());
 
         for member in PRIVATE_JWK_FIELDS {
             let mut private_jwk: Value = serde_json::from_str(&jwk).expect("public JWK");
             private_jwk[*member] = Value::String("private".into());
-            assert!(verify_compact_jwt_with_public_jwk(
-                &signed_token().0,
-                &private_jwk.to_string(),
-                "ES256"
-            )
-            .is_err());
+            assert!(
+                verify_compact_jwt_with_public_jwk(&token, &private_jwk.to_string(), "ES256")
+                    .is_err()
+            );
         }
-        assert!(verify_compact_jwt_with_public_jwk(&signed_token().0, &jwk, "PS256").is_err());
+        assert!(verify_compact_jwt_with_public_jwk(&token, &jwk, "PS256").is_err());
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn direct_jose_inputs_are_bounded_before_decode_and_key_parsing() {
         let oversized =
             "secret-sentinel".repeat(MAX_COMPACT_JWT_BYTES / "secret-sentinel".len() + 1);
@@ -450,6 +446,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn verifies_detached_raw_and_der_ecdsa_signatures() {
         let (token, jwk) = signed_token();
         let parts: Vec<&str> = token.split('.').collect();
