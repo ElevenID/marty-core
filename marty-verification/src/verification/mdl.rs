@@ -557,6 +557,9 @@ mod tests {
     use isomdl::definitions::device_signed::{DeviceAuth, DeviceSigned};
     use isomdl::definitions::helpers::Tag24;
     use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, IssuerSigned, Mso, ValidityInfo};
+    use marty_crypto_test_support::remote_certificate::{
+        RemoteCertificateAlgorithm, RemoteCertificateKey,
+    };
     use p256::ecdsa::{Signature, SigningKey};
     use signature::Signer;
     use std::collections::BTreeMap;
@@ -566,7 +569,7 @@ mod tests {
         is_ca: rcgen::IsCa,
         key_usages: Vec<rcgen::KeyUsagePurpose>,
     ) -> Vec<u8> {
-        let key = rcgen::KeyPair::generate().unwrap();
+        let key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
         let mut params = rcgen::CertificateParams::default();
         params.distinguished_name.push(
             rcgen::DnType::CommonName,
@@ -578,6 +581,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped document signer"]
     fn document_signer_profile_requires_non_ca_digital_signature_leaf() {
         use crate::error::codes;
         use rcgen::{BasicConstraints, IsCa, KeyUsagePurpose};
