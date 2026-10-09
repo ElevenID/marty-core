@@ -74,16 +74,16 @@ pub mod symmetric;
 
 pub use error::{CryptoError, CryptoResult};
 
-// Keep standards vectors and public signature verification vectors
-// crate-internal. `cfg(test)` cannot be selected by dependants.
+// Keep session agreement and public signature verification tests crate-internal.
+// `cfg(test)` cannot be selected by dependants.
 #[cfg(all(test, any(feature = "signature-verification", feature = "ecdh")))]
 extern crate self as marty_crypto;
-#[cfg(all(test, feature = "ecdh", feature = "kdf"))]
-#[path = "../tests/cavp_ecdh.rs"]
-mod cavp_ecdh;
 #[cfg(all(test, feature = "signature-verification"))]
 #[path = "../tests/rsa_public_verification.rs"]
 mod rsa_public_verification;
+#[cfg(all(test, feature = "ecdh", feature = "kdf"))]
+#[path = "../tests/session_ecdh.rs"]
+mod session_ecdh;
 
 use serde::{Deserialize, Serialize};
 
