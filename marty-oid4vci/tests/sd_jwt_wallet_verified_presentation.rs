@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use base64::Engine as _;
 use marty_oid4vci::types::SigningAlgorithm;
 use marty_oid4vci::{
-    Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver, WalletEngine,
+    Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
+    TrustedSdJwtIssuerKeys, WalletEngine,
 };
 
 #[derive(Clone)]
@@ -102,6 +103,77 @@ fn resolver_for(fixture: &Fixture) -> StaticResolver {
             fixture.issuer_public_jwk.clone(),
         ),
     }
+}
+
+#[test]
+fn trusted_issuer_key_set_matches_exact_identity_and_rejects_unsafe_entries() {
+    let fixture = fixture();
+    let trusted = ResolvedSdJwtIssuerKey::new(
+        fixture.issuer.clone(),
+        Some(fixture.key_id.clone()),
+        SigningAlgorithm::ES256,
+        fixture.issuer_public_jwk.clone(),
+    );
+    let resolver = TrustedSdJwtIssuerKeys::new(vec![trusted.clone()]).unwrap();
+    assert!(resolver
+        .resolve(
+            &fixture.issuer,
+            Some(&fixture.key_id),
+            SigningAlgorithm::ES256
+        )
+        .is_ok());
+    assert!(WalletEngine::new()
+        .prepare_verified_sd_jwt_presentation(
+            &fixture.credential,
+            &["email".into()],
+            &fresh_nonce(),
+            "https://verifier.example",
+            &fixture.holder_public_jwk,
+            &resolver,
+        )
+        .is_ok());
+    assert!(resolver
+        .resolve(&fixture.issuer, None, SigningAlgorithm::ES256)
+        .is_err());
+    assert!(resolver
+        .resolve(
+            &fixture.issuer,
+            Some(&fixture.key_id),
+            SigningAlgorithm::EdDSA
+        )
+        .is_err());
+    assert!(resolver
+        .resolve(
+            "did:example:other",
+            Some(&fixture.key_id),
+            SigningAlgorithm::ES256
+        )
+        .is_err());
+    assert!(TrustedSdJwtIssuerKeys::new(vec![trusted.clone(), trusted]).is_err());
+    let mut wrong_family: serde_json::Value =
+        serde_json::from_str(&fixture.issuer_public_jwk).unwrap();
+    wrong_family.as_object_mut().unwrap().remove("alg");
+    assert!(
+        TrustedSdJwtIssuerKeys::new(vec![ResolvedSdJwtIssuerKey::new(
+            fixture.issuer.clone(),
+            Some(fixture.key_id.clone()),
+            SigningAlgorithm::EdDSA,
+            wrong_family.to_string(),
+        )])
+        .is_err()
+    );
+    let mut private_jwk: serde_json::Value =
+        serde_json::from_str(&fixture.issuer_public_jwk).unwrap();
+    private_jwk["d"] = serde_json::json!("private");
+    assert!(
+        TrustedSdJwtIssuerKeys::new(vec![ResolvedSdJwtIssuerKey::new(
+            fixture.issuer,
+            Some(fixture.key_id),
+            SigningAlgorithm::ES256,
+            private_jwk.to_string(),
+        )])
+        .is_err()
+    );
 }
 
 fn tamper_issuer_signature(credential: &str) -> String {

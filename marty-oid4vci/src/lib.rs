@@ -192,6 +192,7 @@ pub use wallet::{
 #[cfg(feature = "wallet")]
 pub use wallet_sd_jwt::{
     PreparedSdJwtPresentation, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
+    TrustedSdJwtIssuerKeys,
 };
 
 #[cfg(feature = "lti")]
