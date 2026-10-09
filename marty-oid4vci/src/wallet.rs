@@ -26,6 +26,7 @@
 use std::collections::HashMap;
 
 use base64::Engine;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
@@ -35,6 +36,52 @@ use crate::types::{
 };
 use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
 use crate::wallet_sd_jwt::{self, SdJwtIssuerKeyResolver};
+
+const MAX_OFFER_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_METADATA_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_NONCE_RESPONSE_BYTES: usize = 16 * 1024;
+const MAX_CREDENTIAL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PRESENTATION_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_OBJECT_BYTES: usize = 512 * 1024;
+
+async fn bounded_response_body(
+    mut response: reqwest::Response,
+    label: &str,
+    limit: usize,
+) -> Oid4vciResult<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(Oid4vciError::InvalidRequest(format!(
+            "{label} response exceeds {limit} bytes"
+        )));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        Oid4vciError::InvalidRequest(format!("{label} response read failed: {error}"))
+    })? {
+        if chunk.len() > limit.saturating_sub(body.len()) {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "{label} response exceeds {limit} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+async fn bounded_json_response<T: DeserializeOwned>(
+    response: reqwest::Response,
+    label: &str,
+    limit: usize,
+) -> Oid4vciResult<T> {
+    let body = bounded_response_body(response, label, limit).await?;
+    serde_json::from_slice(&body).map_err(|error| {
+        Oid4vciError::InvalidRequest(format!("{label} response parse error: {error}"))
+    })
+}
 
 fn generate_pkce_challenge_s256(code_verifier: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -294,16 +341,31 @@ impl WalletEngine {
 
         if let Some(offer_uri) = params.get("credential_offer_uri") {
             // Redirect pattern — fetch the offer
+            let reference = url::Url::parse(offer_uri).map_err(|_| {
+                Oid4vciError::InvalidRequest("credential_offer_uri is invalid".into())
+            })?;
+            if reference.scheme() != "https"
+                || reference.host_str().is_none()
+                || !reference.username().is_empty()
+                || reference.password().is_some()
+                || reference.fragment().is_some()
+            {
+                return Err(Oid4vciError::InvalidRequest(
+                    "credential_offer_uri must be an HTTPS URL without credentials or fragment"
+                        .into(),
+                ));
+            }
             let resp = self.client.get(offer_uri).send().await.map_err(|e| {
                 Oid4vciError::InvalidRequest(format!("credential_offer_uri fetch failed: {}", e))
             })?;
-
-            let offer: CredentialOffer = resp.json().await.map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "credential_offer_uri response is not valid JSON: {}",
-                    e
-                ))
-            })?;
+            if !resp.status().is_success() {
+                return Err(Oid4vciError::InvalidRequest(format!(
+                    "credential_offer_uri returned HTTP {}",
+                    resp.status()
+                )));
+            }
+            let offer: CredentialOffer =
+                bounded_json_response(resp, "Credential offer", MAX_OFFER_RESPONSE_BYTES).await?;
             return Ok(offer);
         }
 
@@ -335,9 +397,7 @@ impl WalletEngine {
             )));
         }
 
-        resp.json::<IssuerMetadata>().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Metadata response parse error: {}", e))
-        })
+        bounded_json_response(resp, "Metadata", MAX_METADATA_RESPONSE_BYTES).await
     }
 
     /// Fetch OAuth Authorization Server Metadata using the RFC 8414 insertion
@@ -361,15 +421,12 @@ impl WalletEngine {
             )));
         }
 
-        let metadata = resp
-            .json::<AuthorizationServerMetadata>()
-            .await
-            .map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "Authorization Server Metadata response parse error: {}",
-                    e
-                ))
-            })?;
+        let metadata: AuthorizationServerMetadata = bounded_json_response(
+            resp,
+            "Authorization Server Metadata",
+            MAX_METADATA_RESPONSE_BYTES,
+        )
+        .await?;
         if Self::normalized_issuer(&metadata.issuer)?
             != Self::normalized_issuer(authorization_server)?
         {
@@ -515,9 +572,7 @@ impl WalletEngine {
             )));
         }
 
-        resp.json::<NonceResponse>()
-            .await
-            .map_err(|e| Oid4vciError::InvalidRequest(format!("Nonce response parse error: {}", e)))
+        bounded_json_response(resp, "Nonce", MAX_NONCE_RESPONSE_BYTES).await
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -841,16 +896,12 @@ impl WalletEngine {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
             return Err(Oid4vciError::InvalidRequest(format!(
-                "Credential endpoint returned HTTP {}: {}",
-                status, body
+                "Credential endpoint returned HTTP {}",
+                status
             )));
         }
-
-        resp.json::<CredentialResponse>().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Credential response parse error: {}", e))
-        })
+        bounded_json_response(resp, "Credential", MAX_CREDENTIAL_RESPONSE_BYTES).await
     }
 
     fn build_credential_request(
@@ -1209,10 +1260,10 @@ impl WalletEngine {
             })?;
 
         let status = resp.status();
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .unwrap_or(serde_json::Value::Object(Default::default()));
+        let body =
+            bounded_response_body(resp, "Presentation", MAX_PRESENTATION_RESPONSE_BYTES).await?;
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Object(Default::default()));
 
         if status.is_success() {
             Ok(PresentationResponse {
@@ -1254,15 +1305,12 @@ impl WalletEngine {
     async fn parse_token_response(resp: reqwest::Response) -> Oid4vciResult<TokenResponse> {
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(Oid4vciError::InvalidRequest(format!(
-                "Token endpoint returned HTTP {}: {}",
-                status, body
+                "Token endpoint returned HTTP {}",
+                status
             )));
         }
-        resp.json::<TokenResponse>()
-            .await
-            .map_err(|e| Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e)))
+        bounded_json_response(resp, "Token", MAX_TOKEN_RESPONSE_BYTES).await
     }
 
     fn request_object_from_params(
@@ -1327,10 +1375,9 @@ impl WalletEngine {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(Oid4vciError::InvalidRequest(format!(
-                "Request object endpoint returned HTTP {}: {}",
-                status, body
+                "Request object endpoint returned HTTP {}",
+                status
             )));
         }
 
@@ -1340,11 +1387,11 @@ impl WalletEngine {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let body = resp.text().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Request object read failed: {}", e))
-        })?;
+        let body = bounded_response_body(resp, "Request object", MAX_REQUEST_OBJECT_BYTES).await?;
+        let body = std::str::from_utf8(&body)
+            .map_err(|_| Oid4vciError::InvalidRequest("Request object is not UTF-8".into()))?;
 
-        Self::decode_request_object_body(&body, Some(content_type.as_str()))
+        Self::decode_request_object_body(body, Some(content_type.as_str()))
     }
 
     fn decode_request_object_body(
@@ -1775,6 +1822,73 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn presentation_submission_rejects_oversized_response_before_success() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let response_uri = format!("http://{}/present", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            stream.read(&mut request).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_PRESENTATION_RESPONSE_BYTES + 1
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let result = WalletEngine::new()
+            .submit_presentation_optional(&response_uri, "vp-token", None)
+            .await;
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::InvalidRequest(message)) if message.contains("exceeds")
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn nonce_rejects_chunked_response_over_limit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let nonce_endpoint = format!("http://{}/nonce", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            stream.read(&mut request).await.unwrap();
+            let body = "x".repeat(MAX_NONCE_RESPONSE_BYTES + 1);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",
+                body.len()
+            );
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(body.as_bytes()).await.unwrap();
+            stream.write_all(b"\r\n0\r\n\r\n").await.unwrap();
+        });
+        let result = WalletEngine::new().fetch_nonce(&nonce_endpoint).await;
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::InvalidRequest(message)) if message.contains("exceeds")
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn by_reference_offer_rejects_insecure_url_before_network() {
+        for reference in [
+            "http://127.0.0.1:9/offer",
+            "https://example.invalid/offer#fragment",
+            "https://user@example.invalid/offer",
+        ] {
+            let offer_uri = format!(
+                "openid-credential-offer://?credential_offer_uri={}",
+                url::form_urlencoded::byte_serialize(reference.as_bytes()).collect::<String>()
+            );
+            assert!(WalletEngine::new()
+                .parse_credential_offer(&offer_uri)
+                .await
+                .is_err());
+        }
     }
 
     #[tokio::test]
