@@ -33,7 +33,6 @@ pub mod asn1;
 #[cfg(feature = "csca")]
 pub mod chip_io;
 pub mod credential_format;
-pub mod device_auth;
 pub mod dtc;
 
 /// KMS-only and verification builds do not expose in-process DTC signing.

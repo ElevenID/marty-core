@@ -7,7 +7,6 @@
 // Rust 1.97 flags even though they are outside the handwritten function bodies.
 #![allow(clippy::useless_conversion)]
 
-mod device_auth;
 mod flow;
 mod haip;
 mod mdoc;
@@ -771,7 +770,7 @@ fn native_backend_diagnostics() -> PyResult<String> {
         "oid4vp_request_builder",
         "oid4vp_x509_identity",
         "siop_jwk_id_token_verification",
-        "device_authentication",
+        "mdoc_device_authentication_verification",
         "flow_state_machine",
         "did_resolution",
         "did_identifier_derivation",
@@ -1968,7 +1967,6 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(trust_registry_validate_state_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_evaluate_pages_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_revalidate_state_json, m)?)?;
-    device_auth::register_device_auth_bindings(m)?;
     m.add_function(wrap_pyfunction!(oid4vci_verify_detached_signature, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_normalize_ecdsa_signature, m)?)?;
     m.add_function(wrap_pyfunction!(
@@ -2798,6 +2796,12 @@ mod tests {
         assert!(capabilities
             .iter()
             .any(|capability| capability == "openid4vp_mdoc_handover"));
+        assert!(capabilities
+            .iter()
+            .any(|capability| capability == "mdoc_device_authentication_verification"));
+        assert!(!capabilities
+            .iter()
+            .any(|capability| capability == "device_authentication"));
         assert_eq!(
             capabilities
                 .iter()
