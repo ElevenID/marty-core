@@ -244,6 +244,7 @@ impl PreparedHolderProof {
 /// internally, consistent with the pattern used by [`crate::issuer::IssuanceEngine`].
 pub struct WalletEngine {
     client: reqwest::Client,
+    presentation_client: reqwest::Client,
 }
 
 impl WalletEngine {
@@ -254,6 +255,12 @@ impl WalletEngine {
                 .user_agent("marty-wallet/0.1")
                 .build()
                 .expect("reqwest client init failed"),
+            presentation_client: reqwest::Client::builder()
+                .user_agent("marty-wallet/0.1")
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .expect("reqwest presentation client init failed"),
         }
     }
 
@@ -1182,7 +1189,7 @@ impl WalletEngine {
         }
 
         let resp = self
-            .client
+            .presentation_client
             .post(response_uri)
             .form(&params)
             .send()
@@ -1728,6 +1735,36 @@ mod tests {
             );
             assert_eq!(request_rx.await.unwrap(), "POST /present HTTP/1.1");
         }
+    }
+
+    #[tokio::test]
+    async fn presentation_submission_never_forwards_token_to_redirect_target() {
+        let redirect_target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let response_uri = format!("http://{}/present", redirect_source.local_addr().unwrap());
+        let target_uri = format!("http://{}/capture", redirect_target.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = redirect_source.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let read = stream.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..read]).contains("POST /present"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_uri}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let response = WalletEngine::new()
+            .submit_presentation_optional(&response_uri, "sensitive-vp-token", None)
+            .await
+            .unwrap();
+        assert!(!response.ok);
+        server.await.unwrap();
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            redirect_target.accept()
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
