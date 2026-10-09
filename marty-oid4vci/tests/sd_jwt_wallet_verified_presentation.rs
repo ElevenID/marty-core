@@ -106,6 +106,37 @@ fn resolver_for(fixture: &Fixture) -> StaticResolver {
 }
 
 #[test]
+fn received_credential_requires_trusted_issuer_and_presenter_key() {
+    let fixture = fixture();
+    let engine = WalletEngine::new();
+    let verified = engine
+        .verify_received_sd_jwt_credential(
+            &fixture.credential,
+            &fixture.holder_public_jwk,
+            &resolver_for(&fixture),
+        )
+        .unwrap();
+    assert_eq!(verified.issuer, fixture.issuer);
+    assert_eq!(verified.credential_type, "VerifiedWalletCredential");
+    assert_eq!(verified.format, "vc+sd-jwt");
+
+    assert!(engine
+        .verify_received_sd_jwt_credential(
+            &fixture.credential,
+            &fixture.issuer_public_jwk,
+            &resolver_for(&fixture),
+        )
+        .is_err());
+    assert!(engine
+        .verify_received_sd_jwt_credential(
+            &fixture.credential,
+            &fixture.holder_public_jwk,
+            &CountingResolver::default(),
+        )
+        .is_err());
+}
+
+#[test]
 fn trusted_issuer_key_set_matches_exact_identity_and_rejects_unsafe_entries() {
     let fixture = fixture();
     let trusted = ResolvedSdJwtIssuerKey::new(

@@ -244,7 +244,6 @@ impl PreparedHolderProof {
 /// internally, consistent with the pattern used by [`crate::issuer::IssuanceEngine`].
 pub struct WalletEngine {
     client: reqwest::Client,
-    presentation_client: reqwest::Client,
 }
 
 impl WalletEngine {
@@ -253,14 +252,10 @@ impl WalletEngine {
         Self {
             client: reqwest::Client::builder()
                 .user_agent("marty-wallet/0.1")
-                .build()
-                .expect("reqwest client init failed"),
-            presentation_client: reqwest::Client::builder()
-                .user_agent("marty-wallet/0.1")
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
-                .expect("reqwest presentation client init failed"),
+                .expect("reqwest wallet client init failed"),
         }
     }
 
@@ -802,6 +797,21 @@ impl WalletEngine {
         )
     }
 
+    /// Verify a received SD-JWT against an explicit trusted issuer key and
+    /// the public P-256 key that will later sign its presentations.
+    pub fn verify_received_sd_jwt_credential(
+        &self,
+        credential: &str,
+        holder_public_jwk_json: &str,
+        issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
+    ) -> Oid4vciResult<crate::VerifiedSdJwtCredential> {
+        wallet_sd_jwt::verify_received_credential(
+            credential,
+            holder_public_jwk_json,
+            issuer_key_resolver,
+        )
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Credential request (§8)
     // ──────────────────────────────────────────────────────────────────────
@@ -1189,7 +1199,7 @@ impl WalletEngine {
         }
 
         let resp = self
-            .presentation_client
+            .client
             .post(response_uri)
             .form(&params)
             .send()
@@ -1758,6 +1768,45 @@ mod tests {
             .await
             .unwrap();
         assert!(!response.ok);
+        server.await.unwrap();
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            redirect_target.accept()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn credential_request_never_forwards_bearer_to_redirect_target() {
+        let redirect_target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/credential",
+            redirect_source.local_addr().unwrap()
+        );
+        let target_uri = format!("http://{}/capture", redirect_target.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = redirect_source.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let read = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.contains("POST /credential"));
+            assert!(request.contains("Bearer sensitive-access-token"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_uri}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        assert!(WalletEngine::new()
+            .request_credential(
+                &endpoint,
+                "sensitive-access-token",
+                "configuration",
+                "proof"
+            )
+            .await
+            .is_err());
         server.await.unwrap();
         assert!(tokio::time::timeout(
             std::time::Duration::from_millis(250),
