@@ -12,6 +12,62 @@ const CANVAS_OPENID_CONFIGURATION_PATH: &str = "/.well-known/openid-configuratio
 const MAX_OPENID_CONFIGURATION_BYTES: u64 = 1024 * 1024;
 const MAX_JWKS_BYTES: u64 = 1024 * 1024;
 
+fn contains_private_material(value: &Value, depth: usize) -> bool {
+    if depth > 16 {
+        return true;
+    }
+    match value {
+        Value::Object(fields) => {
+            let private_jwk = fields.contains_key("kty")
+                && ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"]
+                    .iter()
+                    .any(|name| fields.get(*name).is_some_and(|value| !value.is_null()));
+            private_jwk
+                || fields.iter().any(|(name, value)| {
+                    let normalized = name
+                        .chars()
+                        .filter(|character| character.is_ascii_alphanumeric())
+                        .flat_map(char::to_lowercase)
+                        .collect::<String>();
+                    (!value.is_null()
+                        && (normalized.contains("privatekey")
+                            || normalized.contains("privatejwk")
+                            || normalized.contains("privatepem")
+                            || normalized.contains("secretkey")
+                            || normalized.contains("pkcs8")))
+                        || contains_private_material(value, depth + 1)
+                })
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(|value| contains_private_material(value, depth + 1)),
+        Value::String(text) => {
+            if text.contains("-----BEGIN") && text.contains("PRIVATE KEY-----") {
+                return true;
+            }
+            let trimmed = text.trim_start();
+            (trimmed.starts_with('{') || trimmed.starts_with('['))
+                && serde_json::from_str::<Value>(trimmed)
+                    .is_ok_and(|value| contains_private_material(&value, depth + 1))
+        }
+        _ => false,
+    }
+}
+
+/// Reject secret-bearing Canvas discovery data before returning or verifying it.
+/// Errors intentionally contain no remote input values.
+pub fn ensure_canvas_metadata_public_only(
+    jwks: &Value,
+    configuration: &Value,
+) -> Oid4vciResult<()> {
+    if contains_private_material(jwks, 0) || contains_private_material(configuration, 0) {
+        return Err(invalid_request(
+            "Canvas metadata contains private key material",
+        ));
+    }
+    Ok(())
+}
+
 pub const CANVAS_LTI_TRUST_HOSTED_GLOBAL: &str = "hosted_global";
 pub const CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN: &str = "self_managed_same_origin";
 
@@ -607,6 +663,7 @@ pub async fn probe_canvas_lti_platform(
     {
         return Err(invalid_request("Canvas JWKS does not include any keys"));
     }
+    ensure_canvas_metadata_public_only(&jwks_json, &openid_configuration)?;
 
     Ok(CanvasLtiPlatformProbe {
         canvas_base_url: normalized_base_url,
@@ -644,6 +701,7 @@ pub fn verify_lti_launch_jwt(
             "Invalid JWKS JSON supplied for LTI verification: {e}"
         ))
     })?;
+    ensure_canvas_metadata_public_only(&jwks_value, &Value::Null)?;
     let keys = jwks_value
         .get("keys")
         .and_then(Value::as_array)
@@ -771,6 +829,51 @@ mod tests {
         let signature = signer.sign_ed25519(signing_input.as_bytes()).unwrap();
         let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
         format!("{signing_input}.{signature_b64}")
+    }
+
+    #[test]
+    fn canvas_metadata_rejects_private_material_without_echoing_values() {
+        let public = json!({"keys": [{"kty": "OKP", "crv": "Ed25519", "x": "public"}]});
+        assert!(ensure_canvas_metadata_public_only(&public, &json!({"issuer": "public"})).is_ok());
+        for (jwks, configuration) in [
+            (
+                json!({"keys": [{"kty": "EC", "d": "forbidden"}]}),
+                Value::Null,
+            ),
+            (
+                public.clone(),
+                json!({"nested": [{"private_key": "forbidden"}]}),
+            ),
+            (
+                public.clone(),
+                json!({"nested": "{\"kty\":\"oct\",\"k\":\"forbidden\"}"}),
+            ),
+        ] {
+            let error = ensure_canvas_metadata_public_only(&jwks, &configuration).unwrap_err();
+            assert!(error.to_string().contains("private key material"));
+            assert!(!error.to_string().contains("forbidden"));
+        }
+    }
+
+    #[test]
+    fn lti_verification_rejects_private_jwks_before_key_selection() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"EdDSA","kid":"public-1"}"#);
+        let token = format!("{header}.e30.signature");
+        let jwks =
+            json!({"keys": [{"kty": "OKP", "crv": "Ed25519", "x": "public", "d": "forbidden"}]});
+        let error = verify_lti_launch_jwt(
+            &token,
+            "https://canvas.example.edu",
+            "client-id",
+            "deployment-id",
+            &jwks.to_string(),
+            None,
+            0,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("private key material"));
+        assert!(!error.to_string().contains("forbidden"));
     }
 
     #[test]
