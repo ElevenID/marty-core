@@ -32,42 +32,8 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 #[cfg(any(test, feature = "issuer"))]
 use crate::signer::CredentialSigner;
 use crate::types::CredentialFormat;
-#[cfg(test)]
-use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, SignedCredential};
-
-/// Sign a credential in the requested format.
-///
-/// This is the central dispatch function that routes to the correct signing
-/// pipeline based on the `format` parameter. All format-specific complexity
-/// is handled internally.
-#[cfg(test)]
-pub fn sign_credential(
-    format: &CredentialFormat,
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-) -> Oid4vciResult<SignedCredential> {
-    match format {
-        CredentialFormat::JwtVcJson => jwt_vc::sign_jwt_vc(issuer_key, claims),
-        #[cfg(any(feature = "sd_jwt", all(test, feature = "issuer")))]
-        CredentialFormat::SdJwt => sd_jwt::sign_sd_jwt(issuer_key, claims),
-        #[cfg(all(feature = "issuer", any(test, feature = "mso_mdoc")))]
-        CredentialFormat::MsoMdoc => mdoc::sign_mdoc(issuer_key, claims),
-        #[cfg(all(
-            feature = "zk_mdoc",
-            feature = "issuer",
-            any(test, feature = "mso_mdoc")
-        ))]
-        CredentialFormat::ZkMdoc => zk_mdoc::sign_zk_mdoc(issuer_key, claims),
-        CredentialFormat::VdsNc => vds_nc::sign_vds_nc(issuer_key, claims),
-        #[allow(unreachable_patterns)]
-        _ => Err(Oid4vciError::UnsupportedFormat(format!(
-            "Credential format '{}' is not compiled into this build",
-            format.as_str()
-        ))),
-    }
-}
 
 /// Sign a credential using any [`CredentialSigner`] implementation.
 ///

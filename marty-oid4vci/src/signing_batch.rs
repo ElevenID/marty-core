@@ -1180,8 +1180,11 @@ fn assemble_credentials(
 #[cfg(test)]
 mod tests {
     #[cfg(not(target_family = "wasm"))]
+    use crate::openbao_transit;
+
+    #[cfg(not(target_family = "wasm"))]
     use std::cell::Cell;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -1195,7 +1198,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use p256::ecdsa::signature::{Signer as _, Verifier as _};
+    use p256::ecdsa::signature::Verifier as _;
 
     use super::*;
     use crate::error::{Oid4vciError, Oid4vciResult};
@@ -1212,88 +1215,35 @@ mod tests {
     const ISSUER_SECRET: &str = "did:example:issuer-private-canary";
     const KID_SECRET: &str = "did:example:issuer-private-canary#key-private-canary";
 
-    struct RecordingSigner {
-        signing_key: p256::ecdsa::SigningKey,
-        calls: Mutex<Vec<Vec<u8>>>,
-        signatures: Mutex<Vec<Vec<u8>>>,
+    #[derive(Debug)]
+    struct PreSignMetadataSigner {
+        algorithm: SigningAlgorithm,
         metadata_state: AtomicUsize,
-        fail_at: Option<usize>,
-        initial_algorithm: SigningAlgorithm,
     }
 
-    impl RecordingSigner {
-        fn es256() -> Self {
+    impl PreSignMetadataSigner {
+        fn new(algorithm: SigningAlgorithm) -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
-                calls: Mutex::new(Vec::new()),
-                signatures: Mutex::new(Vec::new()),
+                algorithm,
                 metadata_state: AtomicUsize::new(0),
-                fail_at: None,
-                initial_algorithm: SigningAlgorithm::ES256,
-            }
-        }
-
-        fn failing_at(ordinal: usize) -> Self {
-            Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
-                calls: Mutex::new(Vec::new()),
-                signatures: Mutex::new(Vec::new()),
-                metadata_state: AtomicUsize::new(0),
-                fail_at: Some(ordinal),
-                initial_algorithm: SigningAlgorithm::ES256,
-            }
-        }
-
-        fn with_algorithm(algorithm: SigningAlgorithm) -> Self {
-            Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).unwrap(),
-                calls: Mutex::new(Vec::new()),
-                signatures: Mutex::new(Vec::new()),
-                metadata_state: AtomicUsize::new(0),
-                fail_at: None,
-                initial_algorithm: algorithm,
             }
         }
 
         fn drift(&self, metadata_state: usize) {
             self.metadata_state.store(metadata_state, Ordering::SeqCst);
         }
-
-        fn call_count(&self) -> usize {
-            self.calls.lock().unwrap().len()
-        }
-
-        fn signature_at(&self, ordinal: usize) -> Vec<u8> {
-            self.signatures.lock().unwrap()[ordinal].clone()
-        }
     }
 
-    impl fmt::Debug for RecordingSigner {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("RecordingSigner([redacted])")
-        }
-    }
-
-    impl CredentialSigner for RecordingSigner {
-        fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-            let mut calls = self.calls.lock().unwrap();
-            let ordinal = calls.len();
-            calls.push(message.to_vec());
-            if self.fail_at == Some(ordinal) {
-                return Err(Oid4vciError::SigningError(BACKEND_SECRET.into()));
-            }
-            use p256::ecdsa::signature::Signer as _;
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-            let signature = signature.to_bytes().to_vec();
-            self.signatures.lock().unwrap().push(signature.clone());
-            Ok(signature)
+    impl CredentialSigner for PreSignMetadataSigner {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            panic!("pre-sign failure must not call a signer")
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
             if self.metadata_state.load(Ordering::SeqCst) == 1 {
                 SigningAlgorithm::EdDSA
             } else {
-                self.initial_algorithm
+                self.algorithm
             }
         }
 
@@ -1314,51 +1264,85 @@ mod tests {
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 
-    struct HighSEs256Signer {
-        signing_key: p256::ecdsa::SigningKey,
-        calls: Mutex<Vec<(Vec<u8>, Vec<u8>)>>,
+    #[cfg(not(target_family = "wasm"))]
+    struct RemoteRecordingSigner {
+        backend: openbao_transit::ScopedTransitSigner,
+        calls: Mutex<Vec<Vec<u8>>>,
+        signatures: Mutex<Vec<Vec<u8>>>,
     }
 
-    impl HighSEs256Signer {
-        fn new() -> Self {
+    #[cfg(not(target_family = "wasm"))]
+    impl RemoteRecordingSigner {
+        fn es256() -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x42; 32]).unwrap(),
+                backend: openbao_transit::DisposableOpenBao::from_marked_env().create_es256(),
                 calls: Mutex::new(Vec::new()),
+                signatures: Mutex::new(Vec::new()),
             }
         }
-    }
 
-    impl fmt::Debug for HighSEs256Signer {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("HighSEs256Signer([redacted])")
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+
+        fn signature_at(&self, ordinal: usize) -> Vec<u8> {
+            self.signatures.lock().unwrap()[ordinal].clone()
         }
     }
 
-    impl CredentialSigner for HighSEs256Signer {
+    #[cfg(not(target_family = "wasm"))]
+    impl fmt::Debug for RemoteRecordingSigner {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("RemoteRecordingSigner([redacted])")
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    impl CredentialSigner for RemoteRecordingSigner {
         fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-            let high_s = if signature.normalize_s().is_some() {
-                signature
+            self.calls.lock().unwrap().push(message.to_vec());
+            let signature = self
+                .backend
+                .sign(message)
+                .map_err(|_| Oid4vciError::SigningError("remote signer unavailable".into()))?;
+            self.signatures.lock().unwrap().push(signature.clone());
+            Ok(signature)
+        }
+
+        fn algorithm(&self) -> SigningAlgorithm {
+            SigningAlgorithm::ES256
+        }
+
+        fn issuer_id(&self) -> &str {
+            ISSUER_SECRET
+        }
+
+        fn kid_url(&self) -> String {
+            self.backend.key_id(ISSUER_SECRET)
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(self.backend.public_jwk().to_owned())
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct SimulatedBackendFailureSigner {
+        calls: AtomicUsize,
+    }
+
+    impl CredentialSigner for SimulatedBackendFailureSigner {
+        fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                Err(Oid4vciError::SigningError(BACKEND_SECRET.into()))
             } else {
-                let (r, s) = signature.split_scalars();
-                p256::ecdsa::Signature::from_scalars(r.to_bytes(), (-s).to_bytes()).unwrap()
-            };
-            assert!(
-                high_s.normalize_s().is_some(),
-                "the compatibility fixture must produce a valid high-S signature"
-            );
-            let raw = high_s.to_bytes().to_vec();
-            self.calls
-                .lock()
-                .unwrap()
-                .push((message.to_vec(), raw.clone()));
-            Ok(raw)
+                // The batch fails at the next KMS call, before signature validation.
+                Ok(vec![0xA5; ES256_SIGNATURE_LENGTH])
+            }
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -1374,16 +1358,7 @@ mod tests {
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
-        }
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    impl BoundedConcurrentCredentialSigner for HighSEs256Signer {
-        fn max_concurrent_signing_workers(&self) -> NonZeroUsize {
-            NonZeroUsize::new(2).unwrap()
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 
@@ -1432,8 +1407,14 @@ mod tests {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    type TestSignatureCache = Arc<Mutex<HashMap<Vec<u8>, Vec<u8>>>>;
+
+    #[cfg(not(target_family = "wasm"))]
     struct ConcurrentTestSigner {
-        signing_key: p256::ecdsa::SigningKey,
+        // Reqwest's blocking client is not RefUnwindSafe; the concurrent
+        // executor catches worker panics, then joins workers before reuse.
+        backend: std::panic::AssertUnwindSafe<openbao_transit::ScopedTransitSigner>,
+        signature_cache: Option<TestSignatureCache>,
         calls: Mutex<Vec<Vec<u8>>>,
         active_calls: AtomicUsize,
         peak_calls: AtomicUsize,
@@ -1450,8 +1431,18 @@ mod tests {
     #[cfg(not(target_family = "wasm"))]
     impl ConcurrentTestSigner {
         fn new(max_workers: usize, schedule_seed: u64) -> Self {
+            let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+            Self::with_backend(max_workers, schedule_seed, backend)
+        }
+
+        fn with_backend(
+            max_workers: usize,
+            schedule_seed: u64,
+            backend: openbao_transit::ScopedTransitSigner,
+        ) -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x24; 32]).unwrap(),
+                backend: std::panic::AssertUnwindSafe(backend),
+                signature_cache: None,
                 calls: Mutex::new(Vec::new()),
                 active_calls: AtomicUsize::new(0),
                 peak_calls: AtomicUsize::new(0),
@@ -1464,6 +1455,11 @@ mod tests {
                 drift_on_call: None,
                 call_rendezvous: None,
             }
+        }
+
+        fn with_signature_cache(mut self, cache: TestSignatureCache) -> Self {
+            self.signature_cache = Some(cache);
+            self
         }
 
         fn with_fail_labels(mut self, labels: impl IntoIterator<Item = &'static str>) -> Self {
@@ -1579,8 +1575,21 @@ mod tests {
                 return Err(Oid4vciError::SigningError(BACKEND_SECRET.into()));
             }
 
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-            Ok(signature.to_bytes().to_vec())
+            if let Some(cache) = &self.signature_cache {
+                let mut cache = cache.lock().unwrap();
+                if let Some(signature) = cache.get(message) {
+                    return Ok(signature.clone());
+                }
+                let signature = self
+                    .backend
+                    .sign(message)
+                    .map_err(|_| Oid4vciError::SigningError("remote signer unavailable".into()))?;
+                cache.insert(message.to_vec(), signature.clone());
+                return Ok(signature);
+            }
+            self.backend
+                .sign(message)
+                .map_err(|_| Oid4vciError::SigningError("remote signer unavailable".into()))
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -1603,14 +1612,12 @@ mod tests {
             if self.metadata_state.load(Ordering::SeqCst) == 3 {
                 "did:example:changed#key-2".into()
             } else {
-                KID_SECRET.into()
+                self.backend.key_id(ISSUER_SECRET)
             }
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
+            Ok(self.backend.public_jwk().to_owned())
         }
     }
 
@@ -1630,7 +1637,6 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     struct PanickingConcurrentSigner {
-        signing_key: p256::ecdsa::SigningKey,
         calls: Mutex<Vec<Vec<u8>>>,
         active_calls: AtomicUsize,
         peak_calls: AtomicUsize,
@@ -1646,7 +1652,6 @@ mod tests {
     impl PanickingConcurrentSigner {
         fn new(panicking_worker: PanickingWorker, max_workers: usize) -> Self {
             Self {
-                signing_key: p256::ecdsa::SigningKey::from_slice(&[0x35; 32]).unwrap(),
                 calls: Mutex::new(Vec::new()),
                 active_calls: AtomicUsize::new(0),
                 peak_calls: AtomicUsize::new(0),
@@ -1726,9 +1731,8 @@ mod tests {
             // unwound into the executor boundary. The API must join this call
             // before it resumes the selected panic.
             std::thread::sleep(Duration::from_millis(25));
-            let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
             self.peer_completed.store(true, Ordering::SeqCst);
-            Ok(signature.to_bytes().to_vec())
+            Ok(vec![0xA5; ES256_SIGNATURE_LENGTH])
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
@@ -1744,9 +1748,7 @@ mod tests {
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk_for_key(
-                &self.signing_key,
-            ))
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 
@@ -1793,19 +1795,22 @@ mod tests {
         }
     }
 
-    fn fixed_private_holder_jwk() -> JWK {
+    fn fixed_public_holder_jwk() -> JWK {
         serde_json::from_value(serde_json::json!({
             "kty": "EC",
             "crv": "P-256",
             "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
-            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
-            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
         }))
         .unwrap()
     }
 
-    fn fixed_public_holder_jwk() -> JWK {
-        fixed_private_holder_jwk().to_public()
+    fn fixed_public_ed25519_jwk() -> JWK {
+        serde_json::from_value(serde_json::json!({
+            "kty": "OKP", "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+        }))
+        .unwrap()
     }
 
     fn mdoc_claims(label: &str) -> CredentialClaims {
@@ -2245,14 +2250,11 @@ mod tests {
     }
 
     #[test]
-    fn sd_jwt_input_rejects_private_material_and_retains_verified_public_key() {
-        for private in [fixed_private_holder_jwk(), JWK::generate_ed25519().unwrap()] {
-            assert!(SdJwtSigningBatchInput::new(
-                SigningRouteId::new(91),
-                sd_jwt_claims(CLAIM_SECRET),
-                &private,
-            )
-            .is_err());
+    fn sd_jwt_input_rejects_private_json_and_retains_verified_public_key() {
+        for public in [fixed_public_holder_jwk(), fixed_public_ed25519_jwk()] {
+            let mut with_private_member = serde_json::to_value(public).unwrap();
+            with_private_member["d"] = serde_json::json!("forbidden");
+            assert!(serde_json::from_value::<JWK>(with_private_member).is_err());
         }
 
         let holder_jwk = fixed_public_holder_jwk();
@@ -2270,11 +2272,13 @@ mod tests {
         assert_eq!(format!("{input:?}"), "SdJwtSigningBatchInput([redacted])");
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn jwt_sd_jwt_and_mdoc_sign_complete_payloads_and_preserve_raw_p1363_bytes() {
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
-        let holder_jwk = JWK::generate_ed25519().unwrap().to_public();
+        let holder_jwk = fixed_public_ed25519_jwk();
         let credentials = scope
             .sign_batch(vec![
                 jwt_input(1, "jwt"),
@@ -2314,7 +2318,7 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
         assert_eq!(header["alg"], "ES256");
-        assert_eq!(header["kid"], KID_SECRET);
+        assert_eq!(header["kid"], signer.kid_url());
         assert_eq!(payload["iss"], ISSUER_SECRET);
 
         let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
@@ -2359,94 +2363,79 @@ mod tests {
         assert_eq!(issuer_signed.issuer_auth.signature, signer.signature_at(2));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn valid_high_s_p1363_signatures_are_preserved_for_all_formats() {
-        let signer = HighSEs256Signer::new();
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn remote_batch_signer_preserves_fresh_payloads_and_raw_signatures() {
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let credentials = scope
             .sign_batch(vec![
-                jwt_input(1, "jwt"),
-                sd_jwt_input(2, "sd-jwt"),
-                mdoc_input(3, "mdoc"),
+                jwt_input(1, "remote-jwt"),
+                sd_jwt_input(2, "remote-sd-jwt"),
+                mdoc_input(3, "remote-mdoc"),
             ])
             .unwrap();
+        assert_eq!(credentials.len(), 3);
         let calls = signer.calls.lock().unwrap();
-
+        let signatures = signer.signatures.lock().unwrap();
         assert_eq!(calls.len(), 3);
-        for (payload, raw_signature) in calls.iter() {
-            let signature = p256::ecdsa::Signature::from_slice(raw_signature).unwrap();
-            assert!(
-                signature.normalize_s().is_some(),
-                "the batch must retain the signer's high-S representation"
-            );
-            signer
-                .signing_key
-                .verifying_key()
-                .verify(payload, &signature)
-                .unwrap();
+        assert_eq!(signatures.len(), 3);
+        let verifying_key = signer.backend.verifying_key();
+        for credential in &credentials {
+            verify_signed_credential(credential, &verifying_key);
         }
-
         let SignedCredential::JwtVcJson { jwt, .. } = &credentials[0] else {
-            panic!("expected JWT-VC in caller order")
+            panic!("JWT caller order changed")
         };
         assert_eq!(
             URL_SAFE_NO_PAD
-                .decode(jwt.rsplit('.').next().unwrap())
+                .decode(jwt.split('.').nth(2).unwrap())
                 .unwrap(),
-            calls[0].1,
-            "JWT assembly must not normalize a valid high-S signature"
+            signatures[0]
         );
-
         let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
-            panic!("expected SD-JWT in caller order")
+            panic!("SD-JWT caller order changed")
         };
-        let emitted_sd_jwt_signature = URL_SAFE_NO_PAD
-            .decode(
-                compact
-                    .split('~')
-                    .next()
-                    .unwrap()
-                    .rsplit('.')
-                    .next()
-                    .unwrap(),
-            )
-            .unwrap();
+        let signed_jwt = compact.split('~').next().unwrap();
         assert_eq!(
-            emitted_sd_jwt_signature, calls[1].1,
-            "SD-JWT assembly must not normalize a valid high-S signature"
+            URL_SAFE_NO_PAD
+                .decode(signed_jwt.split('.').nth(2).unwrap())
+                .unwrap(),
+            signatures[1]
         );
-
         let SignedCredential::MsoMdoc {
             issuer_signed_b64, ..
         } = &credentials[2]
         else {
-            panic!("expected mdoc in caller order")
+            panic!("mDoc caller order changed")
         };
-        let issuer_signed_bytes = URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap();
         let issuer_signed: isomdl::definitions::IssuerSigned =
-            isomdl::cbor::from_slice(&issuer_signed_bytes).unwrap();
-        assert_eq!(
-            issuer_signed.issuer_auth.signature, calls[2].1,
-            "mdoc assembly must not normalize a valid high-S signature"
-        );
+            isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap()).unwrap();
+        assert_eq!(issuer_signed.issuer_auth.signature, signatures[2]);
     }
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn randomized_serial_concurrent_jwt_differential_covers_required_batch_sizes() {
+        let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let verifying_key = backend.verifying_key();
         for (batch_size, schedule_seed) in [
             (1, 0x0123_4567_89ab_cdef),
             (8, 0xfedc_ba98_7654_3210),
             (32, 0x55aa_0ff0_33cc_9696),
             (256, 0xdead_beef_cafe_babe),
         ] {
-            let serial_signer = ConcurrentTestSigner::new(1, schedule_seed);
+            let serial_signer =
+                ConcurrentTestSigner::with_backend(1, schedule_seed, backend.clone());
             let serial_credentials = Es256SignerScope::new(&serial_signer)
                 .unwrap()
                 .sign_batch(jwt_inputs(batch_size, "differential"))
                 .unwrap();
 
-            let mut concurrent_signer = ConcurrentTestSigner::new(8, schedule_seed);
+            let mut concurrent_signer =
+                ConcurrentTestSigner::with_backend(8, schedule_seed, backend.clone());
             let concurrent_credentials = {
                 let scope = ConcurrentEs256SignerScope::new(&mut concurrent_signer).unwrap();
                 scope
@@ -2462,8 +2451,8 @@ mod tests {
                     normalized_jwt_semantics(concurrent),
                     "serial and concurrent paths must preserve the same caller-ordered semantics"
                 );
-                verify_signed_credential(serial, serial_signer.signing_key.verifying_key());
-                verify_signed_credential(concurrent, concurrent_signer.signing_key.verifying_key());
+                verify_signed_credential(serial, &verifying_key);
+                verify_signed_credential(concurrent, &verifying_key);
             }
 
             assert_eq!(serial_signer.call_count(), batch_size);
@@ -2481,20 +2470,25 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn randomized_serial_concurrent_sd_jwt_differential_covers_required_batch_sizes() {
+        let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let verifying_key = backend.verifying_key();
         for (batch_size, schedule_seed) in [
             (1, 0x1123_4567_89ab_cdef),
             (8, 0x2edc_ba98_7654_3210),
             (32, 0x35aa_0ff0_33cc_9696),
             (256, 0x4ead_beef_cafe_babe),
         ] {
-            let serial_signer = ConcurrentTestSigner::new(1, schedule_seed);
+            let serial_signer =
+                ConcurrentTestSigner::with_backend(1, schedule_seed, backend.clone());
             let serial_credentials = Es256SignerScope::new(&serial_signer)
                 .unwrap()
                 .sign_batch(sd_jwt_inputs(batch_size, "sd-differential"))
                 .unwrap();
 
-            let mut concurrent_signer = ConcurrentTestSigner::new(8, schedule_seed);
+            let mut concurrent_signer =
+                ConcurrentTestSigner::with_backend(8, schedule_seed, backend.clone());
             let concurrent_credentials = {
                 let scope = ConcurrentEs256SignerScope::new(&mut concurrent_signer).unwrap();
                 scope
@@ -2510,8 +2504,8 @@ mod tests {
                     normalized_sd_jwt_semantics(concurrent),
                     "serial and concurrent paths must preserve proof-bound SD-JWT semantics"
                 );
-                verify_signed_credential(serial, serial_signer.signing_key.verifying_key());
-                verify_signed_credential(concurrent, concurrent_signer.signing_key.verifying_key());
+                verify_signed_credential(serial, &verifying_key);
+                verify_signed_credential(concurrent, &verifying_key);
             }
 
             assert_eq!(serial_signer.call_count(), batch_size);
@@ -2529,6 +2523,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn fixed_source_proof_bound_sd_jwt_is_byte_exact_across_repeated_schedules() {
         const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
         const SCHEDULES: [(usize, u64); 3] = [
@@ -2537,6 +2532,12 @@ mod tests {
             (8, 0x55aa_0ff0_33cc_9696),
         ];
 
+        let backend = openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        // OpenBao ECDSA signatures can vary for identical input. Cache only the
+        // first remotely produced signature per payload so this test can still
+        // compare assembly bytes across worker schedules.
+        let signature_cache = Arc::new(Mutex::new(HashMap::new()));
+        let verifying_key = backend.verifying_key();
         for payload_format in [
             CredentialPayloadFormat::IetfSdJwt,
             CredentialPayloadFormat::W3cVcdmV2SdJwt,
@@ -2547,7 +2548,12 @@ mod tests {
                 let mut schedule_baseline: Option<Vec<(Vec<u8>, Vec<u8>)>> = None;
 
                 for (worker_limit, schedule_seed) in SCHEDULES {
-                    let mut signer = ConcurrentTestSigner::new(worker_limit, schedule_seed);
+                    let mut signer = ConcurrentTestSigner::with_backend(
+                        worker_limit,
+                        schedule_seed,
+                        backend.clone(),
+                    )
+                    .with_signature_cache(Arc::clone(&signature_cache));
                     let serial_credentials = sign_fixed_sd_jwt_batch_serially(&signer, &fixture);
                     let concurrent_credentials =
                         sign_fixed_sd_jwt_batch_concurrently(&mut signer, &fixture);
@@ -2573,7 +2579,7 @@ mod tests {
                         .iter()
                         .chain(concurrent_credentials.iter())
                     {
-                        verify_signed_credential(credential, signer.signing_key.verifying_key());
+                        verify_signed_credential(credential, &verifying_key);
                         assert_fixed_sd_jwt_protocol_boundary(
                             credential,
                             &payload_format,
@@ -2597,6 +2603,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_mixed_formats_restore_order_and_preserve_valid_signatures() {
         let inputs = (0..9)
             .map(|ordinal| match ordinal % 3 {
@@ -2606,6 +2613,7 @@ mod tests {
             })
             .collect();
         let mut signer = ConcurrentTestSigner::new(4, 0x1357_9bdf_2468_ace0);
+        let verifying_key = signer.backend.verifying_key();
         let credentials = {
             let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
             scope.sign_batch_concurrently(inputs).unwrap()
@@ -2618,7 +2626,7 @@ mod tests {
                 1 => assert!(matches!(credential, SignedCredential::SdJwt { .. })),
                 _ => assert!(matches!(credential, SignedCredential::MsoMdoc { .. })),
             }
-            verify_signed_credential(credential, signer.signing_key.verifying_key());
+            verify_signed_credential(credential, &verifying_key);
         }
         assert_eq!(signer.call_count(), 9);
         assert_eq!(signer.unique_call_count(), 9);
@@ -2628,72 +2636,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn concurrent_path_preserves_valid_high_s_p1363_bytes() {
-        let mut signer = HighSEs256Signer::new();
-        let credentials = {
-            let scope = ConcurrentEs256SignerScope::new(&mut signer).unwrap();
-            scope
-                .sign_batch_concurrently(vec![
-                    jwt_input(1, "jwt"),
-                    sd_jwt_input(2, "sd-jwt"),
-                    mdoc_input(3, "mdoc"),
-                ])
-                .unwrap()
-        };
-        let calls = signer.calls.lock().unwrap();
-
-        assert_eq!(calls.len(), 3);
-        for (payload, raw_signature) in calls.iter() {
-            let signature = p256::ecdsa::Signature::from_slice(raw_signature).unwrap();
-            assert!(signature.normalize_s().is_some());
-            signer
-                .signing_key
-                .verifying_key()
-                .verify(payload, &signature)
-                .unwrap();
-        }
-
-        let SignedCredential::JwtVcJson { jwt, .. } = &credentials[0] else {
-            panic!("expected JWT-VC in caller order")
-        };
-        let emitted_jwt_signature = URL_SAFE_NO_PAD
-            .decode(jwt.rsplit('.').next().unwrap())
-            .unwrap();
-
-        let SignedCredential::SdJwt { compact, .. } = &credentials[1] else {
-            panic!("expected SD-JWT in caller order")
-        };
-        let emitted_sd_jwt_signature = URL_SAFE_NO_PAD
-            .decode(
-                compact
-                    .split('~')
-                    .next()
-                    .unwrap()
-                    .rsplit('.')
-                    .next()
-                    .unwrap(),
-            )
-            .unwrap();
-
-        let SignedCredential::MsoMdoc {
-            issuer_signed_b64, ..
-        } = &credentials[2]
-        else {
-            panic!("expected mdoc in caller order")
-        };
-        let issuer_signed: isomdl::definitions::IssuerSigned =
-            isomdl::cbor::from_slice(&URL_SAFE_NO_PAD.decode(issuer_signed_b64).unwrap()).unwrap();
-        assert!(calls.iter().any(|(_, raw)| raw == &emitted_jwt_signature));
-        assert!(calls
-            .iter()
-            .any(|(_, raw)| raw == &emitted_sd_jwt_signature));
-        assert!(calls
-            .iter()
-            .any(|(_, raw)| raw == &issuer_signed.issuer_auth.signature));
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_worker_bounds_cover_empty_single_one_and_library_ceiling() {
         let mut empty_signer = ConcurrentTestSigner::new(8, 1);
         let empty = {
@@ -2749,6 +2692,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_errors_finish_all_jobs_and_choose_lowest_caller_ordinal() {
         let mut signer = ConcurrentTestSigner::new(4, 0xa5a5_5a5a_f0f0_0f0f)
             .with_fail_labels(["failure-2", "failure-7"]);
@@ -2856,6 +2800,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn post_join_metadata_drift_precedes_a_returned_backend_error() {
         let mut failing_signer = ConcurrentTestSigner::new(4, 0x1212_3434_5656_7878)
             .with_fail_labels(["failure-2"])
@@ -2874,6 +2819,7 @@ mod tests {
 
     #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn concurrent_duplicate_preparation_and_metadata_drift_fail_closed() {
         let mut duplicate_signer = ConcurrentTestSigner::new(4, 11);
         {
@@ -2927,33 +2873,31 @@ mod tests {
 
     #[test]
     fn empty_batch_is_a_noop() {
-        let signer = RecordingSigner::failing_at(0);
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert!(scope.sign_batch(vec![]).unwrap().is_empty());
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn invalid_scope_and_duplicate_routes_precede_preparation() {
-        let wrong_algorithm = RecordingSigner::with_algorithm(SigningAlgorithm::EdDSA);
+        let wrong_algorithm = PreSignMetadataSigner::new(SigningAlgorithm::EdDSA);
         let error =
             Es256SignerScope::new(&wrong_algorithm).expect_err("non-ES256 signer must be rejected");
         assert_eq!(error.kind(), SigningBatchErrorKind::InvalidScope);
 
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         let error = assert_error(
             scope.sign_batch(vec![invalid_sd_jwt_input(7), jwt_input(7, "duplicate")]),
             SigningBatchErrorKind::DuplicateRoute,
             Some(0),
         );
-        assert_eq!(signer.call_count(), 0);
         assert!(!format!("{error:?}").contains(CLAIM_SECRET));
     }
 
     #[test]
     fn duplicate_routes_report_the_lowest_first_affected_ordinal() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
 
         assert_error(
@@ -2967,12 +2911,11 @@ mod tests {
             SigningBatchErrorKind::DuplicateRoute,
             Some(0),
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn all_preparation_completes_before_signing_and_lowest_failure_wins() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch(vec![
@@ -2983,12 +2926,11 @@ mod tests {
             SigningBatchErrorKind::PreparationFailed,
             Some(1),
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn preparation_failure_precedes_pre_sign_metadata_drift() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         signer.drift(1);
 
@@ -3002,13 +2944,12 @@ mod tests {
             SigningBatchErrorKind::SignerMetadataChanged,
             None,
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[test]
     fn algorithm_issuer_and_kid_drift_are_all_rejected_before_signing() {
         for metadata_state in 1..=3 {
-            let signer = RecordingSigner::es256();
+            let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
             let scope = Es256SignerScope::new(&signer).unwrap();
             signer.drift(metadata_state);
 
@@ -3017,13 +2958,12 @@ mod tests {
                 SigningBatchErrorKind::SignerMetadataChanged,
                 None,
             );
-            assert_eq!(signer.call_count(), 0);
         }
     }
 
     #[test]
     fn backend_failure_is_redacted_and_returns_no_partial_outputs() {
-        let signer = RecordingSigner::failing_at(1);
+        let signer = SimulatedBackendFailureSigner::default();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let error = assert_error(
             scope.sign_batch(three_format_inputs()),
@@ -3031,7 +2971,11 @@ mod tests {
             Some(1),
         );
 
-        assert_eq!(signer.call_count(), 2, "the serial executor must not retry");
+        assert_eq!(
+            signer.calls.load(Ordering::SeqCst),
+            2,
+            "the serial executor must not retry"
+        );
         let display = error.to_string();
         let debug = format!("{error:?}");
         for secret in [BACKEND_SECRET, CLAIM_SECRET, ISSUER_SECRET, KID_SECRET] {
@@ -3054,7 +2998,7 @@ mod tests {
 
     #[test]
     fn genuinely_batch_wide_executor_failure_has_no_item_ordinal() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch_with_components(
@@ -3065,7 +3009,6 @@ mod tests {
             SigningBatchErrorKind::ExecutorFailed,
             None,
         );
-        assert_eq!(signer.call_count(), 0);
     }
 
     #[derive(Clone, Copy)]
@@ -3085,6 +3028,24 @@ mod tests {
         BackendFailureAndDuplicateIdentity,
     }
 
+    impl ResultFault {
+        fn rejects_before_valid_signature_is_needed(self) -> bool {
+            matches!(
+                self,
+                Self::Missing
+                    | Self::Duplicate
+                    | Self::Unexpected
+                    | Self::WrongScope
+                    | Self::WrongBatch
+                    | Self::WrongRoute
+                    | Self::WrongLength
+                    | Self::WrongEncoding
+                    | Self::InvalidSignatureAndDuplicateIdentity
+                    | Self::BackendFailureAndDuplicateIdentity
+            )
+        }
+    }
+
     struct FaultingExecutor(ResultFault);
 
     fn signature_bytes_mut(result: &mut SigningResult) -> &mut Vec<u8> {
@@ -3100,7 +3061,18 @@ mod tests {
             signer: &dyn CredentialSigner,
             jobs: &[SigningJob<'_>],
         ) -> Result<Vec<SigningResult>, SigningExecutionError> {
-            let mut results = SerialSigningExecutor.execute(signer, jobs)?;
+            let mut results = if self.0.rejects_before_valid_signature_is_needed() {
+                jobs.iter()
+                    .map(|job| SigningResult {
+                        identity: job.identity,
+                        // Envelope faults fail first. First-ordinal signature
+                        // faults also need no valid signature from any job.
+                        outcome: SigningOutcome::Signature(vec![0xA5; ES256_SIGNATURE_LENGTH]),
+                    })
+                    .collect()
+            } else {
+                SerialSigningExecutor.execute(signer, jobs)?
+            };
             match self.0 {
                 ResultFault::Missing => {
                     results.pop();
@@ -3160,7 +3132,7 @@ mod tests {
             ResultFault::InvalidSignatureAndDuplicateIdentity,
             ResultFault::BackendFailureAndDuplicateIdentity,
         ] {
-            let signer = RecordingSigner::es256();
+            let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
             let scope = Es256SignerScope::new(&signer).unwrap();
             assert_error(
                 scope.sign_batch_with_components(
@@ -3174,9 +3146,11 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn reordered_executor_results_restore_caller_order() {
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let credentials = scope
             .sign_batch_with_components(
@@ -3197,7 +3171,7 @@ mod tests {
     #[test]
     fn signature_validation_runs_after_envelope_and_in_expected_order() {
         for fault in [ResultFault::WrongLength, ResultFault::WrongEncoding] {
-            let signer = RecordingSigner::es256();
+            let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
             let scope = Es256SignerScope::new(&signer).unwrap();
             assert_error(
                 scope.sign_batch_with_components(
@@ -3209,8 +3183,13 @@ mod tests {
                 Some(0),
             );
         }
+    }
 
-        let signer = RecordingSigner::es256();
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn signature_validation_rejects_later_ordinals_with_remote_signer() {
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch_with_components(
@@ -3222,7 +3201,7 @@ mod tests {
             Some(1),
         );
 
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         assert_error(
             scope.sign_batch_with_components(
@@ -3260,9 +3239,11 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn assembly_reports_lowest_ordinal_and_returns_no_partial_outputs() {
-        let signer = RecordingSigner::es256();
+        let signer = RemoteRecordingSigner::es256();
         let scope = Es256SignerScope::new(&signer).unwrap();
         let assembler = FailingAssembler {
             fail_at: [1, 2].into(),
@@ -3287,7 +3268,7 @@ mod tests {
 
     #[test]
     fn public_diagnostics_are_fixed_and_redacted() {
-        let signer = RecordingSigner::es256();
+        let signer = PreSignMetadataSigner::new(SigningAlgorithm::ES256);
         let scope = Es256SignerScope::new(&signer).unwrap();
         let route = SigningRouteId::new(91);
         let jwt = JwtVcSigningBatchInput::new(route, jwt_claims(CLAIM_SECRET));

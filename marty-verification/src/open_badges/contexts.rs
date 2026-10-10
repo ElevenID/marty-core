@@ -101,11 +101,6 @@ pub fn ob3_context_uri() -> &'static str {
 }
 
 #[cfg(test)]
-pub fn security_v2_context_uri() -> &'static str {
-    CONTEXT_SECURITY_V2
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;

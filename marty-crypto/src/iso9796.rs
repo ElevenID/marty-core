@@ -25,8 +25,6 @@
 //! )?;
 //! ```
 
-#[cfg(test)]
-use rsa::{pkcs8::DecodePrivateKey, traits::PrivateKeyParts, RsaPrivateKey};
 use rsa::{pkcs8::DecodePublicKey, traits::PublicKeyParts, BigUint, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -185,33 +183,6 @@ fn scheme1_message(encoded: &[u8]) -> CryptoResult<&[u8]> {
         start += 1;
     }
     Ok(&encoded[start..encoded.len() - 1])
-}
-
-/// Create a deterministic Scheme 1 message-recovery signature for tests and
-/// passport-chip simulators. Production passport chips sign internally.
-#[cfg(test)]
-pub fn iso9796_scheme1_sign(private_key_der: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
-    let private_key = RsaPrivateKey::from_pkcs8_der(private_key_der)
-        .map_err(|error| CryptoError::crypto_error(format!("Failed to parse RSA key: {error}")))?;
-    let key_size = private_key.n().bits().div_ceil(8);
-    if message.len() + 3 > key_size {
-        return Err(CryptoError::crypto_error(
-            "Message too large for ISO 9796 Scheme 1 key",
-        ));
-    }
-    let padding_len = key_size - message.len() - 3;
-    let mut encoded = Vec::with_capacity(key_size);
-    encoded.push(0x6A);
-    encoded.extend(std::iter::repeat_n(0xBB, padding_len));
-    encoded.push(0x00);
-    encoded.extend_from_slice(message);
-    encoded.push(0xBC);
-    let representative = BigUint::from_bytes_be(&encoded);
-    let signature = representative.modpow(private_key.d(), private_key.n());
-    let bytes = signature.to_bytes_be();
-    let mut result = vec![0u8; key_size - bytes.len()];
-    result.extend_from_slice(&bytes);
-    Ok(result)
 }
 
 /// Verify ISO 9796-2 Scheme 2 signature (partial message recovery with hash).
@@ -410,8 +381,6 @@ pub fn iso9796_recover_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(test)]
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
 
     #[test]
     fn test_hash_algorithm_properties() {
@@ -435,15 +404,16 @@ mod tests {
     }
 
     #[test]
-    #[cfg(test)]
-    fn scheme1_test_signer_round_trip_and_tamper_rejection() {
-        let private_key = RsaPrivateKey::new(&mut rand::rngs::OsRng, 1024).unwrap();
-        let private_der = private_key.to_pkcs8_der().unwrap();
-        let public_der = private_key.to_public_key().to_public_key_der().unwrap();
-        let message = b"passport-active-authentication-challenge";
-        let signature = iso9796_scheme1_sign(private_der.as_bytes(), message).unwrap();
+    fn scheme1_public_vector_recovers_message_and_rejects_tampering() {
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/iso9796_scheme1_public.json"
+        ))
+        .unwrap();
+        let public_der = hex::decode(vector["public_spki"].as_str().unwrap()).unwrap();
+        let signature = hex::decode(vector["signature"].as_str().unwrap()).unwrap();
+        let message = vector["message"].as_str().unwrap().as_bytes();
         assert!(iso9796_verify(
-            public_der.as_bytes(),
+            &public_der,
             message,
             &signature,
             Iso9796Scheme::Scheme1,
@@ -451,23 +421,27 @@ mod tests {
         )
         .unwrap());
         assert_eq!(
-            iso9796_recover_message(
-                public_der.as_bytes(),
-                &signature,
-                Iso9796Scheme::Scheme1,
-                None,
-            )
-            .unwrap(),
+            iso9796_recover_message(&public_der, &signature, Iso9796Scheme::Scheme1, None).unwrap(),
             message
         );
         assert!(!iso9796_verify(
-            public_der.as_bytes(),
+            &public_der,
             b"wrong challenge",
             &signature,
             Iso9796Scheme::Scheme1,
             Iso9796HashAlgorithm::Sha256,
         )
         .unwrap());
+        let mut tampered = signature;
+        tampered[0] ^= 1;
+        assert!(!iso9796_verify(
+            &public_der,
+            message,
+            &tampered,
+            Iso9796Scheme::Scheme1,
+            Iso9796HashAlgorithm::Sha256,
+        )
+        .unwrap_or(false));
     }
 
     // Note: Full verification tests require test vectors from ISO 9796-2

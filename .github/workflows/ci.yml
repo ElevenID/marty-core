@@ -72,6 +72,11 @@ jobs:
         shell: bash
         run: |
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
+          cargo test --locked -p marty-oid4vci --test sd_jwt_structural_boundaries --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc
+          cargo test --locked -p marty-oid4vci --test sd_jwt_managed_claim_boundaries --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc
+          cargo test --locked -p marty-oid4vci --test sd_jwt_vc_conformance --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc
+          cargo test --locked -p marty-oid4vci --test remote_jwt_vc_boundary --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
+          cargo test --locked -p marty-oid4vci --test signing_payload_semantics --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
           cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings
           cargo test --locked -p marty-oid4vci --no-default-features --lib
@@ -80,6 +85,7 @@ jobs:
           cargo test --locked -p marty-crypto --no-default-features --features ed448-verification ed448::tests
           cargo test --locked -p marty-emrtd-issuance
           cargo check --locked -p marty-verification --no-default-features --features kms-only,ephemeral-session-keys --lib
+          cargo test --locked -p marty-verification --test open_badges_conformance --no-default-features --features kms-only
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
           kms_ecdsa_verification_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,ecdsa-verification -e features,no-dev)"
           kms_issuer_tree="$(cargo tree --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc -e features,no-dev)"
@@ -103,24 +109,17 @@ jobs:
             printf '%s\n' "$kms_emrtd_tree"
             exit 1
           fi
+      - name: Prove issuer signing with disposable non-exportable OpenBao keys
+        shell: bash
+        env:
+          MARTY_TEST_BENCH_AFTER_LIVE: ${{ github.event_name != 'pull_request' && '1' || '0' }}
+          MARTY_TEST_BENCH_MATRIX: ${{ github.event_name != 'pull_request' && '1' || '0' }}
+        run: bash scripts/test_remote_issuer_live_kms.sh
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
       - name: Check OID4VCI WASM serial fallback contract
         shell: bash
         run: bash scripts/test_oid4vci_wasm_serial_fallback.sh
-      - name: Smoke opt-in ES256 payload matrix
-        if: github.event_name == 'merge_group'
-        run: MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
-      - name: Smoke opt-in mdoc payload matrix
-        if: github.event_name == 'merge_group'
-        run: |
-          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=all MARTY_MDOC_MATRIX_ITEM_COUNTS=1,512 MARTY_MDOC_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
-          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=small_primitive MARTY_MDOC_MATRIX_ITEM_COUNTS=1 MARTY_MDOC_MATRIX_BATCH_SIZES=256 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
-      - name: Smoke default-off mdoc evidence binaries
-        if: github.event_name == 'merge_group'
-        run: |
-          cargo test --locked -p marty-oid4vci --bench mdoc_allocation_evidence
-          cargo test --locked -p marty-oid4vci --bench mdoc_tail_evidence
       - name: Exercise the EUDI trusted-list client
         run: |
           cargo clippy --locked -p marty-verification --features eudi-client --all-targets -- -D warnings
@@ -188,18 +187,23 @@ jobs:
           cargo test --locked -p marty-iso18013 --no-default-features --features python --lib python_module_name_coexists_with_session_conformance_alias
           cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys
           cargo test --locked -p marty-bindings --no-default-features --features didcomm-encrypted-envelope encrypted_envelope_module_exposes_anoncrypt_only
-          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
+          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope
+      - name: Qualify external HAIP encryption with opaque session decryption
+        if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-verification')
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/haip-python"
+          "$RUNNER_TEMP/haip-python/bin/python" -m pip install --disable-pip-version-check cryptography==50.0.1
+          MARTY_TEST_HAIP_PYTHON="$RUNNER_TEMP/haip-python/bin/python" \
+            cargo test --locked -p marty-verification --lib --no-default-features \
+              --features ephemeral-session-keys \
+              opaque_haip_session_decrypts_external_python_jwe -- --ignored
       - name: Smoke marty-oid4vci benchmarks
         if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-oid4vci')
-        run: |
-          cargo test --locked -p marty-oid4vci --bench mdoc_issuance
-          cargo test --locked -p marty-oid4vci --bench sd_jwt_issuance
-          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=all MARTY_MDOC_MATRIX_ITEM_COUNTS=1,512 MARTY_MDOC_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
-          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=small_primitive MARTY_MDOC_MATRIX_ITEM_COUNTS=1 MARTY_MDOC_MATRIX_BATCH_SIZES=256 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
-          cargo test --locked -p marty-oid4vci --bench mdoc_allocation_evidence
-          cargo test --locked -p marty-oid4vci --bench mdoc_tail_evidence
-          cargo test --locked -p marty-oid4vci --bench es256_signing_batch
-          MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
+        env:
+          MARTY_TEST_BENCH_SMOKE: '1'
+          MARTY_TEST_BENCH_MATRIX: '1'
+        run: bash scripts/test_remote_issuer_live_kms.sh
       - name: Record non-Rust-only change
         if: steps.affected.outputs.all != 'true' && steps.affected.outputs.has_packages != 'true'
         run: echo "No Rust package tests are needed for the affected-first lane."
@@ -220,6 +224,8 @@ jobs:
           version: v0.16.0
       - name: Install native cryptography dependencies
         run: sudo apt-get update && sudo apt-get install --yes binutils cmake libbenchmark-dev libgtest-dev libssl-dev libzstd-dev zlib1g-dev
+      - name: Prove ZK mDoc issuance with disposable non-exportable OpenBao key
+        run: MARTY_TEST_ZK_MDOC=1 bash scripts/test_remote_issuer_live_kms.sh
       - name: Test vendored Longfellow security regressions
         run: |
           set -euo pipefail
@@ -409,7 +415,7 @@ jobs:
           USE_ZK_MOCK=1 cargo test --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib
           USE_ZK_MOCK=1 cargo clippy --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib -- -D warnings
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
-          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
+          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope
           cargo check --locked -p marty-bindings --no-default-features --features kms-only,extension-module
           if cargo check --locked -p marty-crypto --no-default-features --features kms-only,keygen; then exit 1; fi
           if cargo check --locked -p marty-verification --no-default-features --features kms-only,local-key-operations; then exit 1; fi
@@ -477,9 +483,6 @@ jobs:
           cargo test --locked -p marty-verification --features test-fixtures
           cargo check --locked -p marty-oid4vci --no-default-features
           cargo test --locked -p marty-oid4vci
-          cargo test --locked -p marty-oid4vci --bench mdoc_issuance
-          cargo test --locked -p marty-oid4vci --bench sd_jwt_issuance
-          cargo test --locked -p marty-oid4vci --bench es256_signing_batch
           cargo check --locked -p marty-oid4vci --no-default-features --features issuer
           cargo check --locked -p marty-oid4vci --no-default-features --features verifier
 

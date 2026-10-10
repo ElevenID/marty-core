@@ -21,7 +21,6 @@ kms-only = []
 # to a dependency that also compiles unrelated signing backends. Keep that
 # dependency out of resolver-only and KMS-only base artifacts.
 encrypted-envelope = ["dep:affinidi-messaging-didcomm"]
-local-key-operations = ["encrypted-envelope"] # Caller-supplied long-lived DIDComm sender/recipient private keys
 did_key = []
 did_web = ["dep:reqwest", "dep:tokio"]
 did_peer = []

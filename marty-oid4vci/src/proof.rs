@@ -3,15 +3,9 @@
 //! This module implements cryptographic verification of JWT proofs submitted
 //! with credential requests. This replaces the previous insecure approach of
 //! only extracting the `kid` header without signature verification.
-//!
-//! A local holder proof generator is retained only for crate-internal tests.
 
 use base64::Engine;
-#[cfg(test)]
-use ed25519_dalek::{Signer, SigningKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-#[cfg(test)]
-use rand::rngs::OsRng;
 use serde::Deserialize;
 use ssi_jwk::{Params, JWK};
 
@@ -871,8 +865,8 @@ pub fn extract_proof_jwts(request: &crate::types::CredentialRequest) -> Oid4vciR
 // ---------------------------------------------------------------------------
 
 /// Base58btc encoder using the Bitcoin alphabet (no multibase prefix).
-#[cfg(test)]
-fn base58btc_encode(data: &[u8]) -> String {
+#[cfg(any(test, feature = "wallet"))]
+pub(crate) fn base58btc_encode(data: &[u8]) -> String {
     const ALPHA: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     let n_leading = data.iter().take_while(|&&b| b == 0).count();
     let mut digits: Vec<u8> = Vec::new();
@@ -893,99 +887,66 @@ fn base58btc_encode(data: &[u8]) -> String {
     digits.iter().map(|&d| ALPHA[d as usize] as char).collect()
 }
 
-/// Create a spec-correct OID4VCI proof-of-possession JWT (OID4VCI §8.2).
-///
-/// Generates an ephemeral Ed25519 key pair, derives a `did:key` from it,
-/// and returns a compact JWT signed with that key.  The JWT contains:
-///   - header: `{"alg":"EdDSA","typ":"openid4vci-proof+jwt","kid":"<did:key>#<did:key>"}`
-///   - payload: `{"iss":"<did:key>","aud":"<aud>","iat":<now>,"nonce":"<c_nonce>"}`
-///
-/// The returned JWT passes `verify_jwt_proof` because the `kid` is a `did:key`
-/// whose public key is resolved inline (no network I/O) and the signature is
-/// verified cryptographically.
-#[cfg(test)]
-pub fn create_proof_jwt(aud: &str, c_nonce: &str) -> Oid4vciResult<String> {
-    // Generate ephemeral Ed25519 key pair
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-
-    // Derive did:key: multicodec prefix 0xed 0x01 + raw pub key → base58btc
-    let pub_bytes = verifying_key.to_bytes();
-    let mut prefixed = vec![0xed_u8, 0x01];
-    prefixed.extend_from_slice(&pub_bytes);
-    let did = format!("did:key:z{}", base58btc_encode(&prefixed));
-    let kid = format!("{}#{}", did, did);
-
-    let header = serde_json::json!({
-        "alg": "EdDSA",
-        "typ": "openid4vci-proof+jwt",
-        "kid": kid,
-    });
-    let payload = serde_json::json!({
-        "iss": did,
-        "aud": aud,
-        "iat": chrono::Utc::now().timestamp(),
-        "nonce": c_nonce,
-    });
-
-    let header_b64 = B64.encode(serde_json::to_string(&header).unwrap().as_bytes());
-    let payload_b64 = B64.encode(serde_json::to_string(&payload).unwrap().as_bytes());
-    let signing_input = format!("{}.{}", header_b64, payload_b64);
-
-    let signature = signing_key.sign(signing_input.as_bytes());
-    let sig_b64 = B64.encode(signature.to_bytes());
-
-    Ok(format!("{}.{}.{}", header_b64, payload_b64, sig_b64))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k256::ecdsa::{Signature as K256Signature, SigningKey as K256SigningKey};
-    use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
-    use p384::ecdsa::{Signature as P384Signature, SigningKey as P384SigningKey};
+    #[cfg(not(target_family = "wasm"))]
+    use crate::openbao_transit::{DisposableOpenBao, ScopedTransitSigner, TransitError};
 
-    fn embedded_ed25519_jwk(signing_key: &SigningKey) -> serde_json::Value {
-        serde_json::json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": B64.encode(signing_key.verifying_key().to_bytes()),
-        })
+    #[cfg(not(target_family = "wasm"))]
+    fn embedded_ed25519_jwk(signer: &ScopedTransitSigner) -> serde_json::Value {
+        serde_json::from_str(signer.public_jwk()).unwrap()
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn did_key_for_ed25519(signer: &ScopedTransitSigner) -> String {
+        let jwk = embedded_ed25519_jwk(signer);
+        let public_key = B64.decode(jwk["x"].as_str().unwrap()).unwrap();
+        let mut multicodec_key = vec![0xed, 0x01];
+        multicodec_key.extend_from_slice(&public_key);
+        format!("did:key:z{}", base58btc_encode(&multicodec_key))
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     fn sign_test_proof(
-        signing_key: &SigningKey,
+        signer: &ScopedTransitSigner,
         header: serde_json::Value,
         payload: serde_json::Value,
     ) -> String {
-        let header_b64 = B64.encode(serde_json::to_vec(&header).unwrap());
-        let payload_b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
-        let signing_input = format!("{header_b64}.{payload_b64}");
-        let signature = signing_key.sign(signing_input.as_bytes());
-        format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
+        sign_test_proof_with(signer, header, payload, ScopedTransitSigner::sign_ed25519)
     }
 
-    fn embedded_p256_jwk(signing_key: &P256SigningKey) -> serde_json::Value {
-        let point = signing_key.verifying_key().to_encoded_point(false);
-        serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": B64.encode(point.x().expect("P-256 x coordinate")),
-            "y": B64.encode(point.y().expect("P-256 y coordinate")),
-            "kid": "wallet-proof-key",
-        })
+    #[cfg(not(target_family = "wasm"))]
+    fn embedded_p256_jwk(signer: &ScopedTransitSigner) -> serde_json::Value {
+        let mut jwk: serde_json::Value = serde_json::from_str(signer.public_jwk()).unwrap();
+        jwk.as_object_mut().unwrap().insert(
+            "kid".to_owned(),
+            serde_json::Value::String("wallet-proof-key".to_owned()),
+        );
+        jwk
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn sign_test_p256_proof(
-        signing_key: &P256SigningKey,
+        signer: &ScopedTransitSigner,
         header: serde_json::Value,
         payload: serde_json::Value,
+    ) -> String {
+        sign_test_proof_with(signer, header, payload, ScopedTransitSigner::sign)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn sign_test_proof_with(
+        signer: &ScopedTransitSigner,
+        header: serde_json::Value,
+        payload: serde_json::Value,
+        sign: fn(&ScopedTransitSigner, &[u8]) -> Result<Vec<u8>, TransitError>,
     ) -> String {
         let header_b64 = B64.encode(serde_json::to_vec(&header).unwrap());
         let payload_b64 = B64.encode(serde_json::to_vec(&payload).unwrap());
         let signing_input = format!("{header_b64}.{payload_b64}");
-        let signature: P256Signature = signing_key.sign(signing_input.as_bytes());
-        format!("{signing_input}.{}", B64.encode(signature.to_bytes()))
+        let signature = sign(signer, signing_input.as_bytes()).unwrap();
+        format!("{signing_input}.{}", B64.encode(signature))
     }
 
     fn validated_key_attestation_jwt(attested_keys: Vec<serde_json::Value>) -> String {
@@ -1008,63 +969,44 @@ mod tests {
         format!("{header}.{payload}.{}", B64.encode(b"validated-signature"))
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn verifier_only_backends_cover_es384_and_es256k() {
+    #[ignore = "requires marked disposable OpenBao Transit"]
+    fn verifier_only_backend_covers_es384() {
         let header = "header";
         let payload = "payload";
         let signing_input = format!("{header}.{payload}");
+        let signer = DisposableOpenBao::from_marked_env().create_es384();
+        let p384_jwk: JWK = serde_json::from_str(signer.public_jwk()).unwrap();
+        let p384_signature = signer.sign_es384(signing_input.as_bytes()).unwrap();
+        assert!(verify_signature(&p384_jwk, "ES384", header, payload, &p384_signature,).is_ok());
+    }
 
-        let p384_key = P384SigningKey::random(&mut OsRng);
-        let p384_point = p384_key.verifying_key().to_encoded_point(false);
-        let p384_jwk: JWK = serde_json::from_value(serde_json::json!({
-            "kty": "EC",
-            "crv": "P-384",
-            "x": B64.encode(p384_point.x().unwrap()),
-            "y": B64.encode(p384_point.y().unwrap()),
-        }))
-        .unwrap();
-        let p384_signature: P384Signature = p384_key.sign(signing_input.as_bytes());
-        assert!(verify_signature(
-            &p384_jwk,
-            "ES384",
-            header,
-            payload,
-            &p384_signature.to_bytes(),
-        )
-        .is_ok());
-
-        let k256_key = K256SigningKey::random(&mut OsRng);
-        let k256_point = k256_key.verifying_key().to_encoded_point(false);
+    #[test]
+    fn verifier_only_backend_covers_es256k_public_vector() {
+        let header = "header";
+        let payload = "payload";
+        // Public-only vector generated for the exact signing input above.
+        // The current OpenBao Transit fixture cannot sign secp256k1.
         let k256_jwk: JWK = serde_json::from_value(serde_json::json!({
             "kty": "EC",
             "crv": "secp256k1",
-            "x": B64.encode(k256_point.x().unwrap()),
-            "y": B64.encode(k256_point.y().unwrap()),
+            "x": "cECGx1E8D29Ynm2eNUJIqWwd03Js7mHpJuKn2gF9bh4",
+            "y": "PHPkFv9-wZHZUr7Cf_CHTX8RGmae3p5IjEBbelPRpKI",
         }))
         .unwrap();
-        let k256_signature: K256Signature = k256_key.sign(signing_input.as_bytes());
-        assert!(verify_signature(
-            &k256_jwk,
-            "ES256K",
-            header,
-            payload,
-            &k256_signature.to_bytes(),
-        )
-        .is_ok());
+        let k256_signature = B64.decode("p6POU6jHchmUSG5EYZburBZ77f_l2InRK_YcJRx3b3YbUURHK2j-MsKYXa1drmXWFihy_PqjMUFog6_Vd2CWGw").unwrap();
+        assert!(verify_signature(&k256_jwk, "ES256K", header, payload, &k256_signature,).is_ok());
 
-        let mut tampered = k256_signature.to_bytes();
+        let mut tampered = k256_signature.clone();
         tampered[0] ^= 0x01;
         assert!(verify_signature(&k256_jwk, "ES256K", header, payload, &tampered).is_err());
-        assert!(verify_signature(
-            &k256_jwk,
-            "ES256",
-            header,
-            payload,
-            &k256_signature.to_bytes(),
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("does not match"));
+        assert!(
+            verify_signature(&k256_jwk, "ES256", header, payload, &k256_signature,)
+                .unwrap_err()
+                .to_string()
+                .contains("does not match")
+        );
     }
 
     #[test]
@@ -1126,9 +1068,11 @@ mod tests {
         assert!(!error.to_string().contains("secret-sentinel"));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn proof_freshness_rejects_extreme_iat_and_negative_policy() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let header = serde_json::json!({
             "alg": "EdDSA",
             "typ": "openid4vci-proof+jwt",
@@ -1236,9 +1180,11 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn test_required_typ_aud_and_iat_are_enforced() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let jwk = embedded_ed25519_jwk(&signing_key);
         let base_payload = serde_json::json!({
             "aud": "https://issuer.example",
@@ -1292,9 +1238,11 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn test_kid_and_jwk_are_mutually_exclusive() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let proof = sign_test_proof(
             &signing_key,
             serde_json::json!({
@@ -1318,9 +1266,11 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn test_iss_client_id_cannot_replace_cryptographic_holder_identity() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let proof = sign_test_proof(
             &signing_key,
             serde_json::json!({
@@ -1343,13 +1293,13 @@ mod tests {
         assert!(verified.holder_jwk.is_some());
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn test_mismatched_self_certifying_client_id_is_rejected() {
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let other_key = SigningKey::generate(&mut OsRng);
-        let mut prefixed = vec![0xed_u8, 0x01];
-        prefixed.extend_from_slice(&other_key.verifying_key().to_bytes());
-        let other_did = format!("did:key:z{}", base58btc_encode(&prefixed));
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
+        let other_key = DisposableOpenBao::from_marked_env().create_ed25519();
+        let other_did = did_key_for_ed25519(&other_key);
         let proof = sign_test_proof(
             &signing_key,
             serde_json::json!({
@@ -1373,9 +1323,24 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn test_tampered_proof_signature_is_rejected() {
-        let proof = create_proof_jwt("https://issuer.example", "nonce-1").unwrap();
+        let signer = DisposableOpenBao::from_marked_env().create_ed25519();
+        let did = did_key_for_ed25519(&signer);
+        let header = serde_json::json!({
+            "alg": "EdDSA",
+            "typ": "openid4vci-proof+jwt",
+            "kid": format!("{did}#{did}"),
+        });
+        let payload = serde_json::json!({
+            "iss": did,
+            "aud": "https://issuer.example",
+            "iat": chrono::Utc::now().timestamp(),
+            "nonce": "nonce-1",
+        });
+        let proof = sign_test_proof(&signer, header, payload);
         assert!(
             verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-1"), 300).is_ok(),
             "the unmodified proof is the positive control for this test"
@@ -1401,9 +1366,11 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_bound_proof_accepts_oidf_jwk_binding() {
-        let signing_key = P256SigningKey::random(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_es256();
         let proof_jwk = embedded_p256_jwk(&signing_key);
         let attestation = validated_key_attestation_jwt(vec![proof_jwk.clone()]);
         let proof = sign_test_p256_proof(
@@ -1434,10 +1401,12 @@ mod tests {
         assert!(verified.holder_jwk.is_some());
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_bound_proof_rejects_jwk_not_in_attestation() {
-        let signing_key = P256SigningKey::random(&mut OsRng);
-        let other_key = P256SigningKey::random(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_es256();
+        let other_key = DisposableOpenBao::from_marked_env().create_es256();
         let proof_jwk = embedded_p256_jwk(&signing_key);
         let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&other_key)]);
         let proof = sign_test_p256_proof(
@@ -1466,9 +1435,11 @@ mod tests {
         assert!(error.to_string().contains("not contained in attested_keys"));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_bound_proof_accepts_current_etsi_first_key_selector() {
-        let signing_key = P256SigningKey::random(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_es256();
         let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&signing_key)]);
         let proof = sign_test_p256_proof(
             &signing_key,
@@ -1495,9 +1466,11 @@ mod tests {
         .is_ok());
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_bound_proof_rejects_noncanonical_etsi_key_selectors() {
-        let signing_key = P256SigningKey::random(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_es256();
         let attestation = validated_key_attestation_jwt(vec![embedded_p256_jwk(&signing_key)]);
         let payload = serde_json::json!({
             "aud": "https://issuer.example",
@@ -1533,10 +1506,12 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_bound_proof_uses_only_first_attested_key() {
-        let first_key = P256SigningKey::random(&mut OsRng);
-        let second_key = P256SigningKey::random(&mut OsRng);
+        let first_key = DisposableOpenBao::from_marked_env().create_es256();
+        let second_key = DisposableOpenBao::from_marked_env().create_es256();
         let attestation = validated_key_attestation_jwt(vec![
             embedded_p256_jwk(&first_key),
             embedded_p256_jwk(&second_key),
@@ -1585,9 +1560,11 @@ mod tests {
         .is_err());
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn ordinary_verifier_never_ignores_key_attestation_header() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let proof = sign_test_proof(
             &signing_key,
             serde_json::json!({
@@ -1613,10 +1590,12 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_binding_rejects_token_key_and_private_material_mismatch() {
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let other_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
+        let other_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let proof_jwk = embedded_ed25519_jwk(&signing_key);
         let attestation = validated_key_attestation_jwt(vec![proof_jwk.clone()]);
         let payload = serde_json::json!({
@@ -1691,12 +1670,8 @@ mod tests {
             .to_string()
             .contains("canonical first-key selector '0'"));
 
-        let private_jwk = serde_json::json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": B64.encode(signing_key.verifying_key().to_bytes()),
-            "d": B64.encode(signing_key.to_bytes()),
-        });
+        let mut private_jwk = embedded_ed25519_jwk(&signing_key);
+        private_jwk["d"] = serde_json::json!(B64.encode(b"rejected-private-key-field"));
         let private_attestation = validated_key_attestation_jwt(vec![private_jwk]);
         let private_proof = sign_test_proof(
             &signing_key,
@@ -1723,9 +1698,11 @@ mod tests {
         assert!(private_error.to_string().contains("public keys only"));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_binding_rejects_malformed_or_empty_attestation_payloads() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let proof_for = |attestation: &str| {
             sign_test_proof(
                 &signing_key,
@@ -1766,9 +1743,11 @@ mod tests {
         assert!(empty_error.to_string().contains("no attested public keys"));
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn key_attestation_binding_rejects_every_raw_private_jwk_member() {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = DisposableOpenBao::from_marked_env().create_ed25519();
         let public_jwk = embedded_ed25519_jwk(&signing_key);
         let payload = serde_json::json!({
             "aud": "https://issuer.example",

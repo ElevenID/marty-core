@@ -294,8 +294,7 @@ def check_repository(root: Path = ROOT) -> None:
         didcomm["features"]["kms-only"] == []
         and didcomm["features"]["encrypted-envelope"]
         == ["dep:affinidi-messaging-didcomm"]
-        and didcomm["features"]["local-key-operations"]
-        == ["encrypted-envelope"]
+        and "local-key-operations" not in didcomm["features"]
         and didcomm["dependencies"]["affinidi-messaging-didcomm"].get("optional")
         is True
         and didcomm["dependencies"]["affinidi-messaging-didcomm"].get(

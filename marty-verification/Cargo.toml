@@ -177,6 +177,10 @@ name = "mrz_golden_vectors"
 name = "open_badges_interop"
 
 [[test]]
+name = "open_badges_conformance"
+required-features = ["kms-only"]
+
+[[test]]
 name = "open_badges_typed_api"
 
 [[test]]

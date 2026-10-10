@@ -10,18 +10,21 @@
 //!  §5  Error paths — untrusted chain, empty chain
 //!  §6  Jurisdiction code model (AAMVA ISO 3166-2 codes)
 
+use marty_crypto_test_support::remote_certificate::{
+    RemoteCertificateAlgorithm, RemoteCertificateKey,
+};
 use marty_verification::{
     trust_anchor::{IacaRegistry, Jurisdiction},
     verification::mdl::{
         build_x5chain_from_pem, AuthStatus, MdlVerificationResult, ValidationRuleset,
     },
 };
-use rcgen::{CertificateParams, DnType, KeyPair};
+use rcgen::{CertificateParams, DnType};
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
-/// Generate a self-signed CA certificate for testing.  Returns `(pem, key)`.
-fn gen_ca(common_name: &str) -> (String, KeyPair) {
+/// Generate a self-signed CA certificate with a scoped non-exportable test key.
+fn gen_ca(common_name: &str) -> (String, RemoteCertificateKey) {
     let mut params = CertificateParams::default();
     params
         .distinguished_name
@@ -29,7 +32,7 @@ fn gen_ca(common_name: &str) -> (String, KeyPair) {
     params.distinguished_name.push(DnType::CountryName, "US");
     params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-    let key = KeyPair::generate().expect("CA key generation");
+    let key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
     let cert = params.self_signed(&key).expect("CA self-sign");
     (cert.pem(), key)
 }
@@ -38,6 +41,7 @@ fn gen_ca(common_name: &str) -> (String, KeyPair) {
 
 /// A single self-signed certificate must produce an X5Chain with depth 1.
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped IACA signer"]
 fn x5chain_from_single_pem_cert() {
     let (ca_pem, _) = gen_ca("Conformance Test IACA");
     let chain = build_x5chain_from_pem(&[ca_pem.as_bytes()]).expect("build_x5chain_from_pem");
@@ -51,12 +55,14 @@ fn x5chain_from_single_pem_cert() {
 
 /// A two-cert chain (CA + EE) must build successfully.
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped IACA signer"]
 fn x5chain_from_two_pem_certs() {
     let (ca_pem, ca_key) = gen_ca("Two-Cert IACA");
     let ca_cert_params = {
         let mut p = CertificateParams::default();
         p.distinguished_name
             .push(DnType::CommonName, "Two-Cert IACA");
+        p.distinguished_name.push(DnType::CountryName, "US");
         p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         p
     };
@@ -65,7 +71,7 @@ fn x5chain_from_two_pem_certs() {
         .distinguished_name
         .push(DnType::CommonName, "mDL Document Signer");
     ee_params.is_ca = rcgen::IsCa::NoCa;
-    let ee_key = KeyPair::generate().expect("EE key");
+    let ee_key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
     let ca_issuer = rcgen::Issuer::from_params(&ca_cert_params, &ca_key);
     let ee_pem = ee_params
         .signed_by(&ee_key, &ca_issuer)
@@ -117,6 +123,7 @@ fn iaca_registry_empty_on_creation() {
 
 /// Adding a jurisdiction certificate must make it retrievable.
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped IACA signer"]
 fn iaca_registry_add_and_retrieve_jurisdiction() {
     use x509_cert::der::DecodePem;
 
@@ -142,6 +149,7 @@ fn iaca_registry_add_and_retrieve_jurisdiction() {
 
 /// Different jurisdictions must be stored independently.
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped IACA signer"]
 fn iaca_registry_multiple_jurisdictions() {
     use x509_cert::der::DecodePem;
 
@@ -179,6 +187,7 @@ fn iaca_registry_multiple_jurisdictions() {
 /// A self-signed IACA cert validated against itself must succeed.
 /// (Used to test that the validation pipeline runs without panicking.)
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped IACA signer"]
 fn verify_x5chain_self_signed_against_own_registry() {
     use marty_verification::verification::mdl::verify_x5chain;
     use x509_cert::der::DecodePem;
@@ -203,6 +212,7 @@ fn verify_x5chain_self_signed_against_own_registry() {
 
 /// A chain validated against an empty registry must not be verified.
 #[test]
+#[ignore = "requires marked disposable OpenBao Transit and scoped IACA signer"]
 fn verify_x5chain_empty_registry_not_verified() {
     use marty_verification::verification::mdl::verify_x5chain;
 

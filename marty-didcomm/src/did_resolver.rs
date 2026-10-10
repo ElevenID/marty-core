@@ -541,43 +541,41 @@ fn resolve_did_peer_2(did: &str, elements: &str) -> DidcommResult<DidDocument> {
         if segment.is_empty() {
             continue;
         }
-        let purpose = &segment[..1];
-        let data = &segment[1..];
+        let purpose = segment
+            .get(..1)
+            .ok_or_else(|| DidcommError::InvalidDid(did.to_string()))?;
+        let data = segment
+            .get(1..)
+            .ok_or_else(|| DidcommError::InvalidDid(did.to_string()))?;
 
         match purpose {
-            "V" => {
+            "V" if data.starts_with('z') => {
                 // Verification key
-                if data.starts_with('z') {
-                    let temp_did = format!("did:key:{data}");
-                    if let Ok(temp_doc) = resolve_did_key(&temp_did) {
-                        for vm in temp_doc.verification_method {
-                            let vm_id =
-                                format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
-                            auth.push(serde_json::json!(vm_id.clone()));
-                            vms.push(VerificationMethod {
-                                id: vm_id,
-                                controller: did.to_string(),
-                                ..vm
-                            });
-                        }
+                let temp_did = format!("did:key:{data}");
+                if let Ok(temp_doc) = resolve_did_key(&temp_did) {
+                    for vm in temp_doc.verification_method {
+                        let vm_id = format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
+                        auth.push(serde_json::json!(vm_id.clone()));
+                        vms.push(VerificationMethod {
+                            id: vm_id,
+                            controller: did.to_string(),
+                            ..vm
+                        });
                     }
                 }
             }
-            "E" => {
+            "E" if data.starts_with('z') => {
                 // Key agreement key
-                if data.starts_with('z') {
-                    let temp_did = format!("did:key:{data}");
-                    if let Ok(temp_doc) = resolve_did_key(&temp_did) {
-                        for vm in temp_doc.verification_method {
-                            let vm_id =
-                                format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
-                            ka.push(serde_json::json!(vm_id.clone()));
-                            vms.push(VerificationMethod {
-                                id: vm_id,
-                                controller: did.to_string(),
-                                ..vm
-                            });
-                        }
+                let temp_did = format!("did:key:{data}");
+                if let Ok(temp_doc) = resolve_did_key(&temp_did) {
+                    for vm in temp_doc.verification_method {
+                        let vm_id = format!("{}#{}", did, &data[..std::cmp::min(data.len(), 16)]);
+                        ka.push(serde_json::json!(vm_id.clone()));
+                        vms.push(VerificationMethod {
+                            id: vm_id,
+                            controller: did.to_string(),
+                            ..vm
+                        });
                     }
                 }
             }
@@ -1299,6 +1297,15 @@ fn valid_public_jwk(jwk: &Jwk) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_method_two_rejects_non_ascii_purpose_without_panicking() {
+        let did = "did:peer:2.é";
+        assert!(matches!(
+            resolve_did_peer(did),
+            Err(DidcommError::InvalidDid(_))
+        ));
+    }
 
     #[cfg(feature = "did_web")]
     fn empty_document(did: &str) -> DidDocument {

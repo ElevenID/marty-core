@@ -1,0 +1,40 @@
+{
+  "credential": {
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://purl.imsglobal.org/spec/ob/v3p0/context.json"
+    ],
+    "id": "urn:uuid:ob3-credential-1",
+    "type": [
+      "VerifiableCredential",
+      "OpenBadgeCredential",
+      "AchievementCredential"
+    ],
+    "credentialSubject": {
+      "id": "did:example:subject",
+      "type": "AchievementSubject",
+      "achievement": {
+        "id": "urn:uuid:achievement-1",
+        "type": "Achievement",
+        "name": "Example Badge",
+        "description": "Example achievement description"
+      }
+    },
+    "issuer": "did:example:issuer",
+    "proof": {
+      "@context": "https://w3id.org/security/v2",
+      "type": "Ed25519Signature2018",
+      "created": "2026-10-07T19:06:16.64Z",
+      "verificationMethod": "did:example:issuer#key-2018",
+      "proofPurpose": "assertionMethod",
+      "jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsiYjY0Il0sImI2NCI6ZmFsc2V9..NuJERlXN4ulFFEcNN93n2IS6aEalSZTfteukwmFUNTsm6F-e8fle-7K_aCjNgx4zkubm6aavvN8amFcqjhKJDw"
+    }
+  },
+  "verification_method": "did:example:issuer#key-2018",
+  "method": {
+    "id": "did:example:issuer#key-2018",
+    "type": "Ed25519VerificationKey2018",
+    "controller": "did:example:issuer",
+    "publicKeyBase58": "8McD6b2Qdr8NbiZpygMKhyWmc1fe9agTZarr7T5aNHud"
+  }
+}

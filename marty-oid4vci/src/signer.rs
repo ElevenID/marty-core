@@ -1,16 +1,11 @@
 //! Credential signing abstraction.
 //!
 //! Provides the [`CredentialSigner`] trait that decouples credential construction
-//! from key material. Production implementors delegate to a remote KMS or HSM;
-//! local JWK signing exists only in the crate's non-selectable test build.
+//! from key material. Production implementors delegate to a remote KMS or HSM.
 
-#[cfg(test)]
-use ssi_crypto::AlgorithmInstance;
 use ssi_jwk::{Params, JWK};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-#[cfg(test)]
-use crate::types::IssuerKey;
 use crate::types::SigningAlgorithm;
 
 // =============================================================================
@@ -29,8 +24,7 @@ pub const MAX_REMOTE_RSA_SIGNATURE_BYTES: usize = crate::bounded_jwt::MAX_RSA_SI
 ///
 /// # Implementors
 ///
-/// Product implementations delegate to an external key manager. The crate's
-/// local JWK implementation is available only to its own `cfg(test)` build.
+/// Product implementations delegate to an external key manager.
 ///
 /// Implementors must ensure their [`std::fmt::Debug`] representation never
 /// includes private key material, credentials, signing payloads, or backend
@@ -247,22 +241,14 @@ fn strict_ed25519_verifying_key(bytes: &[u8]) -> Oid4vciResult<ed25519_dalek::Ve
 
 #[cfg(test)]
 pub(crate) fn test_es256_public_jwk() -> String {
-    let signing_key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into())
-        .expect("fixed P-256 test key must be valid");
-    test_es256_public_jwk_for_key(&signing_key)
-}
-
-#[cfg(test)]
-pub(crate) fn test_es256_public_jwk_for_key(signing_key: &p256::ecdsa::SigningKey) -> String {
-    use base64::Engine as _;
-
-    let point = signing_key.verifying_key().to_encoded_point(false);
+    // Public half of the historical fixed test vector. Preparation-only
+    // fixtures do not need access to its private scalar.
     serde_json::json!({
         "alg": "ES256",
         "crv": "P-256",
         "kty": "EC",
-        "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-        "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        "x": "HhhTL9R1TALzBB2cdc6zO4P_2BrHzk_ogsyxyYvFiW4",
+        "y": "pGwxHE4v9A3ZajZT5uRURdMt_khuztdcepDGoYiBwKM",
     })
     .to_string()
 }
@@ -271,41 +257,15 @@ pub(crate) fn test_es256_public_jwk_for_key(signing_key: &p256::ecdsa::SigningKe
 pub(crate) fn test_public_jwk(algorithm: SigningAlgorithm) -> String {
     match algorithm {
         SigningAlgorithm::ES256 => test_es256_public_jwk(),
-        SigningAlgorithm::ES384 => {
-            use base64::Engine as _;
-
-            let signing_key = p384::ecdsa::SigningKey::from_bytes((&[7u8; 48]).into())
-                .expect("fixed P-384 test key must be valid");
-            let point = signing_key.verifying_key().to_encoded_point(false);
-            serde_json::json!({
-                "alg": "ES384",
-                "crv": "P-384",
-                "kty": "EC",
-                "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-            })
-            .to_string()
-        }
+        SigningAlgorithm::ES384 => serde_json::json!({
+            "alg": "ES384",
+            "crv": "P-384",
+            "kty": "EC",
+            "x": "sBv8Si1_4gleZifMXK-avRU9W1Uf5_baYV2p0b_RAejRkehZAsCjTqo6FuZmiAtz",
+            "y": "BZ9ljE1qblfAlZ3oAQmw-mtWvWPR1XAak9FTIvImehVSZkHGDNB8kSpt9Yqpk9ib",
+        })
+        .to_string(),
         _ => panic!("no fixed public test key for {algorithm}"),
-    }
-}
-
-#[cfg(all(test, feature = "issuer"))]
-pub(crate) fn test_signature(algorithm: SigningAlgorithm, message: &[u8]) -> Vec<u8> {
-    match algorithm {
-        SigningAlgorithm::ES256 => {
-            use p256::ecdsa::signature::Signer as _;
-            let key = p256::ecdsa::SigningKey::from_bytes((&[7u8; 32]).into()).unwrap();
-            let signature: p256::ecdsa::Signature = key.sign(message);
-            signature.to_bytes().to_vec()
-        }
-        SigningAlgorithm::ES384 => {
-            use p384::ecdsa::signature::Signer as _;
-            let key = p384::ecdsa::SigningKey::from_bytes((&[7u8; 48]).into()).unwrap();
-            let signature: p384::ecdsa::Signature = key.sign(message);
-            signature.to_bytes().to_vec()
-        }
-        _ => panic!("no fixed signing test key for {algorithm}"),
     }
 }
 
@@ -381,220 +341,10 @@ fn validate_ed25519_encoding(signature: &[u8]) -> bool {
         && signature.iter().any(|byte| *byte != 0)
 }
 
-// =============================================================================
-// Fixture-only IssuerKey implementation
-// =============================================================================
-
-#[cfg(test)]
-impl CredentialSigner for IssuerKey {
-    fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-        let jwk: JWK = serde_json::from_str(&self.jwk_json)
-            .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
-        validate_issuer_key_algorithm(self, &jwk)?;
-        sign_with_jwk(&jwk, message)
-    }
-
-    fn algorithm(&self) -> SigningAlgorithm {
-        self.algorithm
-    }
-
-    fn issuer_id(&self) -> &str {
-        &self.issuer_id
-    }
-
-    fn kid_url(&self) -> String {
-        IssuerKey::kid_url(self)
-    }
-
-    fn public_jwk(&self) -> Oid4vciResult<String> {
-        let jwk: JWK = serde_json::from_str(&self.jwk_json)
-            .map_err(|error| Oid4vciError::KeyError(format!("Invalid issuer JWK: {error}")))?;
-        serde_json::to_string(&jwk.to_public()).map_err(Into::into)
-    }
-}
-
-// =============================================================================
-// JWK signing helpers (shared with format modules)
-// =============================================================================
-
-/// Derive the signing algorithm from a JWK's structural key family.
-///
-/// `alg` is deliberately excluded from this decision. Callers validate that
-/// optional metadata separately so it can only narrow, never override, the
-/// key type and exact curve.
-#[cfg(test)]
-pub(crate) fn derive_signing_algorithm(
-    key_type: Option<&str>,
-    curve: Option<&str>,
-) -> Oid4vciResult<SigningAlgorithm> {
-    match key_type {
-        Some("OKP") => match curve {
-            Some("Ed25519") => Ok(SigningAlgorithm::EdDSA),
-            Some(curve) => Err(Oid4vciError::KeyError(format!(
-                "Unsupported OKP curve: {curve}"
-            ))),
-            None => Err(Oid4vciError::KeyError("Missing curve for OKP key".into())),
-        },
-        Some("EC") => match curve {
-            Some("P-256") => Ok(SigningAlgorithm::ES256),
-            Some("P-384") => Ok(SigningAlgorithm::ES384),
-            Some("secp256k1") => Ok(SigningAlgorithm::ES256K),
-            Some(curve) => Err(Oid4vciError::KeyError(format!(
-                "Unsupported EC curve: {curve}"
-            ))),
-            None => Err(Oid4vciError::KeyError("Missing curve for EC key".into())),
-        },
-        Some("RSA") => Ok(SigningAlgorithm::RS256),
-        Some(key_type) => Err(Oid4vciError::KeyError(format!(
-            "Unsupported key type: {key_type}"
-        ))),
-        None => Err(Oid4vciError::KeyError("Missing kty in JWK".into())),
-    }
-}
-
-/// Require optional JWK `alg` metadata to agree with the structural family.
-#[cfg(test)]
-pub(crate) fn validate_declared_jwk_algorithm(
-    structural_algorithm: SigningAlgorithm,
-    declared_algorithm: Option<&str>,
-) -> Oid4vciResult<()> {
-    let Some(declared_algorithm) = declared_algorithm else {
-        return Ok(());
-    };
-    let declared = match declared_algorithm {
-        "ES256" => SigningAlgorithm::ES256,
-        "EdDSA" => SigningAlgorithm::EdDSA,
-        "ES256K" => SigningAlgorithm::ES256K,
-        "ES384" => SigningAlgorithm::ES384,
-        "RS256" => SigningAlgorithm::RS256,
-        unsupported => {
-            return Err(Oid4vciError::KeyError(format!(
-                "Unsupported algorithm: {unsupported}"
-            )))
-        }
-    };
-    if declared != structural_algorithm {
-        return Err(Oid4vciError::KeyError(format!(
-            "JWK alg {declared} does not match JWK key family {structural_algorithm}"
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-/// Derive the signing family from a parsed JWK and validate its optional `alg` metadata.
-pub fn derive_typed_jwk_algorithm(jwk: &JWK) -> Oid4vciResult<SigningAlgorithm> {
-    let (key_type, curve) = match &jwk.params {
-        Params::OKP(params) => (Some("OKP"), Some(params.curve.as_str())),
-        Params::EC(params) => (Some("EC"), params.curve.as_deref()),
-        Params::RSA(_) => (Some("RSA"), None),
-        Params::Symmetric(_) => (Some("oct"), None),
-    };
-    let structural_algorithm = derive_signing_algorithm(key_type, curve)?;
-    validate_declared_jwk_algorithm(
-        structural_algorithm,
-        jwk.algorithm.map(|algorithm| algorithm.as_str()),
-    )?;
-    Ok(structural_algorithm)
-}
-
-/// Bind an [`IssuerKey`]'s public algorithm hint to its actual JWK family.
-#[cfg(test)]
-pub(crate) fn validate_issuer_key_algorithm(
-    issuer_key: &IssuerKey,
-    jwk: &JWK,
-) -> Oid4vciResult<()> {
-    let structural_algorithm = derive_typed_jwk_algorithm(jwk)?;
-    if issuer_key.algorithm != structural_algorithm {
-        return Err(Oid4vciError::KeyError(format!(
-            "IssuerKey algorithm {} does not match JWK key family {structural_algorithm}",
-            issuer_key.algorithm
-        )));
-    }
-    Ok(())
-}
-
-/// Sign a message using a JWK's private key.
-#[cfg(test)]
-pub(crate) fn sign_with_jwk(jwk: &JWK, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-    let secret_key = extract_secret_key(jwk)?;
-    let alg_instance = get_algorithm_instance(jwk)?;
-
-    secret_key
-        .sign(alg_instance, message)
-        .map_err(|e| Oid4vciError::SigningError(format!("Signing failed: {:?}", e)))
-}
-
-/// Extract a [`SecretKey`](ssi_crypto::SecretKey) from a JWK for signing.
-#[cfg(test)]
-pub(crate) fn extract_secret_key(jwk: &JWK) -> Oid4vciResult<ssi_crypto::SecretKey> {
-    match &jwk.params {
-        Params::OKP(params) => {
-            let d = params.private_key.as_ref().ok_or_else(|| {
-                Oid4vciError::KeyError("Missing private key (d) in OKP JWK".into())
-            })?;
-            ssi_crypto::SecretKey::new_ed25519(&d.0)
-                .map_err(|e| Oid4vciError::KeyError(format!("Invalid Ed25519 key: {:?}", e)))
-        }
-        Params::EC(params) => {
-            let d = params.ecc_private_key.as_ref().ok_or_else(|| {
-                Oid4vciError::KeyError("Missing private key (d) in EC JWK".into())
-            })?;
-            match params.curve.as_deref() {
-                Some("P-256") => ssi_crypto::SecretKey::new_p256(&d.0)
-                    .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 key: {:?}", e))),
-                Some("secp256k1") => ssi_crypto::SecretKey::new_secp256k1(&d.0)
-                    .map_err(|e| Oid4vciError::KeyError(format!("Invalid secp256k1 key: {:?}", e))),
-                curve => Err(Oid4vciError::KeyError(format!(
-                    "Unsupported EC curve: {:?}",
-                    curve
-                ))),
-            }
-        }
-        _ => Err(Oid4vciError::KeyError(
-            "Unsupported key type for signing (need OKP or EC)".into(),
-        )),
-    }
-}
-
-/// Get the [`AlgorithmInstance`] for a JWK.
-#[cfg(test)]
-pub(crate) fn get_algorithm_instance(jwk: &JWK) -> Oid4vciResult<AlgorithmInstance> {
-    match &jwk.params {
-        Params::OKP(_) => Ok(AlgorithmInstance::EdDSA),
-        Params::EC(ec) => match ec.curve.as_deref() {
-            Some("P-256") => Ok(AlgorithmInstance::ES256),
-            Some("secp256k1") => Ok(AlgorithmInstance::ES256K),
-            curve => Err(Oid4vciError::KeyError(format!(
-                "Unsupported EC curve: {:?}",
-                curve
-            ))),
-        },
-        _ => Err(Oid4vciError::KeyError(
-            "Unsupported key type for algorithm selection".into(),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod remote_signature_tests {
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-
-    #[cfg(not(target_family = "wasm"))]
-    const RSA_PRIVATE_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC8rUj8OT3yKej3\nmQFlOO8ZYGNBcWUzdpPotih5ogCMnUA+kekZ9wbvw8m4YTpwlD/S3g/hdbUBHRDx\nxIHG0xmmTM+vfQVb2xgXZCgriXmX/eBhWIGpv/r7R7YWDhhVCmc55KcJivSbh3E7\nzehccigOIWTJ9AVoaFRGYxp8hN4saMv9hNVojxVgizFKg+yFFvVLOjO78WX0i3RJ\nRXJf7g5UeP/Bs0TAMbkVO/fBpUjOJKcT59jdl1/7u0WCTMTfpyt3eLXTtivhh6QE\n6zNWZ3TaB1FFP4SQ8+B8UpoVub4SoUsUpt1kytM5lI1+8BBuwO1izF+awnMts9sg\n5SzvjE63AgMBAAECggEAOhUiRbsdbcInHKm2e0G2oVpB0/Cjld8oE1iYRzFu99qk\n314tozefpAnivGb6BZQtva1suBxzNz+KatLynJF58O7udHiJQMjGttS3ZQeyLe8S\ntwT3DZmzGs3tqQZ3yR4lvvW70j07pfFhE2cE5Aikeg0fqOf9DjIn129ExRZmCsdD\nR7NnblNhDdqmkFiPgbhBqxxDOFPiQyFH2PvR1Pj8b7p6nlCZSrmqesHmTYjFOAEv\nNNz48OuRVV1pGxaEwyT5PaOkW0OKZvlibyaeuFr8jbdtSA4Vh+yePmfExsol0L1I\nvoPYTRjVCxkAGRq0KgkeRwysMk2tQbIvf8vjWQumwQKBgQD/Q4a8Gl3VliK2F9yL\nTwlC6XjAcBLrXc4cL4lttvgB7YyoQB8UvHAySbJoDgBPaPaqbofws6YieMsd1oeY\nVMSzTeXJkMQC3VkKYUaO5IlMFT5PD2F967fJZV/q2V+BL6s6Vsl1PqnHyP1w54qk\n4s02qoJBU+FuFCeUGZyXnar5lwKBgQC9OJgt6m8g49pvguj1TPKJmEfzBBySOmuj\n4C52XlbvrYaVpYyhQnckJUgZIWcx2fA9W/D4PfwFzsiItbxep9GgULIMix9C1PTV\ns7go3gHHQfmOgZpmJH2Tand1qKdhDTOWjKZJzDNdo81rAgYsW+Hx+anquM1bi4cC\nUWHYXoS34QKBgHmMxxC1IW9+QWMiM6OmbAuPry87btbi4S1suW0kDi6k1jCb7/Do\n1igsDacc26r0mViIr3S/puGNUXMQ35p66vtSoZP8ukl+61JVBcsvKe2vw+7TrSHP\n58Ef46+p+J9Eeq2Z++43e5MlswFbUBq54Owh/0pqTdMkB8Cu/XD45BxbAoGBAId0\ncyQzdZgi5KT9Hs0zZ1Bujdr+r4FShunKOxiLUkrDetu3piNulCFw+tramagLLrqO\nDcN3g+mYbN/I0W8lTaApBDyMfzV1g0tUG1pOCxHcPczxJFlIeAjGp3u33xJPxAVa\n7FNZ9c9rykp3KXop0GZLZoLcBk4pZN2Y6qVcjD+hAoGBANXlp2ZCuCYws17lCT+I\nxHlUJDu9t6o6rJGYezXFyrzrZDDS6CrrqARXqOFSKpfZN1f8dHsdaLafqBb9iADe\noqLZ4c0NyDjyxLBhiht/NDrMcfxf5FLrwmdO/iV6Hn6GWVvS8s3x4mYKuns5sJ6b\nYTa2y89NkNgCn0f1CWNdFbJk\n-----END PRIVATE KEY-----\n";
-
-    fn p256_public_jwk(key: &p256::ecdsa::SigningKey) -> String {
-        let point = key.verifying_key().to_encoded_point(false);
-        serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "alg": "ES256",
-            "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-            "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-        })
-        .to_string()
-    }
 
     fn assert_binding(
         algorithm: SigningAlgorithm,
@@ -651,36 +401,22 @@ mod remote_signature_tests {
         assert!(validate_remote_signature(SigningAlgorithm::RS256, &[1; 1025]).is_err());
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
-    fn signature_binding_rejects_payload_and_public_key_substitution() {
-        use p256::ecdsa::signature::Signer as _;
-
-        let key = p256::ecdsa::SigningKey::from_slice(&[1u8; 32]).unwrap();
-        let other_key = p256::ecdsa::SigningKey::from_slice(&[2u8; 32]).unwrap();
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn es256_remote_signature_binds_payload_and_public_key() {
+        let provider = crate::openbao_transit::DisposableOpenBao::from_marked_env();
+        let signer = provider.create_es256();
+        let wrong_signer = provider.create_es256();
         let payload = b"canonical prepared credential payload";
-        let signature: p256::ecdsa::Signature = key.sign(payload);
-
-        assert!(verify_remote_signature(
+        let signature = signer.sign(payload).unwrap();
+        assert_binding(
             SigningAlgorithm::ES256,
-            &p256_public_jwk(&key),
+            signer.public_jwk(),
+            wrong_signer.public_jwk(),
             payload,
-            signature.to_bytes().as_slice(),
-        )
-        .is_ok());
-        assert!(verify_remote_signature(
-            SigningAlgorithm::ES256,
-            &p256_public_jwk(&key),
-            b"substituted payload",
-            signature.to_bytes().as_slice(),
-        )
-        .is_err());
-        assert!(verify_remote_signature(
-            SigningAlgorithm::ES256,
-            &p256_public_jwk(&other_key),
-            payload,
-            signature.to_bytes().as_slice(),
-        )
-        .is_err());
+            &signature,
+        );
     }
 
     #[test]
@@ -751,115 +487,76 @@ mod remote_signature_tests {
     }
 
     #[test]
-    fn every_remote_algorithm_accepts_valid_and_rejects_substituted_bindings() {
+    fn es256k_rejects_substituted_bindings() {
         let payload = b"canonical prepared credential payload";
+        // Public-only signed vector preserves ES256K verifier coverage until
+        // the remote provider exposes secp256k1 signing.
+        let public_jwk = serde_json::json!({
+            "kty": "EC", "crv": "secp256k1", "alg": "ES256K",
+            "x": "75ly36FbnJzTT6bZT4KR_aVx3AlzR7WF6YWBSoi-3lQ",
+            "y": "RswUWdEwFdU7zoC-Ov2YPYG7CrNKXjSMl6C2iwub97Y",
+        });
+        let wrong_public_jwk = serde_json::json!({
+            "kty": "EC", "crv": "secp256k1", "alg": "ES256K",
+            "x": "a3OraLg19-yg49xqGpakSsEf9os09-hDjt51hW-Rm8U",
+            "y": "HaxjsiGpFq2HaRl2anX_I7x2Brp8ZW65DbFcnlN507k",
+        });
+        let signature = URL_SAFE_NO_PAD
+            .decode("ldm8BHtz5gQ8LQsc87_KDMeLXk9rrR43mLneWXfEcZv58QcEDLRfNmHXnf3_cCHYFMTeYg5xGQDznvhmosUSQQ")
+            .unwrap();
+        assert_binding(
+            SigningAlgorithm::ES256K,
+            &public_jwk.to_string(),
+            &wrong_public_jwk.to_string(),
+            payload,
+            &signature,
+        );
+    }
 
-        {
-            use p384::ecdsa::signature::Signer as _;
-            let key = p384::ecdsa::SigningKey::from_slice(&[3u8; 48]).unwrap();
-            let wrong = p384::ecdsa::SigningKey::from_slice(&[4u8; 48]).unwrap();
-            let point = key.verifying_key().to_encoded_point(false);
-            let wrong_point = wrong.verifying_key().to_encoded_point(false);
-            let jwk = |point: &p384::EncodedPoint| {
-                serde_json::json!({
-                    "kty": "EC", "crv": "P-384", "alg": "ES384",
-                    "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                    "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-                })
-                .to_string()
-            };
-            let signature: p384::ecdsa::Signature = key.sign(payload);
-            assert_binding(
-                SigningAlgorithm::ES384,
-                &jwk(&point),
-                &jwk(&wrong_point),
-                payload,
-                signature.to_bytes().as_slice(),
-            );
-        }
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn es384_and_eddsa_remote_signatures_bind_payload_and_public_key() {
+        let provider = crate::openbao_transit::DisposableOpenBao::from_marked_env();
+        let payload = b"canonical prepared credential payload";
+        let es384 = provider.create_es384();
+        let wrong_es384 = provider.create_es384();
+        let es384_signature = es384.sign_es384(payload).unwrap();
+        assert_binding(
+            SigningAlgorithm::ES384,
+            es384.public_jwk(),
+            wrong_es384.public_jwk(),
+            payload,
+            &es384_signature,
+        );
 
-        {
-            use k256::ecdsa::signature::Signer as _;
-            let key = k256::ecdsa::SigningKey::from_slice(&[5u8; 32]).unwrap();
-            let wrong = k256::ecdsa::SigningKey::from_slice(&[6u8; 32]).unwrap();
-            let jwk = |key: &k256::ecdsa::SigningKey| {
-                let point = key.verifying_key().to_encoded_point(false);
-                serde_json::json!({
-                    "kty": "EC", "crv": "secp256k1", "alg": "ES256K",
-                    "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-                    "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-                })
-                .to_string()
-            };
-            let signature: k256::ecdsa::Signature = key.sign(payload);
-            assert_binding(
-                SigningAlgorithm::ES256K,
-                &jwk(&key),
-                &jwk(&wrong),
-                payload,
-                signature.to_bytes().as_slice(),
-            );
-        }
+        let eddsa = provider.create_ed25519();
+        let wrong_eddsa = provider.create_ed25519();
+        let eddsa_signature = eddsa.sign_ed25519(payload).unwrap();
+        assert_binding(
+            SigningAlgorithm::EdDSA,
+            eddsa.public_jwk(),
+            wrong_eddsa.public_jwk(),
+            payload,
+            &eddsa_signature,
+        );
+    }
 
-        {
-            use ed25519_dalek::Signer as _;
-            let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
-            let wrong = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
-            let jwk = |key: &ed25519_dalek::SigningKey| {
-                serde_json::json!({
-                    "kty": "OKP", "crv": "Ed25519", "alg": "EdDSA",
-                    "x": URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes()),
-                })
-                .to_string()
-            };
-            let signature = key.sign(payload);
-            assert_binding(
-                SigningAlgorithm::EdDSA,
-                &jwk(&key),
-                &jwk(&wrong),
-                payload,
-                &signature.to_bytes(),
-            );
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            use aws_lc_rs::signature::KeyPair as _;
-            let encoding_key =
-                jsonwebtoken::EncodingKey::from_rsa_pem(RSA_PRIVATE_KEY.as_bytes()).unwrap();
-            let key_pair =
-                aws_lc_rs::signature::RsaKeyPair::from_der(encoding_key.inner()).unwrap();
-            let public = aws_lc_rs::signature::RsaPublicKeyComponents::<Vec<u8>>::from(
-                key_pair.public_key(),
-            );
-            let mut signature = vec![0u8; key_pair.public_modulus_len()];
-            key_pair
-                .sign(
-                    &aws_lc_rs::signature::RSA_PKCS1_SHA256,
-                    &aws_lc_rs::rand::SystemRandom::new(),
-                    payload,
-                    &mut signature,
-                )
-                .unwrap();
-            let public_jwk = serde_json::json!({
-                "kty": "RSA", "alg": "RS256",
-                "n": URL_SAFE_NO_PAD.encode(&public.n),
-                "e": URL_SAFE_NO_PAD.encode(&public.e),
-            });
-            let mut wrong_n = public.n.clone();
-            *wrong_n.last_mut().unwrap() ^= 1;
-            let wrong_public_jwk = serde_json::json!({
-                "kty": "RSA", "alg": "RS256",
-                "n": URL_SAFE_NO_PAD.encode(wrong_n),
-                "e": URL_SAFE_NO_PAD.encode(&public.e),
-            });
-            assert_binding(
-                SigningAlgorithm::RS256,
-                &public_jwk.to_string(),
-                &wrong_public_jwk.to_string(),
-                payload,
-                &signature,
-            );
-        }
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn rsa_remote_signature_binds_payload_and_public_key() {
+        let provider = crate::openbao_transit::DisposableOpenBao::from_marked_env();
+        let signer = provider.create_rsa2048();
+        let wrong_signer = provider.create_rsa2048();
+        let payload = b"canonical prepared credential payload";
+        let signature = signer.sign_rsa_pkcs1(payload).unwrap();
+        assert_binding(
+            SigningAlgorithm::RS256,
+            signer.public_jwk(),
+            wrong_signer.public_jwk(),
+            payload,
+            &signature,
+        );
     }
 }

@@ -49,12 +49,14 @@
 #[cfg(test)]
 extern crate self as marty_oid4vci;
 
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "../tests/support/openbao_transit.rs"]
+mod openbao_transit;
+
 mod bounded_jwt;
 pub mod discovery;
 pub mod error;
 pub mod formats;
-#[cfg(test)]
-pub mod holder_key;
 pub mod issuance_input;
 #[cfg(feature = "issuer")]
 pub mod issuer;
@@ -96,11 +98,6 @@ pub mod wallet;
 mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
-#[cfg(test)]
-pub use holder_key::{
-    generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
-    DidJwkHolderKeyMaterial,
-};
 
 /// The default issuer surface cannot construct or use an in-process issuer key.
 ///
@@ -130,37 +127,11 @@ pub use holder_key::{
 /// ```
 mod local_issuer_key_compile_boundary {}
 
-// Legacy local-signing behavior remains testable without a downstream-selectable
-// Cargo capability. These sources compile as crate-internal tests, where `cfg(test)`
-// exposes the fixture-only key implementation.
-#[cfg(all(test, feature = "issuer", feature = "jwt_vc_json"))]
-#[path = "../tests/byok_prepare_assemble.rs"]
-mod byok_prepare_assemble;
+// These suites stay crate-internal because automatic integration tests are
+// disabled. Wallet verification uses a public vector signed by remote keys.
 #[cfg(test)]
 #[path = "../tests/issuance_input.rs"]
 mod issuance_input_tests;
-#[cfg(all(test, feature = "issuer"))]
-#[path = "../tests/issuer_key_algorithm_binding.rs"]
-mod issuer_key_algorithm_binding;
-#[cfg(all(test, feature = "issuer", feature = "mso_mdoc"))]
-#[path = "../tests/mdoc_x5chain_conformance.rs"]
-mod mdoc_x5chain_conformance;
-#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
-#[path = "../tests/scalar_sd_jwt_holder_binding.rs"]
-mod scalar_sd_jwt_holder_binding;
-#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
-#[path = "../tests/sd_jwt_managed_claim_boundaries.rs"]
-mod sd_jwt_managed_claim_boundaries;
-#[cfg(all(test, feature = "issuer", feature = "sd_jwt"))]
-#[path = "../tests/sd_jwt_structural_boundaries.rs"]
-mod sd_jwt_structural_boundaries;
-#[cfg(all(
-    test,
-    feature = "sd_jwt",
-    any(feature = "issuer", feature = "verifier")
-))]
-#[path = "../tests/sd_jwt_vc_conformance.rs"]
-mod sd_jwt_vc_conformance;
 #[cfg(all(test, feature = "wallet"))]
 #[path = "../tests/sd_jwt_wallet_verified_presentation.rs"]
 mod sd_jwt_wallet_verified_presentation;
@@ -221,6 +192,7 @@ pub use wallet::{
 #[cfg(feature = "wallet")]
 pub use wallet_sd_jwt::{
     PreparedSdJwtPresentation, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
+    TrustedSdJwtIssuerKeys, VerifiedSdJwtCredential,
 };
 
 #[cfg(feature = "lti")]

@@ -477,32 +477,39 @@ mod tests {
     use super::*;
     use crate::jwk::Jwk;
     use base64::engine::general_purpose::STANDARD as B64;
-    use p256::ecdsa::{signature::Signer as _, SigningKey};
-    use rand::rngs::OsRng;
+    use marty_crypto_test_support::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
 
-    fn make_p256_jwk_and_key() -> (Jwk, SigningKey) {
-        let signing_key = SigningKey::random(&mut OsRng);
-        let verifying_key = signing_key.verifying_key();
-        let point = verifying_key.to_encoded_point(false);
-        let x = point.x().expect("x coord");
-        let y = point.y().expect("y coord");
-
-        let b64url = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        let jwk = Jwk {
+    fn jwk_from_public_value(public: &serde_json::Value) -> Jwk {
+        Jwk {
             kty: "EC".to_string(),
             alg: Some("ES256".to_string()),
             crv: Some("P-256".to_string()),
-            x: Some(b64url.encode(x)),
-            y: Some(b64url.encode(y)),
+            x: Some(public["x"].as_str().expect("public x").to_string()),
+            y: Some(public["y"].as_str().expect("public y").to_string()),
             ..Jwk::default()
-        };
-        (jwk, signing_key)
+        }
     }
 
-    fn sign_barcode(signing_key: &SigningKey, header: &str, payload: &str) -> String {
+    fn remote_p256_jwk_and_signer() -> (Jwk, ScopedTransitSigner) {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
+        let public = serde_json::from_str(signer.public_jwk()).unwrap();
+        (jwk_from_public_value(&public), signer)
+    }
+
+    fn public_p256_jwk() -> Jwk {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/public_key_jwk_vectors.json"
+        ))
+        .unwrap();
+        jwk_from_public_value(&vectors["vectors"][0]["expected_jwk"])
+    }
+
+    fn sign_barcode(signer: &ScopedTransitSigner, header: &str, payload: &str) -> String {
         let signing_input = format!("{}~{}", header, payload);
-        let sig: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
-        let sig_b64 = B64.encode(sig.to_bytes());
+        let sig = signer
+            .sign(signing_input.as_bytes())
+            .expect("remote VDS-NC signature");
+        let sig_b64 = B64.encode(sig);
         format!("{}~{}~{}", header, payload, sig_b64)
     }
 
@@ -532,10 +539,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn verifies_valid_vds_nc_barcode() {
-        let (jwk, signing_key) = make_p256_jwk_and_key();
+        let (jwk, signer) = remote_p256_jwk_and_signer();
         let payload = profile_payload("AUS");
-        let barcode = sign_barcode(&signing_key, "DC03AUS", &payload);
+        let barcode = sign_barcode(&signer, "DC03AUS", &payload);
 
         let result = verify_vds_nc(&barcode, &jwk);
         assert!(result.verified, "should verify: {:?}", result.errors);
@@ -544,10 +552,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn rejects_tampered_payload() {
-        let (jwk, signing_key) = make_p256_jwk_and_key();
+        let (jwk, signer) = remote_p256_jwk_and_signer();
         let payload = profile_payload("DEU");
-        let barcode = sign_barcode(&signing_key, "DC03DEU", &payload);
+        let barcode = sign_barcode(&signer, "DC03DEU", &payload);
 
         // Tamper: replace part of the payload in the barcode string
         let tampered = barcode.replacen("EXAMPLE", "CHANGED", 1);
@@ -560,12 +569,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn rejects_wrong_key() {
-        let (_jwk, signing_key) = make_p256_jwk_and_key();
-        let (other_jwk, _) = make_p256_jwk_and_key();
+        let (_jwk, signer) = remote_p256_jwk_and_signer();
+        let (other_jwk, _) = remote_p256_jwk_and_signer();
 
         let payload = profile_payload("USA");
-        let barcode = sign_barcode(&signing_key, "DC03USA", &payload);
+        let barcode = sign_barcode(&signer, "DC03USA", &payload);
 
         let result = verify_vds_nc(&barcode, &other_jwk);
         assert!(!result.verified);
@@ -576,10 +586,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn rejects_jwk_type_and_curve_confusion() {
-        let (mut jwk, signing_key) = make_p256_jwk_and_key();
+        let (mut jwk, signer) = remote_p256_jwk_and_signer();
         let payload = profile_payload("AUS");
-        let barcode = sign_barcode(&signing_key, "DC03AUS", &payload);
+        let barcode = sign_barcode(&signer, "DC03AUS", &payload);
 
         jwk.kty = "OKP".to_owned();
         let result = verify_vds_nc(&barcode, &jwk);
@@ -595,52 +606,52 @@ mod tests {
 
     #[test]
     fn rejects_malformed_barcode_missing_segments() {
-        let (jwk, _) = make_p256_jwk_and_key();
+        let jwk = public_p256_jwk();
         let result = verify_vds_nc("DC03AUS~{}", &jwk);
         assert!(!result.verified);
         assert!(!result.errors.is_empty());
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn rejects_invalid_header_prefix() {
-        let (jwk, signing_key) = make_p256_jwk_and_key();
+        let (jwk, signer) = remote_p256_jwk_and_signer();
         let payload = profile_payload("AUS");
-        let barcode = sign_barcode(&signing_key, "BADAUS", &payload);
+        let barcode = sign_barcode(&signer, "BADAUS", &payload);
         let result = verify_vds_nc(&barcode, &jwk);
         assert!(!result.verified);
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn rejects_non_alpha_country_code() {
-        let (jwk, signing_key) = make_p256_jwk_and_key();
+        let (jwk, signer) = remote_p256_jwk_and_signer();
         let payload = profile_payload("AUS");
-        let barcode = sign_barcode(&signing_key, "DC0312X", &payload);
+        let barcode = sign_barcode(&signer, "DC0312X", &payload);
         let result = verify_vds_nc(&barcode, &jwk);
         assert!(!result.verified);
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn verify_vds_nc_jwk_json_roundtrip() {
-        let (jwk, signing_key) = make_p256_jwk_and_key();
+        let (jwk, signer) = remote_p256_jwk_and_signer();
         let jwk_json = serde_json::to_string(&jwk).unwrap();
         let payload = profile_payload("GBR");
-        let barcode = sign_barcode(&signing_key, "DC03GBR", &payload);
+        let barcode = sign_barcode(&signer, "DC03GBR", &payload);
 
         let result = verify_vds_nc_jwk_json(&barcode, &jwk_json).unwrap();
         assert!(result.verified);
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped VDS-NC signer"]
     fn profile_verification_preserves_component_outcomes() {
-        use p256::pkcs8::{EncodePublicKey, LineEnding};
-
-        let (_jwk, signing_key) = make_p256_jwk_and_key();
+        let (_jwk, signer) = remote_p256_jwk_and_signer();
         let payload = profile_payload("AUS");
-        let barcode = sign_barcode(&signing_key, "DC03AUS", &payload);
-        let public_key_pem = signing_key
-            .verifying_key()
-            .to_public_key_pem(LineEnding::LF)
-            .unwrap();
+        let barcode = sign_barcode(&signer, "DC03AUS", &payload);
+        let public_key_pem =
+            marty_crypto::serialization::save_public_key_pem(signer.public_key_spki_der()).unwrap();
         let printed = serde_json::json!({"surname": "example"});
         let result = verify_vds_nc_profile_pem(
             &barcode,

@@ -107,11 +107,6 @@ fn validate_digest_parameters(label: &str, parameters: Option<AnyRef<'_>>) -> Cr
 #[cfg(test)]
 mod tests {
     use der::{asn1::Any, Decode, Encode};
-    use rand::rngs::OsRng;
-    use rsa::pkcs8::DecodePrivateKey;
-    use rsa::pss::{Signature, SigningKey};
-    use rsa::signature::{RandomizedSigner, SignatureEncoding};
-    use rsa::RsaPrivateKey;
     use sha2::{Sha256, Sha384, Sha512};
     use spki::{AlgorithmIdentifierOwned, AlgorithmIdentifierRef};
 
@@ -124,27 +119,34 @@ mod tests {
         }
     }
 
-    fn key_pair() -> (RsaPrivateKey, Vec<u8>) {
-        let (private_der, public_der) = crate::rsa::generate_rsa_keypair(2048).unwrap();
+    fn public_vectors() -> [serde_json::Value; 3] {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/pss_algorithm_identifier_public.json"
+        ))
+        .unwrap()
+    }
+
+    fn signed_case(vector: &serde_json::Value) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         (
-            RsaPrivateKey::from_pkcs8_der(&private_der).unwrap(),
-            public_der,
+            hex::decode(vector["public_key_der_hex"].as_str().unwrap()).unwrap(),
+            vector["message_utf8"].as_str().unwrap().as_bytes().to_vec(),
+            hex::decode(vector["signature_hex"].as_str().unwrap()).unwrap(),
         )
     }
 
     #[test]
     fn verifies_sha256_pss_with_declared_non_default_salt() {
-        let (private_key, public_der) = key_pair();
-        let message = b"parameter-aware PS256";
-        let signature: Signature = SigningKey::<Sha256>::new_with_salt_len(private_key, 17)
-            .sign_with_rng(&mut OsRng, message);
+        let [vector, _, _] = public_vectors();
+        assert_eq!(vector["digest"], "SHA256");
+        assert_eq!(vector["salt_len"], 17);
+        let (public_der, message, signature) = signed_case(&vector);
         let identifier = pss_identifier(&RsaPssParams::new::<Sha256>(17));
 
         assert!(verify_signature_with_algorithm_identifier(
             &identifier,
             &public_der,
-            message,
-            &signature.to_bytes(),
+            &message,
+            &signature,
         )
         .unwrap());
 
@@ -152,35 +154,34 @@ mod tests {
         assert!(!verify_signature_with_algorithm_identifier(
             &wrong_salt,
             &public_der,
-            message,
-            &signature.to_bytes(),
+            &message,
+            &signature,
         )
         .unwrap());
     }
 
     #[test]
     fn verifies_sha384_and_sha512_pss_parameters() {
-        let message = b"parameter-aware PSS";
-
-        let (private_key, public_der) = key_pair();
-        let signature: Signature = SigningKey::<Sha384>::new_with_salt_len(private_key, 29)
-            .sign_with_rng(&mut OsRng, message);
+        let [_, ps384, ps512] = public_vectors();
+        assert_eq!(ps384["digest"], "SHA384");
+        assert_eq!(ps384["salt_len"], 29);
+        let (public_der, message, signature) = signed_case(&ps384);
         assert!(verify_signature_with_algorithm_identifier(
             &pss_identifier(&RsaPssParams::new::<Sha384>(29)),
             &public_der,
-            message,
-            &signature.to_bytes(),
+            &message,
+            &signature,
         )
         .unwrap());
 
-        let (private_key, public_der) = key_pair();
-        let signature: Signature = SigningKey::<Sha512>::new_with_salt_len(private_key, 33)
-            .sign_with_rng(&mut OsRng, message);
+        assert_eq!(ps512["digest"], "SHA512");
+        assert_eq!(ps512["salt_len"], 33);
+        let (public_der, message, signature) = signed_case(&ps512);
         assert!(verify_signature_with_algorithm_identifier(
             &pss_identifier(&RsaPssParams::new::<Sha512>(33)),
             &public_der,
-            message,
-            &signature.to_bytes(),
+            &message,
+            &signature,
         )
         .unwrap());
     }

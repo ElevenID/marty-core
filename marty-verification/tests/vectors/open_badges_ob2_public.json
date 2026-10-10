@@ -1,0 +1,26 @@
+{
+  "credential": {
+    "@context": "https://w3id.org/openbadges/v2",
+    "badge": "urn:uuid:badge-2",
+    "id": "urn:uuid:ob2-public-vector",
+    "recipient": {
+      "hash": "sha256",
+      "hashed": true,
+      "identity": "479423002f879a3e46be190d12da0225ae1fbff1dcc92446c4c836cd2826e9f8",
+      "salt": "conformance-salt",
+      "type": "email"
+    },
+    "signature": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDpleGFtcGxlOm9iMi1pc3N1ZXIja2V5LTEifQ.eyJAY29udGV4dCI6Imh0dHBzOi8vdzNpZC5vcmcvb3BlbmJhZGdlcy92MiIsInR5cGUiOiJBc3NlcnRpb24iLCJpZCI6InVybjp1dWlkOm9iMi1wdWJsaWMtdmVjdG9yIiwiYmFkZ2UiOiJ1cm46dXVpZDpiYWRnZS0yIiwicmVjaXBpZW50Ijp7InR5cGUiOiJlbWFpbCIsImhhc2hlZCI6dHJ1ZSwic2FsdCI6ImNvbmZvcm1hbmNlLXNhbHQiLCJpZGVudGl0eSI6IjQ3OTQyMzAwMmY4NzlhM2U0NmJlMTkwZDEyZGEwMjI1YWUxZmJmZjFkY2M5MjQ0NmM0YzgzNmNkMjgyNmU5ZjgiLCJoYXNoIjoic2hhMjU2In19.-sEwJVfOj0YGIZIXukox3pB6cPiygeJNmG_pKtLQ45GgLcxu4jDIcGF9pM5YBinsm9zMdYs0sI0rjqA5YoPGBQ",
+    "type": "Assertion",
+    "verification": {
+      "creator": "did:example:ob2-issuer#key-1",
+      "type": "signed"
+    }
+  },
+  "public_jwk": {
+    "crv": "Ed25519",
+    "kid": "did:example:ob2-issuer#key-1",
+    "kty": "OKP",
+    "x": "Pt0y_IJbrRwgGpkOZcMmF9Pjsl-r9ZSDmEAUw5mRuzw"
+  }
+}

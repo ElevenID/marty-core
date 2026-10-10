@@ -1072,50 +1072,6 @@ pub fn generate_ec_p256() -> VerificationResult<Jwk> {
     })
 }
 
-/// Generate a new EC P-384 JWK.
-#[cfg(test)]
-pub fn generate_ec_p384() -> VerificationResult<Jwk> {
-    use elliptic_curve::sec1::ToEncodedPoint;
-    use p384::SecretKey;
-    use rand::rngs::OsRng;
-
-    let secret = SecretKey::random(&mut OsRng);
-    let public = secret.public_key();
-    let point = public.to_encoded_point(false);
-
-    let x = point
-        .x()
-        .ok_or_else(|| VerificationError::internal("Failed to get x coordinate".to_string()))?;
-    let y = point
-        .y()
-        .ok_or_else(|| VerificationError::internal("Failed to get y coordinate".to_string()))?;
-
-    Ok(Jwk {
-        kty: "EC".to_string(),
-        crv: Some("P-384".to_string()),
-        x: Some(URL_SAFE_NO_PAD.encode(x)),
-        y: Some(URL_SAFE_NO_PAD.encode(y)),
-        d: Some(URL_SAFE_NO_PAD.encode(secret.to_bytes())),
-        ..Default::default()
-    })
-}
-
-/// Generate a new Ed25519 JWK.
-#[cfg(test)]
-pub fn generate_ed25519() -> VerificationResult<Jwk> {
-    use ed25519_dalek::SigningKey;
-
-    let keypair = SigningKey::generate(&mut rand::rngs::OsRng);
-
-    Ok(Jwk {
-        kty: "OKP".to_string(),
-        crv: Some("Ed25519".to_string()),
-        x: Some(URL_SAFE_NO_PAD.encode(keypair.verifying_key().to_bytes())),
-        d: Some(URL_SAFE_NO_PAD.encode(keypair.to_bytes())),
-        ..Default::default()
-    })
-}
-
 /// Generate a new X25519 JWK.
 #[cfg(test)]
 pub fn generate_x25519() -> VerificationResult<Jwk> {
@@ -1130,21 +1086,6 @@ pub fn generate_x25519() -> VerificationResult<Jwk> {
         crv: Some("X25519".to_string()),
         x: Some(URL_SAFE_NO_PAD.encode(public.as_bytes())),
         d: Some(URL_SAFE_NO_PAD.encode(secret.to_bytes())),
-        ..Default::default()
-    })
-}
-
-/// Generate a new symmetric key JWK.
-#[cfg(test)]
-pub fn generate_symmetric(size: usize) -> VerificationResult<Jwk> {
-    use rand::RngCore;
-
-    let mut key = vec![0u8; size];
-    rand::rngs::OsRng.fill_bytes(&mut key);
-
-    Ok(Jwk {
-        kty: "oct".to_string(),
-        k: Some(URL_SAFE_NO_PAD.encode(&key)),
         ..Default::default()
     })
 }
@@ -1169,24 +1110,6 @@ pub fn import_ed25519_public(bytes: &[u8]) -> VerificationResult<Jwk> {
     })
 }
 
-/// Import an Ed25519 private key from raw bytes.
-#[cfg(test)]
-pub fn import_ed25519_private(secret: &[u8], public: &[u8]) -> VerificationResult<Jwk> {
-    if secret.len() != 32 || public.len() != 32 {
-        return Err(VerificationError::internal(
-            "Ed25519 keys must be 32 bytes each".to_string(),
-        ));
-    }
-
-    Ok(Jwk {
-        kty: "OKP".to_string(),
-        crv: Some("Ed25519".to_string()),
-        x: Some(URL_SAFE_NO_PAD.encode(public)),
-        d: Some(URL_SAFE_NO_PAD.encode(secret)),
-        ..Default::default()
-    })
-}
-
 /// Export an Ed25519 public key to raw bytes.
 pub fn export_ed25519_public(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
     if jwk.kty != "OKP" || jwk.crv.as_deref() != Some("Ed25519") {
@@ -1202,24 +1125,6 @@ pub fn export_ed25519_public(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
 
     URL_SAFE_NO_PAD
         .decode(x)
-        .map_err(|e| VerificationError::internal(format!("Invalid base64url: {}", e)))
-}
-
-/// Export an Ed25519 private key to raw bytes.
-#[cfg(test)]
-pub fn export_ed25519_private(jwk: &Jwk) -> VerificationResult<Vec<u8>> {
-    if jwk.kty != "OKP" || jwk.crv.as_deref() != Some("Ed25519") {
-        return Err(VerificationError::internal(
-            "Not an Ed25519 key".to_string(),
-        ));
-    }
-
-    let d = jwk.d.as_ref().ok_or_else(|| {
-        VerificationError::internal("Ed25519 key missing d (private key)".to_string())
-    })?;
-
-    URL_SAFE_NO_PAD
-        .decode(d)
         .map_err(|e| VerificationError::internal(format!("Invalid base64url: {}", e)))
 }
 
@@ -1247,38 +1152,29 @@ pub fn base64url_decode(data: &str) -> VerificationResult<Vec<u8>> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_generate_ec_p256() {
-        let jwk = generate_ec_p256().unwrap();
-        assert_eq!(jwk.kty, "EC");
-        assert_eq!(jwk.crv, Some("P-256".to_string()));
-        assert!(jwk.x.is_some());
-        assert!(jwk.y.is_some());
-        assert!(jwk.d.is_some());
-        assert!(jwk.is_private());
+    fn public_ec_p256() -> Jwk {
+        Jwk {
+            kty: "EC".to_string(),
+            crv: Some("P-256".to_string()),
+            x: Some(marty_crypto_test_support::P256_PUBLIC_JWK_X.to_string()),
+            y: Some(marty_crypto_test_support::P256_PUBLIC_JWK_Y.to_string()),
+            ..Default::default()
+        }
     }
 
-    #[test]
-    fn test_generate_ed25519() {
-        let jwk = generate_ed25519().unwrap();
-        assert_eq!(jwk.kty, "OKP");
-        assert_eq!(jwk.crv, Some("Ed25519".to_string()));
-        assert!(jwk.x.is_some());
-        assert!(jwk.d.is_some());
-        assert!(jwk.is_private());
-    }
-
-    #[test]
-    fn test_generate_symmetric() {
-        let jwk = generate_symmetric(32).unwrap();
-        assert_eq!(jwk.kty, "oct");
-        assert!(jwk.k.is_some());
-        assert!(jwk.is_symmetric());
+    fn public_ed25519() -> Jwk {
+        Jwk {
+            kty: "OKP".to_string(),
+            crv: Some("Ed25519".to_string()),
+            x: Some(marty_crypto_test_support::ED25519_PUBLIC_JWK_X.to_string()),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn test_to_public() {
-        let private = generate_ec_p256().unwrap();
+        let mut private = public_ec_p256();
+        private.d = Some("synthetic-private-marker".to_string());
         let public = private.to_public();
 
         assert!(private.is_private());
@@ -1300,7 +1196,7 @@ mod tests {
 
     #[test]
     fn test_json_roundtrip() {
-        let original = generate_ec_p256().unwrap();
+        let original = public_ec_p256();
         let json = original.to_json().unwrap();
         let parsed = Jwk::from_json(&json).unwrap();
 
@@ -1313,7 +1209,7 @@ mod tests {
 
     #[test]
     fn test_thumbprint() {
-        let jwk = generate_ec_p256().unwrap();
+        let jwk = public_ec_p256();
         let thumbprint = jwk.thumbprint().unwrap();
 
         // Thumbprint should be base64url-encoded SHA-256 (43 chars without padding)
@@ -1328,11 +1224,11 @@ mod tests {
     fn test_jwk_set() {
         let mut set = JwkSet::new();
 
-        let mut key1 = generate_ec_p256().unwrap();
+        let mut key1 = public_ec_p256();
         key1.kid = Some("key-1".to_string());
         key1.alg = Some("ES256".to_string());
 
-        let mut key2 = generate_ed25519().unwrap();
+        let mut key2 = public_ed25519();
         key2.kid = Some("key-2".to_string());
         key2.alg = Some("EdDSA".to_string());
 
@@ -1348,28 +1244,28 @@ mod tests {
 
     #[test]
     fn test_key_type() {
-        let ec = generate_ec_p256().unwrap();
+        let ec = public_ec_p256();
         assert_eq!(ec.key_type(), KeyType::EcP256);
 
-        let ed = generate_ed25519().unwrap();
+        let ed = public_ed25519();
         assert_eq!(ed.key_type(), KeyType::Ed25519);
 
-        let sym = generate_symmetric(32).unwrap();
+        let sym = Jwk {
+            kty: "oct".to_string(),
+            k: Some("synthetic-symmetric-marker".to_string()),
+            ..Default::default()
+        };
         assert_eq!(sym.key_type(), KeyType::Symmetric);
+        assert!(sym.is_symmetric());
     }
 
     #[test]
-    fn test_import_export_ed25519() {
-        let original = generate_ed25519().unwrap();
-
+    fn test_import_export_ed25519_public() {
+        let original = public_ed25519();
         let public_bytes = export_ed25519_public(&original).unwrap();
-        let private_bytes = export_ed25519_private(&original).unwrap();
-
         assert_eq!(public_bytes.len(), 32);
-        assert_eq!(private_bytes.len(), 32);
-
-        let imported = import_ed25519_private(&private_bytes, &public_bytes).unwrap();
+        let imported = import_ed25519_public(&public_bytes).unwrap();
         assert_eq!(original.x, imported.x);
-        assert_eq!(original.d, imported.d);
+        assert!(imported.is_public());
     }
 }
