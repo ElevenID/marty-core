@@ -551,19 +551,28 @@ pub fn build_x5chain_from_pem(pem_certs: &[&[u8]]) -> VerificationResult<X5Chain
 #[cfg(test)]
 mod tests {
     use super::*;
-    use isomdl::cose::sign1::PreparedCoseSign1;
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use isomdl::definitions::device_key::cose_key::EC2Y;
-    use isomdl::definitions::device_response::{DeviceResponse, Document, Documents, Status};
-    use isomdl::definitions::device_signed::{DeviceAuth, DeviceSigned};
     use isomdl::definitions::helpers::Tag24;
-    use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, IssuerSigned, Mso, ValidityInfo};
+    use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, Mso, ValidityInfo};
     use marty_crypto_test_support::remote_certificate::{
         RemoteCertificateAlgorithm, RemoteCertificateKey,
     };
-    use p256::ecdsa::{Signature, SigningKey};
-    use signature::Signer;
+    use serde::Deserialize;
     use std::collections::BTreeMap;
     use time::{Duration, OffsetDateTime};
+
+    fn public_device_key() -> isomdl::definitions::device_key::CoseKey {
+        isomdl::definitions::device_key::CoseKey::EC2 {
+            crv: isomdl::definitions::device_key::EC2Curve::P256,
+            x: hex::decode("1e18532fd4754c02f3041d9c75ceb33b83ffd81ac7ce4fe882ccb1c98bc5896e")
+                .unwrap(),
+            y: EC2Y::Value(
+                hex::decode("a46c311c4e2ff40dd96a3653e6e45445d32dfe486eced75c7a90c6a18881c0a3")
+                    .unwrap(),
+            ),
+        }
+    }
 
     fn document_signer_certificate(
         is_ca: rcgen::IsCa,
@@ -649,13 +658,7 @@ mod tests {
         );
         let namespaces = NonEmptyMap::try_from(namespace_items).unwrap();
 
-        let signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
-        let point = signing_key.verifying_key().to_encoded_point(false);
-        let device_key = isomdl::definitions::device_key::CoseKey::EC2 {
-            crv: isomdl::definitions::device_key::EC2Curve::P256,
-            x: point.x().unwrap().to_vec(),
-            y: EC2Y::Value(point.y().unwrap().to_vec()),
-        };
+        let device_key = public_device_key();
         let now = OffsetDateTime::now_utc();
         let mso = Mso {
             version: "1.0".to_string(),
@@ -746,12 +749,59 @@ mod tests {
         device_response_fixture_with_encoding(session_transcript, None)
     }
 
+    #[derive(Deserialize)]
+    struct PublicMdlVectors {
+        schema_version: u8,
+        canonical_response_cbor_base64: String,
+        nonpreferred_response_cbor_base64: String,
+    }
+
     fn device_response_fixture_with_encoding(
         session_transcript: &ExternalSessionTranscript,
         raw_session_transcript_cbor: Option<&[u8]>,
     ) -> (Vec<u8>, Vec<u8>) {
-        let signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
-        let point = signing_key.verifying_key().to_encoded_point(false);
+        let canonical = isomdl::cbor::to_vec(session_transcript).unwrap();
+        let expected = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![1_u8; 32]),
+            ]),
+        ]));
+        assert_eq!(canonical, isomdl::cbor::to_vec(&expected).unwrap());
+        let mut nonpreferred = canonical.clone();
+        let null_offset = canonical.iter().position(|byte| *byte == 0xf6).unwrap();
+        nonpreferred.splice(null_offset..=null_offset, [0xf8, 0x16]);
+
+        // Fixed public DeviceResponse vectors retain the signed, exact-byte
+        // transcript checks without creating a holder key in this process.
+        let vectors: PublicMdlVectors =
+            serde_json::from_str(include_str!("fixtures/mdl_device_public_responses.json"))
+                .unwrap();
+        assert_eq!(vectors.schema_version, 1);
+        let (response, transcript) = match raw_session_transcript_cbor {
+            Some(raw) => {
+                assert_eq!(raw, nonpreferred);
+                (vectors.nonpreferred_response_cbor_base64, raw.to_vec())
+            }
+            None => (vectors.canonical_response_cbor_base64, canonical),
+        };
+        (STANDARD.decode(response).unwrap(), transcript)
+    }
+
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped mDL holder signer"]
+    fn fresh_remote_holder_signature_binds_mdl_transcript() {
+        use isomdl::cose::sign1::PreparedCoseSign1;
+        use isomdl::definitions::device_response::{DeviceResponse, Document, Documents, Status};
+        use isomdl::definitions::device_signed::{DeviceAuth, DeviceSigned};
+        use isomdl::definitions::IssuerSigned;
+        use marty_crypto_test_support::openbao_transit::DisposableOpenBao;
+
+        let bao = DisposableOpenBao::from_marked_env();
+        let signer = bao.create_es256();
+        let point = signer.verifying_key().to_encoded_point(false);
         let device_key = isomdl::definitions::device_key::CoseKey::EC2 {
             crv: isomdl::definitions::device_key::EC2Curve::P256,
             x: point.x().unwrap().to_vec(),
@@ -775,48 +825,48 @@ mod tests {
                 expected_update: None,
             },
         };
-        let tagged_mso = Tag24::new(mso).unwrap();
-        let mso_bytes = isomdl::cbor::to_vec(&tagged_mso).unwrap();
         let issuer_auth = PreparedCoseSign1::new(
-            coset::CoseSign1Builder::new().payload(mso_bytes),
+            coset::CoseSign1Builder::new()
+                .payload(isomdl::cbor::to_vec(&Tag24::new(mso).unwrap()).unwrap()),
             None,
             None,
             true,
         )
         .unwrap()
         .finalize(vec![0_u8; 64]);
+        let transcript = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![3_u8; 32]),
+            ]),
+        ]));
+        let transcript_cbor = isomdl::cbor::to_vec(&transcript).unwrap();
         let namespaces = Tag24::new(BTreeMap::new()).unwrap();
-        let detached_payload = match raw_session_transcript_cbor {
-            Some(raw) => {
-                raw_device_authentication_fixture(raw, "org.iso.18013.5.1.mDL", &namespaces)
-            }
-            None => {
-                let device_authentication = Tag24::new(
-                    isomdl::definitions::device_signed::DeviceAuthentication::new(
-                        session_transcript.clone(),
-                        "org.iso.18013.5.1.mDL".to_string(),
-                        namespaces.clone(),
-                    ),
-                )
-                .unwrap();
-                isomdl::cbor::to_vec(&device_authentication).unwrap()
-            }
-        };
-        let prepared_device_signature = PreparedCoseSign1::new(
+        let detached = isomdl::cbor::to_vec(
+            &Tag24::new(
+                isomdl::definitions::device_signed::DeviceAuthentication::new(
+                    transcript,
+                    "org.iso.18013.5.1.mDL".to_string(),
+                    namespaces.clone(),
+                ),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let prepared = PreparedCoseSign1::new(
             coset::CoseSign1Builder::new().protected(
                 coset::HeaderBuilder::new()
                     .algorithm(coset::iana::Algorithm::ES256)
                     .build(),
             ),
-            Some(&detached_payload),
+            Some(&detached),
             None,
             false,
         )
         .unwrap();
-        let signature: Signature = signing_key
-            .try_sign(prepared_device_signature.signature_payload())
-            .unwrap();
-        let device_signature = prepared_device_signature.finalize(signature.to_vec());
+        let signature = signer.sign_es256(prepared.signature_payload()).unwrap();
         let response = DeviceResponse {
             version: DeviceResponse::VERSION.to_string(),
             documents: Some(Documents::new(Document {
@@ -827,42 +877,34 @@ mod tests {
                 },
                 device_signed: DeviceSigned {
                     namespaces,
-                    device_auth: DeviceAuth::DeviceSignature(device_signature),
+                    device_auth: DeviceAuth::DeviceSignature(prepared.finalize(signature)),
                 },
                 errors: None,
             })),
             document_errors: None,
             status: Status::OK,
         };
-        let transcript_cbor = raw_session_transcript_cbor
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| isomdl::cbor::to_vec(session_transcript).unwrap());
-        (isomdl::cbor::to_vec(&response).unwrap(), transcript_cbor)
-    }
-
-    fn raw_device_authentication_fixture(
-        session_transcript_cbor: &[u8],
-        doc_type: &str,
-        namespaces: &isomdl::definitions::device_signed::DeviceNamespacesBytes,
-    ) -> Vec<u8> {
-        let mut inner = vec![0x84];
-        inner.extend(isomdl::cbor::to_vec(&"DeviceAuthentication").unwrap());
-        inner.extend_from_slice(session_transcript_cbor);
-        inner.extend(isomdl::cbor::to_vec(&doc_type).unwrap());
-        inner.extend(isomdl::cbor::to_vec(namespaces).unwrap());
-
-        let mut tagged = vec![0xd8, 0x18];
-        match inner.len() {
-            0..=23 => tagged.push(0x40 | inner.len() as u8),
-            24..=0xff => tagged.extend([0x58, inner.len() as u8]),
-            0x100..=0xffff => {
-                tagged.push(0x59);
-                tagged.extend((inner.len() as u16).to_be_bytes());
-            }
-            _ => panic!("test fixture unexpectedly exceeds 65535 bytes"),
-        }
-        tagged.extend(inner);
-        tagged
+        let response = isomdl::cbor::to_vec(&response).unwrap();
+        assert!(
+            verify_device_authentication(&response, &transcript_cbor)
+                .unwrap()
+                .verified
+        );
+        let changed = ExternalSessionTranscript(ciborium::Value::Array(vec![
+            ciborium::Value::Null,
+            ciborium::Value::Null,
+            ciborium::Value::Array(vec![
+                ciborium::Value::Text("OpenID4VPHandover".to_string()),
+                ciborium::Value::Bytes(vec![4_u8; 32]),
+            ]),
+        ]));
+        let changed_cbor = isomdl::cbor::to_vec(&changed).unwrap();
+        assert_eq!(
+            verify_device_authentication(&response, &changed_cbor)
+                .unwrap_err()
+                .code(),
+            crate::error::codes::AUTH_DEVICE_FAILED
+        );
     }
 
     #[test]

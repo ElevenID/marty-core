@@ -71,6 +71,11 @@ if [[ "${MARTY_TEST_REMOTE_STATUS_ONLY:-0}" == '1' ]]; then
     open_badges::status::tests -- --ignored
   exit 0
 fi
+if [[ "${MARTY_TEST_REMOTE_MDL_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked -p marty-verification --lib \
+    verification::mdl::tests::fresh_remote_holder_signature_binds_mdl_transcript -- --ignored
+  exit 0
+fi
 if [[ "${MARTY_TEST_ZK_MDOC:-0}" == '1' ]]; then
   features+=',zk_mdoc'
 fi
