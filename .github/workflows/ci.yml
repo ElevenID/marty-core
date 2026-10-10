@@ -188,6 +188,16 @@ jobs:
           cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys
           cargo test --locked -p marty-bindings --no-default-features --features didcomm-encrypted-envelope encrypted_envelope_module_exposes_anoncrypt_only
           cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope
+      - name: Qualify external HAIP encryption with opaque session decryption
+        if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-verification')
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/haip-python"
+          "$RUNNER_TEMP/haip-python/bin/python" -m pip install --disable-pip-version-check cryptography==50.0.1
+          MARTY_TEST_HAIP_PYTHON="$RUNNER_TEMP/haip-python/bin/python" \
+            cargo test --locked -p marty-verification --lib --no-default-features \
+              --features ephemeral-session-keys \
+              opaque_haip_session_decrypts_external_python_jwe -- --ignored
       - name: Smoke marty-oid4vci benchmarks
         if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-oid4vci')
         env:
