@@ -241,23 +241,35 @@ fn extract_named_curve_point(
 /// Normalize an ES256, ES384, or ES512 signature to fixed-width IEEE P1363/JOSE form.
 ///
 /// Provider APIs commonly return ASN.1 DER while JWS and COSE use `r || s`.
-/// Already-normalized signatures are accepted only at the exact curve width;
-/// malformed DER and unsupported algorithms fail closed.
+/// Already-normalized signatures require the exact curve width and valid
+/// scalars; malformed DER and unsupported algorithms fail closed.
 pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Vec<u8>> {
     match algorithm {
-        "ES256" if signature.len() == 64 => Ok(signature.to_vec()),
+        "ES256" if signature.len() == 64 => P256Signature::from_slice(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES256 signature encoding: {error}"))
+            }),
         "ES256" => p256::ecdsa::Signature::from_der(signature)
             .map(|value| value.to_bytes().to_vec())
             .map_err(|error| {
                 CryptoError::invalid_signature(format!("Invalid ES256 signature encoding: {error}"))
             }),
-        "ES384" if signature.len() == 96 => Ok(signature.to_vec()),
+        "ES384" if signature.len() == 96 => P384Signature::from_slice(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES384 signature encoding: {error}"))
+            }),
         "ES384" => p384::ecdsa::Signature::from_der(signature)
             .map(|value| value.to_bytes().to_vec())
             .map_err(|error| {
                 CryptoError::invalid_signature(format!("Invalid ES384 signature encoding: {error}"))
             }),
-        "ES512" if signature.len() == 132 => Ok(signature.to_vec()),
+        "ES512" if signature.len() == 132 => P521Signature::from_slice(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES512 signature encoding: {error}"))
+            }),
         "ES512" => p521::ecdsa::Signature::from_der(signature)
             .map(|value| value.to_bytes().to_vec())
             .map_err(|error| {
@@ -307,6 +319,7 @@ mod signature_format_tests {
             assert_eq!(normalize_signature(&der, algorithm).unwrap(), raw);
             assert!(raw_signature_to_der(&raw[..raw.len() - 1], algorithm).is_err());
             assert!(raw_signature_to_der(&vec![0; width * 2], algorithm).is_err());
+            assert!(normalize_signature(&vec![0; width * 2], algorithm).is_err());
         }
         assert!(raw_signature_to_der(&[0; 64], "ES256K").is_err());
     }
