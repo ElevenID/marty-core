@@ -10,8 +10,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/99
-    review-after: 2026-10-08
-    rationale: Re-reviewed 2026-09-08. The certificate, SPKI, signature, elliptic-curve, and RSA crates must move as one compatibility set. x509-cert 0.3, der 0.8, signature 3, and elliptic-curve 0.14 are stable, but the compatible RSA 0.10 line remains a release candidate. Updating their major versions independently creates duplicate, incompatible signature, SPKI, and rand trait implementations and breaks certificate and signing paths. ElevenID retains the current stable set until RSA stabilizes, then will qualify the coordinated stack against the existing RSA, certificate, JOSE, passport, mdoc, and Python conformance tests. No RSA functionality is being removed.
+    review-after: 2026-11-11
+    rationale: Re-reviewed 2026-10-11 against crates.io and the locked workspace. The certificate, SPKI, signature, elliptic-curve, and RSA crates must move as one compatibility set. x509-cert 0.3, der 0.8, signature 3, and elliptic-curve 0.14 are stable, but RSA 0.10.0-rc.19 is still a release candidate; 0.9.10 remains the latest stable RSA release and is locked here. Updating their major versions independently creates duplicate, incompatible signature, SPKI, and rand trait implementations and breaks certificate and signing paths. ElevenID retains the current stable set until RSA stabilizes, then will qualify the coordinated stack against the existing RSA, certificate, JOSE, passport, mdoc, and Python conformance tests. No RSA functionality is being removed.
   - package: affinidi-messaging-didcomm
     ecosystem: rust
     owner: ElevenID
@@ -22,8 +22,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/99
-    review-after: 2026-10-08
-    rationale: Re-reviewed 2026-09-08. Version 0.14.0 is the first release with the corrected ECDH-1PU tag KDF and supplies the DIDComm 2.1 envelope implementation without introducing duplicate RustCrypto major versions. Marty uses its anoncrypt boundary today. The current 0.15.8 release requires Rust 1.95 plus ed25519-dalek 3 and the 0.14 elliptic-curve family, so upgrade it in the same change that moves the workspace to that coordinated RustCrypto stack; do not carry two production crypto stacks merely to raise this package version.
+    review-after: 2026-11-11
+    rationale: Re-reviewed 2026-10-11 against crates.io and the locked workspace. Version 0.14.0 remains locked and supplies the corrected ECDH-1PU tag KDF and DIDComm 2.1 envelope implementation without introducing duplicate RustCrypto major versions. Marty uses its anoncrypt boundary today. The latest 0.15.10 release requires Rust 1.95 plus ed25519-dalek 3, p256/k256 0.14, rand 0.10, and sha2 0.11; upgrade it with the coordinated RustCrypto stack rather than carry two production crypto generations merely to raise this package version.
   - package: ssi subcrates
     ecosystem: rust
     owner: ElevenID
