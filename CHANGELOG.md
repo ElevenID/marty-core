@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-11
+
 ### Added
 
 - Add caller-ordered remote SD-JWT batch preparation to Rust and Python. The
   batch validates all requests before allocating source values, uses the shared
   disclosure pipeline with one digest call, and returns existing opaque signing
   handles. Add a sequential versus batch issuance benchmark.
+- Add the isolated offline X.509 verification kernel and headless verifier
+  while preserving the public verification facade.
+
+### Security
+
+- Require KMS-only issuer signing and DIDComm sender agreement through scoped,
+  versioned remote references. Remove remaining production private-key import,
+  export, generation, and signing entry points and reject private-key material
+  at verification and discovery inputs.
+- Replace issuer and certificate test signing with public signed vectors or
+  disposable remote signers. Keep passport and wallet session agreement
+  ephemeral and explicitly scoped.
 
 ## [0.2.0] - 2026-09-21
 
