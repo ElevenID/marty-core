@@ -40,6 +40,12 @@ fn assert_valid(label: &str, result_json: &str) {
     );
 }
 
+fn assert_invalid(label: &str, result_json: &str) {
+    let value: Value = serde_json::from_str(result_json)
+        .unwrap_or_else(|e| panic!("{} output is not JSON: {}", label, e));
+    assert_eq!(value.get("valid").and_then(Value::as_bool), Some(false));
+}
+
 #[test]
 fn ob2_verify_external_fixture() {
     // Fixture must be a JSON request accepted by verify_ob2_json:
@@ -51,6 +57,24 @@ fn ob2_verify_external_fixture() {
 
     let result = verify_ob2_json(&request).expect("OB2 fixture verification failed");
     assert_valid("OB2 fixture", &result);
+
+    let mut tampered: Value = serde_json::from_str(&request).unwrap();
+    tampered["assertion"]
+        .as_object_mut()
+        .unwrap()
+        .remove("@context");
+    let result = verify_ob2_json(&tampered.to_string()).expect("OB2 tampered request failed");
+    assert_invalid("OB2 tampered fixture", &result);
+}
+
+#[test]
+#[ignore = "known gap: OB2 assertion id edit is currently accepted; awaiting payload-binding review"]
+fn ob2_assertion_id_payload_binding_gap() {
+    let request = load_request(OB2_VERIFY_REQUEST_ENV, OB2_FIXTURE_PATH).unwrap();
+    let mut tampered: Value = serde_json::from_str(&request).unwrap();
+    tampered["assertion"]["id"] = Value::from("urn:uuid:tampered");
+    let result = verify_ob2_json(&tampered.to_string()).unwrap();
+    assert_invalid("OB2 assertion-id edit", &result);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,4 +89,9 @@ fn ob3_verify_external_fixture() {
 
     let result = verify_ob3_json(&request).expect("OB3 fixture verification failed");
     assert_valid("OB3 fixture", &result);
+
+    let mut tampered: Value = serde_json::from_str(&request).unwrap();
+    tampered["credential"]["credentialSubject"]["achievement"]["name"] = Value::from("Tampered");
+    let result = verify_ob3_json(&tampered.to_string()).expect("OB3 tampered request failed");
+    assert_invalid("OB3 tampered fixture", &result);
 }

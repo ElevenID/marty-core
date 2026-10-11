@@ -244,6 +244,9 @@ jobs:
           python -m pip install --disable-pip-version-check \
             --force-reinstall --no-deps "${wheels[0]}"
           python scripts/check_python_wheel_import.py "${{ matrix.package }}"
+          if [[ "${{ matrix.package }}" == "marty-verification" ]]; then
+            python scripts/check_verifier_offline_wheel_consumer.py
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}-${{ matrix.target }}
