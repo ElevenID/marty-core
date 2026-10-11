@@ -125,6 +125,18 @@ jobs:
         run: |
           cargo clippy --locked -p marty-verification --features eudi-client --all-targets -- -D warnings
           cargo test --locked -p marty-verification --features eudi-client --lib
+      - name: Qualify the isolated headless verifier consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p marty-headless-verifier
+          cargo build --locked -p marty-headless-verifier
+          bundle="$RUNNER_TEMP/headless-consumer"
+          mkdir -p "$bundle/bin" "$bundle/samples"
+          cp target/debug/marty-headless-verify "$bundle/bin/"
+          cp marty-headless-verifier/samples/*.json "$bundle/samples/"
+          cp marty-headless-verifier/scripts/acceptance.sh "$bundle/"
+          bash "$bundle/acceptance.sh" "$bundle"
 
   affected-tests:
     name: Affected Rust Tests
