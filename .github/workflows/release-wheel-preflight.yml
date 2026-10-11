@@ -18,8 +18,15 @@ on:
       - "marty-iso18013/src/**"
       - "marty-verification/python/**"
       - "marty-verification/src/**"
+      - "marty-verification/tests/fixtures/open_badges/ob2_verify_request.json"
+      - "marty-verification/tests/fixtures/open_badges/ob3_verify_request.json"
+      - "marty-verification/tests/open_badges_interop.rs"
       - "scripts/check_python_wheel_import.py"
       - "scripts/test_check_python_wheel_import.py"
+      - "scripts/check_verifier_clean_wheel_consumer.py"
+      - "scripts/test_check_verifier_clean_wheel_consumer.py"
+      - "scripts/check_verifier_offline_wheel_consumer.py"
+      - "scripts/test_check_verifier_offline_wheel_consumer.py"
 
 concurrency:
   group: release-wheel-preflight-${{ github.event.pull_request.number }}
@@ -77,3 +84,6 @@ jobs:
           python -m pip install --disable-pip-version-check \
             --force-reinstall --no-deps "${wheels[0]}"
           python scripts/check_python_wheel_import.py "${{ matrix.package }}"
+          if [[ "${{ matrix.package }}" == "marty-verification" ]]; then
+            python scripts/check_verifier_clean_wheel_consumer.py "${wheels[0]}"
+          fi

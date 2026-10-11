@@ -185,6 +185,21 @@ class ReleaseWheelImportPolicyTests(unittest.TestCase):
                     any("must trigger preflight" in error for error in errors)
                 )
 
+    def test_preflight_paths_cover_verifier_consumer_fixtures(self) -> None:
+        checked_in = (
+            ROOT / ".github" / "workflows" / "release-wheel-preflight.yml"
+        ).read_text(encoding="utf-8")
+        for fixture in ("ob2_verify_request.json", "ob3_verify_request.json"):
+            with self.subTest(fixture=fixture):
+                path = f'marty-verification/tests/fixtures/open_badges/{fixture}'
+                preflight = checked_in.replace(f'      - "{path}"\n', "")
+                errors = check_release_contract.check_release_wheel_import_policy(
+                    preflight_text=preflight
+                )
+                self.assertTrue(
+                    any("must trigger preflight" in error for error in errors)
+                )
+
 
 class StableTagGateContractTests(unittest.TestCase):
     def test_checked_in_stable_tag_gate_is_complete(self) -> None:
