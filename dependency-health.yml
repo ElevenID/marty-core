@@ -9,9 +9,9 @@ dependencies:
     status: watch
     decision: retain
     advisories: []
-    tracking-issue: https://github.com/ElevenID/marty-core/issues/99
-    review-after: 2026-10-08
-    rationale: Re-reviewed 2026-09-08. The certificate, SPKI, signature, elliptic-curve, and RSA crates must move as one compatibility set. x509-cert 0.3, der 0.8, signature 3, and elliptic-curve 0.14 are stable, but the compatible RSA 0.10 line remains a release candidate. Updating their major versions independently creates duplicate, incompatible signature, SPKI, and rand trait implementations and breaks certificate and signing paths. ElevenID retains the current stable set until RSA stabilizes, then will qualify the coordinated stack against the existing RSA, certificate, JOSE, passport, mdoc, and Python conformance tests. No RSA functionality is being removed.
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/361
+    review-after: 2026-10-18
+    rationale: Re-reviewed 2026-10-11 against crates.io registry metadata (https://crates.io/api/v1/crates/rsa and https://crates.io/api/v1/crates/rsa/0.10.0-rc.19/dependencies). x509-cert 0.3.0, der 0.8.2, signature 3.0.0, and elliptic-curve 0.14.1 are stable, but rsa 0.10.0-rc.19 published 2026-10-06 remains pre-release and 0.9.10 is its latest stable. The RC requires signature 3, pkcs8 0.11, and spki 0.8, so independently raising these major versions risks incompatible signature, SPKI, and rand trait graphs. Retain the tested stable set pending a coordinated candidate and RSA, certificate, JOSE, passport, mdoc, Python, and wheel qualification. Follow up in seven days because the latest RSA RC is recent; this is a review checkpoint, not migration approval. The separate rsa watch entry retains RUSTSEC-2023-0071 and its public-verification-only production boundary.
   - package: affinidi-messaging-didcomm
     ecosystem: rust
     owner: ElevenID
@@ -21,9 +21,9 @@ dependencies:
     status: maintained
     decision: retain
     advisories: []
-    tracking-issue: https://github.com/ElevenID/marty-core/issues/99
-    review-after: 2026-10-08
-    rationale: Re-reviewed 2026-09-08. Version 0.14.0 is the first release with the corrected ECDH-1PU tag KDF and supplies the DIDComm 2.1 envelope implementation without introducing duplicate RustCrypto major versions. Marty uses its anoncrypt boundary today. The current 0.15.8 release requires Rust 1.95 plus ed25519-dalek 3 and the 0.14 elliptic-curve family, so upgrade it in the same change that moves the workspace to that coordinated RustCrypto stack; do not carry two production crypto stacks merely to raise this package version.
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/361
+    review-after: 2026-10-18
+    rationale: Re-reviewed 2026-10-11 against crates.io registry metadata (https://crates.io/api/v1/crates/affinidi-messaging-didcomm and https://crates.io/api/v1/crates/affinidi-messaging-didcomm/0.15.10/dependencies). Marty retains 0.14.0 for its tested DIDComm 2.1 anoncrypt envelope and corrected ECDH-1PU tag KDF. Latest stable 0.15.10 published 2026-10-01 requires ed25519-dalek 3, p256 0.14, and rand 0.10, while the Marty workspace still uses the previous crypto family. Qualify an upgrade with the coordinated RustCrypto migration and DIDComm envelope/security tests, not as an isolated version bump. Recheck with the RustCrypto watch entry in seven days; no DIDComm capability claim changes.
   - package: ssi subcrates
     ecosystem: rust
     owner: ElevenID
