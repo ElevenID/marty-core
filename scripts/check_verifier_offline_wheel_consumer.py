@@ -7,12 +7,14 @@ sandbox or a complete verifier product/dependency-closure qualification.
 
 from __future__ import annotations
 
+import copy
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-
 
 FIXTURES = Path(__file__).resolve().parents[1] / "marty-verification/tests/fixtures/open_badges"
+OTHER_ED25519_PUBLIC_KEY = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+ISSUER_KEY_ID = "did:example:issuer#key-1"
 
 
 def deny_network(event: str, _args: tuple[object, ...]) -> None:
@@ -28,6 +30,7 @@ def verify_fixture(verify: Callable[[str], str], fixture_name: str) -> None:
 
     # Probe one signed-payload edit per format. This is not a comprehensive
     # payload-binding or trust-store authentication test.
+    wrong_key = copy.deepcopy(request)
     if fixture_name.startswith("ob2"):
         request["assertion"]["id"] = "urn:uuid:tampered"
     else:
@@ -35,6 +38,16 @@ def verify_fixture(verify: Callable[[str], str], fixture_name: str) -> None:
     negative = json.loads(verify(json.dumps(request)))
     if negative.get("valid") is not False:
         raise RuntimeError(f"{fixture_name}: negative fixture was accepted: {negative}")
+
+    # Mismatched but well-formed caller-supplied key material must not verify
+    # the fixture's signature. This does not authenticate a trust store.
+    key = wrong_key["document_store"][ISSUER_KEY_ID]["publicKeyJwk"]
+    if key.get("kty") != "OKP" or key.get("crv") != "Ed25519" or key.get("x") == OTHER_ED25519_PUBLIC_KEY:
+        raise RuntimeError(f"{fixture_name}: expected a distinct Ed25519 fixture key")
+    key["x"] = OTHER_ED25519_PUBLIC_KEY
+    wrong_key_result = json.loads(verify(json.dumps(wrong_key)))
+    if wrong_key_result.get("valid") is not False:
+        raise RuntimeError(f"{fixture_name}: mismatched issuer key was accepted: {wrong_key_result}")
 
 
 def main() -> int:
@@ -47,7 +60,7 @@ def main() -> int:
 
     verify_fixture(verifier.open_badge_ob2_verify, "ob2_verify_request.json")
     verify_fixture(verifier.open_badge_ob3_verify, "ob3_verify_request.json")
-    print("verifier-offline-wheel-consumer: OB2/OB3 positive and negative fixtures passed")
+    print("verifier-offline-wheel-consumer: OB2/OB3 positive, tamper, and wrong-key fixtures passed")
     return 0
 
 

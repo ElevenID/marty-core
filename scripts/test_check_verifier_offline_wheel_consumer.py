@@ -7,6 +7,21 @@ import check_verifier_offline_wheel_consumer as probe
 
 
 class OfflineWheelConsumerTests(unittest.TestCase):
+    def test_wrong_key_rust_fixture_changes_trigger_wheel_preflight(self) -> None:
+        workflow = probe.FIXTURES.parents[3] / ".github/workflows/release-wheel-preflight.yml"
+        self.assertIn(
+            '      - "marty-verification/tests/open_badges_interop.rs"',
+            workflow.read_text(encoding="utf-8"),
+        )
+
+    @staticmethod
+    def _recording_verifier(seen: list[dict]) -> object:
+        def fake_verify(raw: str) -> str:
+            seen.append(json.loads(raw))
+            return json.dumps({"valid": len(seen) == 1})
+
+        return fake_verify
+
     def test_rejects_socket_operations(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "network operation"):
             probe.deny_network("socket.connect", ())
@@ -17,13 +32,15 @@ class OfflineWheelConsumerTests(unittest.TestCase):
             with self.subTest(fixture=fixture):
                 seen = []
 
-                def fake_verify(raw: str) -> str:
-                    seen.append(json.loads(raw))
-                    return json.dumps({"valid": len(seen) == 1})
-
-                probe.verify_fixture(fake_verify, fixture)
-                self.assertEqual(len(seen), 2)
+                probe.verify_fixture(self._recording_verifier(seen), fixture)
+                self.assertEqual(len(seen), 3)
                 self.assertNotEqual(seen[0], seen[1])
+                self.assertEqual(seen[0]["document_store"][probe.ISSUER_KEY_ID]["publicKeyJwk"]["x"],
+                                 "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ")
+                self.assertEqual(seen[2]["document_store"][probe.ISSUER_KEY_ID]["publicKeyJwk"]["x"],
+                                 probe.OTHER_ED25519_PUBLIC_KEY)
+                self.assertEqual(seen[0]["assertion" if fixture.startswith("ob2") else "credential"],
+                                 seen[2]["assertion" if fixture.startswith("ob2") else "credential"])
                 if fixture.startswith("ob2"):
                     self.assertEqual(seen[1]["assertion"]["id"], "urn:uuid:tampered")
                 else:
@@ -38,6 +55,16 @@ class OfflineWheelConsumerTests(unittest.TestCase):
             probe.verify_fixture(lambda _: '{"valid": false}', fixture)
         with self.assertRaisesRegex(RuntimeError, "negative fixture was accepted"):
             probe.verify_fixture(lambda _: '{"valid": true}', fixture)
+
+        calls = 0
+
+        def accepts_wrong_key(_: str) -> str:
+            nonlocal calls
+            calls += 1
+            return json.dumps({"valid": calls != 2})
+
+        with self.assertRaisesRegex(RuntimeError, "mismatched issuer key was accepted"):
+            probe.verify_fixture(accepts_wrong_key, fixture)
 
 
 if __name__ == "__main__":
