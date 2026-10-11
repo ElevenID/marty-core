@@ -49,12 +49,15 @@ pub enum StateError {
     ReplayCapacity,
     #[error("replay time-to-live is invalid or exceeds the configured limit")]
     InvalidReplayTtl,
+    #[error("offline state generation is exhausted")]
+    GenerationExhausted,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
     format_version: u8,
+    generation: u64,
     trust_revision: u64,
     last_observed_seconds: u64,
     // Hex-encoded fixed-length digests only; no credential or session payloads.
@@ -74,6 +77,7 @@ impl OfflineState {
         Ok(Self {
             snapshot: Snapshot {
                 format_version: FORMAT_VERSION,
+                generation: 0,
                 trust_revision: 0,
                 last_observed_seconds: 0,
                 replay_expiry: BTreeMap::new(),
@@ -83,10 +87,13 @@ impl OfflineState {
     }
 
     /// Restore only from host-authenticated storage, using independently held
-    /// monotonic floors to reject a replaced old snapshot.
+    /// monotonic floors to reject a replaced old snapshot. The generation
+    /// floor is essential: time and trust revision may stay constant across
+    /// multiple accepted verifications.
     pub fn restore(
         json: &str,
         limits: Limits,
+        minimum_generation: u64,
         minimum_trust_revision: u64,
         minimum_observed_seconds: u64,
     ) -> Result<Self, StateError> {
@@ -98,8 +105,10 @@ impl OfflineState {
         let snapshot: Snapshot =
             serde_json::from_str(json).map_err(|_| StateError::InvalidSnapshot)?;
         if snapshot.format_version != FORMAT_VERSION
+            || snapshot.generation < minimum_generation
             || snapshot.trust_revision < minimum_trust_revision
             || snapshot.last_observed_seconds < minimum_observed_seconds
+            || (snapshot.trust_revision > 0 && snapshot.generation == 0)
             || (snapshot.trust_revision == 0 && !snapshot.replay_expiry.is_empty())
             || snapshot.replay_expiry.len() > limits.max_replay_keys
             || snapshot.replay_expiry.iter().any(|(key, expiry)| {
@@ -124,6 +133,13 @@ impl OfflineState {
         self.snapshot.trust_revision
     }
 
+    /// Advance an independently protected floor to this value before reporting
+    /// acceptance. If the floor advances but the snapshot does not, restoration
+    /// must fail closed; it must not silently reset replay history.
+    pub fn generation(&self) -> u64 {
+        self.snapshot.generation
+    }
+
     pub fn replay_len(&self) -> usize {
         self.snapshot.replay_expiry.len()
     }
@@ -139,11 +155,17 @@ impl OfflineState {
         if revision <= self.snapshot.trust_revision {
             return Err(StateError::TrustRevisionRollback);
         }
+        let next_generation = self
+            .snapshot
+            .generation
+            .checked_add(1)
+            .ok_or(StateError::GenerationExhausted)?;
         self.snapshot
             .replay_expiry
             .retain(|_, expiry| *expiry > now_seconds);
         self.snapshot.trust_revision = revision;
         self.snapshot.last_observed_seconds = now_seconds;
+        self.snapshot.generation = next_generation;
         Ok(())
     }
 
@@ -185,11 +207,17 @@ impl OfflineState {
         if live_count >= self.limits.max_replay_keys {
             return Err(StateError::ReplayCapacity);
         }
+        let next_generation = self
+            .snapshot
+            .generation
+            .checked_add(1)
+            .ok_or(StateError::GenerationExhausted)?;
         self.snapshot
             .replay_expiry
             .retain(|_, existing| *existing > now_seconds);
         self.snapshot.replay_expiry.insert(key, expiry);
         self.snapshot.last_observed_seconds = now_seconds;
+        self.snapshot.generation = next_generation;
         Ok(())
     }
 
@@ -258,17 +286,17 @@ mod tests {
         state.accept_authenticated_trust_revision(4, 100).unwrap();
         state.record_replay_key([9; 32], 101, 30).unwrap();
         let json = state.snapshot_json().unwrap();
-        let mut restored = OfflineState::restore(&json, limits(), 4, 101).unwrap();
+        let mut restored = OfflineState::restore(&json, limits(), 2, 4, 101).unwrap();
         assert_eq!(
             restored.record_replay_key([9; 32], 102, 30),
             Err(StateError::Replay)
         );
         assert!(matches!(
-            OfflineState::restore(&json, limits(), 5, 101),
+            OfflineState::restore(&json, limits(), 2, 5, 101),
             Err(StateError::InvalidSnapshot)
         ));
         assert!(matches!(
-            OfflineState::restore(&json, limits(), 4, 102),
+            OfflineState::restore(&json, limits(), 2, 4, 102),
             Err(StateError::InvalidSnapshot)
         ));
     }
@@ -281,7 +309,27 @@ mod tests {
         state.accept_authenticated_trust_revision(2, 106).unwrap();
         assert_eq!(state.replay_len(), 0);
         let json = state.snapshot_json().unwrap();
-        OfflineState::restore(&json, limits(), 2, 106).unwrap();
+        OfflineState::restore(&json, limits(), 3, 2, 106).unwrap();
+    }
+
+    #[test]
+    fn earlier_same_second_snapshot_cannot_discard_accepted_replay_key() {
+        let mut state = OfflineState::new(limits()).unwrap();
+        state.accept_authenticated_trust_revision(1, 100).unwrap();
+        state.record_replay_key([1; 32], 100, 30).unwrap();
+        let earlier = state.snapshot_json().unwrap();
+        state.record_replay_key([2; 32], 100, 30).unwrap();
+        assert_eq!(state.generation(), 3);
+        assert!(matches!(
+            OfflineState::restore(&earlier, limits(), state.generation(), 1, 100),
+            Err(StateError::InvalidSnapshot)
+        ));
+        let current = state.snapshot_json().unwrap();
+        let mut restored = OfflineState::restore(&current, limits(), 3, 1, 100).unwrap();
+        assert_eq!(
+            restored.record_replay_key([2; 32], 100, 30),
+            Err(StateError::Replay)
+        );
     }
 
     #[test]
@@ -308,11 +356,11 @@ mod tests {
             .unwrap()
             .replace("\"format_version\":1", "\"format_version\":2");
         assert!(matches!(
-            OfflineState::restore(&json, limits(), 0, 0),
+            OfflineState::restore(&json, limits(), 0, 0, 0),
             Err(StateError::InvalidSnapshot)
         ));
         assert!(matches!(
-            OfflineState::restore(&"x".repeat(449), limits(), 0, 0),
+            OfflineState::restore(&"x".repeat(449), limits(), 0, 0, 0),
             Err(StateError::InvalidSnapshot)
         ));
     }
