@@ -1182,13 +1182,14 @@ class CorePreflightSplitContractTests(unittest.TestCase):
         for step in (
             "Run clippy",
             "Check OID4VCI WASM serial fallback contract",
-            "Smoke opt-in ES256 payload matrix",
-            "Smoke opt-in mdoc payload matrix",
-            "Smoke default-off mdoc evidence binaries",
             "Exercise the EUDI trusted-list client",
         ):
             self.assertEqual(workflow.count(f"      - name: {step}"), 1)
             self.assertIn(f"      - name: {step}", lint)
+        self.assertIn('          MARTY_TEST_BENCH_AFTER_LIVE: "1"', kms)
+        self.assertIn("        run: bash scripts/test_remote_issuer_live_kms.sh", kms)
+        self.assertIn("        run: cargo test --locked -p marty-oid4vci --benches --no-run", workflow)
+        self.assertNotIn("cargo test --locked -p marty-oid4vci --bench ", workflow)
         for job in (kms, lint):
             self.assertNotIn("\n    if:", job)
             self.assertNotIn("continue-on-error:", job)
