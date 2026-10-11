@@ -6,7 +6,7 @@ use marty_x509_verification::{ErrorKind, VerificationError as KernelError};
 
 pub struct ChainValidator(marty_x509_verification::chain::ChainValidator);
 
-fn map_error(error: Box<KernelError>) -> Box<VerificationError> {
+fn map_error(error: KernelError) -> Box<VerificationError> {
     match error.kind {
         ErrorKind::Pem => VerificationError::pem_error(error.reason),
         ErrorKind::Der => VerificationError::der_error(error.reason),
@@ -27,40 +27,56 @@ impl ChainValidator {
         Self(self.0.configured(config))
     }
     pub fn add_trust_anchor_pem(&mut self, pem: &str) -> VerificationResult<()> {
-        self.0.add_trust_anchor_pem(pem).map_err(map_error)
+        self.0
+            .add_trust_anchor_pem(pem)
+            .map_err(|error| map_error(*error))
     }
     pub fn add_trust_anchor_der(&mut self, der: &[u8]) -> VerificationResult<()> {
-        self.0.add_trust_anchor_der(der).map_err(map_error)
+        self.0
+            .add_trust_anchor_der(der)
+            .map_err(|error| map_error(*error))
     }
     pub fn add_intermediate_pem(&mut self, pem: &str) -> VerificationResult<()> {
-        self.0.add_intermediate_pem(pem).map_err(map_error)
+        self.0
+            .add_intermediate_pem(pem)
+            .map_err(|error| map_error(*error))
     }
     pub fn add_intermediate_der(&mut self, der: &[u8]) -> VerificationResult<()> {
-        self.0.add_intermediate_der(der).map_err(map_error)
+        self.0
+            .add_intermediate_der(der)
+            .map_err(|error| map_error(*error))
     }
     pub fn add_crl_der(&mut self, der: &[u8]) -> VerificationResult<()> {
-        self.0.add_crl_der(der).map_err(map_error)
+        self.0.add_crl_der(der).map_err(|error| map_error(*error))
     }
     pub fn add_ocsp_response_der(&mut self, der: &[u8]) -> VerificationResult<()> {
-        self.0.add_ocsp_response_der(der).map_err(map_error)
+        self.0
+            .add_ocsp_response_der(der)
+            .map_err(|error| map_error(*error))
     }
     pub fn validate_chain(
         &self,
         chain_pem: &[String],
     ) -> VerificationResult<ChainValidationResult> {
-        self.0.validate_chain(chain_pem).map_err(map_error)
+        self.0
+            .validate_chain(chain_pem)
+            .map_err(|error| map_error(*error))
     }
     pub fn validate_chain_der(
         &self,
         chain_der: &[Vec<u8>],
     ) -> VerificationResult<ChainValidationResult> {
-        self.0.validate_chain_der(chain_der).map_err(map_error)
+        self.0
+            .validate_chain_der(chain_der)
+            .map_err(|error| map_error(*error))
     }
     pub fn validate_certificate(
         &self,
         cert_pem: &str,
     ) -> VerificationResult<ChainValidationResult> {
-        self.0.validate_certificate(cert_pem).map_err(map_error)
+        self.0
+            .validate_certificate(cert_pem)
+            .map_err(|error| map_error(*error))
     }
 }
 
@@ -98,7 +114,7 @@ mod compatibility_tests {
 
     #[test]
     fn crypto_failure_mapping_keeps_internal_error() {
-        let error = map_error(KernelError::internal("signature verification failed"));
+        let error = map_error(*KernelError::internal("signature verification failed"));
         assert!(matches!(&*error, VerificationError::Internal { .. }));
         assert_eq!(error.code(), "E999");
     }
