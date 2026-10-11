@@ -26,10 +26,10 @@ def verify_fixture(verify: Callable[[str], str], fixture_name: str) -> None:
     if result.get("valid") is not True:
         raise RuntimeError(f"{fixture_name}: valid signed fixture was rejected: {result}")
 
-    # Probe one known rejection per format. This is not a comprehensive
-    # payload-binding test.
+    # Probe one signed-payload edit per format. This is not a comprehensive
+    # payload-binding or trust-store authentication test.
     if fixture_name.startswith("ob2"):
-        del request["assertion"]["@context"]
+        request["assertion"]["id"] = "urn:uuid:tampered"
     else:
         request["credential"]["credentialSubject"]["achievement"]["name"] = "Tampered"
     negative = json.loads(verify(json.dumps(request)))

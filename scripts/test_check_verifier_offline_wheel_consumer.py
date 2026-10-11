@@ -24,6 +24,13 @@ class OfflineWheelConsumerTests(unittest.TestCase):
                 probe.verify_fixture(fake_verify, fixture)
                 self.assertEqual(len(seen), 2)
                 self.assertNotEqual(seen[0], seen[1])
+                if fixture.startswith("ob2"):
+                    self.assertEqual(seen[1]["assertion"]["id"], "urn:uuid:tampered")
+                else:
+                    self.assertEqual(
+                        seen[1]["credential"]["credentialSubject"]["achievement"]["name"],
+                        "Tampered",
+                    )
 
     def test_rejects_false_positive_and_false_negative(self) -> None:
         fixture = "ob2_verify_request.json"

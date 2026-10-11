@@ -67,16 +67,6 @@ fn ob2_verify_external_fixture() {
     assert_invalid("OB2 tampered fixture", &result);
 }
 
-#[test]
-#[ignore = "known gap: OB2 assertion id edit is currently accepted; awaiting payload-binding review"]
-fn ob2_assertion_id_payload_binding_gap() {
-    let request = load_request(OB2_VERIFY_REQUEST_ENV, OB2_FIXTURE_PATH).unwrap();
-    let mut tampered: Value = serde_json::from_str(&request).unwrap();
-    tampered["assertion"]["id"] = Value::from("urn:uuid:tampered");
-    let result = verify_ob2_json(&tampered.to_string()).unwrap();
-    assert_invalid("OB2 assertion-id edit", &result);
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn ob3_verify_external_fixture() {
