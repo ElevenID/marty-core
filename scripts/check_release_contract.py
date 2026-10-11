@@ -870,13 +870,15 @@ def check_release_wheel_import_policy(
         '      - "marty-biometrics/python/**"',
         '      - "marty-iso18013/python/**"',
         '      - "marty-verification/python/**"',
+        '      - "marty-verification/tests/fixtures/open_badges/ob2_verify_request.json"',
+        '      - "marty-verification/tests/fixtures/open_badges/ob3_verify_request.json"',
         '      - "scripts/check_python_wheel_import.py"',
         '      - "scripts/test_check_python_wheel_import.py"',
     ):
         if path_filter not in preflight:
             errors.append(
-                ".github/workflows/release-wheel-preflight.yml: wheel configuration "
-                "and import-check changes must trigger preflight"
+                ".github/workflows/release-wheel-preflight.yml: wheel configuration, "
+                "verifier fixtures, and import-check changes must trigger preflight"
             )
             break
     return errors

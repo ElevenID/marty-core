@@ -20,9 +20,12 @@
   "document_store": {
     "did:example:issuer": {
       "id": "did:example:issuer",
-      "name": "Example Issuer"
+      "name": "Example Issuer",
+      "publicKey": "did:example:issuer#key-1"
     },
     "did:example:issuer#key-1": {
+      "id": "did:example:issuer#key-1",
+      "owner": "did:example:issuer",
       "publicKeyJwk": {
         "crv": "Ed25519",
         "kty": "OKP",
