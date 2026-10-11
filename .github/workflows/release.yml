@@ -294,8 +294,60 @@ jobs:
         with:
           packages-dir: dist
 
+  build-headless-verifier:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+      - name: Build standalone Linux amd64 verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          version="${GITHUB_REF_NAME#v}"
+          cargo build --locked --release -p marty-headless-verifier
+          stage="$RUNNER_TEMP/marty-headless-verify-$version-linux-amd64"
+          mkdir -p "$stage/bin" "$stage/samples"
+          cp target/release/marty-headless-verify "$stage/bin/"
+          cp marty-headless-verifier/README.md "$stage/"
+          cp marty-headless-verifier/scripts/acceptance.sh "$stage/"
+          cp marty-headless-verifier/samples/*.json "$stage/samples/"
+          cp LICENSE-MIT LICENSE-APACHE "$stage/"
+          cat > "$stage/manifest.json" <<EOF
+          {
+            "product": "marty-headless-verifier",
+            "version": "$version",
+            "architecture": "linux-amd64",
+            "build_os": "ubuntu-24.04",
+            "profile": "offline-open-badges-3-no-status-snapshot",
+            "support_state": "preview",
+            "license": "MIT OR Apache-2.0",
+            "source_commit": "$GITHUB_SHA"
+          }
+          EOF
+          mkdir -p release/headless-verifier
+          tar -C "$RUNNER_TEMP" -czf "release/headless-verifier/$(basename "$stage").tar.gz" "$(basename "$stage")"
+      - name: Clean extracted artifact acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/consumer"
+          tar -C "$RUNNER_TEMP/consumer" -xzf release/headless-verifier/*.tar.gz
+          bundle="$(find "$RUNNER_TEMP/consumer" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          jq -e --arg sha "$GITHUB_SHA" '.product == "marty-headless-verifier" and .architecture == "linux-amd64" and .build_os == "ubuntu-24.04" and .support_state == "preview" and .source_commit == $sha' "$bundle/manifest.json"
+          bash "$bundle/acceptance.sh" "$bundle"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: headless-verifier-release-assets
+          path: release/headless-verifier
+          retention-days: 7
+          if-no-files-found: error
+
   release:
-    needs: [build-crates, build-python-wheels, build-python-sdists]
+    needs: [build-crates, build-headless-verifier, build-python-wheels, build-python-sdists]
     runs-on: ubuntu-latest
     permissions:
       contents: write
