@@ -1,0 +1,16 @@
+[package]
+name = "marty-offline-chain-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Keep this a genuine downstream crate, not a member inheriting Core features.
+[workspace]
+
+[dependencies]
+marty-verification = { path = "../../marty-verification", default-features = false }
+chrono = "0.4"
+
+[dev-dependencies]
+rcgen = { version = "0.14", features = ["aws_lc_rs"] }
+time = "0.3"
