@@ -76,6 +76,8 @@ fn ob2_issue_fixture() -> (Value, BTreeMap<String, Value>, String) {
     store.insert(
         "did:example:issuer#key-1".to_string(),
         json!({
+            "id": "did:example:issuer#key-1",
+            "controller": "did:example:issuer",
             "publicKeyJwk": serde_json::to_value(jwk.to_public()).expect("failed to serialize public JWK")
         }),
     );
@@ -117,6 +119,13 @@ fn ob2_verify_rejects_wrong_recipient() {
 
     let verify_result = verify_ob2_json(&verify_request.to_string()).expect("OB2 verify failed");
     assert_invalid("OB2 wrong recipient", &verify_result);
+    let result: Value = serde_json::from_str(&verify_result).expect("invalid OB2 verify JSON");
+    let errors = result["errors"].as_array().expect("OB2 errors array");
+    assert!(errors.iter().any(|error| error
+        .as_str()
+        .is_some_and(|message| message.contains("Recipient hash does not match"))));
+    let codes = result["error_codes"].as_array().expect("OB2 error codes");
+    assert!(!codes.contains(&json!("E703")));
 }
 
 #[test]
