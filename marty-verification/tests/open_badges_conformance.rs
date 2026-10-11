@@ -516,7 +516,11 @@ fn ob2_hashed_recipient_round_trip() {
     );
     store.insert(
         "did:example:ob2-issuer#key-1".to_string(),
-        json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }),
+        json!({
+            "id": "did:example:ob2-issuer#key-1",
+            "controller": "did:example:ob2-issuer",
+            "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap()
+        }),
     );
 
     let verify_req = json!({
@@ -569,7 +573,11 @@ fn ob2_wrong_recipient_identity_fails() {
     );
     store.insert(
         "did:example:ob2-issuer#key-2".to_string(),
-        json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }),
+        json!({
+            "id": "did:example:ob2-issuer#key-2",
+            "controller": "did:example:ob2-issuer",
+            "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap()
+        }),
     );
 
     let verify_req = json!({
@@ -579,4 +587,11 @@ fn ob2_wrong_recipient_identity_fails() {
     });
     let result = verify_ob2_json(&verify_req.to_string()).expect("verify call");
     assert_invalid("OB2 wrong recipient", &result);
+    let value: Value = serde_json::from_str(&result).expect("OB2 verify JSON");
+    let errors = value["errors"].as_array().expect("OB2 errors array");
+    assert!(errors.iter().any(|error| error
+        .as_str()
+        .is_some_and(|message| message.contains("Recipient hash does not match"))));
+    let codes = value["error_codes"].as_array().expect("OB2 error codes");
+    assert!(!codes.contains(&json!("E703")));
 }

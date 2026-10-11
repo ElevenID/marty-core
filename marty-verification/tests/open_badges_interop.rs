@@ -9,6 +9,7 @@ const OB2_VERIFY_REQUEST_ENV: &str = "OPEN_BADGES_OB2_VERIFY_REQUEST";
 const OB3_VERIFY_REQUEST_ENV: &str = "OPEN_BADGES_OB3_VERIFY_REQUEST";
 const OB2_FIXTURE_PATH: &str = "tests/fixtures/open_badges/ob2_verify_request.json";
 const OB3_FIXTURE_PATH: &str = "tests/fixtures/open_badges/ob3_verify_request.json";
+const OTHER_ED25519_PUBLIC_KEY: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
 
 fn load_request(var: &str, fallback: &str) -> Option<String> {
     let path = match env::var(var) {
@@ -40,6 +41,12 @@ fn assert_valid(label: &str, result_json: &str) {
     );
 }
 
+fn assert_invalid(label: &str, result_json: &str) {
+    let value: Value = serde_json::from_str(result_json)
+        .unwrap_or_else(|e| panic!("{} output is not JSON: {}", label, e));
+    assert_eq!(value.get("valid").and_then(Value::as_bool), Some(false));
+}
+
 #[test]
 fn ob2_verify_external_fixture() {
     // Fixture must be a JSON request accepted by verify_ob2_json:
@@ -51,6 +58,14 @@ fn ob2_verify_external_fixture() {
 
     let result = verify_ob2_json(&request).expect("OB2 fixture verification failed");
     assert_valid("OB2 fixture", &result);
+
+    let mut tampered: Value = serde_json::from_str(&request).unwrap();
+    tampered["assertion"]
+        .as_object_mut()
+        .unwrap()
+        .remove("@context");
+    let result = verify_ob2_json(&tampered.to_string()).expect("OB2 tampered request failed");
+    assert_invalid("OB2 tampered fixture", &result);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -65,4 +80,27 @@ fn ob3_verify_external_fixture() {
 
     let result = verify_ob3_json(&request).expect("OB3 fixture verification failed");
     assert_valid("OB3 fixture", &result);
+
+    let mut tampered: Value = serde_json::from_str(&request).unwrap();
+    tampered["credential"]["credentialSubject"]["achievement"]["name"] = Value::from("Tampered");
+    let result = verify_ob3_json(&tampered.to_string()).expect("OB3 tampered request failed");
+    assert_invalid("OB3 tampered fixture", &result);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn bundled_fixtures_reject_mismatched_issuer_key() {
+    let mut ob2: Value =
+        serde_json::from_str(include_str!("fixtures/open_badges/ob2_verify_request.json")).unwrap();
+    ob2["document_store"]["did:example:issuer#key-1"]["publicKeyJwk"]["x"] =
+        Value::from(OTHER_ED25519_PUBLIC_KEY);
+    let result = verify_ob2_json(&ob2.to_string()).expect("OB2 wrong-key request failed");
+    assert_invalid("OB2 wrong-key fixture", &result);
+
+    let mut ob3: Value =
+        serde_json::from_str(include_str!("fixtures/open_badges/ob3_verify_request.json")).unwrap();
+    ob3["document_store"]["did:example:issuer#key-1"]["publicKeyJwk"]["x"] =
+        Value::from(OTHER_ED25519_PUBLIC_KEY);
+    let result = verify_ob3_json(&ob3.to_string()).expect("OB3 wrong-key request failed");
+    assert_invalid("OB3 wrong-key fixture", &result);
 }
