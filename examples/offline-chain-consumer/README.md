@@ -1,7 +1,7 @@
 # Offline trust-chain consumer (PKG03 boundary probe)
 
-This independent Cargo project consumes `marty-verification` with default
-features disabled. It takes DER evidence, one locally approved trust anchor,
+This independent Cargo project consumes the shared `marty-x509-verification`
+kernel directly. It takes DER evidence, one locally approved trust anchor,
 and a caller-supplied validation moment. Its four tests exercise valid,
 tampered, wrong-trust, and expired certificate chains without Redis, Flow,
 issuer services, or Canvas. The tested call path contains no network I/O;
@@ -14,8 +14,8 @@ presentation. In particular, this sample does not check revocation/status,
 document signatures, session authentication, replay, or protocol policy.
 Those obligations remain with each qualified verifier profile.
 
-Dependency audit caveat: `default-features = false` still resolves `reqwest`
-through Core's mandatory `ssi-dids`/`ssi-claims` dependencies. This consumer
-proves an application/runtime boundary but **not** a network-client-free build
-closure. A dedicated kernel extraction or upstream feature split is needed
-before claiming the latter.
+The package's normal dependency tree excludes `reqwest`, SSI, Flow, Redis,
+and issuance crates. The full `marty-verification` crate retains its existing
+public chain-validator API through a compatibility facade over the same kernel.
+This is a dependency-closure proof for X.509 chain checking only; no complete
+credential/presentation profile or network-blocked runtime test is qualified.

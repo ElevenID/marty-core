@@ -8,7 +8,7 @@ publish = false
 [workspace]
 
 [dependencies]
-marty-verification = { path = "../../marty-verification", default-features = false }
+marty-x509-verification = { path = "../../marty-x509-verification" }
 chrono = "0.4"
 
 [dev-dependencies]

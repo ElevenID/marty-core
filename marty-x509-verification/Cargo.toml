@@ -1,0 +1,29 @@
+[package]
+name = "marty-x509-verification"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Offline X.509 trust-chain verification kernel"
+
+[dependencies]
+chrono.workspace = true
+const-oid.workspace = true
+der.workspace = true
+serde.workspace = true
+x509-cert.workspace = true
+marty-crypto = { version = "0.2.0", path = "../marty-crypto", default-features = false, features = ["crl", "ocsp"] }
+
+[dev-dependencies]
+rcgen = { workspace = true, features = ["aws_lc_rs"] }
+p256 = { workspace = true, features = ["ecdsa", "pem", "pkcs8"] }
+pem-rfc7468.workspace = true
+sha2.workspace = true
+spki.workspace = true
+time.workspace = true
+x509-ocsp.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

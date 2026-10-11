@@ -5,10 +5,8 @@
 //! presentation verifier or a supported distribution.
 
 use chrono::{DateTime, Utc};
-use marty_verification::verification::{
-    ChainValidationResult, ChainValidator, ChainValidatorConfig,
-};
-use marty_verification::VerificationResult;
+use marty_x509_verification::chain::{ChainValidationResult, ChainValidator, ChainValidatorConfig};
+use marty_x509_verification::VerificationResult;
 
 /// Verify an ordered leaf-to-root DER chain against one locally provisioned CA.
 /// This function performs no trust resolution, status fetch, or network I/O.
