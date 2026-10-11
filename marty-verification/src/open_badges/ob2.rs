@@ -26,6 +26,8 @@ struct IssueOb2Request {
 #[derive(Debug, Deserialize)]
 pub struct VerifyOb2Request {
     pub assertion: Value,
+    /// Resolution and key material supplied by the caller. A valid result is
+    /// relative to this store; callers must authenticate its issuer/key records.
     #[serde(default)]
     pub document_store: Option<DocumentStore>,
     #[serde(default)]
@@ -161,7 +163,7 @@ pub fn verify_ob2(req: VerifyOb2Request) -> VerificationResult<OpenBadgesVerific
     // Verify signature if the verification type indicates signed assertion,
     // or if a signature field is present (even without explicit signed verification type)
     if should_verify_signature(&assertion) || assertion.get("signature").is_some() {
-        if let Err(err) = verify_signature(&assertion, &store) {
+        if let Err(err) = verify_signature(&assertion, &store, issuer.as_ref()) {
             errors.push(err.to_string());
             error_codes_out.push(err.code().to_string());
         }
@@ -277,7 +279,11 @@ fn build_verification(signing: &Ob2SigningOptions, warnings: &mut Vec<String>) -
     Value::Object(verification)
 }
 
-fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationResult<()> {
+fn verify_signature(
+    assertion: &Value,
+    store: &DocumentStore,
+    issuer: Option<&Value>,
+) -> VerificationResult<()> {
     let signature = assertion
         .get("signature")
         .and_then(|v| v.as_str())
@@ -303,6 +309,8 @@ fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationRes
             creator
         ))
     })?;
+
+    verify_issuer_key_binding(issuer, creator, key_value)?;
 
     let jwk = extract_public_jwk(key_value)?;
 
@@ -350,6 +358,57 @@ fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationRes
     } else {
         Ok(())
     }
+}
+
+fn verify_issuer_key_binding(
+    issuer: Option<&Value>,
+    creator: &str,
+    key: &Value,
+) -> VerificationResult<()> {
+    let issuer_id = issuer
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            VerificationError::open_badges_signature_invalid(
+                "Signed assertion issuer id is missing".to_string(),
+            )
+        })?;
+
+    let key_id_matches = key.get("id").and_then(Value::as_str) == Some(creator);
+    let owner = key.get("owner").and_then(Value::as_str);
+    let controller = key.get("controller").and_then(Value::as_str);
+    let issuer_controls_key = (owner.is_some() || controller.is_some())
+        && (key.get("owner").is_none() || owner.is_some())
+        && (key.get("controller").is_none() || controller.is_some())
+        && owner.is_none_or(|value| value == issuer_id)
+        && controller.is_none_or(|value| value == issuer_id);
+    if !key_id_matches || !issuer_controls_key {
+        return Err(VerificationError::open_badges_signature_invalid(
+            "Signing key is not controlled by the badge issuer".to_string(),
+        ));
+    }
+
+    // Governed key records use controller without an issuer Profile publicKey.
+    // When a Profile does declare publicKey, it must agree with the key used.
+    if let Some(public_key) = issuer.and_then(|value| value.get("publicKey")) {
+        let listed = match public_key {
+            Value::Array(keys) => keys
+                .iter()
+                .any(|value| key_reference_matches(value, creator)),
+            value => key_reference_matches(value, creator),
+        };
+        if !listed {
+            return Err(VerificationError::open_badges_signature_invalid(
+                "Signing key is not listed by the badge issuer".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn key_reference_matches(value: &Value, creator: &str) -> bool {
+    value.as_str() == Some(creator) || value.get("id").and_then(Value::as_str) == Some(creator)
 }
 
 fn extract_public_jwk(value: &Value) -> VerificationResult<Jwk> {

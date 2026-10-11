@@ -59,6 +59,118 @@ fn ob2_legacy_unsigned_verification_metadata_is_limited_to_key_selection() {
 }
 
 #[test]
+fn ob2_rejects_attacker_owned_key_for_victim_issuer() {
+    let mut request: Value = serde_json::from_str(OB2).unwrap();
+    request["document_store"]["urn:uuid:badge-1"]["issuer"] = json!("did:example:victim");
+    request["document_store"]["did:example:victim"] =
+        json!({"id": "did:example:victim", "name": "Victim Issuer"});
+    request["document_store"]["did:example:issuer#key-1"]["id"] = json!("did:example:issuer#key-1");
+    request["document_store"]["did:example:issuer#key-1"]["owner"] = json!("did:example:attacker");
+
+    let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+    assert!(!result.valid, "{result:?}");
+    assert!(result.error_codes.iter().any(|code| code == "E703"));
+    assert_eq!(
+        result.normalized.unwrap()["issuer_id"],
+        "did:example:victim"
+    );
+}
+
+#[test]
+fn ob2_rejects_key_not_listed_by_issuer_profile() {
+    for public_key in [
+        Value::Null,
+        json!({}),
+        json!("did:example:issuer#different-key"),
+        json!([{"id": "did:example:issuer#different-key"}]),
+    ] {
+        let mut request: Value = serde_json::from_str(OB2).unwrap();
+        request["document_store"]["did:example:issuer"]["publicKey"] = public_key;
+
+        let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+        assert!(!result.valid, "{result:?}");
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("Signing key is not listed by the badge issuer")));
+    }
+}
+
+#[test]
+fn ob2_rejects_key_without_issuer_controller_or_owner() {
+    let mut request: Value = serde_json::from_str(OB2).unwrap();
+    request["document_store"]["did:example:issuer#key-1"]
+        .as_object_mut()
+        .unwrap()
+        .remove("owner");
+
+    let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+    assert!(!result.valid, "{result:?}");
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("Signing key is not controlled by the badge issuer")));
+}
+
+#[test]
+fn ob2_accepts_governed_controller_key_for_issuer() {
+    let mut request: Value = serde_json::from_str(OB2).unwrap();
+    request["document_store"]["did:example:issuer"]
+        .as_object_mut()
+        .unwrap()
+        .remove("publicKey");
+    let key = request["document_store"]["did:example:issuer#key-1"]
+        .as_object_mut()
+        .unwrap();
+    key.remove("owner");
+    key.insert("controller".to_string(), json!("did:example:issuer"));
+
+    let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+    assert!(result.valid, "{result:?}");
+}
+
+#[test]
+fn ob2_rejects_missing_or_wrong_key_id() {
+    for key_id in [None, Some("did:example:attacker#key-1")] {
+        let mut request: Value = serde_json::from_str(OB2).unwrap();
+        let key = request["document_store"]["did:example:issuer#key-1"]
+            .as_object_mut()
+            .unwrap();
+        match key_id {
+            Some(value) => {
+                key.insert("id".to_string(), json!(value));
+            }
+            None => {
+                key.remove("id");
+            }
+        }
+
+        let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+        assert!(!result.valid, "{result:?}");
+        assert!(result.error_codes.iter().any(|code| code == "E703"));
+    }
+}
+
+#[test]
+fn ob2_rejects_either_conflicting_issuer_link_on_key() {
+    for (owner, controller) in [
+        ("did:example:attacker", "did:example:issuer"),
+        ("did:example:issuer", "did:example:attacker"),
+    ] {
+        let mut request: Value = serde_json::from_str(OB2).unwrap();
+        let key = request["document_store"]["did:example:issuer#key-1"]
+            .as_object_mut()
+            .unwrap();
+        key.insert("owner".to_string(), json!(owner));
+        key.insert("controller".to_string(), json!(controller));
+
+        let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+        assert!(!result.valid, "{result:?}");
+        assert!(result.error_codes.iter().any(|code| code == "E703"));
+    }
+}
+
+#[test]
 fn typed_ob3_preserves_signed_fixture_and_missing_authority_failure() {
     futures::executor::block_on(async {
         for valid in [true, false] {
