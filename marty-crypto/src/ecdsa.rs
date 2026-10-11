@@ -268,3 +268,46 @@ pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Ve
         ))),
     }
 }
+
+/// Convert a fixed-width IEEE P1363/JOSE ECDSA signature into ASN.1 DER.
+///
+/// Certificate signing consumes DER, while some remote signers return `r || s`.
+/// Reject an incorrect width or invalid scalar rather than passing through
+/// unverified provider bytes.
+pub fn raw_signature_to_der(signature: &[u8], algorithm: &str) -> CryptoResult<Vec<u8>> {
+    let invalid =
+        |error| CryptoError::invalid_signature(format!("Invalid {algorithm} signature: {error}"));
+    match algorithm {
+        "ES256" if signature.len() == 64 => P256Signature::from_slice(signature)
+            .map(|value| value.to_der().as_bytes().to_vec())
+            .map_err(invalid),
+        "ES384" if signature.len() == 96 => P384Signature::from_slice(signature)
+            .map(|value| value.to_der().as_bytes().to_vec())
+            .map_err(invalid),
+        "ES512" if signature.len() == 132 => P521Signature::from_slice(signature)
+            .map(|value| value.to_der().as_bytes().to_vec())
+            .map_err(invalid),
+        _ => Err(CryptoError::invalid_signature(format!(
+            "Invalid {algorithm} raw ECDSA signature width"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod signature_format_tests {
+    use super::{normalize_signature, raw_signature_to_der};
+
+    #[test]
+    fn raw_signatures_round_trip_through_der_for_supported_curves() {
+        for (algorithm, width) in [("ES256", 32), ("ES384", 48), ("ES512", 66)] {
+            let mut raw = vec![0; width * 2];
+            raw[width - 1] = 1;
+            raw[width * 2 - 1] = 2;
+            let der = raw_signature_to_der(&raw, algorithm).expect("valid raw signature");
+            assert_eq!(normalize_signature(&der, algorithm).unwrap(), raw);
+            assert!(raw_signature_to_der(&raw[..raw.len() - 1], algorithm).is_err());
+            assert!(raw_signature_to_der(&vec![0; width * 2], algorithm).is_err());
+        }
+        assert!(raw_signature_to_der(&[0; 64], "ES256K").is_err());
+    }
+}
