@@ -371,7 +371,7 @@ WASM_SECURITY_TEST_STEPS = {
           cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture""",
     ),
 }
-CI_GATE_SHA256 = "b27d57803fcafb19cf4171fb39101a8fd4cc27bd34de9d57c225b02b4bd46895"
+CI_GATE_SHA256 = "1c8a43312aa7cc5040d2345bf15ce10354cc184272f9a777a804971f3c4a01fd"
 ZKP_NATIVE_SECURITY_JOB_SHA256 = (
     "d230b5ab4c6c5ba18c2a5874332467cb879ff51b84de2d2f95ea73504ac1987e"
 )

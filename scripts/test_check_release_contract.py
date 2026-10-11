@@ -1114,5 +1114,102 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         )
 
 
+class CorePreflightSplitContractTests(unittest.TestCase):
+    def workflow(self) -> str:
+        return (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+    def test_heavy_checks_run_once_in_required_parallel_jobs(self) -> None:
+        workflow = self.workflow()
+        for job in ("preflight", "kms-role-graphs", "rust-lint-compat"):
+            self.assertEqual(workflow.count(f"\n  {job}:\n"), 1)
+        preflight = workflow.split("\n  preflight:\n", 1)[1].split(
+            "\n  kms-role-graphs:\n", 1
+        )[0]
+        kms = workflow.split("\n  kms-role-graphs:\n", 1)[1].split(
+            "\n  rust-lint-compat:\n", 1
+        )[0]
+        lint = workflow.split("\n  rust-lint-compat:\n", 1)[1].split(
+            "\n  affected-tests:\n", 1
+        )[0]
+        self.assertIn("      - name: Check formatting", preflight)
+        self.assertNotIn("      - name: Enforce exact KMS", preflight)
+        self.assertNotIn("      - name: Run clippy", preflight)
+        self.assertIn("          components: rustfmt", preflight)
+        self.assertNotIn("          targets: wasm32-unknown-unknown", preflight)
+        self.assertIn("          components: clippy", kms)
+        self.assertIn("          components: clippy", lint)
+        self.assertIn("          targets: wasm32-unknown-unknown", lint)
+        self.assertEqual(
+            workflow.count("      - name: Enforce exact KMS role and public-key graphs"),
+            1,
+        )
+        self.assertEqual(
+            [line.strip() for line in kms.splitlines() if line.strip().startswith("cargo ")],
+            [
+                "cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc",
+                "cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt",
+                "cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings",
+                "cargo test --locked -p marty-oid4vci --no-default-features --lib",
+                "cargo test --locked -p marty-oid4vci --lib",
+                "cargo test --locked -p marty-crypto --no-default-features --features signature-verification ed448_requires_explicit_verification_capability",
+                "cargo test --locked -p marty-crypto --no-default-features --features ed448-verification ed448::tests",
+                "cargo test --locked -p marty-emrtd-issuance",
+                "cargo check --locked -p marty-verification --no-default-features --features kms-only,ephemeral-session-keys --lib",
+                "cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk",
+            ],
+        )
+        for command in (
+            "cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer",
+            "cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier",
+            "cargo test --locked -p marty-crypto --no-default-features --features ed448-verification",
+            "cargo test --locked -p marty-emrtd-issuance",
+            "kms_ecdsa_verification_tree=",
+            "kms_issuer_tree=",
+            "kms_csca_tree=",
+            "kms_public_tree=",
+            "kms_didcomm_public_tree=",
+            "kms_emrtd_tree=",
+        ):
+            self.assertIn(command, kms)
+        for step in (
+            "Run clippy",
+            "Check OID4VCI WASM serial fallback contract",
+            "Smoke opt-in ES256 payload matrix",
+            "Smoke opt-in mdoc payload matrix",
+            "Smoke default-off mdoc evidence binaries",
+            "Exercise the EUDI trusted-list client",
+        ):
+            self.assertEqual(workflow.count(f"      - name: {step}"), 1)
+            self.assertIn(f"      - name: {step}", lint)
+        for job in (kms, lint):
+            self.assertNotIn("\n    if:", job)
+            self.assertNotIn("continue-on-error:", job)
+            self.assertIn("      - name: Enable compiler cache", job)
+        self.assertNotIn("\n        if:", kms)
+        for required_step in (
+            "Run clippy",
+            "Check OID4VCI WASM serial fallback contract",
+            "Exercise the EUDI trusted-list client",
+        ):
+            step = lint.split(f"      - name: {required_step}\n", 1)[1].split(
+                "\n      - name:", 1
+            )[0]
+            self.assertNotIn("\n        if:", step)
+
+    def test_gate_rejects_dropped_parallel_job_results(self) -> None:
+        workflow = self.workflow()
+        for result in ("KMS_ROLE_GRAPHS", "RUST_LINT_COMPAT"):
+            assertion = f'          test "${result}" = success\n'
+            self.assertIn(assertion, workflow)
+            errors = check_release_contract.check_wasm_security_cache_setup(
+                workflow.replace(assertion, "", 1)
+            )
+            self.assertTrue(
+                any("ci-gate must use its exact approved" in error for error in errors)
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
