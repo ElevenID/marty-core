@@ -28,7 +28,7 @@ class VerifierArtifactInventoryTests(unittest.TestCase):
         self.assets = Path(self.temporary.name)
         for platform in WHEELS:
             (
-                self.assets / f"marty_verification_py-0.2.0-cp311-cp311-{platform}.whl"
+                self.assets / f"marty_verification_py-0.2.0-cp311-abi3-{platform}.whl"
             ).write_bytes(platform.encode("ascii"))
         (self.assets / "marty_verification_py-0.2.0.tar.gz").write_bytes(b"sdist")
 
@@ -61,13 +61,11 @@ class VerifierArtifactInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "version"):
             build_inventory(self.assets, TAG, COMMIT)
 
-    def test_python_312_only_and_pure_python_wheels_fail(self) -> None:
-        for replacement in ("cp312-cp312", "py3-none"):
+    def test_non_abi3_wheels_fail(self) -> None:
+        for replacement in ("cp311-cp311", "cp312-cp312", "py3-none"):
             with self.subTest(replacement=replacement):
                 wheel = next(self.assets.glob("*win_amd64.whl"))
-                invalid = wheel.with_name(
-                    wheel.name.replace("cp311-cp311", replacement)
-                )
+                invalid = wheel.with_name(wheel.name.replace("cp311-abi3", replacement))
                 wheel.rename(invalid)
                 with self.assertRaisesRegex(ValueError, "Python ABI"):
                     build_inventory(self.assets, TAG, COMMIT)

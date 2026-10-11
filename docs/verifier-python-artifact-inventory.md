@@ -3,9 +3,8 @@
 The stable Core release assembles `marty-verification-py` wheels and an sdist
 alongside the other Python packages. Before signing the assembled release
 assets, `scripts/record_verifier_artifact_inventory.py` checks the existing
-five-platform wheel matrix, Python 3.11 native ABI tag, and one sdist, binds
-their filenames and SHA-256
-digests to the tag and commit, and emits
+five-platform wheel matrix, the declared `cp311-abi3` tag, and one sdist,
+binds their filenames and SHA-256 digests to the tag and commit, and emits
 `marty-verification-python-artifact-inventory.json`. The existing release step
 then signs and checksums this descriptor like the other assets. The script
 does not rebuild or publish anything.

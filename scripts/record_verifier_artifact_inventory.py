@@ -57,11 +57,9 @@ def build_inventory(assets: Path, tag: str, commit: str) -> dict[str, object]:
         raise ValueError("release assets directory is missing")
 
     version = tag[1:]
-    # The release builder uses Python 3.11. A cp312-only or pure-Python wheel
-    # filename cannot stand in for an importable 3.11 native extension.
-    wheel_pattern = re.compile(
-        rf"{NAME}-{re.escape(version)}-cp311-(?:cp311|abi3)-[^-]+\.whl"
-    )
+    # Workspace PyO3 enables abi3-py311 and the package declares >=3.11.
+    # A cp311-cp311 wheel would silently narrow installation to Python 3.11.
+    wheel_pattern = re.compile(rf"{NAME}-{re.escape(version)}-cp311-abi3-[^-]+\.whl")
     sdist_name = f"{NAME}-{version}.tar.gz"
     candidates = sorted(
         path
