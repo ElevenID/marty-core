@@ -21,6 +21,7 @@ fn typed_ob2_preserves_signed_fixture_and_rejects_missing_context() {
         assert_eq!(typed.valid, valid);
         assert_eq!(typed.version, "2.0");
         assert!(typed.normalized.is_some());
+        assert!(typed.warnings.is_empty());
         if !valid {
             assert!(typed.errors.iter().any(|error| error.contains("context")));
         }
@@ -28,6 +29,33 @@ fn typed_ob2_preserves_signed_fixture_and_rejects_missing_context() {
             serde_json::from_str(&verify_ob2_json(&request.to_string()).unwrap()).unwrap();
         assert_eq!(serde_json::to_value(typed).unwrap(), wire);
     }
+}
+
+#[test]
+fn ob2_rejects_assertion_id_changed_outside_signed_payload() {
+    let mut request: Value = serde_json::from_str(OB2).unwrap();
+    request["assertion"]["id"] = json!("urn:uuid:assertion-replaced");
+
+    let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+    assert!(!result.valid);
+    assert!(result.error_codes.iter().any(|code| code == "E703"));
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("Signed payload does not match assertion body")));
+}
+
+#[test]
+fn ob2_legacy_unsigned_verification_metadata_is_limited_to_key_selection() {
+    let mut request: Value = serde_json::from_str(OB2).unwrap();
+    request["assertion"]["verification"]["startsWith"] = json!("urn:uuid:attacker-");
+
+    let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+    assert!(!result.valid);
+    assert!(result
+        .errors
+        .iter()
+        .any(|error| error.contains("Unsigned verification instructions are not supported")));
 }
 
 #[test]

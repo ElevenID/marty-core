@@ -161,16 +161,9 @@ pub fn verify_ob2(req: VerifyOb2Request) -> VerificationResult<OpenBadgesVerific
     // Verify signature if the verification type indicates signed assertion,
     // or if a signature field is present (even without explicit signed verification type)
     if should_verify_signature(&assertion) || assertion.get("signature").is_some() {
-        match verify_signature(&assertion, &store) {
-            Ok(warn) => {
-                if let Some(w) = warn {
-                    warnings.push(w);
-                }
-            }
-            Err(err) => {
-                errors.push(err.to_string());
-                error_codes_out.push(err.code().to_string());
-            }
+        if let Err(err) = verify_signature(&assertion, &store) {
+            errors.push(err.to_string());
+            error_codes_out.push(err.code().to_string());
         }
     } else {
         warnings.push("Hosted assertion not cryptographically verified".to_string());
@@ -284,10 +277,7 @@ fn build_verification(signing: &Ob2SigningOptions, warnings: &mut Vec<String>) -
     Value::Object(verification)
 }
 
-fn verify_signature(
-    assertion: &Value,
-    store: &DocumentStore,
-) -> VerificationResult<Option<String>> {
+fn verify_signature(assertion: &Value, store: &DocumentStore) -> VerificationResult<()> {
     let signature = assertion
         .get("signature")
         .and_then(|v| v.as_str())
@@ -327,14 +317,38 @@ fn verify_signature(
     let mut expected = assertion.clone();
     if let Value::Object(ref mut obj) = expected {
         obj.remove("signature");
+        // Legacy OB2 fixtures attach verification instructions after signing.
+        // Only tolerate that omission; all assertion claims must be signed.
+        if payload.get("verification").is_none() {
+            let legacy_verification = assertion
+                .get("verification")
+                .and_then(Value::as_object)
+                .filter(|value| {
+                    value.len() == 2
+                        && value.get("creator").and_then(Value::as_str) == Some(creator)
+                        && value
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| {
+                                kind.eq_ignore_ascii_case("signed")
+                                    || kind.eq_ignore_ascii_case("signedbadge")
+                            })
+                });
+            if legacy_verification.is_none() {
+                return Err(VerificationError::open_badges_signature_invalid(
+                    "Unsigned verification instructions are not supported".to_string(),
+                ));
+            }
+            obj.remove("verification");
+        }
     }
 
     if payload != expected {
-        Ok(Some(
+        Err(VerificationError::open_badges_signature_invalid(
             "Signed payload does not match assertion body".to_string(),
         ))
     } else {
-        Ok(None)
+        Ok(())
     }
 }
 
