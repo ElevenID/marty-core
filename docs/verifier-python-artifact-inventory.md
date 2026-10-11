@@ -20,8 +20,11 @@ that a clean project can install from a public channel, that the Python wheel
 has a verification-only dependency closure, or that a headless executable runs
 without network access. Those remain explicit qualification work.
 
-The native wheel import step also runs a bounded, headless **in-process**
-consumer probe against signed Open Badges 2/3 fixtures, an OB2 changed-assertion-ID
+The native verifier wheel step additionally installs that locally built wheel
+into a fresh virtual environment with package indexes disabled and dependency
+resolution enabled. From that environment it repeats the native-extension
+import check and runs a bounded, headless **in-process** consumer probe against
+signed Open Badges 2/3 fixtures, an OB2 changed-assertion-ID
 case, and an OB3 changed-achievement-name case. The former OB2 assertion-ID
 binding gap is now covered by an active typed Rust regression test and by this
 local-wheel consumer probe. These checks do not prove every signed-payload
@@ -30,7 +33,9 @@ field is bound or authenticate the caller-supplied `document_store`: an OB2
 by the caller, which must be authenticated by that caller.
 Python's audit hook rejects audited socket operations during import and
 verification; it does not sandbox native Rust network calls.
-This provides local release-matrix wheel behavior evidence only: the wheel is
-installed with `--no-deps` into the build runner, not a clean environment, and
-the probe does not qualify public-channel installability, dependency closure,
-all verification formats, or a standalone executable.
+This provides local release-matrix wheel behavior evidence only. The earlier
+build-runner import check still uses `--no-deps`; the fresh-environment check
+will fail on unavailable declared Python requirements. It does not qualify
+public-channel installability, undeclared or unexercised runtime dependencies,
+native/system dependency closure, all verification formats, or a standalone
+executable.
