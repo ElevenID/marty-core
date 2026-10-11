@@ -55,6 +55,7 @@ marty-crypto = { workspace = true, default-features = false, features = [
     "x509",
 ] }
 marty-oid4vci = { workspace = true, default-features = false }
+marty-x509-verification = { version = "0.2.0", path = "../marty-x509-verification" }
 
 # Re-export crypto types
 x509-cert = { workspace = true }

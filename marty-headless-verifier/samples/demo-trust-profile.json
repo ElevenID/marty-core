@@ -1,0 +1,16 @@
+{
+  "allow_credentials_without_status": true,
+  "document_store": {
+    "did:example:issuer#key-1": {
+      "controller": "did:example:issuer",
+      "id": "did:example:issuer#key-1",
+      "publicKeyJwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ"
+      },
+      "type": "JsonWebKey2020"
+    }
+  },
+  "trusted_issuer": "did:example:issuer"
+}

@@ -371,9 +371,9 @@ WASM_SECURITY_TEST_STEPS = {
           cargo test --locked -p marty-crypto --target wasm32-unknown-unknown --no-default-features --features kdf,symmetric --test wasm_key_derivation -- --nocapture""",
     ),
 }
-CI_GATE_SHA256 = "b27d57803fcafb19cf4171fb39101a8fd4cc27bd34de9d57c225b02b4bd46895"
+CI_GATE_SHA256 = "1c8a43312aa7cc5040d2345bf15ce10354cc184272f9a777a804971f3c4a01fd"
 ZKP_NATIVE_SECURITY_JOB_SHA256 = (
-    "633e5c27d1ed63092c08b069ecdab174435e75998c6d1014b200d799c43c9286"
+    "d230b5ab4c6c5ba18c2a5874332467cb879ff51b84de2d2f95ea73504ac1987e"
 )
 WASM_SECURITY_WORKFLOW_ENV = """env:
   CARGO_TERM_COLOR: always
@@ -870,13 +870,15 @@ def check_release_wheel_import_policy(
         '      - "marty-biometrics/python/**"',
         '      - "marty-iso18013/python/**"',
         '      - "marty-verification/python/**"',
+        '      - "marty-verification/tests/fixtures/open_badges/ob2_verify_request.json"',
+        '      - "marty-verification/tests/fixtures/open_badges/ob3_verify_request.json"',
         '      - "scripts/check_python_wheel_import.py"',
         '      - "scripts/test_check_python_wheel_import.py"',
     ):
         if path_filter not in preflight:
             errors.append(
-                ".github/workflows/release-wheel-preflight.yml: wheel configuration "
-                "and import-check changes must trigger preflight"
+                ".github/workflows/release-wheel-preflight.yml: wheel configuration, "
+                "verifier fixtures, and import-check changes must trigger preflight"
             )
             break
     return errors

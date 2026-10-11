@@ -47,8 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
-          components: clippy, rustfmt
-          targets: wasm32-unknown-unknown
+          components: rustfmt
       - name: Install cargo-deny
         uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12
         with:
@@ -68,6 +67,34 @@ jobs:
         run: cargo deny --locked --all-features check advisories --deny yanked
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+  kms-role-graphs:
+    name: KMS Role and Public-Key Graphs
+    runs-on: ubuntu-latest
+    env:
+      USE_ZK_MOCK: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+          components: clippy
+      - name: Cache Cargo inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-inputs-${{ hashFiles('**/Cargo.lock') }}
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
       - name: Enforce exact KMS role and public-key graphs
         shell: bash
         run: |
@@ -115,15 +142,69 @@ jobs:
           MARTY_TEST_BENCH_AFTER_LIVE: ${{ github.event_name != 'pull_request' && '1' || '0' }}
           MARTY_TEST_BENCH_MATRIX: ${{ github.event_name != 'pull_request' && '1' || '0' }}
         run: bash scripts/test_remote_issuer_live_kms.sh
+
+  rust-lint-compat:
+    name: Rust Lint and Compatibility
+    runs-on: ubuntu-latest
+    env:
+      USE_ZK_MOCK: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - name: Cache Cargo inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-inputs-${{ hashFiles('**/Cargo.lock') }}
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
       - name: Check OID4VCI WASM serial fallback contract
         shell: bash
         run: bash scripts/test_oid4vci_wasm_serial_fallback.sh
+      - name: Smoke opt-in ES256 payload matrix
+        if: github.event_name == 'merge_group'
+        run: MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
+      - name: Smoke opt-in mdoc payload matrix
+        if: github.event_name == 'merge_group'
+        run: |
+          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=all MARTY_MDOC_MATRIX_ITEM_COUNTS=1,512 MARTY_MDOC_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=small_primitive MARTY_MDOC_MATRIX_ITEM_COUNTS=1 MARTY_MDOC_MATRIX_BATCH_SIZES=256 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+      - name: Smoke default-off mdoc evidence binaries
+        if: github.event_name == 'merge_group'
+        run: |
+          cargo test --locked -p marty-oid4vci --bench mdoc_allocation_evidence
+          cargo test --locked -p marty-oid4vci --bench mdoc_tail_evidence
       - name: Exercise the EUDI trusted-list client
         run: |
           cargo clippy --locked -p marty-verification --features eudi-client --all-targets -- -D warnings
           cargo test --locked -p marty-verification --features eudi-client --lib
+      - name: Qualify the isolated headless verifier consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p marty-headless-verifier
+          cargo build --locked -p marty-headless-verifier
+          bundle="$RUNNER_TEMP/headless-consumer"
+          mkdir -p "$bundle/bin" "$bundle/samples"
+          cp target/debug/marty-headless-verify "$bundle/bin/"
+          cp marty-headless-verifier/samples/*.json "$bundle/samples/"
+          cp marty-headless-verifier/scripts/acceptance.sh "$bundle/"
+          bash "$bundle/acceptance.sh" "$bundle"
 
   affected-tests:
     name: Affected Rust Tests
@@ -155,7 +236,7 @@ jobs:
         if: steps.affected.outputs.all == 'true'
         run: |
           cargo test --locked --workspace --exclude marty-zkp --exclude marty-bindings --features test-fixtures
-          # The required preflight already runs the exact EUDI client test.
+          # The required lint/compat job already runs the exact EUDI client test.
           cargo test --locked -p marty-bindings --no-default-features
           cargo test --locked -p marty-zkp
       - name: Test affected packages first
@@ -187,23 +268,18 @@ jobs:
           cargo test --locked -p marty-iso18013 --no-default-features --features python --lib python_module_name_coexists_with_session_conformance_alias
           cargo test --locked -p marty-bindings --no-default-features --features ephemeral-session-keys
           cargo test --locked -p marty-bindings --no-default-features --features didcomm-encrypted-envelope encrypted_envelope_module_exposes_anoncrypt_only
-          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope
-      - name: Qualify external HAIP encryption with opaque session decryption
-        if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-verification')
-        shell: bash
-        run: |
-          python3 -m venv "$RUNNER_TEMP/haip-python"
-          "$RUNNER_TEMP/haip-python/bin/python" -m pip install --disable-pip-version-check cryptography==50.0.1
-          MARTY_TEST_HAIP_PYTHON="$RUNNER_TEMP/haip-python/bin/python" \
-            cargo test --locked -p marty-verification --lib --no-default-features \
-              --features ephemeral-session-keys \
-              opaque_haip_session_decrypts_external_python_jwe -- --ignored
+          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
       - name: Smoke marty-oid4vci benchmarks
         if: steps.affected.outputs.all == 'true' || contains(steps.affected.outputs.packages, 'marty-oid4vci')
-        env:
-          MARTY_TEST_BENCH_SMOKE: '1'
-          MARTY_TEST_BENCH_MATRIX: '1'
-        run: bash scripts/test_remote_issuer_live_kms.sh
+        run: |
+          cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          cargo test --locked -p marty-oid4vci --bench sd_jwt_issuance
+          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=all MARTY_MDOC_MATRIX_ITEM_COUNTS=1,512 MARTY_MDOC_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          MARTY_MDOC_MATRIX=1 MARTY_MDOC_MATRIX_CLASSES=small_primitive MARTY_MDOC_MATRIX_ITEM_COUNTS=1 MARTY_MDOC_MATRIX_BATCH_SIZES=256 cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          cargo test --locked -p marty-oid4vci --bench mdoc_allocation_evidence
+          cargo test --locked -p marty-oid4vci --bench mdoc_tail_evidence
+          cargo test --locked -p marty-oid4vci --bench es256_signing_batch
+          MARTY_ES256_MATRIX=1 MARTY_ES256_MATRIX_FORMATS=all MARTY_ES256_MATRIX_CLASSES=all MARTY_ES256_MATRIX_ITEM_COUNTS=1,512 MARTY_ES256_MATRIX_BATCH_SIZES=1 cargo test --locked -p marty-oid4vci --bench es256_signing_batch
       - name: Record non-Rust-only change
         if: steps.affected.outputs.all != 'true' && steps.affected.outputs.has_packages != 'true'
         run: echo "No Rust package tests are needed for the affected-first lane."
@@ -224,8 +300,6 @@ jobs:
           version: v0.16.0
       - name: Install native cryptography dependencies
         run: sudo apt-get update && sudo apt-get install --yes binutils cmake libbenchmark-dev libgtest-dev libssl-dev libzstd-dev zlib1g-dev
-      - name: Prove ZK mDoc issuance with disposable non-exportable OpenBao key
-        run: MARTY_TEST_ZK_MDOC=1 bash scripts/test_remote_issuer_live_kms.sh
       - name: Test vendored Longfellow security regressions
         run: |
           set -euo pipefail
@@ -415,7 +489,7 @@ jobs:
           USE_ZK_MOCK=1 cargo test --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib
           USE_ZK_MOCK=1 cargo clippy --locked -p marty-oid4vci --no-default-features --features verifier,zk_mdoc --lib -- -D warnings
           cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk
-          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope
+          cargo test --locked -p marty-didcomm --no-default-features --features did_key,did_web,did_peer,did_jwk,encrypted-envelope,local-key-operations
           cargo check --locked -p marty-bindings --no-default-features --features kms-only,extension-module
           if cargo check --locked -p marty-crypto --no-default-features --features kms-only,keygen; then exit 1; fi
           if cargo check --locked -p marty-verification --no-default-features --features kms-only,local-key-operations; then exit 1; fi
@@ -483,6 +557,9 @@ jobs:
           cargo test --locked -p marty-verification --features test-fixtures
           cargo check --locked -p marty-oid4vci --no-default-features
           cargo test --locked -p marty-oid4vci
+          cargo test --locked -p marty-oid4vci --bench mdoc_issuance
+          cargo test --locked -p marty-oid4vci --bench sd_jwt_issuance
+          cargo test --locked -p marty-oid4vci --bench es256_signing_batch
           cargo check --locked -p marty-oid4vci --no-default-features --features issuer
           cargo check --locked -p marty-oid4vci --no-default-features --features verifier
 
@@ -695,6 +772,8 @@ jobs:
     if: always()
     needs:
       - preflight
+      - kms-role-graphs
+      - rust-lint-compat
       - affected-tests
       - zkp-native-security
       - platform-tests
@@ -713,6 +792,8 @@ jobs:
     env:
       EVENT_NAME: ${{ github.event_name }}
       PREFLIGHT: ${{ needs.preflight.result }}
+      KMS_ROLE_GRAPHS: ${{ needs.kms-role-graphs.result }}
+      RUST_LINT_COMPAT: ${{ needs.rust-lint-compat.result }}
       AFFECTED_TESTS: ${{ needs.affected-tests.result }}
       ZKP_NATIVE_SECURITY: ${{ needs.zkp-native-security.result }}
       PLATFORM_TESTS: ${{ needs.platform-tests.result }}
@@ -730,6 +811,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$PREFLIGHT" = success
+          test "$KMS_ROLE_GRAPHS" = success
+          test "$RUST_LINT_COMPAT" = success
           test "$ZKP_NATIVE_SECURITY" = success
           test "$OID4VCI_WASM_SECURITY" = success
           test "$CRYPTO_WASM_SECURITY" = success

@@ -128,6 +128,8 @@ fn ob2_verification_request(source: &Value, recipient_identity: &str) -> Value {
                 "id": "did:example:ob2-issuer"
             },
             "did:example:ob2-issuer#key-1": {
+                "id": "did:example:ob2-issuer#key-1",
+                "controller": "did:example:ob2-issuer",
                 "publicKeyJwk": source["public_jwk"]
             }
         },

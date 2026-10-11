@@ -127,8 +127,7 @@ fi
   -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
   verification::vds_nc::tests -- --ignored
-"$cargo" test --locked -p marty-verification --lib \
-  verification::chain::tests -- --ignored
+"$cargo" test --locked -p marty-x509-verification --lib -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
   verification::mdl::tests -- --ignored
 "$cargo" test --locked -p marty-verification --lib \
