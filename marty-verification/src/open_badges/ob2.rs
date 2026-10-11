@@ -392,10 +392,14 @@ fn verify_issuer_key_binding(
     // When a Profile does declare publicKey, it must agree with the key used.
     if let Some(public_key) = issuer.and_then(|value| value.get("publicKey")) {
         let listed = match public_key {
-            Value::Array(keys) => keys
-                .iter()
-                .any(|value| key_reference_matches(value, creator)),
-            value => key_reference_matches(value, creator),
+            Value::Array(keys) => {
+                let mut listed = false;
+                for value in keys {
+                    listed |= key_reference_matches(value, creator)?;
+                }
+                listed
+            }
+            value => key_reference_matches(value, creator)?,
         };
         if !listed {
             return Err(VerificationError::open_badges_signature_invalid(
@@ -407,8 +411,22 @@ fn verify_issuer_key_binding(
     Ok(())
 }
 
-fn key_reference_matches(value: &Value, creator: &str) -> bool {
-    value.as_str() == Some(creator) || value.get("id").and_then(Value::as_str) == Some(creator)
+fn key_reference_matches(value: &Value, creator: &str) -> VerificationResult<bool> {
+    match value {
+        Value::String(id) => Ok(id == creator),
+        Value::Object(object) if object.is_empty() => Ok(false),
+        Value::Object(object) if object.len() == 1 && object.contains_key("id") => {
+            Ok(object.get("id").and_then(Value::as_str) == Some(creator))
+        }
+        // OB2's supported Profile form is a key-id reference. Accepting an
+        // embedded key here without comparing its material to the selected
+        // document_store key would permit contradictory issuer key claims.
+        Value::Object(_) => Err(VerificationError::open_badges_unsupported(
+            "Embedded issuer publicKey objects are not supported; use a key id reference"
+                .to_string(),
+        )),
+        _ => Ok(false),
+    }
 }
 
 fn extract_public_jwk(value: &Value) -> VerificationResult<Jwk> {
@@ -541,7 +559,16 @@ fn resolve_reference(
 ) -> Option<Value> {
     match value {
         Some(Value::String(id)) => match store.get(id) {
-            Some(doc) => Some(doc.clone()),
+            Some(doc) if doc.get("id").and_then(Value::as_str) == Some(id) => Some(doc.clone()),
+            Some(_) => {
+                push_error(
+                    errors,
+                    error_codes_out,
+                    error_codes::OPEN_BADGES_INVALID,
+                    format!("{} document id does not match reference: {}", field, id),
+                );
+                None
+            }
             None => {
                 push_error(
                     errors,

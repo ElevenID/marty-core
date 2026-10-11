@@ -171,6 +171,80 @@ fn ob2_rejects_either_conflicting_issuer_link_on_key() {
 }
 
 #[test]
+fn ob2_rejects_document_id_mismatch_at_either_reference_hop() {
+    for field in ["badge", "issuer"] {
+        let mut request: Value = serde_json::from_str(OB2).unwrap();
+        if field == "badge" {
+            request["document_store"]["urn:uuid:badge-1"]["id"] = json!("urn:uuid:other-badge");
+        } else {
+            request["document_store"]["did:example:issuer"]["id"] = json!("did:example:attacker");
+            request["document_store"]["did:example:issuer#key-1"]["owner"] =
+                json!("did:example:attacker");
+        }
+
+        let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+        assert!(!result.valid, "{field}: {result:?}");
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains(&format!("{field} document id does not match reference"))));
+    }
+}
+
+#[test]
+fn ob2_preserves_inline_badge_and_issuer_objects() {
+    let mut request: Value = serde_json::from_str(OB2).unwrap();
+    let assertion = request["assertion"].as_object_mut().unwrap();
+    assertion.remove("signature");
+    assertion.remove("verification");
+    assertion.insert(
+        "badge".to_string(),
+        json!({
+            "id": "urn:uuid:badge-1",
+            "issuer": {"id": "did:example:issuer", "name": "Example Issuer"}
+        }),
+    );
+
+    let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+    assert!(result.valid, "{result:?}");
+    assert_eq!(
+        result.normalized.unwrap()["issuer_id"],
+        "did:example:issuer"
+    );
+}
+
+#[test]
+fn ob2_rejects_embedded_issuer_key_material_even_with_matching_id() {
+    for public_key in [
+        json!({
+            "id": "did:example:issuer#key-1",
+            "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "contradictory"}
+        }),
+        json!([
+            "did:example:issuer#key-1",
+            {"id": "did:example:issuer#key-1", "publicKeyPem": "contradictory"}
+        ]),
+    ] {
+        let mut request: Value = serde_json::from_str(OB2).unwrap();
+        request["document_store"]["did:example:issuer"]["publicKey"] = public_key;
+
+        let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+        assert!(!result.valid, "{result:?}");
+        assert!(result.error_codes.iter().any(|code| code == "E706"));
+    }
+}
+
+#[test]
+fn ob2_accepts_reference_only_issuer_public_key_object() {
+    let mut request: Value = serde_json::from_str(OB2).unwrap();
+    request["document_store"]["did:example:issuer"]["publicKey"] =
+        json!({"id": "did:example:issuer#key-1"});
+
+    let result = verify_ob2(serde_json::from_value(request).unwrap()).unwrap();
+    assert!(result.valid, "{result:?}");
+}
+
+#[test]
 fn typed_ob3_preserves_signed_fixture_and_missing_authority_failure() {
     futures::executor::block_on(async {
         for valid in [true, false] {
