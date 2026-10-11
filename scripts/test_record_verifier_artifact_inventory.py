@@ -61,14 +61,22 @@ class VerifierArtifactInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "version"):
             build_inventory(self.assets, TAG, COMMIT)
 
+    def test_python_312_only_and_pure_python_wheels_fail(self) -> None:
+        for replacement in ("cp312-cp312", "py3-none"):
+            with self.subTest(replacement=replacement):
+                wheel = next(self.assets.glob("*win_amd64.whl"))
+                invalid = wheel.with_name(
+                    wheel.name.replace("cp311-cp311", replacement)
+                )
+                wheel.rename(invalid)
+                with self.assertRaisesRegex(ValueError, "Python ABI"):
+                    build_inventory(self.assets, TAG, COMMIT)
+                invalid.rename(wheel)
+
     def test_duplicate_platform_fails_even_with_five_wheels(self) -> None:
         wheel = next(self.assets.glob("*win_amd64.whl"))
         wheel.rename(
-            wheel.with_name(
-                wheel.name.replace("cp311-cp311", "cp312-cp312").replace(
-                    "win_amd64", "manylinux_2_17_x86_64"
-                )
-            )
+            wheel.with_name(wheel.name.replace("win_amd64", "manylinux_2_28_x86_64"))
         )
         with self.assertRaisesRegex(ValueError, "platform matrix"):
             build_inventory(self.assets, TAG, COMMIT)
@@ -98,6 +106,19 @@ class VerifierArtifactInventoryTests(unittest.TestCase):
         signed = workflow.index("cosign sign-blob --yes")
         self.assertLess(flattened, inventoried)
         self.assertLess(inventoried, signed)
+
+    def test_release_import_checks_native_macos_x86_wheel(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "matrix.os == 'macos-latest' && matrix.target == 'x86_64' && 'macos-15-intel'",
+            workflow,
+        )
+        self.assertIn("runner.arch == 'X64' && matrix.target == 'x86_64'", workflow)
 
     def test_cli_writes_inventory_once(self) -> None:
         arguments = [

@@ -57,7 +57,11 @@ def build_inventory(assets: Path, tag: str, commit: str) -> dict[str, object]:
         raise ValueError("release assets directory is missing")
 
     version = tag[1:]
-    wheel_pattern = re.compile(rf"{NAME}-{re.escape(version)}-[^-]+-[^-]+-[^-]+\.whl")
+    # The release builder uses Python 3.11. A cp312-only or pure-Python wheel
+    # filename cannot stand in for an importable 3.11 native extension.
+    wheel_pattern = re.compile(
+        rf"{NAME}-{re.escape(version)}-cp311-(?:cp311|abi3)-[^-]+\.whl"
+    )
     sdist_name = f"{NAME}-{version}.tar.gz"
     candidates = sorted(
         path
@@ -70,7 +74,7 @@ def build_inventory(assets: Path, tag: str, commit: str) -> dict[str, object]:
     if len(wheels) != WHEEL_COUNT or len(sdists) != 1:
         raise ValueError("expected exactly five verifier wheels and one sdist")
     if any(not wheel_pattern.fullmatch(path.name) for path in wheels):
-        raise ValueError("verifier wheel name or version does not match release tag")
+        raise ValueError("verifier wheel name, version, or Python ABI is invalid")
     if sdists[0].name != sdist_name:
         raise ValueError("verifier sdist name or version does not match release tag")
     platforms = [wheel_platform(path.name) for path in wheels]
