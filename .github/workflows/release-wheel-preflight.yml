@@ -18,6 +18,8 @@ on:
       - "marty-iso18013/src/**"
       - "marty-verification/python/**"
       - "marty-verification/src/**"
+      - "marty-verification/tests/fixtures/open_badges/ob2_verify_request.json"
+      - "marty-verification/tests/fixtures/open_badges/ob3_verify_request.json"
       - "scripts/check_python_wheel_import.py"
       - "scripts/test_check_python_wheel_import.py"
       - "scripts/check_verifier_clean_wheel_consumer.py"
