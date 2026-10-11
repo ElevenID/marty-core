@@ -329,6 +329,10 @@ jobs:
             echo "Release artifact tree still contains nested files" >&2
             exit 1
           fi
+          # Inventory only the verifier Python artifacts already built by the
+          # release matrix. This is not a standalone-product qualification.
+          python scripts/record_verifier_artifact_inventory.py \
+            --assets release-assets --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA"
           find release-assets -type f ! -name '*.sigstore.json' -print0 | while IFS= read -r -d '' file; do
             cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"
           done
