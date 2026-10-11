@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 chrono.workspace = true
-marty-verification = { path = "../marty-verification", version = "0.2.1", default-features = false, features = ["kms-only"] }
+marty-verification = { path = "../marty-verification", version = "0.2.2", default-features = false, features = ["kms-only"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
