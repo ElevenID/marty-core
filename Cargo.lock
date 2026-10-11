@@ -4104,6 +4104,7 @@ dependencies = [
  "marty-crypto",
  "marty-crypto-test-support",
  "marty-oid4vci",
+ "marty-x509-verification",
  "moka",
  "openssl",
  "p256",
@@ -4144,6 +4145,25 @@ dependencies = [
  "x509-cert",
  "x509-ocsp",
  "zeroize",
+]
+
+[[package]]
+name = "marty-x509-verification"
+version = "0.2.1"
+dependencies = [
+ "chrono",
+ "const-oid",
+ "der 0.7.10",
+ "marty-crypto",
+ "p256",
+ "pem-rfc7468 0.7.0",
+ "rcgen",
+ "serde",
+ "sha2 0.10.9",
+ "spki",
+ "time",
+ "x509-cert",
+ "x509-ocsp",
 ]
 
 [[package]]
