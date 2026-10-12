@@ -413,6 +413,14 @@ pub fn verify_parsed_certificate_signature(
 mod tests {
     use super::*;
 
+    fn public_parser_certificate(field: &str) -> Vec<u8> {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/certificate_parser_public.json"
+        ))
+        .unwrap();
+        hex::decode(vectors[field].as_str().unwrap()).unwrap()
+    }
+
     #[test]
     fn test_der_to_pem_format() {
         let fake_der = vec![0x30, 0x82, 0x01, 0x00]; // Minimal DER sequence
@@ -428,16 +436,8 @@ mod tests {
 
     #[test]
     fn test_extract_crl_distribution_points() {
-        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
-        params
-            .crl_distribution_points
-            .push(rcgen::CrlDistributionPoint {
-                uris: vec!["https://example.invalid/issuer.crl".to_string()],
-            });
-        params.is_ca = rcgen::IsCa::ExplicitNoCa;
-        let key_pair = rcgen::KeyPair::generate().unwrap();
-        let certificate = params.self_signed(&key_pair).unwrap();
-        let urls = get_crl_distribution_points(certificate.der()).unwrap();
+        let certificate = public_parser_certificate("crl_distribution_certificate_der_hex");
+        let urls = get_crl_distribution_points(&certificate).unwrap();
         assert_eq!(urls, vec!["https://example.invalid/issuer.crl"]);
     }
 
@@ -448,10 +448,8 @@ mod tests {
 
     #[test]
     fn test_certificate_info_includes_native_pkd_metadata() {
-        let params = rcgen::CertificateParams::new(vec!["pkd.example".to_string()]).unwrap();
-        let key_pair = rcgen::KeyPair::generate().unwrap();
-        let certificate = params.self_signed(&key_pair).unwrap();
-        let info = get_certificate_info(certificate.der()).unwrap();
+        let certificate = public_parser_certificate("pkd_metadata_certificate_der_hex");
+        let info = get_certificate_info(&certificate).unwrap();
 
         assert!(!info.signature_algorithm.is_empty());
         assert_eq!(info.fingerprint_sha1.len(), 40);
@@ -467,45 +465,14 @@ mod tests {
     ))]
     #[test]
     fn verifies_certificate_with_parameterized_rsa_pss_signature() {
-        use crate::cert_builder::{create_ca_certificate, create_signed_certificate};
-        use crate::keygen::KeyType;
-        use der::asn1::{Any, BitString};
-        use rand::rngs::OsRng;
-        use rsa::pkcs1::RsaPssParams;
-        use rsa::pkcs8::DecodePrivateKey;
-        use rsa::pss::{Signature as PssSignature, SigningKey as PssSigningKey};
-        use rsa::signature::{RandomizedSigner, SignatureEncoding};
-        use rsa::RsaPrivateKey;
-        use sha2::Sha256;
-        use spki::AlgorithmIdentifierOwned;
+        use der::asn1::BitString;
 
-        let (issuer_der, issuer_key_pem) =
-            create_ca_certificate("PSS issuer", None, 30, KeyType::Rsa2048).unwrap();
-        let (subject_der, _) = create_signed_certificate(
-            "PSS subject",
-            &issuer_der,
-            &issuer_key_pem,
-            7,
-            false,
-            KeyType::EcdsaP256,
-        )
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/pss_certificate_public.json"
+        ))
         .unwrap();
-
-        let parameters = RsaPssParams::new::<Sha256>(17).to_der().unwrap();
-        let algorithm = AlgorithmIdentifierOwned {
-            oid: "1.2.840.113549.1.1.10".parse().unwrap(),
-            parameters: Some(Any::from_der(&parameters).unwrap()),
-        };
-        let mut subject = Certificate::from_der(&subject_der).unwrap();
-        subject.tbs_certificate.signature = algorithm.clone();
-        subject.signature_algorithm = algorithm;
-
-        let tbs_der = subject.tbs_certificate.to_der().unwrap();
-        let issuer_key = RsaPrivateKey::from_pkcs8_pem(&issuer_key_pem).unwrap();
-        let signature: PssSignature = PssSigningKey::<Sha256>::new_with_salt_len(issuer_key, 17)
-            .sign_with_rng(&mut OsRng, &tbs_der);
-        subject.signature = BitString::from_bytes(&signature.to_bytes()).unwrap();
-        let subject_der = subject.to_der().unwrap();
+        let issuer_der = hex::decode(vectors["issuer_der_hex"].as_str().unwrap()).unwrap();
+        let subject_der = hex::decode(vectors["subject_pss_der_hex"].as_str().unwrap()).unwrap();
 
         assert!(verify_certificate_signature(&subject_der, &issuer_der).unwrap());
 

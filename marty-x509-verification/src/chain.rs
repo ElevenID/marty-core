@@ -832,14 +832,21 @@ fn verify_certificate_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marty_crypto_test_support::remote_certificate::{
+        RemoteCertificateAlgorithm, RemoteCertificateKey,
+    };
 
-    fn revocation_certificate_fixture(ca_name: &str) -> (Vec<u8>, String, Vec<u8>) {
+    fn remote_key() -> RemoteCertificateKey {
+        RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256)
+    }
+
+    fn revocation_certificate_fixture(ca_name: &str) -> (Vec<u8>, RemoteCertificateKey, Vec<u8>) {
         use rcgen::{
-            BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose,
+            BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyUsagePurpose,
             SerialNumber,
         };
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let mut ca_params = CertificateParams::default();
         ca_params
             .distinguished_name
@@ -853,7 +860,7 @@ mod tests {
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let issuer = Issuer::from_params(&ca_params, &ca_key);
 
-        let leaf_key = KeyPair::generate().unwrap();
+        let leaf_key = remote_key();
         let mut leaf_params = CertificateParams::default();
         leaf_params
             .distinguished_name
@@ -861,21 +868,16 @@ mod tests {
         leaf_params.serial_number = Some(SerialNumber::from(2u64));
         let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
 
-        (
-            ca_cert.der().to_vec(),
-            ca_key.serialize_pem(),
-            leaf_cert.der().to_vec(),
-        )
+        (ca_cert.der().to_vec(), ca_key, leaf_cert.der().to_vec())
     }
 
-    fn revoked_crl(ca_name: &str, ca_key_pem: &str) -> Vec<u8> {
+    fn revoked_crl(ca_name: &str, ca_key: &RemoteCertificateKey) -> Vec<u8> {
         use rcgen::{
             date_time_ymd, BasicConstraints, CertificateParams, CertificateRevocationListParams,
-            DnType, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose, RevocationReason,
+            DnType, IsCa, Issuer, KeyIdMethod, KeyUsagePurpose, RevocationReason,
             RevokedCertParams, SerialNumber,
         };
 
-        let ca_key = KeyPair::from_pem(ca_key_pem).unwrap();
         let mut ca_params = CertificateParams::default();
         ca_params
             .distinguished_name
@@ -886,7 +888,7 @@ mod tests {
             KeyUsagePurpose::KeyCertSign,
             KeyUsagePurpose::CrlSign,
         ];
-        let issuer = Issuer::from_params(&ca_params, &ca_key);
+        let issuer = Issuer::from_params(&ca_params, ca_key);
         CertificateRevocationListParams {
             this_update: date_time_ymd(2026, 1, 1),
             next_update: date_time_ymd(2030, 1, 1),
@@ -909,13 +911,12 @@ mod tests {
     fn ocsp_response(
         cert_der: &[u8],
         issuer_der: &[u8],
-        issuer_key_pem: &str,
+        issuer_key: &RemoteCertificateKey,
         revoked: bool,
     ) -> Vec<u8> {
         use der::asn1::{BitString, GeneralizedTime, Null, OctetString};
         use der::Encode;
-        use p256::ecdsa::{signature::Signer, SigningKey};
-        use p256::pkcs8::DecodePrivateKey;
+        use rcgen::SigningKey as _;
         use sha2::{Digest, Sha256};
         use std::time::{Duration, SystemTime, UNIX_EPOCH};
         use x509_ocsp::{
@@ -967,16 +968,14 @@ mod tests {
             }],
             response_extensions: None,
         };
-        let signing_key = SigningKey::from_pkcs8_pem(issuer_key_pem).unwrap();
-        let signature: p256::ecdsa::DerSignature =
-            signing_key.sign(&response_data.to_der().unwrap());
+        let signature = issuer_key.sign(&response_data.to_der().unwrap()).unwrap();
         let basic = BasicOcspResponse {
             tbs_response_data: response_data,
             signature_algorithm: spki::AlgorithmIdentifierOwned {
                 oid: const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2"),
                 parameters: None,
             },
-            signature: BitString::from_bytes(signature.as_bytes()).unwrap(),
+            signature: BitString::from_bytes(&signature).unwrap(),
             certs: None,
         };
         OcspResponse {
@@ -1031,8 +1030,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_valid_chain_self_signed() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate a self-signed CA certificate
         let mut ca_params = CertificateParams::default();
@@ -1041,7 +1041,7 @@ mod tests {
             .push(DnType::CommonName, "Test Root CA");
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca_pem = ca_cert.pem();
 
@@ -1059,8 +1059,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_valid_two_cert_chain() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate CA
         let mut ca_params = CertificateParams::default();
@@ -1069,7 +1070,7 @@ mod tests {
             .push(DnType::CommonName, "Test Root CA");
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca_pem = ca_cert.pem();
 
@@ -1080,7 +1081,7 @@ mod tests {
             .push(DnType::CommonName, "Test End Entity");
         ee_params.is_ca = rcgen::IsCa::NoCa;
 
-        let ee_key = KeyPair::generate().unwrap();
+        let ee_key = remote_key();
         let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
         let ee_pem = ee_cert.pem();
@@ -1099,8 +1100,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_expired_certificate() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate CA
         let mut ca_params = CertificateParams::default();
@@ -1109,7 +1111,7 @@ mod tests {
             .push(DnType::CommonName, "Test Root CA");
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca_pem = ca_cert.pem();
 
@@ -1123,7 +1125,7 @@ mod tests {
         ee_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(365);
         ee_params.not_after = time::OffsetDateTime::now_utc() - time::Duration::days(1);
 
-        let ee_key = KeyPair::generate().unwrap();
+        let ee_key = remote_key();
         let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
         let ee_pem = ee_cert.pem();
@@ -1138,8 +1140,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_not_yet_valid_certificate() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate CA
         let mut ca_params = CertificateParams::default();
@@ -1148,7 +1151,7 @@ mod tests {
             .push(DnType::CommonName, "Test Root CA");
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca_pem = ca_cert.pem();
 
@@ -1162,7 +1165,7 @@ mod tests {
         ee_params.not_before = time::OffsetDateTime::now_utc() + time::Duration::days(30);
         ee_params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(365);
 
-        let ee_key = KeyPair::generate().unwrap();
+        let ee_key = remote_key();
         let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
         let ee_pem = ee_cert.pem();
@@ -1206,8 +1209,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_validation_at_specific_moment() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate CA with long validity
         let mut ca_params = CertificateParams::default();
@@ -1218,7 +1222,7 @@ mod tests {
         ca_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(365);
         ca_params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(365 * 10);
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca_pem = ca_cert.pem();
 
@@ -1231,7 +1235,7 @@ mod tests {
         ee_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(365);
         ee_params.not_after = time::OffsetDateTime::now_utc() - time::Duration::days(30);
 
-        let ee_key = KeyPair::generate().unwrap();
+        let ee_key = remote_key();
         let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
         let ee_pem = ee_cert.pem();
@@ -1264,8 +1268,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_untrusted_chain() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate CA
         let mut ca_params = CertificateParams::default();
@@ -1274,7 +1279,7 @@ mod tests {
             .push(DnType::CommonName, "Unknown CA");
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca_pem = ca_cert.pem();
 
@@ -1285,7 +1290,7 @@ mod tests {
             .push(DnType::CommonName, "Test End Entity");
         ee_params.is_ca = rcgen::IsCa::NoCa;
 
-        let ee_key = KeyPair::generate().unwrap();
+        let ee_key = remote_key();
         let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
         let ee_pem = ee_cert.pem();
@@ -1297,7 +1302,7 @@ mod tests {
             .push(DnType::CommonName, "Trusted CA");
         trusted_ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let trusted_ca_key = KeyPair::generate().unwrap();
+        let trusted_ca_key = remote_key();
         let trusted_ca_cert = trusted_ca_params.self_signed(&trusted_ca_key).unwrap();
         let trusted_ca_pem = trusted_ca_cert.pem();
 
@@ -1311,8 +1316,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_three_level_chain() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate Root CA
         let mut root_params = CertificateParams::default();
@@ -1321,7 +1327,7 @@ mod tests {
             .push(DnType::CommonName, "Root CA");
         root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let root_key = KeyPair::generate().unwrap();
+        let root_key = remote_key();
         let root_cert = root_params.self_signed(&root_key).unwrap();
         let root_pem = root_cert.pem();
 
@@ -1332,7 +1338,7 @@ mod tests {
             .push(DnType::CommonName, "Intermediate CA");
         int_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
 
-        let int_key = KeyPair::generate().unwrap();
+        let int_key = remote_key();
         let root_issuer = rcgen::Issuer::from_params(&root_params, &root_key);
         let int_cert = int_params.signed_by(&int_key, &root_issuer).unwrap();
         let int_pem = int_cert.pem();
@@ -1344,7 +1350,7 @@ mod tests {
             .push(DnType::CommonName, "End Entity");
         ee_params.is_ca = rcgen::IsCa::NoCa;
 
-        let ee_key = KeyPair::generate().unwrap();
+        let ee_key = remote_key();
         let int_issuer = rcgen::Issuer::from_params(&int_params, &int_key);
         let ee_cert = ee_params.signed_by(&ee_key, &int_issuer).unwrap();
         let ee_pem = ee_cert.pem();
@@ -1365,15 +1371,16 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn rejects_non_ca_certificate_as_issuer() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         let mut issuer_params = CertificateParams::default();
         issuer_params
             .distinguished_name
             .push(DnType::CommonName, "Non-CA issuer");
         issuer_params.is_ca = rcgen::IsCa::NoCa;
-        let issuer_key = KeyPair::generate().unwrap();
+        let issuer_key = remote_key();
         let issuer_cert = issuer_params.self_signed(&issuer_key).unwrap();
 
         let mut leaf_params = CertificateParams::default();
@@ -1381,7 +1388,7 @@ mod tests {
             .distinguished_name
             .push(DnType::CommonName, "Leaf signed by non-CA");
         leaf_params.is_ca = rcgen::IsCa::NoCa;
-        let leaf_key = KeyPair::generate().unwrap();
+        let leaf_key = remote_key();
         let issuer = rcgen::Issuer::from_params(&issuer_params, &issuer_key);
         let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
 
@@ -1399,8 +1406,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn rejects_ca_issuer_without_key_cert_sign_usage() {
-        use rcgen::{CertificateParams, DnType, KeyPair, KeyUsagePurpose};
+        use rcgen::{CertificateParams, DnType, KeyUsagePurpose};
 
         let mut issuer_params = CertificateParams::default();
         issuer_params
@@ -1408,7 +1416,7 @@ mod tests {
             .push(DnType::CommonName, "CA without certificate-signing usage");
         issuer_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         issuer_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        let issuer_key = KeyPair::generate().unwrap();
+        let issuer_key = remote_key();
         let issuer_cert = issuer_params.self_signed(&issuer_key).unwrap();
 
         let mut leaf_params = CertificateParams::default();
@@ -1416,7 +1424,7 @@ mod tests {
             .distinguished_name
             .push(DnType::CommonName, "Leaf");
         leaf_params.is_ca = rcgen::IsCa::NoCa;
-        let leaf_key = KeyPair::generate().unwrap();
+        let leaf_key = remote_key();
         let issuer = rcgen::Issuer::from_params(&issuer_params, &issuer_key);
         let leaf_cert = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
 
@@ -1435,15 +1443,16 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn rejects_ca_certificate_in_end_entity_position() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         let mut root_params = CertificateParams::default();
         root_params
             .distinguished_name
             .push(DnType::CommonName, "Root CA");
         root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        let root_key = KeyPair::generate().unwrap();
+        let root_key = remote_key();
         let root_cert = root_params.self_signed(&root_key).unwrap();
 
         let mut subordinate_params = CertificateParams::default();
@@ -1451,7 +1460,7 @@ mod tests {
             .distinguished_name
             .push(DnType::CommonName, "Subordinate CA used as leaf");
         subordinate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
-        let subordinate_key = KeyPair::generate().unwrap();
+        let subordinate_key = remote_key();
         let root_issuer = rcgen::Issuer::from_params(&root_params, &root_key);
         let subordinate_cert = subordinate_params
             .signed_by(&subordinate_key, &root_issuer)
@@ -1472,15 +1481,16 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn rejects_path_length_constraint_violation() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         let mut root_params = CertificateParams::default();
         root_params
             .distinguished_name
             .push(DnType::CommonName, "Path length zero root");
         root_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
-        let root_key = KeyPair::generate().unwrap();
+        let root_key = remote_key();
         let root_cert = root_params.self_signed(&root_key).unwrap();
 
         let mut intermediate_params = CertificateParams::default();
@@ -1488,7 +1498,7 @@ mod tests {
             .distinguished_name
             .push(DnType::CommonName, "Prohibited intermediate");
         intermediate_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
-        let intermediate_key = KeyPair::generate().unwrap();
+        let intermediate_key = remote_key();
         let root_issuer = rcgen::Issuer::from_params(&root_params, &root_key);
         let intermediate_cert = intermediate_params
             .signed_by(&intermediate_key, &root_issuer)
@@ -1499,7 +1509,7 @@ mod tests {
             .distinguished_name
             .push(DnType::CommonName, "Leaf below prohibited intermediate");
         leaf_params.is_ca = rcgen::IsCa::NoCa;
-        let leaf_key = KeyPair::generate().unwrap();
+        let leaf_key = remote_key();
         let intermediate_issuer =
             rcgen::Issuer::from_params(&intermediate_params, &intermediate_key);
         let leaf_cert = leaf_params
@@ -1521,8 +1531,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn test_revocation_soft_fail_mode() {
-        use rcgen::{CertificateParams, DnType, KeyPair};
+        use rcgen::{CertificateParams, DnType};
 
         // Generate CA
         let mut ca_params = CertificateParams::default();
@@ -1531,7 +1542,7 @@ mod tests {
             .push(DnType::CommonName, "Test CA");
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let ca_key = KeyPair::generate().unwrap();
+        let ca_key = remote_key();
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
         let ca_pem = ca_cert.pem();
 
@@ -1542,7 +1553,7 @@ mod tests {
             .push(DnType::CommonName, "Test EE");
         ee_params.is_ca = rcgen::IsCa::NoCa;
 
-        let ee_key = KeyPair::generate().unwrap();
+        let ee_key = remote_key();
         let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params.signed_by(&ee_key, &ca_issuer).unwrap();
         let ee_pem = ee_cert.pem();
@@ -1567,6 +1578,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn hard_fail_revocation_uses_authenticated_fresh_crl_evidence() {
         let (ca_der, ca_key, leaf_der) = revocation_certificate_fixture("Chain CRL CA");
         let crl_der = revoked_crl("Chain CRL CA", &ca_key);
@@ -1591,6 +1603,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn authenticated_ocsp_evidence_controls_hard_fail_validation() {
         let (ca_der, ca_key, leaf_der) = revocation_certificate_fixture("OCSP Chain CA");
         let config = ChainValidatorConfig {

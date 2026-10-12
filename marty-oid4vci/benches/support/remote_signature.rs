@@ -3,23 +3,17 @@ use marty_oid4vci::{
     types::SignedCredential,
     Oid4vciResult,
 };
-use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
+#[path = "openbao_signer.rs"]
+mod openbao_signer;
 
 use crate::signed_preparation::{PreparedAssembly, SignedPreparation};
 
-const FIXTURE_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#;
-
 pub fn issuer_public_jwk() -> &'static str {
-    FIXTURE_PUBLIC_JWK
+    openbao_signer::public_jwk()
 }
 
 pub fn sign_es256(message: &[u8]) -> Vec<u8> {
-    let mut scalar = [0; 32];
-    scalar[31] = 1;
-    let key =
-        SigningKey::from_slice(&scalar).expect("fixed benchmark-only P-256 key must be valid");
-    let signature: Signature = key.sign(message);
-    signature.to_bytes().to_vec()
+    openbao_signer::sign(message)
 }
 
 pub fn assemble_es256_mdoc(prepared: PreparedMdoc) -> Oid4vciResult<SignedCredential> {

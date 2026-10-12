@@ -4,8 +4,9 @@ Verification and explicitly scoped protocol-session cryptography for Marty.
 
 Production builds have no key-generation, signing, private-key codec,
 PKCS#12, BBS signing, or certificate/SOD builder feature. Credential signing
-uses prepare/KMS/assemble APIs in the service layer. Local fixtures live in the
-non-publishable `marty-crypto-test-support` crate.
+uses prepare/KMS/assemble APIs in the service layer. Cross-crate signing
+fixtures in the non-publishable `marty-crypto-test-support` crate call a
+disposable remote OpenBao signer; that crate has no local private-key helper.
 
 ```toml
 [dependencies]

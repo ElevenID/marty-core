@@ -19,11 +19,6 @@ thiserror = { workspace = true }
 x509-cert = { workspace = true }
 
 [dev-dependencies]
-ed25519-dalek = { workspace = true, features = ["pkcs8"] }
+marty-crypto-test-support = { workspace = true }
 marty-verification = { workspace = true, default-features = false, features = ["csca"] }
-p256 = { workspace = true, features = ["ecdsa", "pkcs8", "std"] }
-p384 = { workspace = true, features = ["ecdsa", "pkcs8", "std"] }
-rcgen = { workspace = true, features = ["aws_lc_rs"] }
-rsa = { workspace = true, features = ["sha2"] }
-sha2 = { workspace = true, features = ["oid"] }
-signature = { workspace = true }
+rcgen = { workspace = true }

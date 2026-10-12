@@ -1,19 +1,13 @@
 #![cfg(feature = "wallet")]
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use base64::Engine as _;
-use marty_oid4vci::formats::sd_jwt::{sign_sd_jwt, verify_sd_jwt};
-use marty_oid4vci::signer::CredentialSigner;
-use marty_oid4vci::types::{
-    CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential, SigningAlgorithm,
-};
+use marty_oid4vci::types::SigningAlgorithm;
 use marty_oid4vci::{
-    Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver, WalletEngine,
+    Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
+    TrustedSdJwtIssuerKeys, WalletEngine,
 };
-use p256::ecdsa::SigningKey;
-use p256::elliptic_curve::rand_core::OsRng;
 
 #[derive(Clone)]
 struct StaticResolver {
@@ -52,8 +46,8 @@ struct Fixture {
     credential: String,
     issuer: String,
     issuer_public_jwk: String,
-    issuer_private_jwk: String,
-    holder_private_jwk: String,
+    key_id: String,
+    holder_public_jwk: String,
 }
 
 fn fresh_nonce() -> String {
@@ -76,71 +70,27 @@ fn runtime_whitespace_transaction_value() -> String {
         .collect()
 }
 
-fn p256_jwk(key: &SigningKey, include_private: bool) -> serde_json::Value {
-    let point = key.verifying_key().to_encoded_point(false);
-    let mut jwk = serde_json::json!({
-        "kty": "EC",
-        "crv": "P-256",
-        "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.x().unwrap()),
-        "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(point.y().unwrap()),
-    });
-    if include_private {
-        jwk["d"] = serde_json::Value::String(
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes()),
-        );
-    }
-    jwk
-}
-
 fn fixture() -> Fixture {
-    let issuer_signing_key = SigningKey::random(&mut OsRng);
-    let holder_signing_key = SigningKey::random(&mut OsRng);
-    let issuer = "did:example:verified-wallet-issuer".to_string();
-    let issuer_private_jwk = p256_jwk(&issuer_signing_key, true).to_string();
-    let holder_cnf_jwk = p256_jwk(&holder_signing_key, false);
-    let holder_private_jwk = p256_jwk(&holder_signing_key, true).to_string();
-
-    let claims = CredentialClaims {
-        subject_id: Some("did:example:holder".into()),
-        credential_type: "VerifiedWalletCredential".into(),
-        claims: HashMap::from([
-            ("email".into(), serde_json::json!("member@example.com")),
-            ("role".into(), serde_json::json!("member")),
-            ("cnf".into(), serde_json::json!({"jwk": holder_cnf_jwk})),
-        ]),
-        expiration_seconds: None,
-        selective_disclosure_claims: vec!["email".into()],
-        mdoc_namespace: None,
-        mdoc_doctype: None,
-        zk_predicate_claims: Vec::new(),
-        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
-        w3c_context: Vec::new(),
-        w3c_types: Vec::new(),
-    };
-    let signed = sign_sd_jwt(
-        &IssuerKey {
-            issuer_id: issuer.clone(),
-            jwk_json: issuer_private_jwk.clone(),
-            algorithm: SigningAlgorithm::ES256,
-        },
-        &claims,
-    )
-    .unwrap();
-    let credential = match signed {
-        SignedCredential::SdJwt { compact, .. } => compact,
-        _ => panic!("expected SD-JWT"),
-    };
-
-    let mut issuer_public_jwk = p256_jwk(&issuer_signing_key, false);
-    issuer_public_jwk["kid"] = serde_json::Value::String(issuer.clone());
-    issuer_public_jwk["alg"] = serde_json::Value::String("ES256".into());
+    let vector: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/remote_sd_jwt_wallet_public.json")).unwrap();
+    let credential = vector["credential"].as_str().unwrap().to_owned();
+    let header_segment = credential.split('.').next().unwrap();
+    let header_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(header_segment)
+        .unwrap();
+    let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+    let issuer = vector["issuer"].as_str().unwrap().to_owned();
+    let key_id = header["kid"].as_str().unwrap().to_owned();
+    let mut issuer_public_jwk = vector["issuer_public_jwk"].clone();
+    issuer_public_jwk["kid"] = serde_json::json!(key_id);
+    issuer_public_jwk["alg"] = serde_json::json!("ES256");
 
     Fixture {
         credential,
         issuer,
         issuer_public_jwk: issuer_public_jwk.to_string(),
-        issuer_private_jwk,
-        holder_private_jwk,
+        key_id,
+        holder_public_jwk: vector["holder_public_jwk"].to_string(),
     }
 }
 
@@ -148,11 +98,113 @@ fn resolver_for(fixture: &Fixture) -> StaticResolver {
     StaticResolver {
         key: ResolvedSdJwtIssuerKey::new(
             fixture.issuer.clone(),
-            Some(fixture.issuer.clone()),
+            Some(fixture.key_id.clone()),
             SigningAlgorithm::ES256,
             fixture.issuer_public_jwk.clone(),
         ),
     }
+}
+
+#[test]
+fn received_credential_requires_trusted_issuer_and_presenter_key() {
+    let fixture = fixture();
+    let engine = WalletEngine::new();
+    let verified = engine
+        .verify_received_sd_jwt_credential(
+            &fixture.credential,
+            &fixture.holder_public_jwk,
+            &resolver_for(&fixture),
+        )
+        .unwrap();
+    assert_eq!(verified.issuer, fixture.issuer);
+    assert_eq!(verified.credential_type, "VerifiedWalletCredential");
+    assert_eq!(verified.format, "vc+sd-jwt");
+
+    assert!(engine
+        .verify_received_sd_jwt_credential(
+            &fixture.credential,
+            &fixture.issuer_public_jwk,
+            &resolver_for(&fixture),
+        )
+        .is_err());
+    assert!(engine
+        .verify_received_sd_jwt_credential(
+            &fixture.credential,
+            &fixture.holder_public_jwk,
+            &CountingResolver::default(),
+        )
+        .is_err());
+}
+
+#[test]
+fn trusted_issuer_key_set_matches_exact_identity_and_rejects_unsafe_entries() {
+    let fixture = fixture();
+    let trusted = ResolvedSdJwtIssuerKey::new(
+        fixture.issuer.clone(),
+        Some(fixture.key_id.clone()),
+        SigningAlgorithm::ES256,
+        fixture.issuer_public_jwk.clone(),
+    );
+    let resolver = TrustedSdJwtIssuerKeys::new(vec![trusted.clone()]).unwrap();
+    assert!(resolver
+        .resolve(
+            &fixture.issuer,
+            Some(&fixture.key_id),
+            SigningAlgorithm::ES256
+        )
+        .is_ok());
+    assert!(WalletEngine::new()
+        .prepare_verified_sd_jwt_presentation(
+            &fixture.credential,
+            &["email".into()],
+            &fresh_nonce(),
+            "https://verifier.example",
+            &fixture.holder_public_jwk,
+            &resolver,
+        )
+        .is_ok());
+    assert!(resolver
+        .resolve(&fixture.issuer, None, SigningAlgorithm::ES256)
+        .is_err());
+    assert!(resolver
+        .resolve(
+            &fixture.issuer,
+            Some(&fixture.key_id),
+            SigningAlgorithm::EdDSA
+        )
+        .is_err());
+    assert!(resolver
+        .resolve(
+            "did:example:other",
+            Some(&fixture.key_id),
+            SigningAlgorithm::ES256
+        )
+        .is_err());
+    assert!(TrustedSdJwtIssuerKeys::new(vec![trusted.clone(), trusted]).is_err());
+    let mut wrong_family: serde_json::Value =
+        serde_json::from_str(&fixture.issuer_public_jwk).unwrap();
+    wrong_family.as_object_mut().unwrap().remove("alg");
+    assert!(
+        TrustedSdJwtIssuerKeys::new(vec![ResolvedSdJwtIssuerKey::new(
+            fixture.issuer.clone(),
+            Some(fixture.key_id.clone()),
+            SigningAlgorithm::EdDSA,
+            wrong_family.to_string(),
+        )])
+        .is_err()
+    );
+    let mut private_jwk: serde_json::Value =
+        serde_json::from_str(&fixture.issuer_public_jwk).unwrap();
+    private_jwk["d"] = serde_json::json!("private");
+    assert!(
+        TrustedSdJwtIssuerKeys::new(vec![ResolvedSdJwtIssuerKey::new(
+            fixture.issuer,
+            Some(fixture.key_id),
+            SigningAlgorithm::ES256,
+            private_jwk.to_string(),
+        )])
+        .is_err()
+    );
 }
 
 fn tamper_issuer_signature(credential: &str) -> String {
@@ -183,33 +235,6 @@ fn mutate_issuer_header(credential: &str, mutate: impl FnOnce(&mut serde_json::V
     format!("{}~{suffix}", segments.join("."))
 }
 
-fn mutate_issuer_header_and_resign(
-    fixture: &Fixture,
-    mutate: impl FnOnce(&mut serde_json::Value),
-) -> String {
-    let (issuer_jws, suffix) = fixture.credential.split_once('~').unwrap();
-    let segments = issuer_jws.split('.').collect::<Vec<_>>();
-    let header_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(segments[0])
-        .unwrap();
-    let mut header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
-    mutate(&mut header);
-    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(serde_json::to_vec(&header).unwrap());
-    let signing_input = format!("{header}.{}", segments[1]);
-    let signature = IssuerKey {
-        issuer_id: fixture.issuer.clone(),
-        jwk_json: fixture.issuer_private_jwk.clone(),
-        algorithm: SigningAlgorithm::ES256,
-    }
-    .sign(signing_input.as_bytes())
-    .unwrap();
-    format!(
-        "{signing_input}.{}~{suffix}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
-    )
-}
-
 fn mutate_issuer_payload(credential: &str, mutate: impl FnOnce(&mut serde_json::Value)) -> String {
     let (issuer_jws, suffix) = credential.split_once('~').unwrap();
     let mut segments = issuer_jws
@@ -226,33 +251,6 @@ fn mutate_issuer_payload(credential: &str, mutate: impl FnOnce(&mut serde_json::
     format!("{}~{suffix}", segments.join("."))
 }
 
-fn mutate_issuer_payload_and_resign(
-    fixture: &Fixture,
-    mutate: impl FnOnce(&mut serde_json::Value),
-) -> String {
-    let (issuer_jws, suffix) = fixture.credential.split_once('~').unwrap();
-    let segments = issuer_jws.split('.').collect::<Vec<_>>();
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(segments[1])
-        .unwrap();
-    let mut payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
-    mutate(&mut payload);
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(serde_json::to_vec(&payload).unwrap());
-    let signing_input = format!("{}.{payload}", segments[0]);
-    let signature = IssuerKey {
-        issuer_id: fixture.issuer.clone(),
-        jwk_json: fixture.issuer_private_jwk.clone(),
-        algorithm: SigningAlgorithm::ES256,
-    }
-    .sign(signing_input.as_bytes())
-    .unwrap();
-    format!(
-        "{signing_input}.{}~{suffix}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
-    )
-}
-
 fn replace_issuer_algorithm(credential: &str, algorithm: &str) -> String {
     mutate_issuer_header(credential, |header| {
         header["alg"] = serde_json::Value::String(algorithm.into());
@@ -260,60 +258,15 @@ fn replace_issuer_algorithm(credential: &str, algorithm: &str) -> String {
 }
 
 #[test]
-fn verified_presentation_authenticates_issuer_and_holder_before_kb_jwt() {
-    let fixture = fixture();
-    let nonce = fresh_nonce();
-    let presentation = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
-            &fixture.credential,
-            &["email".into()],
-            &nonce,
-            "https://verifier.example",
-            &fixture.holder_private_jwk,
-            &resolver_for(&fixture),
-        )
-        .unwrap();
-
-    let verified = verify_sd_jwt(
-        &presentation,
-        &fixture.issuer_public_jwk,
-        Some("https://verifier.example".into()),
-        Some(nonce),
-    )
-    .unwrap();
-    assert_eq!(verified["email"], "member@example.com");
-    assert_eq!(verified["role"], "member");
-}
-
-#[test]
-fn verified_presentation_accepts_transitional_dc_sd_jwt_type() {
-    let fixture = fixture();
-    let credential = mutate_issuer_header_and_resign(&fixture, |header| {
-        header["typ"] = serde_json::json!("dc+sd-jwt");
-    });
-
-    WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
-            &credential,
-            &["email".into()],
-            &fresh_nonce(),
-            "https://verifier.example",
-            &fixture.holder_private_jwk,
-            &resolver_for(&fixture),
-        )
-        .unwrap();
-}
-
-#[test]
 fn verified_presentation_rejects_invalid_issuer_signature() {
     let fixture = fixture();
     let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
+        .prepare_verified_sd_jwt_presentation(
             &tamper_issuer_signature(&fixture.credential),
             &["email".into()],
             &fresh_nonce(),
             "https://verifier.example",
-            &fixture.holder_private_jwk,
+            &fixture.holder_public_jwk,
             &resolver_for(&fixture),
         )
         .unwrap_err();
@@ -330,12 +283,12 @@ fn unsupported_issuer_algorithm_is_rejected_before_resolution() {
     let fixture = fixture();
     let resolver = CountingResolver::default();
     let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
+        .prepare_verified_sd_jwt_presentation(
             &replace_issuer_algorithm(&fixture.credential, "HS256"),
             &["email".into()],
             &fresh_nonce(),
             "https://verifier.example",
-            &fixture.holder_private_jwk,
+            &fixture.holder_public_jwk,
             &resolver,
         )
         .unwrap_err();
@@ -356,12 +309,12 @@ fn unsupported_critical_header_is_rejected_before_resolution() {
         header["b64"] = serde_json::json!(false);
     });
     let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
+        .prepare_verified_sd_jwt_presentation(
             &credential,
             &["email".into()],
             &fresh_nonce(),
             "https://verifier.example",
-            &fixture.holder_private_jwk,
+            &fixture.holder_public_jwk,
             &resolver,
         )
         .unwrap_err();
@@ -386,12 +339,12 @@ fn missing_or_unrecognized_credential_type_is_rejected_before_resolution() {
     for credential in credentials {
         let resolver = CountingResolver::default();
         let error = WalletEngine::new()
-            .create_verified_sd_jwt_presentation(
+            .prepare_verified_sd_jwt_presentation(
                 &credential,
                 &["email".into()],
                 &fresh_nonce(),
                 "https://verifier.example",
-                &fixture.holder_private_jwk,
+                &fixture.holder_public_jwk,
                 &resolver,
             )
             .unwrap_err();
@@ -417,12 +370,12 @@ fn missing_or_empty_vct_is_rejected_before_resolution() {
     for credential in credentials {
         let resolver = CountingResolver::default();
         let error = WalletEngine::new()
-            .create_verified_sd_jwt_presentation(
+            .prepare_verified_sd_jwt_presentation(
                 &credential,
                 &["email".into()],
                 &fresh_nonce(),
                 "https://verifier.example",
-                &fixture.holder_private_jwk,
+                &fixture.holder_public_jwk,
                 &resolver,
             )
             .unwrap_err();
@@ -448,12 +401,12 @@ fn empty_transaction_binding_is_rejected_before_resolution() {
     ] {
         let resolver = CountingResolver::default();
         let error = WalletEngine::new()
-            .create_verified_sd_jwt_presentation(
+            .prepare_verified_sd_jwt_presentation(
                 &fixture.credential,
                 &["email".into()],
                 &nonce,
                 &audience,
-                &fixture.holder_private_jwk,
+                &fixture.holder_public_jwk,
                 &resolver,
             )
             .unwrap_err();
@@ -465,9 +418,9 @@ fn empty_transaction_binding_is_rejected_before_resolution() {
 #[test]
 fn verified_presentation_rejects_holder_key_not_bound_by_cnf() {
     let fixture = fixture();
-    let other_holder_jwk = p256_jwk(&SigningKey::random(&mut OsRng), true).to_string();
+    let other_holder_jwk = fixture.issuer_public_jwk.clone();
     let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
+        .prepare_verified_sd_jwt_presentation(
             &fixture.credential,
             &["email".into()],
             &fresh_nonce(),
@@ -489,7 +442,7 @@ fn verified_presentation_rejects_resolver_identity_or_algorithm_mismatch() {
     let mismatches = [
         ResolvedSdJwtIssuerKey::new(
             "did:example:wrong-issuer",
-            Some(fixture.issuer.clone()),
+            Some(fixture.key_id.clone()),
             SigningAlgorithm::ES256,
             fixture.issuer_public_jwk.clone(),
         ),
@@ -501,7 +454,7 @@ fn verified_presentation_rejects_resolver_identity_or_algorithm_mismatch() {
         ),
         ResolvedSdJwtIssuerKey::new(
             fixture.issuer.clone(),
-            Some(fixture.issuer.clone()),
+            Some(fixture.key_id.clone()),
             SigningAlgorithm::ES384,
             fixture.issuer_public_jwk.clone(),
         ),
@@ -509,12 +462,12 @@ fn verified_presentation_rejects_resolver_identity_or_algorithm_mismatch() {
 
     for key in mismatches {
         let error = WalletEngine::new()
-            .create_verified_sd_jwt_presentation(
+            .prepare_verified_sd_jwt_presentation(
                 &fixture.credential,
                 &["email".into()],
                 &fresh_nonce(),
                 "https://verifier.example",
-                &fixture.holder_private_jwk,
+                &fixture.holder_public_jwk,
                 &StaticResolver { key },
             )
             .unwrap_err();
@@ -539,18 +492,18 @@ fn verified_presentation_rejects_incompatible_issuer_jwk_policy() {
         let resolver = StaticResolver {
             key: ResolvedSdJwtIssuerKey::new(
                 fixture.issuer.clone(),
-                Some(fixture.issuer.clone()),
+                Some(fixture.key_id.clone()),
                 SigningAlgorithm::ES256,
                 public_jwk.to_string(),
             ),
         };
         let error = WalletEngine::new()
-            .create_verified_sd_jwt_presentation(
+            .prepare_verified_sd_jwt_presentation(
                 &fixture.credential,
                 &["email".into()],
                 &fresh_nonce(),
                 "https://verifier.example",
-                &fixture.holder_private_jwk,
+                &fixture.holder_public_jwk,
                 &resolver,
             )
             .unwrap_err();
@@ -569,18 +522,18 @@ fn malformed_or_duplicate_resolver_jwk_is_a_key_error() {
         let resolver = StaticResolver {
             key: ResolvedSdJwtIssuerKey::new(
                 fixture.issuer.clone(),
-                Some(fixture.issuer.clone()),
+                Some(fixture.key_id.clone()),
                 SigningAlgorithm::ES256,
                 public_jwk,
             ),
         };
         let error = WalletEngine::new()
-            .create_verified_sd_jwt_presentation(
+            .prepare_verified_sd_jwt_presentation(
                 &fixture.credential,
                 &["email".into()],
                 &fresh_nonce(),
                 "https://verifier.example",
-                &fixture.holder_private_jwk,
+                &fixture.holder_public_jwk,
                 &resolver,
             )
             .unwrap_err();
@@ -590,76 +543,23 @@ fn malformed_or_duplicate_resolver_jwk_is_a_key_error() {
 }
 
 #[test]
-fn no_kid_binding_rejects_a_present_malformed_jwk_kid() {
-    let fixture = fixture();
-    let credential = mutate_issuer_header_and_resign(&fixture, |header| {
-        header.as_object_mut().unwrap().remove("kid");
-    });
-    let mut public_jwk: serde_json::Value =
-        serde_json::from_str(&fixture.issuer_public_jwk).unwrap();
-    public_jwk.as_object_mut().unwrap().remove("kid");
-
-    WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
-            &credential,
-            &["email".into()],
-            &fresh_nonce(),
-            "https://verifier.example",
-            &fixture.holder_private_jwk,
-            &StaticResolver {
-                key: ResolvedSdJwtIssuerKey::new(
-                    fixture.issuer.clone(),
-                    None,
-                    SigningAlgorithm::ES256,
-                    public_jwk.to_string(),
-                ),
-            },
-        )
-        .unwrap();
-
-    for malformed_kid in [serde_json::Value::Null, serde_json::json!("")] {
-        public_jwk["kid"] = malformed_kid;
-        let error = WalletEngine::new()
-            .create_verified_sd_jwt_presentation(
-                &credential,
-                &["email".into()],
-                &fresh_nonce(),
-                "https://verifier.example",
-                &fixture.holder_private_jwk,
-                &StaticResolver {
-                    key: ResolvedSdJwtIssuerKey::new(
-                        fixture.issuer.clone(),
-                        None,
-                        SigningAlgorithm::ES256,
-                        public_jwk.to_string(),
-                    ),
-                },
-            )
-            .unwrap_err();
-
-        assert!(matches!(error, Oid4vciError::KeyError(_)));
-        assert!(error.to_string().contains("non-empty string when present"));
-    }
-}
-
-#[test]
 fn verified_presentation_rejects_private_issuer_material_from_resolver() {
     let fixture = fixture();
     let resolver = StaticResolver {
         key: ResolvedSdJwtIssuerKey::new(
             fixture.issuer.clone(),
-            Some(fixture.issuer.clone()),
+            Some(fixture.key_id.clone()),
             SigningAlgorithm::ES256,
-            fixture.issuer_private_jwk.clone(),
+            serde_json::json!({"kty":"EC","crv":"P-256","x":"redacted","y":"redacted","d":"redacted"}).to_string(),
         ),
     };
     let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
+        .prepare_verified_sd_jwt_presentation(
             &fixture.credential,
             &["email".into()],
             &fresh_nonce(),
             "https://verifier.example",
-            &fixture.holder_private_jwk,
+            &fixture.holder_public_jwk,
             &resolver,
         )
         .unwrap_err();
@@ -671,100 +571,26 @@ fn verified_presentation_rejects_private_issuer_material_from_resolver() {
 }
 
 #[test]
-fn verified_presentation_rejects_private_holder_material_in_signed_cnf() {
-    let fixture = fixture();
-    let private_holder: serde_json::Value =
-        serde_json::from_str(&fixture.holder_private_jwk).unwrap();
-    let credential = mutate_issuer_payload_and_resign(&fixture, |payload| {
-        payload["cnf"]["jwk"] = private_holder;
-    });
-    let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
-            &credential,
-            &["email".into()],
-            &fresh_nonce(),
-            "https://verifier.example",
-            &fixture.holder_private_jwk,
-            &resolver_for(&fixture),
-        )
-        .unwrap_err();
-
-    assert!(matches!(error, Oid4vciError::KeyError(_)));
-    assert!(error
-        .to_string()
-        .contains("contains private key material: d"));
-}
-
-#[test]
-fn verified_presentation_derives_holder_public_key_from_private_scalar() {
-    let fixture = fixture();
-    let other_holder = p256_jwk(&SigningKey::random(&mut OsRng), false);
-    let mut inconsistent_holder: serde_json::Value =
-        serde_json::from_str(&fixture.holder_private_jwk).unwrap();
-    inconsistent_holder["x"] = other_holder["x"].clone();
-    inconsistent_holder["y"] = other_holder["y"].clone();
-
-    let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
-            &fixture.credential,
-            &["email".into()],
-            &fresh_nonce(),
-            "https://verifier.example",
-            &inconsistent_holder.to_string(),
-            &resolver_for(&fixture),
-        )
-        .unwrap_err();
-
-    assert!(matches!(error, Oid4vciError::InvalidRequest(_)));
-    assert!(error
-        .to_string()
-        .contains("public coordinates do not match the private key"));
-}
-
-#[test]
-fn verified_presentation_uses_the_canonical_holder_jwk_boundary() {
-    let fixture = fixture();
-    let mut noncanonical: serde_json::Value =
-        serde_json::from_str(&fixture.holder_private_jwk).unwrap();
-    noncanonical["alg"] = serde_json::json!("ES256");
-    let error = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
-            &fixture.credential,
-            &["email".into()],
-            &fresh_nonce(),
-            "https://verifier.example",
-            &noncanonical.to_string(),
-            &resolver_for(&fixture),
-        )
-        .unwrap_err();
-
-    assert!(matches!(error, Oid4vciError::InvalidRequest(_)));
-    assert!(error.to_string().contains("unknown field"));
-}
-
-#[test]
 fn resolved_issuer_key_debug_is_redacted() {
     let fixture = fixture();
+    let sensitive_marker = "test-private-material-marker";
     let resolved = ResolvedSdJwtIssuerKey::new(
         fixture.issuer.clone(),
-        Some(fixture.issuer.clone()),
+        Some(fixture.key_id.clone()),
         SigningAlgorithm::ES256,
-        fixture.issuer_private_jwk.clone(),
+        sensitive_marker,
     );
     let diagnostic = format!("{resolved:?}");
 
     assert_eq!(diagnostic, "ResolvedSdJwtIssuerKey([redacted])");
-    assert!(!diagnostic.contains(&fixture.issuer_private_jwk));
+    assert!(!diagnostic.contains(sensitive_marker));
 }
 
 #[test]
-fn prepared_presentation_binds_signature_and_bounds_public_keys() {
-    use p256::ecdsa::signature::Signer as _;
-
+fn prepared_presentation_bounds_public_keys() {
     let fixture = fixture();
-    let mut holder_public: serde_json::Value =
-        serde_json::from_str(&fixture.holder_private_jwk).unwrap();
-    holder_public.as_object_mut().unwrap().remove("d");
+    let holder_public: serde_json::Value =
+        serde_json::from_str(&fixture.holder_public_jwk).unwrap();
     let engine = WalletEngine::new();
 
     let prepared = engine
@@ -777,12 +603,14 @@ fn prepared_presentation_binds_signature_and_bounds_public_keys() {
             &resolver_for(&fixture),
         )
         .unwrap();
-    let wrong_key = SigningKey::random(&mut OsRng);
-    let wrong_signature: p256::ecdsa::Signature = wrong_key.sign(prepared.signing_input());
-    assert!(prepared
-        .complete(wrong_signature.to_bytes().as_slice())
-        .is_err());
-
+    assert_eq!(prepared.algorithm(), SigningAlgorithm::ES256);
+    assert_eq!(
+        std::str::from_utf8(prepared.signing_input())
+            .unwrap()
+            .split('.')
+            .count(),
+        2
+    );
     let oversized_holder = " ".repeat(marty_oid4vci::jose::MAX_PUBLIC_JWK_BYTES + 1);
     let counting_resolver = CountingResolver::default();
     assert!(engine
@@ -800,7 +628,7 @@ fn prepared_presentation_binds_signature_and_bounds_public_keys() {
     let oversized_issuer = StaticResolver {
         key: ResolvedSdJwtIssuerKey::new(
             fixture.issuer.clone(),
-            Some(fixture.issuer.clone()),
+            Some(fixture.key_id.clone()),
             SigningAlgorithm::ES256,
             " ".repeat(marty_oid4vci::jose::MAX_PUBLIC_JWK_BYTES + 1),
         ),

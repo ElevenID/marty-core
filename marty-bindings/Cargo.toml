@@ -46,14 +46,11 @@ thiserror.workspace = true
 tokio = { workspace = true }
 
 [dev-dependencies]
-# Test-only dependencies retain regression coverage without re-enabling issuer
-# private-key APIs in the production dependency graph.
+# Test-only remote signers and public-key verification fixtures.
 marty-crypto = { workspace = true, default-features = false, features = ["ecdsa-verification", "eddsa-verification", "public-key-codec", "rsa-verification"] }
 marty-crypto-test-support = { workspace = true }
 marty-oid4vci = { workspace = true, default-features = false, features = ["issuer", "verifier", "wallet", "jwt_vc_json", "sd_jwt", "mso_mdoc", "lti"] }
 marty-verification = { workspace = true, default-features = false, features = ["ephemeral-session-keys"] }
-p256 = { workspace = true, features = ["ecdsa"] }
-p384 = { workspace = true, features = ["ecdsa"] }
 serde_json.workspace = true
 hex.workspace = true
 

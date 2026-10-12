@@ -27,8 +27,8 @@ use zeroize::Zeroizing;
 use crate::{CryptoError, CryptoResult};
 
 #[cfg(not(test))]
-/// Production ECDH exposes generated, opaque, one-use agreement state only.
-/// Raw private-key import/export and reusable agreement helpers are test-only:
+/// ECDH exposes generated, opaque agreement state only.
+/// Raw private-key import/export and reusable scalar agreement helpers are absent:
 ///
 /// ```compile_fail
 /// let _ = marty_crypto::ecdh::P256KeyPair::from_secret_key(&[7u8; 32]);
@@ -63,24 +63,6 @@ impl X25519KeyPair {
         let secret = StaticSecret::random_from_rng(OsRng);
         let public = X25519PublicKey::from(&secret);
         Self { secret, public }
-    }
-
-    /// Create from a 32-byte secret key for deterministic test vectors.
-    #[cfg(test)]
-    pub fn from_secret_key(secret_bytes: &[u8]) -> CryptoResult<Self> {
-        if secret_bytes.len() != 32 {
-            return Err(CryptoError::internal(
-                "X25519 secret key must be 32 bytes".to_string(),
-            ));
-        }
-
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(secret_bytes);
-
-        let secret = StaticSecret::from(bytes);
-        let public = X25519PublicKey::from(&secret);
-
-        Ok(Self { secret, public })
     }
 
     /// Get the public key bytes.
@@ -163,24 +145,6 @@ pub fn x25519_ephemeral_agree(peer_public: &[u8]) -> CryptoResult<([u8; 32], Zer
     Ok((public.to_bytes(), Zeroizing::new(shared.to_bytes())))
 }
 
-/// Generate a new X25519 key pair.
-///
-/// # Returns
-///
-/// (secret_key, public_key) as 32-byte arrays.
-#[cfg(test)]
-pub fn x25519_generate_keypair() -> ([u8; 32], [u8; 32]) {
-    // Generate from random 32 bytes since StaticSecret doesn't expose its bytes
-    let mut secret_bytes = [0u8; 32];
-    use rand::RngCore;
-    OsRng.fill_bytes(&mut secret_bytes);
-
-    let secret = StaticSecret::from(secret_bytes);
-    let public = X25519PublicKey::from(&secret);
-
-    (secret_bytes, public.to_bytes())
-}
-
 // ============================================================================
 // ECDH P-256 Key Agreement
 // ============================================================================
@@ -195,14 +159,6 @@ impl P256KeyPair {
     pub fn generate() -> Self {
         let secret = P256SecretKey::random(&mut OsRng);
         Self { secret }
-    }
-
-    /// Create from a 32-byte secret key (scalar) for deterministic test vectors.
-    #[cfg(test)]
-    pub fn from_secret_key(secret_bytes: &[u8]) -> CryptoResult<Self> {
-        let secret = P256SecretKey::from_slice(secret_bytes)
-            .map_err(|e| CryptoError::internal(format!("Invalid P-256 secret key: {}", e)))?;
-        Ok(Self { secret })
     }
 
     /// Get the public key in uncompressed SEC1 format (65 bytes: 04 || x || y).
@@ -246,26 +202,6 @@ impl P256KeyPair {
     }
 }
 
-/// Generate a new P-256 ECDH key pair.
-///
-/// # Returns
-///
-/// (secret_key, public_key_uncompressed) tuple.
-#[cfg(test)]
-pub fn p256_generate_keypair() -> (Vec<u8>, Vec<u8>) {
-    let keypair = P256KeyPair::generate();
-    let secret = keypair.secret.to_bytes().to_vec();
-    let public = keypair.public_key_uncompressed();
-    (secret, public)
-}
-
-/// Perform P-256 ECDH key agreement.
-#[cfg(test)]
-pub fn p256_agree(secret_key: &[u8], peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
-    let keypair = P256KeyPair::from_secret_key(secret_key)?;
-    keypair.agree(peer_public)
-}
-
 /// Validate a P-256 SEC1 public point without generating secret material.
 pub fn validate_p256_public_key(public_key: &[u8]) -> CryptoResult<()> {
     P256PublicKey::from_sec1_bytes(public_key)
@@ -287,14 +223,6 @@ impl P384KeyPair {
     pub fn generate() -> Self {
         let secret = P384SecretKey::random(&mut OsRng);
         Self { secret }
-    }
-
-    /// Create from a 48-byte secret key (scalar) for deterministic test vectors.
-    #[cfg(test)]
-    pub fn from_secret_key(secret_bytes: &[u8]) -> CryptoResult<Self> {
-        let secret = P384SecretKey::from_slice(secret_bytes)
-            .map_err(|e| CryptoError::internal(format!("Invalid P-384 secret key: {}", e)))?;
-        Ok(Self { secret })
     }
 
     /// Get the public key in uncompressed SEC1 format (97 bytes).
@@ -328,22 +256,6 @@ impl P384KeyPair {
 
         Ok(shared.raw_secret_bytes().to_vec())
     }
-}
-
-/// Generate a new P-384 ECDH key pair.
-#[cfg(test)]
-pub fn p384_generate_keypair() -> (Vec<u8>, Vec<u8>) {
-    let keypair = P384KeyPair::generate();
-    let secret = keypair.secret.to_bytes().to_vec();
-    let public = keypair.public_key_uncompressed();
-    (secret, public)
-}
-
-/// Perform P-384 ECDH key agreement.
-#[cfg(test)]
-pub fn p384_agree(secret_key: &[u8], peer_public: &[u8]) -> CryptoResult<Vec<u8>> {
-    let keypair = P384KeyPair::from_secret_key(secret_key)?;
-    keypair.agree(peer_public)
 }
 
 // ============================================================================
@@ -399,12 +311,12 @@ pub fn ecies_encrypt(
 ///
 /// # Arguments
 ///
-/// * `recipient_secret` - 32-byte X25519 secret key
+/// * `recipient` - generated ephemeral recipient agreement state
 /// * `ciphertext` - Data encrypted with `ecies_encrypt`
 /// * `aad` - Additional authenticated data (must match encryption)
 #[cfg(test)]
 pub fn ecies_decrypt(
-    recipient_secret: &[u8],
+    recipient: &X25519KeyPair,
     ciphertext: &[u8],
     aad: &[u8],
 ) -> CryptoResult<Vec<u8>> {
@@ -423,8 +335,7 @@ pub fn ecies_decrypt(
     let encrypted = &ciphertext[44..];
 
     // Perform key agreement
-    let keypair = X25519KeyPair::from_secret_key(recipient_secret)?;
-    let shared_secret = keypair.agree(ephem_public)?;
+    let shared_secret = recipient.agree(ephem_public)?;
 
     // Derive decryption key
     let info = b"ECIES-X25519-AES256GCM";
@@ -526,29 +437,29 @@ mod tests {
         let aad = b"additional data";
 
         // Generate keypair for encryption/decryption test
-        let (secret, public) = x25519_generate_keypair();
+        let recipient = X25519KeyPair::generate();
 
         // Encrypt to recipient's public key
-        let ciphertext = ecies_encrypt(&public, plaintext, aad).unwrap();
+        let ciphertext = ecies_encrypt(&recipient.public_key_bytes(), plaintext, aad).unwrap();
 
         // Ciphertext should be larger than plaintext
         assert!(ciphertext.len() > plaintext.len());
 
-        // Decrypt with recipient's secret key
-        let decrypted = ecies_decrypt(&secret, &ciphertext, aad).unwrap();
+        let decrypted = ecies_decrypt(&recipient, &ciphertext, aad).unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
     fn test_ecies_wrong_aad() {
-        let (secret, public) = x25519_generate_keypair();
+        let recipient = X25519KeyPair::generate();
         let plaintext = b"Test data";
 
-        let ciphertext = ecies_encrypt(&public, plaintext, b"correct aad").unwrap();
+        let ciphertext =
+            ecies_encrypt(&recipient.public_key_bytes(), plaintext, b"correct aad").unwrap();
 
         // Decryption with wrong AAD should fail
-        let result = ecies_decrypt(&secret, &ciphertext, b"wrong aad");
+        let result = ecies_decrypt(&recipient, &ciphertext, b"wrong aad");
         assert!(result.is_err());
     }
 
@@ -561,13 +472,5 @@ mod tests {
 
         // Too long
         assert!(keypair.agree(&[0u8; 64]).is_err());
-    }
-
-    #[test]
-    fn test_from_secret_key() {
-        let (secret, public) = x25519_generate_keypair();
-
-        let restored = X25519KeyPair::from_secret_key(&secret).unwrap();
-        assert_eq!(restored.public_key_bytes(), public);
     }
 }

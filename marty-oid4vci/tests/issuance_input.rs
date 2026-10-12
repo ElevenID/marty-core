@@ -1,29 +1,6 @@
 use marty_oid4vci::{issuance_input::normalize_zk_predicate_claims, types::SignedCredential};
 use serde_json::json;
 
-#[test]
-fn typed_key_admission_preserves_supported_curves_and_metadata_checks() {
-    use marty_oid4vci::{signer::derive_typed_jwk_algorithm, types::SigningAlgorithm};
-    for (curve, expected) in [
-        ("P-256", SigningAlgorithm::ES256),
-        ("P-384", SigningAlgorithm::ES384),
-        ("secp256k1", SigningAlgorithm::ES256K),
-    ] {
-        let key: ssi_jwk::JWK = serde_json::from_value(json!({"kty":"EC", "crv":curve})).unwrap();
-        assert_eq!(derive_typed_jwk_algorithm(&key).unwrap(), expected);
-    }
-    let mut key = ssi_jwk::JWK::generate_ed25519().unwrap();
-    assert_eq!(
-        derive_typed_jwk_algorithm(&key).unwrap(),
-        SigningAlgorithm::EdDSA
-    );
-    key.algorithm = Some(ssi_jwk::Algorithm::ES256);
-    assert!(derive_typed_jwk_algorithm(&key).is_err());
-    for value in [json!({"kty":"EC"}), json!({"kty":"EC", "crv":"unknown"})] {
-        let key = serde_json::from_value(value).unwrap();
-        assert!(derive_typed_jwk_algorithm(&key).is_err());
-    }
-}
 use std::collections::HashMap;
 
 #[test]
@@ -99,29 +76,5 @@ fn encoded_credentials_preserve_every_format_and_zk_response_metadata() {
         } else {
             assert_eq!(response, expected);
         }
-    }
-}
-
-#[test]
-fn compact_signing_preserves_payload_and_binds_header_to_key() {
-    use base64::Engine;
-    use marty_oid4vci::jose::{sign_compact_jwt, verify_compact_jwt_with_public_jwk};
-    let jwk = ssi_jwk::JWK::generate_ed25519().unwrap();
-    let payload =
-        json!({"iss":"did:example:issuer", "vc":{"credentialSubject":{"claims":{"name":"test"}}}});
-    let jwt = sign_compact_jwt(&jwk, &json!({"alg":"EdDSA", "typ":"JWT"}), &payload).unwrap();
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(jwt.split('.').nth(1).unwrap())
-        .unwrap();
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&decoded).unwrap(),
-        payload
-    );
-    // Public verification checks the signature independently of the signing helper.
-    let public = serde_json::to_string(&jwk.to_public()).unwrap();
-    let verified = verify_compact_jwt_with_public_jwk(&jwt, &public, "EdDSA").unwrap();
-    assert_eq!(verified.claims, payload);
-    for header in [json!({}), json!({"alg":7}), json!({"alg":"ES256"})] {
-        assert!(sign_compact_jwt(&jwk, &header, &payload).is_err());
     }
 }

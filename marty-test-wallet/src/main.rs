@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use base64::Engine as _;
 use marty_oid4vci::types::{CredentialFormat, SigningAlgorithm};
 use marty_oid4vci::wallet::{DcqlCredentialQuery, WalletEngine};
-use marty_oid4vci::{Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver};
+use marty_oid4vci::{ResolvedSdJwtIssuerKey, TrustedSdJwtIssuerKeys};
 use marty_test_wallet::signer_ipc::{request_signature, SignerAuthenticationKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,7 +20,7 @@ use zeroize::Zeroizing;
 struct AppState {
     engine: Arc<WalletEngine>,
     holder_signer: Arc<RemoteHolderSigner>,
-    issuer_resolver: Arc<TrustedIssuerResolver>,
+    issuer_resolver: Arc<TrustedSdJwtIssuerKeys>,
     wallet: Arc<RwLock<WalletData>>,
 }
 
@@ -41,17 +41,6 @@ struct TrustedIssuerKeyConfig {
     key_id: Option<String>,
     algorithm: String,
     public_jwk: Value,
-}
-
-struct TrustedIssuerKey {
-    issuer: String,
-    key_id: Option<String>,
-    algorithm: SigningAlgorithm,
-    public_jwk_json: String,
-}
-
-struct TrustedIssuerResolver {
-    keys: Vec<TrustedIssuerKey>,
 }
 
 #[derive(Clone)]
@@ -154,63 +143,33 @@ impl RemoteHolderSigner {
     }
 }
 
-impl TrustedIssuerResolver {
-    fn from_env() -> Result<Self, String> {
-        let encoded = required_env("MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS")?;
-        let configured: Vec<TrustedIssuerKeyConfig> =
-            serde_json::from_str(&encoded).map_err(|_| {
-                "MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS must be a JSON array".to_string()
-            })?;
-        if configured.is_empty() {
-            return Err("MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS must not be empty".into());
-        }
-        let keys = configured
-            .into_iter()
-            .map(|entry| {
-                let algorithm = match entry.algorithm.as_str() {
-                    "ES256" => SigningAlgorithm::ES256,
-                    "ES384" => SigningAlgorithm::ES384,
-                    "EdDSA" => SigningAlgorithm::EdDSA,
-                    "RS256" => SigningAlgorithm::RS256,
-                    _ => return Err("trusted issuer key uses an unsupported algorithm".to_string()),
-                };
-                let public_jwk_json = entry.public_jwk.to_string();
-                validate_public_jwk_json(&public_jwk_json, "trusted issuer public JWK")?;
-                Ok(TrustedIssuerKey {
-                    issuer: entry.issuer,
-                    key_id: entry.key_id,
-                    algorithm,
-                    public_jwk_json,
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok(Self { keys })
+fn trusted_issuer_keys_from_env() -> Result<TrustedSdJwtIssuerKeys, String> {
+    let encoded = required_env("MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS")?;
+    let configured: Vec<TrustedIssuerKeyConfig> = serde_json::from_str(&encoded)
+        .map_err(|_| "MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS must be a JSON array".to_string())?;
+    if configured.is_empty() {
+        return Err("MARTY_TEST_WALLET_TRUSTED_ISSUER_KEYS must not be empty".into());
     }
-}
-
-impl SdJwtIssuerKeyResolver for TrustedIssuerResolver {
-    fn resolve(
-        &self,
-        issuer: &str,
-        key_id: Option<&str>,
-        algorithm: SigningAlgorithm,
-    ) -> Oid4vciResult<ResolvedSdJwtIssuerKey> {
-        let key = self
-            .keys
-            .iter()
-            .find(|candidate| {
-                candidate.issuer == issuer
-                    && candidate.key_id.as_deref() == key_id
-                    && candidate.algorithm == algorithm
-            })
-            .ok_or_else(|| Oid4vciError::KeyError("Issuer key is not explicitly trusted".into()))?;
-        Ok(ResolvedSdJwtIssuerKey::new(
-            key.issuer.clone(),
-            key.key_id.clone(),
-            key.algorithm,
-            key.public_jwk_json.clone(),
-        ))
-    }
+    let keys = configured
+        .into_iter()
+        .map(|entry| {
+            let algorithm = match entry.algorithm.as_str() {
+                "ES256" => SigningAlgorithm::ES256,
+                "ES384" => SigningAlgorithm::ES384,
+                "EdDSA" => SigningAlgorithm::EdDSA,
+                "RS256" => SigningAlgorithm::RS256,
+                _ => return Err("trusted issuer key uses an unsupported algorithm".to_string()),
+            };
+            let public_jwk_json = entry.public_jwk.to_string();
+            Ok(ResolvedSdJwtIssuerKey::new(
+                entry.issuer,
+                entry.key_id,
+                algorithm,
+                public_jwk_json,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    TrustedSdJwtIssuerKeys::new(keys).map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,7 +235,7 @@ async fn main() {
         RemoteHolderSigner::from_env().expect("opaque holder signer configuration is required"),
     );
     let issuer_resolver = Arc::new(
-        TrustedIssuerResolver::from_env().expect("trusted issuer key configuration is required"),
+        trusted_issuer_keys_from_env().expect("trusted issuer key configuration is required"),
     );
     let state = AppState {
         wallet: Arc::new(RwLock::new(WalletData {

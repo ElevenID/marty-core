@@ -9,18 +9,12 @@
 
 #[cfg(any(test, feature = "issuer"))]
 use base64::Engine;
-#[cfg(test)]
-use ssi_jwk::JWK;
 #[cfg(any(test, feature = "issuer"))]
 use std::collections::HashMap;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-#[cfg(test)]
-use crate::signer::validate_issuer_key_algorithm;
 #[cfg(any(test, feature = "issuer"))]
 use crate::signer::{validate_signer_public_jwk, verify_remote_signature, CredentialSigner};
-#[cfg(test)]
-use crate::types::IssuerKey;
 #[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
 
@@ -47,109 +41,6 @@ pub fn checked_jwt_vc_expiration(
                 .ok_or_else(|| Oid4vciError::SigningError(JWT_VC_EXPIRATION_OUT_OF_RANGE.into()))
         })
         .transpose()
-}
-
-/// Sign a W3C VC-JWT credential.
-///
-/// Branches on `claims.credential_payload_format`:
-/// - `W3cVcdmV2JwtVc` → VCDM v2 (`validFrom`/`validUntil`, v2 `@context`)
-/// - any other value  → VCDM v1 (`issuanceDate`/`expirationDate`, v1 `@context`)
-#[cfg(test)]
-pub fn sign_jwt_vc(
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-) -> Oid4vciResult<SignedCredential> {
-    let jwk: JWK = serde_json::from_str(&issuer_key.jwk_json)
-        .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
-
-    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now();
-    let expires_at = checked_jwt_vc_expiration(now, claims.expiration_seconds)?;
-
-    // Build the W3C VC payload
-    let mut credential_subject: HashMap<String, serde_json::Value> = claims.claims.clone();
-    if let Some(ref subject_id) = claims.subject_id {
-        credential_subject.insert("id".to_string(), serde_json::json!(subject_id));
-    }
-
-    let use_vcdm_v2 = claims.credential_payload_format == CredentialPayloadFormat::W3cVcdmV2JwtVc;
-
-    let mut vc_types = vec!["VerifiableCredential".to_string()];
-    if !claims.credential_type.is_empty() {
-        vc_types.push(claims.credential_type.clone());
-    }
-    vc_types.extend(claims.w3c_types.iter().cloned());
-
-    let vc = if use_vcdm_v2 {
-        // ── VCDM v2 ──────────────────────────────────────────────────────────
-        let valid_from = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-        let mut context = vec!["https://www.w3.org/ns/credentials/v2".to_string()];
-        context.extend(claims.w3c_context.iter().cloned());
-
-        let mut v = serde_json::json!({
-            "@context": context,
-            "id": credential_id,
-            "type": vc_types,
-            "issuer": issuer_key.issuer_id,
-            "validFrom": valid_from,
-            "credentialSubject": credential_subject,
-        });
-        if let Some(expires_at) = expires_at.as_ref() {
-            let valid_until = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            v["validUntil"] = serde_json::json!(valid_until);
-        }
-        v
-    } else {
-        // ── VCDM v1 (default) ────────────────────────────────────────────────
-        let issuance_date = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-        let mut v = serde_json::json!({
-            "@context": ["https://www.w3.org/2018/credentials/v1"],
-            "id": credential_id,
-            "type": vc_types,
-            "issuer": issuer_key.issuer_id,
-            "issuanceDate": issuance_date,
-            "credentialSubject": credential_subject,
-        });
-        if let Some(expires_at) = expires_at.as_ref() {
-            let expiration_date = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-            v["expirationDate"] = serde_json::json!(expiration_date);
-        }
-        v
-    };
-
-    // Build the JWT registered claims
-    let mut payload = serde_json::json!({
-        "iss": issuer_key.issuer_id,
-        "iat": now.timestamp(),
-        "jti": credential_id,
-        "vc": vc,
-    });
-
-    if let Some(ref subject_id) = claims.subject_id {
-        payload["sub"] = serde_json::json!(subject_id);
-    }
-
-    if let Some(expires_at) = expires_at {
-        payload["exp"] = serde_json::json!(expires_at.timestamp());
-    }
-
-    // Bind the configured JOSE header algorithm to the actual JWK family only
-    // after all claim validation, preserving existing claim-error precedence.
-    validate_issuer_key_algorithm(issuer_key, &jwk)?;
-
-    // Build and sign the JWT
-    let alg_str = issuer_key.algorithm.as_str();
-    let header = serde_json::json!({
-        "alg": alg_str,
-        "typ": "vc+jwt",
-        "kid": issuer_key.kid_url()
-    });
-
-    let jwt = encode_and_sign_jwt(&jwk, &header, &payload)?;
-
-    Ok(SignedCredential::JwtVcJson { jwt, credential_id })
 }
 
 /// Sign a W3C VC-JWT credential using any [`CredentialSigner`].
@@ -182,52 +73,6 @@ pub struct PreparedJwtVc {
 
 #[cfg(any(test, feature = "issuer"))]
 impl PreparedJwtVc {
-    /// Reconstruct prepared JWT state for compatibility adapters that retain
-    /// the exact signing input and algorithm out of process.
-    #[cfg(test)]
-    pub fn from_signing_input(
-        signing_input: String,
-        credential_id: String,
-        algorithm: crate::types::SigningAlgorithm,
-    ) -> Oid4vciResult<Self> {
-        let mut segments = signing_input.split('.');
-        let header_segment = segments.next().ok_or_else(|| {
-            Oid4vciError::SigningError("JWT signing input is missing its protected header".into())
-        })?;
-        if segments.next().is_none() || segments.next().is_some() {
-            return Err(Oid4vciError::SigningError(
-                "JWT signing input must contain exactly header.payload".into(),
-            ));
-        }
-        let header: serde_json::Value =
-            serde_json::from_slice(&B64.decode(header_segment).map_err(|error| {
-                Oid4vciError::SigningError(format!("invalid protected JWT header: {error}"))
-            })?)?;
-        let protected_algorithm = match header.get("alg").and_then(serde_json::Value::as_str) {
-            Some("ES256") => crate::types::SigningAlgorithm::ES256,
-            Some("ES384") => crate::types::SigningAlgorithm::ES384,
-            Some("ES256K") => crate::types::SigningAlgorithm::ES256K,
-            Some("EdDSA") => crate::types::SigningAlgorithm::EdDSA,
-            Some("RS256") => crate::types::SigningAlgorithm::RS256,
-            _ => {
-                return Err(Oid4vciError::SigningError(
-                    "unsupported or missing protected JWT algorithm".into(),
-                ))
-            }
-        };
-        if protected_algorithm != algorithm {
-            return Err(Oid4vciError::SigningError(
-                "requested algorithm does not match protected JWT header".into(),
-            ));
-        }
-        Ok(Self {
-            signing_input,
-            credential_id,
-            algorithm,
-            issuer_public_jwk: crate::signer::test_es256_public_jwk(),
-        })
-    }
-
     /// Borrow the complete base64url-encoded `header.payload` signing input.
     pub fn signing_payload(&self) -> &[u8] {
         self.signing_input.as_bytes()
@@ -737,68 +582,58 @@ pub fn assemble_jwt_vc(
 }
 
 #[cfg(test)]
-pub(crate) use crate::jose::sign_compact_jwt as encode_and_sign_jwt;
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::SigningAlgorithm;
 
-    fn test_ed25519_key() -> IssuerKey {
-        let jwk = JWK::generate_ed25519().unwrap();
-        let jwk_json = serde_json::to_string(&jwk).unwrap();
+    const P256_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","alg":"ES256","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#;
+    const ED25519_PUBLIC_JWK: &str =
+        r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
 
-        // Use did:jwk for simplicity (avoids bs58 dependency)
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_json.as_bytes());
-        let did = format!("did:jwk:{}", encoded);
+    struct PublicOnlySigner {
+        algorithm: SigningAlgorithm,
+        public_jwk: &'static str,
+    }
 
-        IssuerKey {
-            issuer_id: did,
-            jwk_json,
+    fn test_ed25519_signer() -> PublicOnlySigner {
+        PublicOnlySigner {
             algorithm: SigningAlgorithm::EdDSA,
+            public_jwk: ED25519_PUBLIC_JWK,
         }
     }
 
-    fn test_p256_key() -> IssuerKey {
-        let jwk = JWK::generate_p256();
-        let jwk_json = serde_json::to_string(&jwk).unwrap();
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_json.as_bytes());
-        let did = format!("did:jwk:{}", encoded);
-
-        IssuerKey {
-            issuer_id: did,
-            jwk_json,
+    fn test_p256_signer() -> PublicOnlySigner {
+        PublicOnlySigner {
             algorithm: SigningAlgorithm::ES256,
+            public_jwk: P256_PUBLIC_JWK,
         }
     }
 
-    struct MustNotSign;
-
-    impl std::fmt::Debug for MustNotSign {
+    impl std::fmt::Debug for PublicOnlySigner {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("MustNotSign([redacted])")
+            formatter.write_str("PublicOnlySigner([redacted])")
         }
     }
 
-    impl CredentialSigner for MustNotSign {
+    impl CredentialSigner for PublicOnlySigner {
         fn sign(&self, _message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-            panic!("invalid expiration must be rejected before signing")
+            panic!("public-only format fixture must never sign")
         }
 
         fn algorithm(&self) -> SigningAlgorithm {
-            SigningAlgorithm::ES256
+            self.algorithm
         }
 
         fn issuer_id(&self) -> &str {
-            "did:example:expiration-test-issuer"
+            "did:web:issuer.example"
         }
 
         fn kid_url(&self) -> String {
-            "did:example:expiration-test-issuer#key-1".into()
+            "did:web:issuer.example#key-1".into()
         }
 
         fn public_jwk(&self) -> Oid4vciResult<String> {
-            Ok(crate::signer::test_es256_public_jwk())
+            Ok(self.public_jwk.into())
         }
     }
 
@@ -833,7 +668,6 @@ mod tests {
 
     #[test]
     fn jwt_vc_rejects_extreme_expiration_before_any_signer_call() {
-        let key = test_p256_key();
         for credential_payload_format in [
             CredentialPayloadFormat::default(),
             CredentialPayloadFormat::W3cVcdmV2JwtVc,
@@ -841,9 +675,13 @@ mod tests {
             for expiration_seconds in [i64::MIN, i64::MAX] {
                 let claims =
                     claims_with_expiration(credential_payload_format.clone(), expiration_seconds);
-                assert_expiration_out_of_range(sign_jwt_vc(&key, &claims).unwrap_err());
+                let error = match prepare_jwt_vc(&test_p256_signer(), &claims) {
+                    Ok(_) => panic!("extreme expiration reached signing preparation"),
+                    Err(error) => error,
+                };
+                assert_expiration_out_of_range(error);
                 assert_expiration_out_of_range(
-                    sign_jwt_vc_with_signer(&MustNotSign, &claims).unwrap_err(),
+                    sign_jwt_vc_with_signer(&test_p256_signer(), &claims).unwrap_err(),
                 );
             }
         }
@@ -868,7 +706,7 @@ mod tests {
             (CredentialPayloadFormat::W3cVcdmV2JwtVc, "validUntil"),
         ] {
             let claims = claims_with_expiration(credential_payload_format, 3_600);
-            let prepared = prepare_jwt_vc(&MustNotSign, &claims).unwrap();
+            let prepared = prepare_jwt_vc(&test_p256_signer(), &claims).unwrap();
             let payload_segment = prepared.signing_input.split('.').nth(1).unwrap();
             let payload: serde_json::Value =
                 serde_json::from_slice(&B64.decode(payload_segment).unwrap()).unwrap();
@@ -884,8 +722,8 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_jwt_vc_ed25519() {
-        let key = test_ed25519_key();
+    fn jwt_vc_ed25519_preparation_preserves_degree_claims() {
+        let signer = test_ed25519_signer();
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder123".into()),
             credential_type: "UniversityDegree".into(),
@@ -904,27 +742,24 @@ mod tests {
             w3c_types: vec![],
         };
 
-        let result = sign_jwt_vc(&key, &claims).unwrap();
-        match result {
-            SignedCredential::JwtVcJson { jwt, credential_id } => {
-                assert!(jwt.split('.').count() == 3, "JWT should have 3 parts");
-                assert!(credential_id.starts_with("urn:uuid:"));
-
-                // Decode and verify payload structure
-                let parts: Vec<&str> = jwt.split('.').collect();
-                let payload_bytes = B64.decode(parts[1]).unwrap();
-                let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
-                assert_eq!(payload["vc"]["type"][1], "UniversityDegree");
-                assert_eq!(payload["sub"], "did:example:holder123");
-                assert!(payload["exp"].is_number());
-            }
-            _ => panic!("Expected JwtVcJson"),
-        }
+        let prepared = prepare_jwt_vc(&signer, &claims).unwrap();
+        assert_eq!(prepared.signing_input().split('.').count(), 2);
+        assert!(prepared.credential_id().starts_with("urn:uuid:"));
+        let parts: Vec<&str> = prepared.signing_input().split('.').collect();
+        let payload_bytes = B64.decode(parts[1]).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
+        assert_eq!(payload["vc"]["type"][1], "UniversityDegree");
+        assert_eq!(
+            payload["vc"]["credentialSubject"]["degree"],
+            "Bachelor of Science"
+        );
+        assert_eq!(payload["sub"], "did:example:holder123");
+        assert!(payload["exp"].is_number());
     }
 
     #[test]
-    fn test_sign_jwt_vc_p256() {
-        let key = test_p256_key();
+    fn jwt_vc_p256_preparation_preserves_algorithm_and_claims() {
+        let signer = test_p256_signer();
         let claims = CredentialClaims {
             subject_id: None,
             credential_type: "DriverLicense".into(),
@@ -939,24 +774,20 @@ mod tests {
             w3c_types: vec![],
         };
 
-        let result = sign_jwt_vc(&key, &claims).unwrap();
-        match result {
-            SignedCredential::JwtVcJson { jwt, .. } => {
-                assert!(jwt.split('.').count() == 3);
-
-                // Decode header and verify algorithm
-                let parts: Vec<&str> = jwt.split('.').collect();
-                let header_bytes = B64.decode(parts[0]).unwrap();
-                let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
-                assert_eq!(header["alg"], "ES256");
-            }
-            _ => panic!("Expected JwtVcJson"),
-        }
+        let prepared = prepare_jwt_vc(&signer, &claims).unwrap();
+        assert_eq!(prepared.signing_input().split('.').count(), 2);
+        let parts: Vec<&str> = prepared.signing_input().split('.').collect();
+        let header_bytes = B64.decode(parts[0]).unwrap();
+        let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+        let payload_bytes = B64.decode(parts[1]).unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
+        assert_eq!(header["alg"], "ES256");
+        assert_eq!(payload["vc"]["credentialSubject"]["name"], "Alice");
     }
 
     #[test]
     fn open_badge_v3_profile_builds_canonical_achievement_subject() {
-        let key = test_p256_key();
+        let signer = test_p256_signer();
         let mut claims = CredentialClaims {
             subject_id: Some("did:key:holder".into()),
             credential_type: "open_badge".into(),
@@ -990,7 +821,7 @@ mod tests {
         )
         .unwrap();
 
-        let prepared = prepare_jwt_vc_with_options(&key, &claims, options).unwrap();
+        let prepared = prepare_jwt_vc_with_options(&signer, &claims, options).unwrap();
         let payload_segment = prepared.signing_input.split('.').nth(1).unwrap();
         let payload: serde_json::Value =
             serde_json::from_slice(&B64.decode(payload_segment).unwrap()).unwrap();

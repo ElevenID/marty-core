@@ -1,0 +1,11 @@
+{
+    "provenance":  "Synthetic public BBS+ verification inputs captured from retired crate-internal keypair tests; no private key retained",
+    "sha256":  {
+                   "public_key":  "83606d14bdbf32dd22ab65c93e68e40e59a846460e96fcdbbadae7e74a5fdc34d7a53a3c16ac82fa27ed04d2fcfabd3804612ea091a425431ada54307fed5dc820b7f455dca1d5f492e3337a746d421a1f86fd984953a5b3573cc9b3fccee229",
+                   "signature":  "8f355ba508c5752808f9c9b368edd3fc2218cfbad548b613a38486cce39c1f18118e1bd8193965cb2b83fb95d919996f395f54403c36eed8f3b5bd9a181ea78933e96ab102a563330df58b7c4bd7b697"
+               },
+    "shake256":  {
+                     "public_key":  "b0818184eb8bd94d18b7274f54179102e5d461f5c8d53a33c0c8deba5ed020fbf0d39bd5ff04a263a7a56d15f66a15330954613d558c1d8f54efd9c5b3e7205eb138a26d9b45d5f3ff535dd59dffc31ddbcb3503d0c000bf02565368ad8e185a",
+                     "signature":  "b1bc8484e8cc123dfd1605638a5cf907e21ef080b085dbb5b6c6cc68e6362bb3381dc84f01da68bea3f5b2404db6402061c04af2b7f11e7073659ce36d8050f66b0c9be4a2af25efe39b550425ff07d3"
+                 }
+}

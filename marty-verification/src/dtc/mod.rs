@@ -1,8 +1,9 @@
 //! Digital Travel Credential helpers exposed via Python bindings.
 //!
 //! These helpers operate on JSON blobs that mirror the Python/proto shapes for
-//! DTC create/sign/verify. They normalize data groups (base64), compute
-//! canonical payloads, and perform lightweight signing/verification.
+//! DTC creation, remote-signature preparation/assembly, and verification. They
+//! normalize data groups (base64), compute canonical payloads, and verify
+//! externally signed records.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,25 +14,13 @@ use chrono::{DateTime, Utc};
 use const_oid::{db::rfc5280::ID_CE_EXT_KEY_USAGE, ObjectIdentifier};
 use der::Decode;
 use iref::IriBuf;
-#[cfg(test)]
-use p256::ecdsa::{signature::Signer, SigningKey as P256SigningKey};
 use p256::ecdsa::{
     signature::Verifier, Signature as P256Signature, VerifyingKey as P256VerifyingKey,
 };
-#[cfg(test)]
-use p256::pkcs8::DecodePrivateKey as _;
 use p256::pkcs8::DecodePublicKey as _;
 use p256::PublicKey as P256PublicKey;
-#[cfg(test)]
-use p256::SecretKey as P256SecretKey;
-#[cfg(test)]
-use p384::ecdsa::SigningKey as P384SigningKey;
 use p384::ecdsa::{Signature as P384Signature, VerifyingKey as P384VerifyingKey};
 use p384::PublicKey as P384PublicKey;
-#[cfg(test)]
-use p384::SecretKey as P384SecretKey;
-#[cfg(test)]
-use pkcs8::PrivateKeyInfo;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -554,32 +543,6 @@ fn curve_from_oid(oid: ObjectIdentifier) -> Option<EcCurve> {
     }
 }
 
-#[cfg(test)]
-fn detect_curve_from_private_key_pem(pem: &str) -> VerificationResult<EcCurve> {
-    let der = decode_pem_body(pem)?;
-    if let Ok(pkcs8) = PrivateKeyInfo::try_from(der.as_slice()) {
-        if let Some(params) = pkcs8.algorithm.parameters {
-            let oid = params
-                .decode_as::<ObjectIdentifier>()
-                .map_err(|e| VerificationError::dtc_invalid(e.to_string()))?;
-            if let Some(curve) = curve_from_oid(oid) {
-                return Ok(curve);
-            }
-        }
-    }
-
-    if P256SecretKey::from_sec1_der(&der).is_ok() {
-        return Ok(EcCurve::P256);
-    }
-    if P384SecretKey::from_sec1_der(&der).is_ok() {
-        return Ok(EcCurve::P384);
-    }
-
-    Err(VerificationError::dtc_unsupported(
-        "Unsupported EC private key format or curve".to_string(),
-    ))
-}
-
 fn detect_curve_from_public_key_pem(pem: &str) -> VerificationResult<EcCurve> {
     let der = decode_pem_body(pem)?;
     if let Ok(spki) = SubjectPublicKeyInfoRef::try_from(der.as_slice()) {
@@ -599,70 +562,6 @@ fn detect_curve_from_public_key_pem(pem: &str) -> VerificationResult<EcCurve> {
         _ => Err(VerificationError::dtc_unsupported(
             "Unsupported EC public key format or curve".to_string(),
         )),
-    }
-}
-
-#[cfg(test)]
-fn parse_p256_signing_key(pem: &str) -> VerificationResult<P256SigningKey> {
-    let pkcs8 = P256SigningKey::from_pkcs8_pem(pem).map_err(|e| e.to_string());
-    if let Ok(key) = pkcs8 {
-        return Ok(key);
-    }
-    let pkcs8_err = pkcs8
-        .err()
-        .unwrap_or_else(|| "unknown PKCS#8 error".to_string());
-    let der = decode_pem_body(pem).map_err(|e| {
-        VerificationError::dtc_invalid(format!(
-            "PKCS#8 parse failed: {}; SEC1 decode failed: {}",
-            pkcs8_err, e
-        ))
-    })?;
-    let secret = P256SecretKey::from_sec1_der(&der).map_err(|e| {
-        VerificationError::dtc_invalid(format!(
-            "PKCS#8 parse failed: {}; SEC1 parse failed: {}",
-            pkcs8_err, e
-        ))
-    })?;
-    Ok(P256SigningKey::from(secret))
-}
-
-#[cfg(test)]
-fn parse_p384_signing_key(pem: &str) -> VerificationResult<P384SigningKey> {
-    let pkcs8 = P384SigningKey::from_pkcs8_pem(pem).map_err(|e| e.to_string());
-    if let Ok(key) = pkcs8 {
-        return Ok(key);
-    }
-    let pkcs8_err = pkcs8
-        .err()
-        .unwrap_or_else(|| "unknown PKCS#8 error".to_string());
-    let der = decode_pem_body(pem).map_err(|e| {
-        VerificationError::dtc_invalid(format!(
-            "PKCS#8 parse failed: {}; SEC1 decode failed: {}",
-            pkcs8_err, e
-        ))
-    })?;
-    let secret = P384SecretKey::from_sec1_der(&der).map_err(|e| {
-        VerificationError::dtc_invalid(format!(
-            "PKCS#8 parse failed: {}; SEC1 parse failed: {}",
-            pkcs8_err, e
-        ))
-    })?;
-    Ok(P384SigningKey::from(secret))
-}
-
-#[cfg(test)]
-fn sign_ecdsa(payload: &[u8], signing_key_pem: &str) -> VerificationResult<String> {
-    match detect_curve_from_private_key_pem(signing_key_pem)? {
-        EcCurve::P256 => {
-            let sk = parse_p256_signing_key(signing_key_pem)?;
-            let sig: P256Signature = sk.sign(payload);
-            Ok(b64_encode(sig.to_der().as_bytes()))
-        }
-        EcCurve::P384 => {
-            let sk = parse_p384_signing_key(signing_key_pem)?;
-            let sig: P384Signature = sk.sign(payload);
-            Ok(b64_encode(sig.to_der().as_bytes()))
-        }
     }
 }
 
@@ -1011,40 +910,6 @@ fn validate_bounded_text(
         )));
     }
     Ok(text.to_string())
-}
-
-#[cfg(test)]
-pub fn sign_dtc_json(input: &str) -> VerificationResult<String> {
-    // Accept optional signing_key_pem and signer_public_key_pem in the JSON envelope
-    let value: Value = serde_json::from_str(input)
-        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
-    let signing_key = value
-        .get("signing_key_pem")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| VerificationError::dtc_missing_field("signing_key_pem"))?;
-    let signer_id = value
-        .get("signer_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("rust-dtc");
-
-    let record: DtcRecord = serde_json::from_value(value.clone())
-        .map_err(|e| VerificationError::dtc_invalid(format!("Invalid DTC payload: {}", e)))?;
-    let mut record = normalize_record(record);
-    let payload = canonical_payload(&record)?;
-    let sig_b64 = sign_ecdsa(&payload, &signing_key)?;
-
-    record.is_signed = true;
-    record.signature_info = Some(SignatureInfo {
-        signature_date: now_iso(),
-        signer_id: signer_id.to_string(),
-        signature: sig_b64,
-        is_valid: true,
-    });
-
-    serde_json::to_string(&record).map_err(|e| {
-        VerificationError::dtc_invalid(format!("Failed to serialize DTC payload: {}", e))
-    })
 }
 
 /// Verify a DTC using verifier-selected PKI trust material.

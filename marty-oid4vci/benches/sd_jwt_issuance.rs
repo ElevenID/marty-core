@@ -16,6 +16,9 @@ use marty_oid4vci::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "support/openbao_signer.rs"]
+mod openbao_signer;
+
 const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
 const SELECTIVE_CLAIM_COUNT: usize = 8;
 const SELECTIVE_CLAIM_BYTES: usize = 256;
@@ -43,12 +46,7 @@ fn fixture_with_credential_id(credential_id: &str) -> RemoteSdJwtRequest {
         issuer_id: "did:web:issuer.example".into(),
         verification_method_id: "did:web:issuer.example#key-1".into(),
         algorithm: "ES256".into(),
-        issuer_public_jwk: serde_json::json!({
-            "kty": "EC", "crv": "P-256",
-            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
-            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
-        })
-        .to_string(),
+        issuer_public_jwk: openbao_signer::public_jwk().to_owned(),
         subject_id: Some("did:key:holder".into()),
         credential_type: "AccessBadge".into(),
         claims,
@@ -157,18 +155,13 @@ fn assert_prepared(request: &RemoteSdJwtRequest, prepared: PreparedSdJwt) {
     }
     assert!(expected_digests.is_empty());
 
-    use p256::ecdsa::signature::Signer as _;
-    let mut scalar = [0u8; 32];
-    scalar[31] = 1;
-    let signing_key = p256::ecdsa::SigningKey::from_slice(&scalar).unwrap();
-    let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_payload());
+    let signature = openbao_signer::sign(prepared.signing_payload());
     let signing_input = prepared.signing_input().to_owned();
     let disclosures_suffix = prepared.disclosures_suffix().to_owned();
     let SignedCredential::SdJwt {
         compact,
         credential_id: assembled_id,
-    } = assemble_sd_jwt(prepared, signature.to_bytes().as_slice())
-        .expect("valid fixture signature")
+    } = assemble_sd_jwt(prepared, &signature).expect("valid fixture signature")
     else {
         panic!("fixture must assemble as SD-JWT")
     };

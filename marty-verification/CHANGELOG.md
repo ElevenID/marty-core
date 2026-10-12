@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-11
+
+### Changed
+
+- Retain the verification API through the shared offline X.509 kernel and
+  public-only signed Open Badges vectors. Signed OB2 assertions must bind the
+  verification key to the badge issuer.
+
+### Security
+
+- Replace issuer-key fixtures and raw private-JWK helpers in the affected
+  verification tests. Live certificate and revocation cases use disposable
+  remote signing with scoped grants.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added

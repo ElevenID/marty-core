@@ -15,3 +15,12 @@ representations for RSA-2048, P-256, P-384, Ed25519, and Ed448 public keys, the 
 RFC 7517 public JWK expected for each key, one X.509 certificate extraction
 vector, and malformed DER cases. The fixture contains public material only and
 can be consumed by Rust services and compatibility-wrapper tests alike.
+
+## Active-authentication challenge vectors
+
+`active_authentication_public.json` contains one synthetic RSA public key and
+two ISO 9796 Scheme 1 signatures. One recovers the exact fixed challenge and
+the other recovers a different message. Only public key and signature bytes
+are retained; the verification test no longer generates or reads an RSA
+private key. These vectors prove exact-challenge verification, not remote key
+custody or a production issuer-signing path.

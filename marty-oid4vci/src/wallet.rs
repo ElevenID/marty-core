@@ -26,6 +26,7 @@
 use std::collections::HashMap;
 
 use base64::Engine;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Oid4vciError, Oid4vciResult};
@@ -35,6 +36,52 @@ use crate::types::{
 };
 use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
 use crate::wallet_sd_jwt::{self, SdJwtIssuerKeyResolver};
+
+const MAX_OFFER_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_METADATA_RESPONSE_BYTES: usize = 256 * 1024;
+const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_NONCE_RESPONSE_BYTES: usize = 16 * 1024;
+const MAX_CREDENTIAL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PRESENTATION_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_OBJECT_BYTES: usize = 512 * 1024;
+
+async fn bounded_response_body(
+    mut response: reqwest::Response,
+    label: &str,
+    limit: usize,
+) -> Oid4vciResult<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(Oid4vciError::InvalidRequest(format!(
+            "{label} response exceeds {limit} bytes"
+        )));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        Oid4vciError::InvalidRequest(format!("{label} response read failed: {error}"))
+    })? {
+        if chunk.len() > limit.saturating_sub(body.len()) {
+            return Err(Oid4vciError::InvalidRequest(format!(
+                "{label} response exceeds {limit} bytes"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+async fn bounded_json_response<T: DeserializeOwned>(
+    response: reqwest::Response,
+    label: &str,
+    limit: usize,
+) -> Oid4vciResult<T> {
+    let body = bounded_response_body(response, label, limit).await?;
+    serde_json::from_slice(&body).map_err(|error| {
+        Oid4vciError::InvalidRequest(format!("{label} response parse error: {error}"))
+    })
+}
 
 fn generate_pkce_challenge_s256(code_verifier: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -174,27 +221,18 @@ pub struct PresentationResponse {
     pub error_description: Option<String>,
 }
 
-/// Holder key material for wallet-controlled proof and presentation signing.
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub struct HolderKeyMaterial {
-    /// Self-contained P-256 did:key identifier.
-    pub holder_id: String,
-    /// Private P-256 JWK. Callers must store this as sensitive key material.
-    pub private_jwk: String,
-}
-
 /// OID4VCI holder proof awaiting a signature from an opaque platform signer.
 pub struct PreparedHolderProof {
     signing_input: String,
     public_jwk_json: String,
+    algorithm: crate::types::SigningAlgorithm,
 }
 
 impl std::fmt::Debug for PreparedHolderProof {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PreparedHolderProof")
-            .field("algorithm", &"ES256")
+            .field("algorithm", &self.algorithm.as_str())
             .field("contents", &"[redacted]")
             .finish()
     }
@@ -203,7 +241,7 @@ impl std::fmt::Debug for PreparedHolderProof {
 impl PreparedHolderProof {
     /// Algorithm the KMS, secure enclave, or platform keystore must use.
     pub const fn algorithm(&self) -> crate::types::SigningAlgorithm {
-        crate::types::SigningAlgorithm::ES256
+        self.algorithm
     }
 
     /// Exact ASCII JWS signing input to send to the opaque signer.
@@ -211,28 +249,29 @@ impl PreparedHolderProof {
         self.signing_input.as_bytes()
     }
 
-    /// Assemble the compact proof JWT from a raw 64-byte ES256 signature.
+    /// Assemble the compact proof JWT from a raw ES256 or EdDSA signature.
     pub fn complete(self, signature: &[u8]) -> Oid4vciResult<String> {
-        p256::ecdsa::Signature::from_slice(signature).map_err(|_| {
-            Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            )
-        })?;
+        let invalid_signature = || {
+            Oid4vciError::SigningError(format!(
+                "opaque holder signer returned an invalid {} signature",
+                self.algorithm
+            ))
+        };
+        if signature.len() != 64 {
+            return Err(invalid_signature());
+        }
+        if self.algorithm == crate::types::SigningAlgorithm::ES256 {
+            p256::ecdsa::Signature::from_slice(signature).map_err(|_| invalid_signature())?;
+        }
         let verified = crate::jose::verify_detached_signature_with_public_jwk(
             self.signing_input.as_bytes(),
             signature,
             &self.public_jwk_json,
-            "ES256",
+            self.algorithm.as_str(),
         )
-        .map_err(|_| {
-            Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            )
-        })?;
+        .map_err(|_| invalid_signature())?;
         if !verified {
-            return Err(Oid4vciError::SigningError(
-                "opaque holder signer returned an invalid ES256 signature".into(),
-            ));
+            return Err(invalid_signature());
         }
         Ok(format!(
             "{}.{}",
@@ -260,59 +299,11 @@ impl WalletEngine {
         Self {
             client: reqwest::Client::builder()
                 .user_agent("marty-wallet/0.1")
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(15))
                 .build()
-                .expect("reqwest client init failed"),
+                .expect("reqwest wallet client init failed"),
         }
-    }
-
-    /// Generate a P-256 holder key represented as a self-contained `did:key`.
-    #[cfg(test)]
-    pub fn generate_holder_key(&self) -> HolderKeyMaterial {
-        let signing_key = crate::holder_key::generate_p256_signing_key();
-        let (x, y) = crate::holder_key::p256_public_coordinates(&signing_key)
-            .expect("a generated P-256 key always has affine coordinates");
-        let mut multicodec_key = vec![0x80, 0x24];
-        multicodec_key.extend_from_slice(
-            signing_key
-                .verifying_key()
-                .to_encoded_point(true)
-                .as_bytes(),
-        );
-        let holder_id = format!("did:key:z{}", base58btc_encode(&multicodec_key));
-        let private_jwk = serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(x),
-            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(y),
-            "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-        })
-        .to_string();
-
-        HolderKeyMaterial {
-            holder_id,
-            private_jwk,
-        }
-    }
-
-    /// Generate canonical P-256 holder material represented as `did:jwk`.
-    #[cfg(test)]
-    pub fn generate_p256_did_jwk_holder_key(
-        &self,
-    ) -> Oid4vciResult<crate::holder_key::DidJwkHolderKeyMaterial> {
-        crate::holder_key::generate_p256_did_jwk_holder_key()
-    }
-
-    /// Validate stored private P-256 JWK material and derive its canonical
-    /// public JWK and `did:jwk` identifier.
-    ///
-    /// This is used when loading existing mobile-wallet keys so malformed or
-    /// mismatched public coordinates fail closed instead of being trusted.
-    #[cfg(test)]
-    pub fn p256_did_jwk_holder_key_from_private_jwk(
-        &self,
-        private_jwk: &str,
-    ) -> Oid4vciResult<crate::holder_key::DidJwkHolderKeyMaterial> {
-        crate::holder_key::p256_did_jwk_holder_key_from_private_jwk(private_jwk)
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -350,16 +341,31 @@ impl WalletEngine {
 
         if let Some(offer_uri) = params.get("credential_offer_uri") {
             // Redirect pattern — fetch the offer
+            let reference = url::Url::parse(offer_uri).map_err(|_| {
+                Oid4vciError::InvalidRequest("credential_offer_uri is invalid".into())
+            })?;
+            if reference.scheme() != "https"
+                || reference.host_str().is_none()
+                || !reference.username().is_empty()
+                || reference.password().is_some()
+                || reference.fragment().is_some()
+            {
+                return Err(Oid4vciError::InvalidRequest(
+                    "credential_offer_uri must be an HTTPS URL without credentials or fragment"
+                        .into(),
+                ));
+            }
             let resp = self.client.get(offer_uri).send().await.map_err(|e| {
                 Oid4vciError::InvalidRequest(format!("credential_offer_uri fetch failed: {}", e))
             })?;
-
-            let offer: CredentialOffer = resp.json().await.map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "credential_offer_uri response is not valid JSON: {}",
-                    e
-                ))
-            })?;
+            if !resp.status().is_success() {
+                return Err(Oid4vciError::InvalidRequest(format!(
+                    "credential_offer_uri returned HTTP {}",
+                    resp.status()
+                )));
+            }
+            let offer: CredentialOffer =
+                bounded_json_response(resp, "Credential offer", MAX_OFFER_RESPONSE_BYTES).await?;
             return Ok(offer);
         }
 
@@ -391,9 +397,7 @@ impl WalletEngine {
             )));
         }
 
-        resp.json::<IssuerMetadata>().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Metadata response parse error: {}", e))
-        })
+        bounded_json_response(resp, "Metadata", MAX_METADATA_RESPONSE_BYTES).await
     }
 
     /// Fetch OAuth Authorization Server Metadata using the RFC 8414 insertion
@@ -417,15 +421,12 @@ impl WalletEngine {
             )));
         }
 
-        let metadata = resp
-            .json::<AuthorizationServerMetadata>()
-            .await
-            .map_err(|e| {
-                Oid4vciError::InvalidRequest(format!(
-                    "Authorization Server Metadata response parse error: {}",
-                    e
-                ))
-            })?;
+        let metadata: AuthorizationServerMetadata = bounded_json_response(
+            resp,
+            "Authorization Server Metadata",
+            MAX_METADATA_RESPONSE_BYTES,
+        )
+        .await?;
         if Self::normalized_issuer(&metadata.issuer)?
             != Self::normalized_issuer(authorization_server)?
         {
@@ -571,9 +572,7 @@ impl WalletEngine {
             )));
         }
 
-        resp.json::<NonceResponse>()
-            .await
-            .map_err(|e| Oid4vciError::InvalidRequest(format!("Nonce response parse error: {}", e)))
+        bounded_json_response(resp, "Nonce", MAX_NONCE_RESPONSE_BYTES).await
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -711,7 +710,7 @@ impl WalletEngine {
     /// * `holder_kid`   — the holder DID or key URL to use as the proof issuer
     /// * `c_nonce`      — the nonce from the issuer's Nonce Endpoint
     /// * `issuer_url`   — the credential issuer URL (goes in `aud`)
-    /// * `public_jwk_json` — holder's public-only P-256 JWK
+    /// * `public_jwk_json` — holder's public-only P-256 or Ed25519 JWK
     pub fn prepare_proof_jwt(
         &self,
         holder_kid: &str,
@@ -728,15 +727,26 @@ impl WalletEngine {
         }
         let public_jwk =
             crate::jose::parse_unique_object(public_jwk_json.as_bytes(), "holder public JWK")?;
-        let header_jwk = crate::jose::validate_public_jwk(&public_jwk, "ES256")?;
-        let object = public_jwk.as_object().expect("validated JWK is an object");
-        if object.get("kty").and_then(serde_json::Value::as_str) != Some("EC")
-            || object.get("crv").and_then(serde_json::Value::as_str) != Some("P-256")
-        {
-            return Err(Oid4vciError::KeyError(
-                "Holder public JWK must be an EC P-256 key".into(),
-            ));
-        }
+        let object = public_jwk
+            .as_object()
+            .ok_or_else(|| Oid4vciError::KeyError("Holder public JWK must be an object".into()))?;
+        let (algorithm, jose_algorithm) = match (
+            object.get("kty").and_then(serde_json::Value::as_str),
+            object.get("crv").and_then(serde_json::Value::as_str),
+        ) {
+            (Some("EC"), Some("P-256")) => {
+                (crate::types::SigningAlgorithm::ES256, Algorithm::ES256)
+            }
+            (Some("OKP"), Some("Ed25519")) => {
+                (crate::types::SigningAlgorithm::EdDSA, Algorithm::EdDSA)
+            }
+            _ => {
+                return Err(Oid4vciError::KeyError(
+                    "Holder public JWK must be P-256 or Ed25519".into(),
+                ))
+            }
+        };
+        let header_jwk = crate::jose::validate_public_jwk(&public_jwk, algorithm.as_str())?;
 
         let now = chrono::Utc::now().timestamp() as u64;
         let holder_id = holder_kid.split('#').next().unwrap_or(holder_kid);
@@ -748,7 +758,7 @@ impl WalletEngine {
             nonce: c_nonce.to_string(),
         };
 
-        let mut header = Header::new(Algorithm::ES256);
+        let mut header = Header::new(jose_algorithm);
         header.typ = Some("openid4vci-proof+jwt".into());
         header.jwk = Some(header_jwk);
 
@@ -757,6 +767,7 @@ impl WalletEngine {
         let claims = serde_json::to_vec(&claims)
             .map_err(|error| Oid4vciError::SigningError(error.to_string()))?;
         Ok(PreparedHolderProof {
+            algorithm,
             public_jwk_json: serde_json::to_string(&public_jwk)
                 .map_err(|error| Oid4vciError::KeyError(error.to_string()))?,
             signing_input: format!(
@@ -767,87 +778,47 @@ impl WalletEngine {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn create_proof_jwt(
-        &self,
-        holder_kid: &str,
-        c_nonce: &str,
-        issuer_url: &str,
-        private_jwk_json: &str,
-    ) -> Oid4vciResult<String> {
-        use p256::ecdsa::signature::Signer as _;
-
-        let signing_key = crate::holder_key::p256_signing_key_from_private_jwk(private_jwk_json)?;
-        let mut public_jwk: serde_json::Value = serde_json::from_str(private_jwk_json)
-            .map_err(|error| Oid4vciError::KeyError(error.to_string()))?;
-        public_jwk
-            .as_object_mut()
-            .ok_or_else(|| Oid4vciError::KeyError("Holder JWK must be an object".into()))?
-            .remove("d");
-        let prepared =
-            self.prepare_proof_jwt(holder_kid, c_nonce, issuer_url, &public_jwk.to_string())?;
-        let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
-        prepared.complete(signature.to_bytes().as_slice())
-    }
-
-    /// Create a selectively disclosed SD-JWT VC presentation with a KB-JWT.
-    ///
-    /// The key-binding JWT binds the presentation to the verifier's audience
-    /// and nonce. The private JWK must correspond to the public key in the
-    /// credential's `cnf` claim.
-    ///
-    /// # Security
-    ///
-    /// This API retains its existing preverified-input contract: it does not
-    /// resolve an issuer key or verify the issuer-signed JWT, and it does not
-    /// compare the supplied holder key with the credential's `cnf` claim.
-    /// Callers must authenticate the credential and enforce that holder-key
-    /// binding before passing it to this method.
-    #[cfg(test)]
-    fn create_sd_jwt_presentation(
-        &self,
-        credential: &str,
-        claims_to_disclose: &[String],
-        nonce: &str,
-        audience: &str,
-        holder_jwk_json: &str,
-    ) -> Oid4vciResult<String> {
-        use sd_jwt_rs::{SDJWTHolder, SDJWTSerializationFormat};
-
-        let disclosures = claims_to_disclose
-            .iter()
-            .map(|claim| (claim.clone(), serde_json::Value::Bool(true)))
-            .collect();
-        use p256::ecdsa::signature::Signer as _;
-        let signing_key = crate::holder_key::p256_signing_key_from_private_jwk(holder_jwk_json)?;
-        // Compatibility and security boundary: the previous sd-jwt-rs pin also
-        // parsed this credential without verifying its issuer signature, and
-        // WalletEngine does not yet accept a trusted issuer-key resolver. Use
-        // the dependency's explicit opt-out to preserve that behavior. A
-        // resolver- and holder-binding-aware API must be introduced as a
-        // separate product change.
-        let mut holder =
-            SDJWTHolder::new_unverified(credential.to_string(), SDJWTSerializationFormat::Compact)
-                .map_err(|error| {
-                    Oid4vciError::InvalidRequest(format!("Invalid SD-JWT credential: {error:?}"))
-                })?;
-
-        let prepared = holder
-            .prepare_key_binding_presentation(
-                disclosures,
-                nonce.to_string(),
-                audience.to_string(),
-                Some("ES256".to_string()),
-            )
-            .map_err(|error| {
-                Oid4vciError::SigningError(format!(
-                    "SD-JWT presentation preparation failed: {error:?}"
-                ))
-            })?;
-        let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
-        prepared
-            .complete(signature.to_bytes().as_slice())
-            .map_err(|error| Oid4vciError::SigningError(format!("{error:?}")))
+    /// Derive a self-certifying `did:key` from an Ed25519 public JWK.
+    /// Private key members and invalid public encodings are rejected.
+    pub fn ed25519_did_key_from_public_jwk(public_jwk_json: &str) -> Oid4vciResult<String> {
+        if public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+            return Err(Oid4vciError::KeyError(
+                "Holder public JWK exceeds its size limit".into(),
+            ));
+        }
+        let public_jwk =
+            crate::jose::parse_unique_object(public_jwk_json.as_bytes(), "holder public JWK")?;
+        let object = public_jwk
+            .as_object()
+            .ok_or_else(|| Oid4vciError::KeyError("Holder public JWK must be an object".into()))?;
+        if object.get("kty").and_then(serde_json::Value::as_str) != Some("OKP")
+            || object.get("crv").and_then(serde_json::Value::as_str) != Some("Ed25519")
+        {
+            return Err(Oid4vciError::KeyError(
+                "Holder public JWK must be Ed25519".into(),
+            ));
+        }
+        crate::jose::validate_public_jwk(&public_jwk, "EdDSA")?;
+        let encoded = object
+            .get("x")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| Oid4vciError::KeyError("Ed25519 public JWK x is missing".into()))?;
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| Oid4vciError::KeyError("Ed25519 public JWK x is invalid".into()))?;
+        if decoded.len() != 32 {
+            return Err(Oid4vciError::KeyError(
+                "Ed25519 public JWK x must be 32 bytes".into(),
+            ));
+        }
+        marty_crypto::ed25519::Ed25519VerifyingKey::from_bytes(&decoded)
+            .map_err(|_| Oid4vciError::KeyError("Ed25519 public JWK x is invalid".into()))?;
+        let mut multicodec_key = vec![0xed, 0x01];
+        multicodec_key.extend_from_slice(&decoded);
+        Ok(format!(
+            "did:key:z{}",
+            crate::proof::base58btc_encode(&multicodec_key)
+        ))
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -881,22 +852,17 @@ impl WalletEngine {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn create_verified_sd_jwt_presentation(
+    /// Verify a received SD-JWT against an explicit trusted issuer key and
+    /// the public P-256 key that will later sign its presentations.
+    pub fn verify_received_sd_jwt_credential(
         &self,
         credential: &str,
-        claims_to_disclose: &[String],
-        nonce: &str,
-        audience: &str,
-        holder_private_jwk_json: &str,
+        holder_public_jwk_json: &str,
         issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
-    ) -> Oid4vciResult<String> {
-        wallet_sd_jwt::create_verified_presentation(
+    ) -> Oid4vciResult<crate::VerifiedSdJwtCredential> {
+        wallet_sd_jwt::verify_received_credential(
             credential,
-            claims_to_disclose,
-            nonce,
-            audience,
-            holder_private_jwk_json,
+            holder_public_jwk_json,
             issuer_key_resolver,
         )
     }
@@ -930,16 +896,12 @@ impl WalletEngine {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
             return Err(Oid4vciError::InvalidRequest(format!(
-                "Credential endpoint returned HTTP {}: {}",
-                status, body
+                "Credential endpoint returned HTTP {}",
+                status
             )));
         }
-
-        resp.json::<CredentialResponse>().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Credential response parse error: {}", e))
-        })
+        bounded_json_response(resp, "Credential", MAX_CREDENTIAL_RESPONSE_BYTES).await
     }
 
     fn build_credential_request(
@@ -1298,10 +1260,10 @@ impl WalletEngine {
             })?;
 
         let status = resp.status();
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .unwrap_or(serde_json::Value::Object(Default::default()));
+        let body =
+            bounded_response_body(resp, "Presentation", MAX_PRESENTATION_RESPONSE_BYTES).await?;
+        let body: serde_json::Value =
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Object(Default::default()));
 
         if status.is_success() {
             Ok(PresentationResponse {
@@ -1343,15 +1305,12 @@ impl WalletEngine {
     async fn parse_token_response(resp: reqwest::Response) -> Oid4vciResult<TokenResponse> {
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(Oid4vciError::InvalidRequest(format!(
-                "Token endpoint returned HTTP {}: {}",
-                status, body
+                "Token endpoint returned HTTP {}",
+                status
             )));
         }
-        resp.json::<TokenResponse>()
-            .await
-            .map_err(|e| Oid4vciError::InvalidRequest(format!("Token response parse error: {}", e)))
+        bounded_json_response(resp, "Token", MAX_TOKEN_RESPONSE_BYTES).await
     }
 
     fn request_object_from_params(
@@ -1416,10 +1375,9 @@ impl WalletEngine {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
             return Err(Oid4vciError::InvalidRequest(format!(
-                "Request object endpoint returned HTTP {}: {}",
-                status, body
+                "Request object endpoint returned HTTP {}",
+                status
             )));
         }
 
@@ -1429,11 +1387,11 @@ impl WalletEngine {
             .and_then(|value| value.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let body = resp.text().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Request object read failed: {}", e))
-        })?;
+        let body = bounded_response_body(resp, "Request object", MAX_REQUEST_OBJECT_BYTES).await?;
+        let body = std::str::from_utf8(&body)
+            .map_err(|_| Oid4vciError::InvalidRequest("Request object is not UTF-8".into()))?;
 
-        Self::decode_request_object_body(&body, Some(content_type.as_str()))
+        Self::decode_request_object_body(body, Some(content_type.as_str()))
     }
 
     fn decode_request_object_body(
@@ -1585,31 +1543,6 @@ fn generate_random_state() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-#[cfg(test)]
-fn base58btc_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-    let leading_zeroes = data.iter().take_while(|&&byte| byte == 0).count();
-    let mut digits: Vec<u8> = Vec::new();
-    for &byte in data {
-        let mut carry = byte as u32;
-        for digit in &mut digits {
-            carry += (*digit as u32) * 256;
-            *digit = (carry % 58) as u8;
-            carry /= 58;
-        }
-        while carry > 0 {
-            digits.push((carry % 58) as u8);
-            carry /= 58;
-        }
-    }
-    digits.extend(std::iter::repeat_n(0, leading_zeroes));
-    digits.reverse();
-    digits
-        .iter()
-        .map(|&digit| ALPHABET[digit as usize] as char)
-        .collect()
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Format detection heuristic
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1631,6 +1564,17 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
+
+    fn remote_p256_holder() -> (crate::openbao_transit::ScopedTransitSigner, String) {
+        let signer = crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let mut multicodec_key = vec![0x80, 0x24];
+        multicodec_key.extend_from_slice(signer.verifying_key().to_encoded_point(true).as_bytes());
+        let did = format!(
+            "did:key:z{}",
+            crate::proof::base58btc_encode(&multicodec_key)
+        );
+        (signer, did)
+    }
 
     fn issuer_metadata(credential_issuer: String) -> IssuerMetadata {
         IssuerMetadata {
@@ -1851,6 +1795,142 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn presentation_submission_never_forwards_token_to_redirect_target() {
+        let redirect_target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let response_uri = format!("http://{}/present", redirect_source.local_addr().unwrap());
+        let target_uri = format!("http://{}/capture", redirect_target.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = redirect_source.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let read = stream.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..read]).contains("POST /present"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_uri}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let response = WalletEngine::new()
+            .submit_presentation_optional(&response_uri, "sensitive-vp-token", None)
+            .await
+            .unwrap();
+        assert!(!response.ok);
+        server.await.unwrap();
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            redirect_target.accept()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn presentation_submission_rejects_oversized_response_before_success() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let response_uri = format!("http://{}/present", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            stream.read(&mut request).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_PRESENTATION_RESPONSE_BYTES + 1
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let result = WalletEngine::new()
+            .submit_presentation_optional(&response_uri, "vp-token", None)
+            .await;
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::InvalidRequest(message)) if message.contains("exceeds")
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn nonce_rejects_chunked_response_over_limit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let nonce_endpoint = format!("http://{}/nonce", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            stream.read(&mut request).await.unwrap();
+            let body = "x".repeat(MAX_NONCE_RESPONSE_BYTES + 1);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",
+                body.len()
+            );
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(body.as_bytes()).await.unwrap();
+            stream.write_all(b"\r\n0\r\n\r\n").await.unwrap();
+        });
+        let result = WalletEngine::new().fetch_nonce(&nonce_endpoint).await;
+        assert!(matches!(
+            result,
+            Err(Oid4vciError::InvalidRequest(message)) if message.contains("exceeds")
+        ));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn by_reference_offer_rejects_insecure_url_before_network() {
+        for reference in [
+            "http://127.0.0.1:9/offer",
+            "https://example.invalid/offer#fragment",
+            "https://user@example.invalid/offer",
+        ] {
+            let offer_uri = format!(
+                "openid-credential-offer://?credential_offer_uri={}",
+                url::form_urlencoded::byte_serialize(reference.as_bytes()).collect::<String>()
+            );
+            assert!(WalletEngine::new()
+                .parse_credential_offer(&offer_uri)
+                .await
+                .is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_request_never_forwards_bearer_to_redirect_target() {
+        let redirect_target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_source = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/credential",
+            redirect_source.local_addr().unwrap()
+        );
+        let target_uri = format!("http://{}/capture", redirect_target.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = redirect_source.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let read = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.contains("POST /credential"));
+            assert!(request.contains("Bearer sensitive-access-token"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_uri}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        assert!(WalletEngine::new()
+            .request_credential(
+                &endpoint,
+                "sensitive-access-token",
+                "configuration",
+                "proof"
+            )
+            .await
+            .is_err());
+        server.await.unwrap();
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            redirect_target.accept()
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
     async fn parse_presentation_request_by_value_dcql() {
         let engine = WalletEngine::new();
         let dcql_query = r#"{"credentials":[{"id":"member_credential","format":"dc+sd-jwt","claims":[{"id":"claim_email","path":["email"]}]}]}"#;
@@ -1878,17 +1958,20 @@ mod tests {
     }
 
     #[test]
-    fn generated_holder_key_creates_verifiable_proof() {
+    #[ignore = "requires marked disposable OpenBao Transit and scoped holder signer"]
+    fn remote_holder_key_creates_verifiable_proof() {
         let engine = WalletEngine::new();
-        let holder = engine.generate_holder_key();
-        let proof = engine
-            .create_proof_jwt(
-                &format!("{}#{}", holder.holder_id, holder.holder_id),
+        let (signer, holder_id) = remote_p256_holder();
+        let prepared = engine
+            .prepare_proof_jwt(
+                &format!("{holder_id}#{holder_id}"),
                 "nonce-123",
                 "https://issuer.example",
-                &holder.private_jwk,
+                signer.public_jwk(),
             )
             .unwrap();
+        let signature = signer.sign(prepared.signing_input()).unwrap();
+        let proof = prepared.complete(&signature).unwrap();
 
         let verified = crate::proof::verify_jwt_proof(
             &proof,
@@ -1897,7 +1980,7 @@ mod tests {
             300,
         )
         .unwrap();
-        assert_eq!(verified.holder_id, holder.holder_id);
+        assert_eq!(verified.holder_id, holder_id);
         let holder_jwk = verified
             .holder_jwk
             .expect("proof must expose the holder public JWK");
@@ -1908,37 +1991,34 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped holder signer"]
     fn opaque_holder_proof_accepts_only_public_key_input() {
-        use p256::ecdsa::signature::Signer as _;
-
         let engine = WalletEngine::new();
-        let holder = engine.generate_holder_key();
+        let (signer, holder_id) = remote_p256_holder();
+        let mut private_jwk: serde_json::Value = serde_json::from_str(signer.public_jwk()).unwrap();
+        private_jwk["d"] = serde_json::json!("forbidden");
         assert!(engine
             .prepare_proof_jwt(
-                &holder.holder_id,
+                &holder_id,
                 "nonce-opaque",
                 "https://issuer.example",
-                &holder.private_jwk,
+                &private_jwk.to_string(),
             )
             .is_err());
 
-        let signing_key = crate::holder_key::p256_signing_key_from_private_jwk(&holder.private_jwk)
-            .expect("test holder key");
-        let mut public_jwk: serde_json::Value = serde_json::from_str(&holder.private_jwk).unwrap();
-        public_jwk.as_object_mut().unwrap().remove("d");
         let prepared = engine
             .prepare_proof_jwt(
-                &holder.holder_id,
+                &holder_id,
                 "nonce-opaque",
                 "https://issuer.example",
-                &public_jwk.to_string(),
+                signer.public_jwk(),
             )
             .unwrap();
         let diagnostic = format!("{prepared:?}");
         assert!(diagnostic.contains("[redacted]"));
         assert!(!diagnostic.contains("nonce-opaque"));
-        let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
-        let proof = prepared.complete(signature.to_bytes().as_slice()).unwrap();
+        let signature = signer.sign(prepared.signing_input()).unwrap();
+        let proof = prepared.complete(&signature).unwrap();
         assert!(crate::proof::verify_jwt_proof(
             &proof,
             "https://issuer.example",
@@ -1947,25 +2027,23 @@ mod tests {
         )
         .is_ok());
 
-        let wrong_signing_key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let wrong_signer =
+            crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
         let prepared = engine
             .prepare_proof_jwt(
-                &holder.holder_id,
+                &holder_id,
                 "nonce-wrong-key",
                 "https://issuer.example",
-                &public_jwk.to_string(),
+                signer.public_jwk(),
             )
             .unwrap();
-        let wrong_signature: p256::ecdsa::Signature =
-            wrong_signing_key.sign(prepared.signing_input());
-        assert!(prepared
-            .complete(wrong_signature.to_bytes().as_slice())
-            .is_err());
+        let wrong_signature = wrong_signer.sign(prepared.signing_input()).unwrap();
+        assert!(prepared.complete(&wrong_signature).is_err());
 
         let oversized = " ".repeat(crate::jose::MAX_PUBLIC_JWK_BYTES + 1);
         assert!(engine
             .prepare_proof_jwt(
-                &holder.holder_id,
+                &holder_id,
                 "nonce-oversized",
                 "https://issuer.example",
                 &oversized,
@@ -2029,124 +2107,5 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&vp_token).unwrap(),
             serde_json::json!({"member_credential": ["credential.jwt"]})
         );
-    }
-
-    #[test]
-    fn create_sd_jwt_presentation_adds_nonce_audience_and_dcql_shape() {
-        use p256::ecdsa::signature::Signer as _;
-        use p256::ecdsa::SigningKey;
-        use p256::elliptic_curve::rand_core::OsRng;
-        use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
-        use sd_jwt_rs::{SDJWTIssuerPlanner, SDJWTSerializationFormat};
-
-        let issuer_key = SigningKey::random(&mut OsRng);
-        let holder_key = SigningKey::random(&mut OsRng);
-        let holder_point = holder_key.verifying_key().to_encoded_point(false);
-        let private_jwk = serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.x().unwrap()),
-            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.y().unwrap()),
-            "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_key.to_bytes()),
-        });
-        let public_jwk = serde_json::from_value(serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": private_jwk["x"],
-            "y": private_jwk["y"],
-        }))
-        .unwrap();
-        let prepared = SDJWTIssuerPlanner::new(Some("ES256".to_string()))
-            .prepare(
-                serde_json::json!({"email": "member@example.com", "role": "member"}),
-                ClaimsForSelectiveDisclosureStrategy::AllLevels,
-                Some(public_jwk),
-                false,
-                SDJWTSerializationFormat::Compact,
-            )
-            .unwrap();
-        let issuer_signature: p256::ecdsa::Signature = issuer_key.sign(prepared.signing_input());
-        let issuer_point = issuer_key.verifying_key().to_encoded_point(false);
-        let issuer_verification_key =
-            jsonwebtoken::DecodingKey::from_ec_der(issuer_point.as_bytes());
-        let credential = prepared
-            .complete(
-                issuer_signature.to_bytes().as_slice(),
-                &issuer_verification_key,
-            )
-            .unwrap();
-
-        let presentation = WalletEngine::new()
-            .create_sd_jwt_presentation(
-                &credential,
-                &["email".to_string()],
-                "nonce-123",
-                "https://verifier.example",
-                &private_jwk.to_string(),
-            )
-            .unwrap();
-        let kb_jwt = presentation
-            .split('~')
-            .rfind(|part| !part.is_empty())
-            .unwrap();
-        let payload = WalletEngine::decode_jwt_payload(kb_jwt).unwrap();
-
-        assert_eq!(payload["nonce"], "nonce-123");
-        assert_eq!(payload["aud"], "https://verifier.example");
-        assert!(payload["sd_hash"].as_str().is_some());
-        assert!(presentation.contains('~'));
-    }
-
-    #[test]
-    fn create_sd_jwt_presentation_preserves_preverified_input_boundary() {
-        use p256::ecdsa::SigningKey;
-        use p256::elliptic_curve::rand_core::OsRng;
-
-        let holder_key = SigningKey::random(&mut OsRng);
-        let holder_point = holder_key.verifying_key().to_encoded_point(false);
-        let credential_bound_key = SigningKey::random(&mut OsRng);
-        let credential_bound_point = credential_bound_key.verifying_key().to_encoded_point(false);
-        let private_jwk = serde_json::json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.x().unwrap()),
-            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_point.y().unwrap()),
-            "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(holder_key.to_bytes()),
-        });
-        let issuer_payload = serde_json::json!({
-            "iss": "https://issuer.example",
-            "iat": 1_700_000_000,
-            "cnf": {
-                "jwk": {
-                    "kty": "EC",
-                    "crv": "P-256",
-                    "x": base64::engine::general_purpose::URL_SAFE_NO_PAD
-                        .encode(credential_bound_point.x().unwrap()),
-                    "y": base64::engine::general_purpose::URL_SAFE_NO_PAD
-                        .encode(credential_bound_point.y().unwrap()),
-                }
-            }
-        });
-        let protected = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(br#"{"alg":"ES256","typ":"vc+sd-jwt"}"#);
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&issuer_payload).unwrap());
-        let invalid_issuer_jws = format!("{protected}.{payload}.AA");
-        let credential = format!("{invalid_issuer_jws}~");
-
-        // Even the compatibility method must not assemble a key-binding JWT
-        // for a key different from the issuer-signed `cnf.jwk`.
-        assert_ne!(private_jwk["x"], issuer_payload["cnf"]["jwk"]["x"]);
-        let nonce = uuid::Uuid::new_v4().to_string();
-        let error = WalletEngine::new()
-            .create_sd_jwt_presentation(
-                &credential,
-                &[],
-                &nonce,
-                "https://verifier.example",
-                &private_jwk.to_string(),
-            )
-            .unwrap_err();
-        assert!(matches!(error, crate::error::Oid4vciError::SigningError(_)));
     }
 }

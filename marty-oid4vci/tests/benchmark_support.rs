@@ -12,6 +12,7 @@ fn normalize_source_line_endings(source: &str) -> String {
 }
 
 #[test]
+#[ignore = "requires disposable OpenBao; run through test_remote_issuer_live_kms.sh"]
 fn benchmark_remote_signature_matches_the_public_fixture_key() {
     use base64::Engine as _;
     use p256::ecdsa::signature::Verifier as _;
@@ -39,6 +40,7 @@ fn benchmark_remote_signature_matches_the_public_fixture_key() {
 }
 
 #[test]
+#[ignore = "requires disposable OpenBao; run through test_remote_issuer_live_kms.sh"]
 #[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
 fn benchmark_mdoc_assembly_helper_signs_the_exact_prepared_payload() {
     use marty_oid4vci::{

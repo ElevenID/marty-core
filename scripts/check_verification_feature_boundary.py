@@ -60,7 +60,7 @@ def check_repository(root: Path = ROOT) -> None:
             for dependency in canonical_digest["dependencies"].values()
         )
         and workspace_dependencies["marty-canonical-digest"]
-        == {"version": "0.2.1", "path": "marty-canonical-digest"}
+        == {"version": "0.2.2", "path": "marty-canonical-digest"}
         and verification["dependencies"].get("marty-canonical-digest")
         == {"workspace": True},
         "canonical digest boundary must contain only shared JSON/SHA-256 and feed verification",
@@ -294,8 +294,7 @@ def check_repository(root: Path = ROOT) -> None:
         didcomm["features"]["kms-only"] == []
         and didcomm["features"]["encrypted-envelope"]
         == ["dep:affinidi-messaging-didcomm"]
-        and didcomm["features"]["local-key-operations"]
-        == ["encrypted-envelope"]
+        and "local-key-operations" not in didcomm["features"]
         and didcomm["dependencies"]["affinidi-messaging-didcomm"].get("optional")
         is True
         and didcomm["dependencies"]["affinidi-messaging-didcomm"].get(

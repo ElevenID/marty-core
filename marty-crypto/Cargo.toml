@@ -167,22 +167,7 @@ zkryptium = { workspace = true, optional = true }
 aws-lc-rs = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-cms = { workspace = true, features = ["builder"] }
-ecdsa-core = { workspace = true, features = ["signing"] }
-ed25519-dalek = { workspace = true, features = ["pem", "pkcs8", "rand_core"] }
 hmac = { workspace = true }
-p12 = { workspace = true }
-p256 = { workspace = true, features = ["arithmetic", "ecdh", "ecdsa", "pem", "pkcs8", "sha256", "std"] }
-p384 = { workspace = true, features = ["arithmetic", "ecdh", "ecdsa", "pem", "pkcs8", "sha384", "std"] }
-p521 = { workspace = true, features = ["arithmetic", "ecdsa", "getrandom", "pem", "pkcs8", "sha512", "std"] }
-pem-rfc7468 = { workspace = true }
-pkcs8 = { workspace = true }
-rand = { workspace = true }
-rsa = { workspace = true, features = ["pem"] }
-signature = { workspace = true }
-tempfile = { workspace = true }
-rcgen = { workspace = true }
-x509-cert = { workspace = true, features = ["builder"] }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.76"

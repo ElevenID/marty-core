@@ -48,6 +48,12 @@ format-specific remote signing handles.
 - The Python extension no longer has features capable of exporting credential
   key generation, private-key signing, proof-key generation, or DIDComm
   long-lived-key decryption/authcrypt functions.
+- `marty-didcomm` no longer declares a selectable `local-key-operations`
+  feature or caller-private-key authcrypt/decrypt APIs. Its public-recipient
+  anoncrypt still creates an ephemeral sender key and checks protected JWE
+  headers. Native services own sender-authenticated encryption through the
+  remote non-exportable KMS boundary; Core's former raw-key Appendix C
+  decryption test is not retained as a false KMS-custody claim.
 - The unsafe generic tuple-based signing wrapper was removed. Production uses
   the bounded, format-specific remote-signing APIs, which retain opaque,
   one-use preparation state and require explicit verification-method IDs.
@@ -63,14 +69,43 @@ format-specific remote signing handles.
 - `marty-crypto` no longer declares selectable signing, key-generation,
   private-key codec, PKCS#12, BBS signing, or certificate/SOD builder features.
   BBS signature/proof verification and holder proof generation remain available
-  through `bbs-verification`; BBS secret keys, key generation, and signing are
-  test-only. Historical local vectors run only under rustc's non-selectable
-  `cfg(test)` boundary.
-- Cross-crate fixture signing lives in `marty-crypto-test-support`, which is
-  `publish = false` and used only as a dev-dependency.
+  through `bbs-verification`; BBS issuer secret keys, key generation, and
+  signing are absent from this crate, including its tests. Public signed
+  vectors preserve both ciphersuites' signature checks and multi-message
+  holder proof creation and verification.
+- The unused `cfg(test)` certificate builder, key-generation, PKCS#12 and SOD
+  builder modules are removed as well. CRL and OCSP response verification now
+  uses public signed vectors at fixed test instants; production freshness still
+  reads system time. Cryptographic conformance and holder/session test paths
+  require separate custody classification before the test graph is complete.
+- The public-key serialization module no longer contains its unreferenced
+  `cfg(test)` private-key import, export, raw conversion or public-key derivation
+  helpers. Its SPKI/PEM public-key operations and public-vector checks remain.
+- RSA's `cfg(test)` key generator and PKCS#1/PSS signers are retired. Its
+  former signer-dependent conformance tests now verify public RS256/384/512
+  and PS256/384/512 vectors, including wrong-message/key, tamper, cross-scheme
+  and distinct-PSS-signature behavior. The verifier API remains available.
+- ECDSA's `cfg(test)` P-256/P-384/P-521 key generators and signers are retired.
+  The former signer-dependent suite is removed; the existing public-vector
+  verifier suite covers all three curves, SEC1/SPKI inputs, tampering, wrong
+  keys and signature normalization. These tests verify public artifacts and
+  do not establish remote KMS custody.
+- Ed25519's test-only keypair, secret import/export, signer and private
+  PEM/DER parser are retired. The public RFC 8032 vector and existing public
+  verifier fixtures cover valid and invalid messages, keys, signatures and
+  encodings. ISO 9796-2's test-only RSA private-key signer is also retired;
+  Scheme 1 recovery and tamper checks use a public signed vector. Signing-only
+  crypto dev-dependency feature overrides are removed.
+- Cross-crate fixture signing uses disposable OpenBao through
+  `marty-crypto-test-support`, which is `publish = false` and used only as a
+  dev-dependency. Its former local ECDSA, Ed25519, RSA and private-key codec
+  helpers have been retired; public fixed vectors cover exact-challenge
+  active authentication.
 - `marty-verification` no longer declares local-key, certificate-builder, or
-  authority-issuance features. Explicit, zeroizing ECDH/BAC/PACE/EAC session
-  state and TLS clients remain separate capabilities.
+  authority-issuance features. Its unreachable former authority-issuance source
+  was removed after the test-only crypto builders it referenced were retired.
+  Explicit, zeroizing ECDH/BAC/PACE/EAC session state and TLS clients remain
+  separate capabilities.
 - Public JWK parsing remains Serde-compatible but now uses bounded visitors:
   member strings, arrays, extension depth/count, aggregate bytes, duplicate
   names, and private members all fail closed before unbounded allocation.

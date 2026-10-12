@@ -85,16 +85,15 @@ reqwest = { workspace = true, features = ["form"], optional = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }
+marty-crypto = { workspace = true, default-features = false, features = ["jwk", "ecdsa-verification"] }
+reqwest = { workspace = true, features = ["blocking"] }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e", features = ["issuer-planning"] }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "82143d688355315f22297b40ca18050a94cd2525" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
-ed25519-dalek = { workspace = true, features = ["pkcs8", "rand_core"] }
 k256 = { workspace = true, features = ["ecdsa", "sha256"] }
-ssi-crypto = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 ssi-jwk = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-aws-lc-rs = { version = "1.14", default-features = false, features = ["aws-lc-sys", "ring-io"] }
 criterion = { workspace = true }
 marty-crypto-test-support = { workspace = true }
 tokio = { workspace = true }
@@ -139,10 +138,37 @@ required-features = ["verifier"]
 [[test]]
 name = "signing_payload_semantics"
 path = "tests/signing_payload_semantics.rs"
+required-features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
+name = "sd_jwt_structural_boundaries"
+path = "tests/sd_jwt_structural_boundaries.rs"
+required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
+name = "sd_jwt_managed_claim_boundaries"
+path = "tests/sd_jwt_managed_claim_boundaries.rs"
+required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
+name = "sd_jwt_vc_conformance"
+path = "tests/sd_jwt_vc_conformance.rs"
+required-features = ["issuer", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
+name = "remote_jwt_vc_boundary"
+path = "tests/remote_jwt_vc_boundary.rs"
+required-features = ["issuer", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
+
+[[test]]
+name = "remote_issuer_live_kms"
+path = "tests/remote_issuer_live_kms.rs"
+required-features = ["issuer", "verifier", "wallet", "jwt_vc_json", "sd_jwt", "mso_mdoc", "kms-only"]
 
 [[test]]
 name = "benchmark_support"
 path = "tests/benchmark_support.rs"
+required-features = ["issuer", "mso_mdoc", "sd_jwt"]
 
 [[test]]
 name = "wasm_crypto_provider"

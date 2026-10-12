@@ -118,7 +118,6 @@ pub fn verify_challenge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marty_crypto_test_support::rsa::{generate_rsa_keypair, sign_iso9796_scheme1};
 
     #[test]
     fn builds_and_parses_internal_authenticate_apdus() {
@@ -137,9 +136,13 @@ mod tests {
 
     #[test]
     fn verifies_only_the_exact_challenge() {
-        let (private_der, public_der) = generate_rsa_keypair(2048).unwrap();
-        let challenge = b"0123456789abcdef";
-        let signature = sign_iso9796_scheme1(&private_der, challenge).unwrap();
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/active_authentication_public.json"
+        ))
+        .unwrap();
+        let public_der = hex::decode(vector["public_key_der_hex"].as_str().unwrap()).unwrap();
+        let challenge = vector["challenge_utf8"].as_str().unwrap().as_bytes();
+        let signature = hex::decode(vector["matching_signature_hex"].as_str().unwrap()).unwrap();
         let valid = verify_challenge(
             &public_der,
             challenge,
@@ -148,12 +151,10 @@ mod tests {
         )
         .unwrap();
         assert!(valid.is_valid);
-        assert_eq!(
-            valid.recovered_message.as_deref(),
-            Some(challenge.as_slice())
-        );
+        assert_eq!(valid.recovered_message.as_deref(), Some(challenge));
 
-        let signature = sign_iso9796_scheme1(&private_der, b"xx0123456789abcdefyy").unwrap();
+        let signature =
+            hex::decode(vector["other_message_signature_hex"].as_str().unwrap()).unwrap();
         assert!(
             !verify_challenge(
                 &public_der,

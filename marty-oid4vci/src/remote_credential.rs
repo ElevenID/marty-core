@@ -907,10 +907,7 @@ mod tests {
         }
         use p384::elliptic_curve::sec1::ToEncodedPoint as _;
 
-        let mut scalar = [0u8; 48];
-        scalar[47] = 1;
-        let secret = p384::SecretKey::from_slice(&scalar).unwrap();
-        let point = secret.public_key().to_encoded_point(false);
+        let point = p384::AffinePoint::GENERATOR.to_encoded_point(false);
         serde_json::json!({
             "kty": "EC",
             "crv": "P-384",

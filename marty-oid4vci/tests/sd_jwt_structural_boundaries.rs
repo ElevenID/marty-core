@@ -8,15 +8,14 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_oid4vci::{
     formats::sd_jwt::{
-        prepare_sd_jwt, prepare_sd_jwt_with_options, sign_sd_jwt, sign_sd_jwt_with_signer,
-        PreparedSdJwt, SdJwtPreparationOptions,
+        prepare_sd_jwt, prepare_sd_jwt_with_options, sign_sd_jwt_with_signer, PreparedSdJwt,
+        SdJwtPreparationOptions,
     },
     remote_credential::{prepare_remote_sd_jwt, RemoteSdJwtRequest},
     signer::CredentialSigner,
-    types::{CredentialClaims, CredentialPayloadFormat, IssuerKey, SigningAlgorithm},
+    types::{CredentialClaims, CredentialPayloadFormat, SigningAlgorithm},
     Oid4vciError, Oid4vciResult,
 };
-use ssi_jwk::JWK;
 
 const RESERVED_STRUCTURE: &str = "SD-JWT claims contain reserved structural markers";
 const STRUCTURAL_MARKERS: &[&str] = &["_sd", "_sd_alg", "..."];
@@ -52,16 +51,6 @@ impl CredentialSigner for SignerSpy {
 
     fn public_jwk(&self) -> Oid4vciResult<String> {
         Ok(r#"{"alg":"ES256","crv":"P-256","kty":"EC","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}"#.into())
-    }
-}
-
-fn test_key() -> IssuerKey {
-    let jwk = JWK::generate_p256();
-    let jwk_json = serde_json::to_string(&jwk).unwrap();
-    IssuerKey {
-        issuer_id: format!("did:jwk:{}", URL_SAFE_NO_PAD.encode(jwk_json.as_bytes())),
-        jwk_json,
-        algorithm: SigningAlgorithm::ES256,
     }
 }
 
@@ -103,8 +92,7 @@ fn assert_structural_error<T>(result: Oid4vciResult<T>) {
     assert!(!message.contains("Sensitive private key sentinel"));
 }
 
-fn assert_direct_rejection(key: &IssuerKey, spy: &SignerSpy, submitted: &CredentialClaims) {
-    assert_structural_error(sign_sd_jwt(key, submitted));
+fn assert_direct_rejection(spy: &SignerSpy, submitted: &CredentialClaims) {
     assert_structural_error(prepare_sd_jwt(spy, submitted));
     assert_structural_error(sign_sd_jwt_with_signer(spy, submitted));
 }
@@ -143,7 +131,6 @@ fn remote_request() -> RemoteSdJwtRequest {
 
 #[test]
 fn direct_boundaries_reject_each_marker_as_a_raw_or_nested_object_key_before_signing() {
-    let key = test_key();
     let spy = SignerSpy::default();
 
     for format in [
@@ -156,7 +143,7 @@ fn direct_boundaries_reject_each_marker_as_a_raw_or_nested_object_key_before_sig
                 (*marker).into(),
                 serde_json::json!("Sensitive forged structure"),
             );
-            assert_direct_rejection(&key, &spy, &top_level);
+            assert_direct_rejection(&spy, &top_level);
 
             let mut member = serde_json::Map::new();
             member.insert(
@@ -173,7 +160,7 @@ fn direct_boundaries_reject_each_marker_as_a_raw_or_nested_object_key_before_sig
                     ]
                 }),
             );
-            assert_direct_rejection(&key, &spy, &nested);
+            assert_direct_rejection(&spy, &nested);
         }
     }
 
@@ -186,7 +173,6 @@ fn direct_boundaries_reject_each_marker_as_a_raw_or_nested_object_key_before_sig
 
 #[test]
 fn selectors_and_confirmation_reject_each_structural_marker_in_both_payload_modes() {
-    let key = test_key();
     let spy = SignerSpy::default();
 
     for format in [
@@ -196,7 +182,7 @@ fn selectors_and_confirmation_reject_each_structural_marker_in_both_payload_mode
         for marker in STRUCTURAL_MARKERS {
             let mut selected = claims(format.clone());
             selected.selective_disclosure_claims = vec![(*marker).into()];
-            assert_direct_rejection(&key, &spy, &selected);
+            assert_direct_rejection(&spy, &selected);
 
             let mut member = serde_json::Map::new();
             member.insert(
@@ -328,7 +314,7 @@ fn unsupported_plain_jwt_format_keeps_its_existing_error_precedence() {
         Err(error) => error,
     };
     for error in [
-        sign_sd_jwt(&test_key(), &submitted).unwrap_err(),
+        sign_sd_jwt_with_signer(&SignerSpy::default(), &submitted).unwrap_err(),
         prepared_error,
     ] {
         let Oid4vciError::UnsupportedFormat(message) = error else {

@@ -81,9 +81,112 @@ pub trait SdJwtIssuerKeyResolver {
     ) -> Oid4vciResult<ResolvedSdJwtIssuerKey>;
 }
 
+/// Explicit public-key allowlist supplied by an independently trusted source.
+/// It never discovers keys from a credential or presentation request.
+#[derive(Clone)]
+pub struct TrustedSdJwtIssuerKeys {
+    keys: Vec<ResolvedSdJwtIssuerKey>,
+}
+
+impl TrustedSdJwtIssuerKeys {
+    pub fn new(keys: Vec<ResolvedSdJwtIssuerKey>) -> Oid4vciResult<Self> {
+        if keys.is_empty() {
+            return Err(Oid4vciError::KeyError(
+                "Trusted SD-JWT issuer key set must not be empty".into(),
+            ));
+        }
+        let mut tuples = std::collections::BTreeSet::new();
+        for key in &keys {
+            if key.issuer.is_empty()
+                || key.issuer.trim() != key.issuer
+                || key
+                    .key_id
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.trim() != id)
+                || !matches!(
+                    key.algorithm,
+                    SigningAlgorithm::ES256
+                        | SigningAlgorithm::ES384
+                        | SigningAlgorithm::EdDSA
+                        | SigningAlgorithm::RS256
+                )
+            {
+                return Err(Oid4vciError::KeyError(
+                    "Trusted SD-JWT issuer key identity is invalid".into(),
+                ));
+            }
+            if key.public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+                return Err(Oid4vciError::KeyError(
+                    "Trusted SD-JWT issuer public JWK exceeds its size limit".into(),
+                ));
+            }
+            let jwk = crate::jose::parse_unique_object(
+                key.public_jwk_json.as_bytes(),
+                "trusted issuer public JWK",
+            )?;
+            crate::jose::validate_public_jwk(&jwk, key.algorithm.as_str())?;
+            if !issuer_key_family_matches(&jwk, key.algorithm) {
+                return Err(Oid4vciError::KeyError(
+                    "Trusted SD-JWT issuer public JWK type or curve is incompatible with its algorithm".into(),
+                ));
+            }
+            if let Some(jwk_id) = jwk.get("kid") {
+                let jwk_id = jwk_id.as_str().filter(|id| !id.is_empty()).ok_or_else(|| {
+                    Oid4vciError::KeyError(
+                        "Trusted SD-JWT issuer public JWK kid must be a non-empty string".into(),
+                    )
+                })?;
+                if Some(jwk_id) != key.key_id.as_deref() {
+                    return Err(Oid4vciError::KeyError(
+                        "Trusted SD-JWT issuer public JWK kid does not match its identity".into(),
+                    ));
+                }
+            }
+            if !tuples.insert((
+                key.issuer.clone(),
+                key.key_id.clone(),
+                key.algorithm.as_str(),
+            )) {
+                return Err(Oid4vciError::KeyError(
+                    "Trusted SD-JWT issuer key identity is ambiguous".into(),
+                ));
+            }
+        }
+        Ok(Self { keys })
+    }
+}
+
+impl SdJwtIssuerKeyResolver for TrustedSdJwtIssuerKeys {
+    fn resolve(
+        &self,
+        issuer: &str,
+        key_id: Option<&str>,
+        algorithm: SigningAlgorithm,
+    ) -> Oid4vciResult<ResolvedSdJwtIssuerKey> {
+        self.keys
+            .iter()
+            .find(|key| {
+                key.issuer == issuer
+                    && key.key_id.as_deref() == key_id
+                    && key.algorithm == algorithm
+            })
+            .cloned()
+            .ok_or_else(|| Oid4vciError::KeyError("Issuer key is not explicitly trusted".into()))
+    }
+}
+
 /// Verified SD-JWT presentation awaiting an opaque holder-key signature.
 pub struct PreparedSdJwtPresentation {
     inner: sd_jwt_rs::PreparedKeyBindingPresentation,
+}
+
+/// Issuer-authenticated metadata from an SD-JWT bound to a supplied public
+/// holder key. This contains no signing key or bearer credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedSdJwtCredential {
+    pub issuer: String,
+    pub credential_type: String,
+    pub format: String,
 }
 
 impl std::fmt::Debug for PreparedSdJwtPresentation {
@@ -122,7 +225,27 @@ struct SdJwtIssuerContext {
     key_id: Option<String>,
     algorithm: SigningAlgorithm,
     jose_algorithm: jsonwebtoken::Algorithm,
+    format: String,
     payload: serde_json::Value,
+}
+
+/// Verify an issuer-signed credential and its P-256 holder confirmation key
+/// before it is admitted to a wallet store.
+pub(crate) fn verify_received_credential(
+    credential: &str,
+    holder_public_jwk_json: &str,
+    issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
+) -> Oid4vciResult<VerifiedSdJwtCredential> {
+    let (_, context) = verified_holder(credential, holder_public_jwk_json, issuer_key_resolver)?;
+    let credential_type = context.payload["vct"]
+        .as_str()
+        .ok_or_else(|| Oid4vciError::InvalidRequest("Verified SD-JWT is missing `vct`".into()))?
+        .to_owned();
+    Ok(VerifiedSdJwtCredential {
+        issuer: context.issuer,
+        credential_type,
+        format: context.format,
+    })
 }
 
 /// Verify issuer and holder bindings before preparing any KB-JWT signing input.
@@ -134,13 +257,6 @@ pub(crate) fn prepare_verified_presentation(
     holder_public_jwk_json: &str,
     issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
 ) -> Oid4vciResult<PreparedSdJwtPresentation> {
-    use sd_jwt_rs::{SDJWTHolder, SDJWTSerializationFormat};
-
-    if holder_public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
-        return Err(Oid4vciError::KeyError(
-            "Holder public JWK exceeds its size limit".into(),
-        ));
-    }
     if nonce.trim().is_empty() {
         return Err(Oid4vciError::InvalidRequest(
             "SD-JWT presentation nonce must not be empty".into(),
@@ -152,39 +268,7 @@ pub(crate) fn prepare_verified_presentation(
         ));
     }
 
-    let issuer_context = parse_sd_jwt_issuer_context(credential)?;
-    let resolved_key = issuer_key_resolver.resolve(
-        &issuer_context.issuer,
-        issuer_context.key_id.as_deref(),
-        issuer_context.algorithm,
-    )?;
-    validate_resolved_sd_jwt_issuer_key(&issuer_context, &resolved_key)?;
-    let decoding_key = sd_jwt_issuer_decoding_key(&issuer_context, &resolved_key)?;
-
-    let expected_issuer = issuer_context.issuer.clone();
-    let expected_key_id = issuer_context.key_id.clone();
-    let expected_algorithm = issuer_context.jose_algorithm;
-    let mut holder = SDJWTHolder::new(
-        credential.to_string(),
-        SDJWTSerializationFormat::Compact,
-        Box::new(move |issuer, header| {
-            if issuer == expected_issuer
-                && header.kid.as_deref() == expected_key_id.as_deref()
-                && header.alg == expected_algorithm
-            {
-                decoding_key.clone()
-            } else {
-                // The dependency's resolver callback cannot return an error.
-                // An impossible second-context mismatch therefore receives a
-                // key that deterministically fails signature verification.
-                jsonwebtoken::DecodingKey::from_secret(&[])
-            }
-        }),
-    )
-    .map_err(|_| Oid4vciError::InvalidRequest("SD-JWT issuer verification failed".into()))?;
-
-    validate_sd_jwt_holder_binding(&issuer_context.payload, holder_public_jwk_json)?;
-
+    let (mut holder, _) = verified_holder(credential, holder_public_jwk_json, issuer_key_resolver)?;
     let disclosures = claims_to_disclose
         .iter()
         .map(|claim| (claim.clone(), serde_json::Value::Bool(true)))
@@ -202,35 +286,51 @@ pub(crate) fn prepare_verified_presentation(
     Ok(PreparedSdJwtPresentation { inner })
 }
 
-#[cfg(test)]
-pub(crate) fn create_verified_presentation(
+fn verified_holder(
     credential: &str,
-    claims_to_disclose: &[String],
-    nonce: &str,
-    audience: &str,
-    holder_private_jwk_json: &str,
+    holder_public_jwk_json: &str,
     issuer_key_resolver: &dyn SdJwtIssuerKeyResolver,
-) -> Oid4vciResult<String> {
-    use p256::ecdsa::signature::Signer as _;
+) -> Oid4vciResult<(sd_jwt_rs::SDJWTHolder, SdJwtIssuerContext)> {
+    use sd_jwt_rs::SDJWTSerializationFormat;
 
-    let signing_key =
-        crate::holder_key::p256_signing_key_from_private_jwk(holder_private_jwk_json)?;
-    let mut public_jwk: serde_json::Value = serde_json::from_str(holder_private_jwk_json)
-        .map_err(|error| Oid4vciError::KeyError(error.to_string()))?;
-    public_jwk
-        .as_object_mut()
-        .ok_or_else(|| Oid4vciError::KeyError("Holder JWK must be an object".into()))?
-        .remove("d");
-    let prepared = prepare_verified_presentation(
-        credential,
-        claims_to_disclose,
-        nonce,
-        audience,
-        &public_jwk.to_string(),
-        issuer_key_resolver,
+    if holder_public_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Holder public JWK exceeds its size limit".into(),
+        ));
+    }
+    let issuer_context = parse_sd_jwt_issuer_context(credential)?;
+    let resolved_key = issuer_key_resolver.resolve(
+        &issuer_context.issuer,
+        issuer_context.key_id.as_deref(),
+        issuer_context.algorithm,
     )?;
-    let signature: p256::ecdsa::Signature = signing_key.sign(prepared.signing_input());
-    prepared.complete(signature.to_bytes().as_slice())
+    validate_resolved_sd_jwt_issuer_key(&issuer_context, &resolved_key)?;
+    let decoding_key = sd_jwt_issuer_decoding_key(&issuer_context, &resolved_key)?;
+
+    let expected_issuer = issuer_context.issuer.clone();
+    let expected_key_id = issuer_context.key_id.clone();
+    let expected_algorithm = issuer_context.jose_algorithm;
+    let holder = sd_jwt_rs::SDJWTHolder::new_with_policy(
+        credential.to_string(),
+        SDJWTSerializationFormat::Compact,
+        Box::new(move |issuer, header| {
+            if issuer == expected_issuer
+                && header.kid.as_deref() == expected_key_id.as_deref()
+                && header.alg == expected_algorithm
+            {
+                Ok(decoding_key.clone())
+            } else {
+                Err(sd_jwt_rs::error::Error::InvalidInput(
+                    "Issuer verification context changed".into(),
+                ))
+            }
+        }),
+        sd_jwt_rs::VerificationPolicy::default(),
+    )
+    .map_err(|_| Oid4vciError::InvalidRequest("SD-JWT issuer verification failed".into()))?;
+
+    validate_sd_jwt_holder_binding(&issuer_context.payload, holder_public_jwk_json)?;
+    Ok((holder, issuer_context))
 }
 
 fn parse_sd_jwt_issuer_context(credential: &str) -> Oid4vciResult<SdJwtIssuerContext> {
@@ -252,14 +352,14 @@ fn parse_sd_jwt_issuer_context(credential: &str) -> Oid4vciResult<SdJwtIssuerCon
             "Issuer-signed SD-JWT uses unsupported critical JOSE parameters".into(),
         ));
     }
-    match header.get("typ").and_then(serde_json::Value::as_str) {
-        Some("vc+sd-jwt" | "dc+sd-jwt") => {}
+    let format = match header.get("typ").and_then(serde_json::Value::as_str) {
+        Some(format @ ("vc+sd-jwt" | "dc+sd-jwt")) => format,
         _ => {
             return Err(Oid4vciError::InvalidRequest(
                 "Issuer-signed SD-JWT has a missing or unsupported protected `typ`".into(),
             ));
         }
-    }
+    };
     let algorithm_name = header
         .get("alg")
         .and_then(serde_json::Value::as_str)
@@ -300,6 +400,7 @@ fn parse_sd_jwt_issuer_context(credential: &str) -> Oid4vciResult<SdJwtIssuerCon
         key_id,
         algorithm,
         jose_algorithm,
+        format: format.to_owned(),
         payload,
     })
 }
@@ -372,20 +473,7 @@ fn sd_jwt_issuer_decoding_key(
         }
     }
 
-    let key_type = public_jwk_object
-        .get("kty")
-        .and_then(serde_json::Value::as_str);
-    let curve = public_jwk_object
-        .get("crv")
-        .and_then(serde_json::Value::as_str);
-    let key_family_matches = match context.algorithm {
-        SigningAlgorithm::ES256 => key_type == Some("EC") && curve == Some("P-256"),
-        SigningAlgorithm::ES384 => key_type == Some("EC") && curve == Some("P-384"),
-        SigningAlgorithm::EdDSA => key_type == Some("OKP") && curve == Some("Ed25519"),
-        SigningAlgorithm::RS256 => key_type == Some("RSA"),
-        SigningAlgorithm::ES256K => false,
-    };
-    if !key_family_matches {
+    if !issuer_key_family_matches(&public_jwk, context.algorithm) {
         return Err(Oid4vciError::KeyError(
             "Issuer public JWK type or curve is incompatible with the protected `alg`".into(),
         ));
@@ -394,6 +482,18 @@ fn sd_jwt_issuer_decoding_key(
     jsonwebtoken::DecodingKey::from_jwk(&parsed_jwk).map_err(|error| {
         Oid4vciError::KeyError(format!("Failed to create issuer decoding key: {error}"))
     })
+}
+
+fn issuer_key_family_matches(jwk: &serde_json::Value, algorithm: SigningAlgorithm) -> bool {
+    let key_type = jwk.get("kty").and_then(serde_json::Value::as_str);
+    let curve = jwk.get("crv").and_then(serde_json::Value::as_str);
+    match algorithm {
+        SigningAlgorithm::ES256 => key_type == Some("EC") && curve == Some("P-256"),
+        SigningAlgorithm::ES384 => key_type == Some("EC") && curve == Some("P-384"),
+        SigningAlgorithm::EdDSA => key_type == Some("OKP") && curve == Some("Ed25519"),
+        SigningAlgorithm::RS256 => key_type == Some("RSA"),
+        SigningAlgorithm::ES256K => false,
+    }
 }
 
 fn decode_p256_jwk_coordinate(value: &serde_json::Value, name: &str) -> Oid4vciResult<Vec<u8>> {

@@ -337,6 +337,12 @@ impl SecureStorage {
         &self,
         method: &OpenBadgeVerificationMethod,
     ) -> Result<(), StorageError> {
+        if contains_private_key_material(&method.document) {
+            return Err(StorageError::InvalidPublicKey(format!(
+                "method {} contains private or symmetric key material",
+                method.id
+            )));
+        }
         let conn = self.conn.lock().await;
         let document_json = serde_json::to_string(&method.document)?;
         let governed = conn
@@ -2832,6 +2838,30 @@ mod tests {
     // ====================================================================
     // Open Badge trust packages
     // ====================================================================
+
+    #[test]
+    fn direct_open_badge_storage_rejects_private_material_before_writing() {
+        let rt = runtime();
+        rt.block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let mut method = open_badge_method("did:example:issuer#key-1", "did:example:issuer");
+            method.document["private_key_pem"] = serde_json::json!("forbidden");
+
+            assert!(matches!(
+                storage.store_open_badge_key(&method).await,
+                Err(StorageError::InvalidPublicKey(_))
+            ));
+            assert_eq!(storage.count_open_badge_keys().await.unwrap(), 0);
+
+            method
+                .document
+                .as_object_mut()
+                .unwrap()
+                .remove("private_key_pem");
+            storage.store_open_badge_key(&method).await.unwrap();
+            assert_eq!(storage.count_open_badge_keys().await.unwrap(), 1);
+        });
+    }
 
     #[test]
     fn open_badge_package_apply_records_provenance_and_replaces_domain() {

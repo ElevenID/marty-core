@@ -284,10 +284,7 @@ mod parsing {
                 format!(
                     "{}={}",
                     e.object().nid().short_name().unwrap_or("?"),
-                    e.data()
-                        .as_utf8()
-                        .map(|s| s.to_string())
-                        .unwrap_or_default()
+                    e.data().to_string().unwrap_or_default()
                 )
             })
             .collect::<Vec<_>>()
@@ -412,9 +409,8 @@ mod signatures {
         println!("Bad CA signature verification: {:?}", result);
 
         // This should fail because the signature is intentionally bad
-        match result {
-            Ok(valid) => assert!(!valid, "Bad signature CA should not verify"),
-            Err(_) => {} // Error is also acceptable
+        if let Ok(valid) = result {
+            assert!(!valid, "Bad signature CA should not verify");
         }
     }
 }
@@ -426,13 +422,21 @@ mod signatures {
 #[cfg(feature = "cross-validation")]
 mod cert_generation {
     use der::Decode;
+    use marty_crypto_test_support::remote_certificate::{
+        RemoteCertificateAlgorithm, RemoteCertificateKey,
+    };
     use openssl::x509::X509;
     use rcgen::date_time_ymd;
-    use rcgen::{CertificateParams, DnType, KeyPair};
+    use rcgen::{CertificateParams, DnType};
     use x509_cert::Certificate as X509Certificate;
+
+    fn remote_key() -> RemoteCertificateKey {
+        RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256)
+    }
 
     /// Generate a self-signed certificate and verify both libraries can parse it
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signer"]
     fn test_generated_cert_cross_parse() {
         let mut params = CertificateParams::default();
         params
@@ -449,8 +453,7 @@ mod cert_generation {
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
         // Generate the certificate
-        let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
-            .expect("Failed to generate key pair");
+        let key_pair = remote_key();
         let cert = params
             .self_signed(&key_pair)
             .expect("Failed to create self-signed cert");
@@ -477,6 +480,7 @@ mod cert_generation {
 
     /// Generate an expired certificate and verify detection
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signer"]
     fn test_generated_expired_cert() {
         let mut params = CertificateParams::default();
         params
@@ -488,8 +492,7 @@ mod cert_generation {
         params.not_after = date_time_ymd(2021, 1, 1);
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
 
-        let key_pair = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
-            .expect("Failed to generate key pair");
+        let key_pair = remote_key();
         let cert = params
             .self_signed(&key_pair)
             .expect("Failed to create expired cert");
@@ -521,6 +524,7 @@ mod cert_generation {
 
     /// Generate a certificate chain and validate with OpenSSL
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signer"]
     fn test_generated_chain_validation() {
         // Generate CA
         let mut ca_params = CertificateParams::default();
@@ -535,8 +539,7 @@ mod cert_generation {
             rcgen::KeyUsagePurpose::CrlSign,
         ];
 
-        let ca_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
-            .expect("Failed to generate CA key");
+        let ca_key = remote_key();
         let ca_cert = ca_params
             .self_signed(&ca_key)
             .expect("Failed to create CA cert");
@@ -550,8 +553,7 @@ mod cert_generation {
         ee_params.not_after = date_time_ymd(2030, 12, 31);
         ee_params.is_ca = rcgen::IsCa::NoCa;
 
-        let ee_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
-            .expect("Failed to generate EE key");
+        let ee_key = remote_key();
         let ca_issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
         let ee_cert = ee_params
             .signed_by(&ee_key, &ca_issuer)

@@ -1149,6 +1149,11 @@ class CorePreflightSplitContractTests(unittest.TestCase):
             [line.strip() for line in kms.splitlines() if line.strip().startswith("cargo ")],
             [
                 "cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc",
+                "cargo test --locked -p marty-oid4vci --test sd_jwt_structural_boundaries --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc",
+                "cargo test --locked -p marty-oid4vci --test sd_jwt_managed_claim_boundaries --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc",
+                "cargo test --locked -p marty-oid4vci --test sd_jwt_vc_conformance --no-default-features --features kms-only,issuer,sd_jwt,mso_mdoc",
+                "cargo test --locked -p marty-oid4vci --test remote_jwt_vc_boundary --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc",
+                "cargo test --locked -p marty-oid4vci --test signing_payload_semantics --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc",
                 "cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt",
                 "cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings",
                 "cargo test --locked -p marty-oid4vci --no-default-features --lib",
@@ -1157,6 +1162,7 @@ class CorePreflightSplitContractTests(unittest.TestCase):
                 "cargo test --locked -p marty-crypto --no-default-features --features ed448-verification ed448::tests",
                 "cargo test --locked -p marty-emrtd-issuance",
                 "cargo check --locked -p marty-verification --no-default-features --features kms-only,ephemeral-session-keys --lib",
+                "cargo test --locked -p marty-verification --test open_badges_conformance --no-default-features --features kms-only",
                 "cargo check --locked -p marty-didcomm --no-default-features --features kms-only,did_key,did_web,did_peer,did_jwk",
             ],
         )
@@ -1176,13 +1182,14 @@ class CorePreflightSplitContractTests(unittest.TestCase):
         for step in (
             "Run clippy",
             "Check OID4VCI WASM serial fallback contract",
-            "Smoke opt-in ES256 payload matrix",
-            "Smoke opt-in mdoc payload matrix",
-            "Smoke default-off mdoc evidence binaries",
             "Exercise the EUDI trusted-list client",
         ):
             self.assertEqual(workflow.count(f"      - name: {step}"), 1)
             self.assertIn(f"      - name: {step}", lint)
+        self.assertIn('          MARTY_TEST_BENCH_AFTER_LIVE: "1"', kms)
+        self.assertIn("        run: bash scripts/test_remote_issuer_live_kms.sh", kms)
+        self.assertIn("        run: cargo test --locked -p marty-oid4vci --benches --no-run", workflow)
+        self.assertNotIn("cargo test --locked -p marty-oid4vci --bench ", workflow)
         for job in (kms, lint):
             self.assertNotIn("\n    if:", job)
             self.assertNotIn("continue-on-error:", job)
