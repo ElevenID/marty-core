@@ -1,0 +1,3 @@
+# Native extensions are built by Maturin or installed from release wheels.
+/_marty_verification*.so
+/_marty_verification*.pyd

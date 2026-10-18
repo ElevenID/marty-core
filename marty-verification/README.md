@@ -2,6 +2,13 @@
 
 Python bindings for the `marty-verification` Rust library, providing cryptographic verification and Open Badges support.
 
+Python extensions are built from Rust by Maturin using this crate's declared
+KMS-only feature profile, or installed from a platform release wheel. Compiled
+`.so`/`.pyd` files must not be committed into the Python source package. A checkout
+without a built extension cannot perform native verification; it must not load a
+stale prebuilt artifact or substitute Python cryptography. Release wheel preflight
+checks the built wheel through the public import and clean-consumer boundaries.
+
 ## Features
 
 - **Open Badges 3**: Current/default verification profile
