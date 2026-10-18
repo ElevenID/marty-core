@@ -32,6 +32,12 @@ cd marty-biometrics
 make dev-python
 ```
 
+Compiled Python extensions are Maturin build/release artifacts, not source files.
+Install a platform wheel or build from the Rust sources before using the native
+API; a source-only checkout reports unavailable bindings until that build/install.
+Do not commit generated `.so` or `.pyd` files. Release wheel preflight checks the
+installed extension and public adapter from a source build.
+
 ### WebAssembly
 
 ```bash
