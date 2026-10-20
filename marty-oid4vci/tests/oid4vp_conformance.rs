@@ -4,8 +4,8 @@
 //! Presentations 1.0 Final specification, mirroring the OIDF conformance suite
 //! module names used in `test_oid4vp_verifier_conformance.py`.
 //!
-//! The fixtures are copied into this crate so the tests remain hermetic in an
-//! isolated package checkout. Keep them aligned with the integration corpus.
+//! This crate owns its hermetic engine vectors. The retired Integration Python
+//! generator is not their source of truth; see fixtures/conformance/README.md.
 //!
 //! Run:
 //!   cargo test --test oid4vp_conformance                (from marty-oid4vci/)
@@ -38,21 +38,21 @@ use rand::RngCore;
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// ── Constants (must stay in sync with generate_fixtures.py) ──────────────────
+// ── Constants for this crate's static vectors ──────────────────
 
-/// Verifier identifier — matches `VERIFIER_ID` in generate_fixtures.py.
+/// Verifier audience embedded in this crate's static VP token.
 const VERIFIER_ID: &str = "https://verifier.example.com";
 
 /// Response URI for the verification engine.
 const RESPONSE_URI: &str = "https://verifier.example.com/callback";
 
-/// Nonce from `presentation_request.json` — also embedded in `vp_token_jwt.txt`.
+/// Nonce embedded in this crate's static VP token.
 const NONCE: &str = "n-0S6_WzA2Mj";
 
-/// Holder DID asserted by the static conformance corpus.
+/// Holder DID asserted by this crate's static vectors.
 const HOLDER_DID: &str = "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7";
 
-// ── Static fixtures (shared corpus) ──────────────────────────────────────────
+// ── Static fixtures (crate-owned vectors) ──────────────────────────────────────────
 
 const PRESENTATION_DEFINITION_JSON: &str =
     include_str!("fixtures/conformance/presentation_definition.json");
@@ -268,9 +268,8 @@ fn happy_path_vp_token_jwt() {
     );
 }
 
-/// Cross-language consistency check: the static VP token written by
-/// `generate_fixtures.py` must verify against the same VERIFIER_ID and NONCE.
-/// Failure here indicates the fixture generator and test constants have drifted.
+/// Verify the checked-in public static vector against its pinned audience/nonce.
+/// Dynamic signing cases use the marked disposable OpenBao test provider.
 #[test]
 fn static_fixture_vp_token_verifies() {
     let engine = make_engine();
@@ -279,7 +278,7 @@ fn static_fixture_vp_token_verifies() {
 
     assert!(
         result.check_valid,
-        "static fixture VP token (from generate_fixtures.py) must verify — \
+        "static fixture VP token must verify — \
          check VERIFIER_ID and NONCE constants are in sync: {:?}",
         result.errors
     );
