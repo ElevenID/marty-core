@@ -10,8 +10,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/361
-    review-after: 2026-10-18
-    rationale: Re-reviewed 2026-10-11 against crates.io registry metadata (https://crates.io/api/v1/crates/rsa and https://crates.io/api/v1/crates/rsa/0.10.0-rc.19/dependencies). x509-cert 0.3.0, der 0.8.2, signature 3.0.0, and elliptic-curve 0.14.1 are stable, but rsa 0.10.0-rc.19 published 2026-10-06 remains pre-release and 0.9.10 is its latest stable. The RC requires signature 3, pkcs8 0.11, and spki 0.8, so independently raising these major versions risks incompatible signature, SPKI, and rand trait graphs. Retain the tested stable set pending a coordinated candidate and RSA, certificate, JOSE, passport, mdoc, Python, and wheel qualification. Follow up in seven days because the latest RSA RC is recent; this is a review checkpoint, not migration approval. The separate rsa watch entry retains RUSTSEC-2023-0071 and its public-verification-only production boundary.
+    review-after: 2026-10-27
+    rationale: Re-reviewed 2026-10-20 against crates.io metadata for rsa, x509-cert, der, signature and elliptic-curve. The latest stable set remains x509-cert 0.3.0, der 0.8.2, signature 3.0.0 and elliptic-curve 0.14.1, but RSA is still stable 0.9.10 / prerelease 0.10.0-rc.19. The RSA RC requires signature 3, pkcs8 0.11, spki 0.8 and rand 0.10. Retain the tested existing family pending one coordinated candidate qualified for RSA, certificates, JOSE, passport, mdoc, Python and wheels under issue 361. Recheck in seven days; no major-version or signing-boundary change is authorized. The separate RSA row keeps its advisory and public-verification-only production boundary.
   - package: affinidi-messaging-didcomm
     ecosystem: rust
     owner: ElevenID
@@ -22,8 +22,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/361
-    review-after: 2026-10-18
-    rationale: Re-reviewed 2026-10-11 against crates.io registry metadata (https://crates.io/api/v1/crates/affinidi-messaging-didcomm and https://crates.io/api/v1/crates/affinidi-messaging-didcomm/0.15.10/dependencies). Marty retains 0.14.0 for its tested DIDComm 2.1 anoncrypt envelope and corrected ECDH-1PU tag KDF. Latest stable 0.15.10 published 2026-10-01 requires ed25519-dalek 3, p256 0.14, and rand 0.10, while the Marty workspace still uses the previous crypto family. Qualify an upgrade with the coordinated RustCrypto migration and DIDComm envelope/security tests, not as an isolated version bump. Recheck with the RustCrypto watch entry in seven days; no DIDComm capability claim changes.
+    review-after: 2026-10-27
+    rationale: Re-reviewed 2026-10-20 against https://crates.io/api/v1/crates/affinidi-messaging-didcomm and its 0.15.10 dependency metadata. Stable remains 0.15.10 and requires ed25519-dalek 3, p256 0.14 and rand 0.10. Cargo.lock still selects 0.14.0 with the tested DIDComm 2.1 anoncrypt envelope and corrected ECDH-1PU tag KDF. Coordinate the upgrade with the RustCrypto family and envelope/security qualification in issue 361; recheck in seven days. No DIDComm implementation or capability changes.
   - package: ssi subcrates
     ecosystem: rust
     owner: ElevenID
@@ -34,8 +34,8 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2022-0040, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-10-20
-    rationale: Re-reviewed 2026-09-20. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification. spruceid/ssi#706 closed unmerged on 2026-08-25 without maintainer review after remaining CLA-pending, so the exact ElevenID ssi-jwt revision remains necessary. Upstream main still declares serde_with 2.3.2 in ssi-jwt and serde_cbor 0.11.2 directly in ssi-data-integrity-suites, so a consumer-only version bump cannot remove either exception. The lock contains only patched serde_with 3.22.0, owning_ref is absent, cargo-deny reports no unignored SSI exception advisory after the rustls 0.23.45 lock repair, and issue 26 remains the replacement gate.
+    review-after: 2026-11-03
+    rationale: Re-reviewed 2026-10-20 against upstream SSI manifests, closed-unmerged https://github.com/spruceid/ssi/pull/706 and Cargo.lock. Upstream ssi-jwt still declares serde_with 2.3.2 and data-integrity-suites still declares serde_cbor 0.11.2. The umbrella remains removed; narrow DID/VC/SD-JWT/Open Badges verification uses the existing exact ElevenID fork. The lock has serde_with 3.22.0 and no owning_ref. Retain the existing advisory list and replacement gate in issue 26; a consumer version bump alone does not remove the transitive CBOR parser. Native security CI remains required; no fork revision or exception is broadened.
   - package: serde_cbor
     ecosystem: rust
     owner: SpruceID SSI
@@ -46,8 +46,8 @@ dependencies:
     decision: replace
     advisories: [RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-10-20
-    rationale: Re-reviewed against SpruceID SSI main on 2026-09-20; the current suite still declares serde_cbor 0.11.2 unconditionally and uses it for ECDSA-SD-2023 and BBS-2023 proof encoding and decoding. Marty has no direct serde_cbor calls, but this is an active transitive parser path and RUSTSEC-2021-0127 records that the crate is unmaintained with no patched version. No upstream issue or pull request currently replaces it with ciborium. A local backend substitution without upstream-equivalent proof vectors would create a higher interoperability risk, so retain it only through the narrow SSI data-integrity graph, prohibit new direct uses, and replace it as soon as a maintained compatible upstream release is qualified.
+    review-after: 2026-11-03
+    rationale: Re-reviewed 2026-10-20 against upstream crates/claims/crates/data-integrity/suites/Cargo.toml and https://rustsec.org/advisories/RUSTSEC-2021-0127.html. The suite still declares 0.11.2 unconditionally and Cargo.lock retains it; the advisory still marks it unmaintained with no patched version. Retain only the existing SSI data-integrity parser path for ECDSA-SD-2023/BBS-2023 and prohibit new direct uses. A ciborium replacement needs upstream-equivalent proof encoding/decoding vectors and qualification under issue 26. No parser, proof implementation or exception changes.
   - package: linked-data
     ecosystem: rust
     owner: ElevenID
@@ -58,8 +58,8 @@ dependencies:
     decision: fork
     advisories: [RUSTSEC-2023-0126, RUSTSEC-2026-0255]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-10-15
-    rationale: Re-reviewed 2026-10-01. Upstream main still depends on im 15.1.0 and has no GitHub release, the locked ElevenID fork still excludes im and sized-chunks, and tracking issue 26 remains open. The exact-revision dependency retains the complete spruceid/linked-data-rs history on the dedicated deps/linked-data-rs-v0.1.2-hardening ref in ElevenID/ssi-elevenid. It replaces the traversal-only im dependency with standard-library path-local sets, removing im and sized-chunks from Marty's graph while preserving shared-node expansion, cycle termination, visitor-error cleanup, public API, default features, and MSRV 1.71.1. The ref must be published before this consumer commit and retired after an equivalent maintained upstream release is qualified.
+    review-after: 2026-10-30
+    rationale: Re-reviewed 2026-10-16 against https://github.com/spruceid/linked-data-rs/blob/main/Cargo.toml and the upstream releases API. Upstream main remains version 0.1.2, still depends on im 15.1.0, and has no GitHub release. The locked ElevenID fork still excludes im and sized-chunks, and tracking issue 26 remains open. Recheck in fourteen days; no dependency revision or security exception is broadened. The exact-revision dependency retains the complete spruceid/linked-data-rs history on the dedicated deps/linked-data-rs-v0.1.2-hardening ref in ElevenID/ssi-elevenid. It replaces the traversal-only im dependency with standard-library path-local sets, removing im and sized-chunks from Marty's graph while preserving shared-node expansion, cycle termination, visitor-error cleanup, public API, default features, and MSRV 1.71.1. The ref must be published before this consumer commit and retired after an equivalent maintained upstream release is qualified.
   - package: sd-jwt-rs
     ecosystem: rust
     owner: ElevenID
@@ -100,14 +100,14 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/PyO3/pyo3
-    current: "0.29.0"
-    target: "0.29.x"
+    current: "0.29.2"
+    target: coordinated-Core-and-downstream-PyO3-0.30.x-migration
     status: maintained
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-10-18
-    rationale: The binding migration is complete and the obsolete cargo-deny exception has been removed.
+    review-after: 2026-11-03
+    rationale: Re-reviewed 2026-10-20 against Cargo.lock and https://github.com/PyO3/pyo3/releases/tag/v0.30.1. Bindings resolve 0.29.2; upstream 0.30.1 is available. Coordinate the API-family migration across canonical Python adapters, extension modules and downstream bindings, with native wheel and Python qualification. Retain the existing compatible family until that candidate passes; no security exception is added.
   - package: rsa
     ecosystem: rust
     owner: ElevenID
@@ -118,5 +118,5 @@ dependencies:
     decision: retain
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-10-18
-    rationale: RSA 0.9 is retained only for public-key verification in supported passport, certificate, CMS/CRL, and JOSE operations; production local RSA key generation and signing APIs are absent. Legacy RSA/SHA-1 and ISO 9796 code now requires the explicit emrtd-compat capability selected by the first-class csca/eMRTD build, while unrelated RSA verifier artifacts exclude it. No patched RustCrypto release exists, and cargo-deny reports the documented exception with no additional advisory.
+    review-after: 2026-11-03
+    rationale: Re-reviewed 2026-10-20 against https://rustsec.org/advisories/RUSTSEC-2023-0071.html and crates.io metadata. Stable 0.9.10 and RC 0.10.0-rc.19 remain affected; no patched version exists. Keep the explicit watch/advisory and existing public-verification-only boundary for passport, certificate, CMS/CRL and JOSE. Production local key generation/signing APIs remain absent; legacy SHA-1/ISO 9796 require emrtd-compat through the csca/eMRTD build, not unrelated RSA verifier artifacts. No signing fallback or expanded exception is authorized; current role/security gates remain required.

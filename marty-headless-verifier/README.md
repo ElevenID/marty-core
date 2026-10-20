@@ -25,7 +25,9 @@ credentials that do not declare a revocation mechanism.
 
 ## Reproducible local consumer run
 
-Once a release containing this crate is published, download its
+For a version-pinned external preview using Docker, see
+[EXTERNAL_PREVIEW_V0.2.2.md](EXTERNAL_PREVIEW_V0.2.2.md). To run a release
+directly on a qualified Linux host, download its
 `marty-headless-verify-<version>-linux-amd64.tar.gz` asset and `SHA256SUMS`
 from the same release. Verify the checksum and GitHub provenance attestation,
 then extract the binary and samples on a Linux amd64 machine. This asset is
