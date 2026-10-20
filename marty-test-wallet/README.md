@@ -72,6 +72,40 @@ cargo run -p marty-test-wallet --bin marty-test-signer-agent
 
 The default browser URL is `http://127.0.0.1:8787`.
 
+## Isolated demo sessions
+
+Automated browser demos must create a session in a fresh browser context before
+receiving credentials or resetting wallet storage. `GET /ready` advertises
+`features.isolated_sessions: 1` and the current process `instance_id`.
+
+`POST /api/sessions` with `{ "run_id": "<unique-run-id>" }` creates an empty
+wallet and sets an opaque `HttpOnly; SameSite=Strict` session cookie. Its JSON
+response contains public `session_id`, `instance_id`, `run_id` and lifetime
+metadata; it never exposes the cookie capability. `GET /api/session` returns
+those fields with the credential count. `DELETE /api/session` erases that
+session's storage and clears its cookie. The server drains in-flight receive,
+present and storage operations before acknowledging deletion; later operations
+are rejected. A teardown timeout must remain an incomplete cleanup in the run
+report. Closing a browser context alone does
+not immediately free server storage, so demo runners must call the delete
+endpoint before closing the context and retain any cleanup error in the report.
+
+All credential operations use the cookie's separate Rust storage. Run-aware
+requests also send `x-marty-wallet-run-id`; a missing cookie, wrong run, expired
+session or ambiguous cookie is rejected before storage or protocol access. Open
+the visible wallet as `/?wallet_run=<run-id>` so its Receive, Present and Reset
+controls send this guard. This also prevents a cleared cookie from silently
+redirecting an automated operation to the interactive wallet. Marty UI's
+`tests/scripts/demo-wallet-session.js` supplies this transport consistently.
+
+Sessions expire after six hours and are limited to 128 concurrent runs. Capacity
+errors do not evict an active run. The session cookie lasts for the browser
+context so server expiry rejects a stale cookie instead of selecting other
+storage. The existing interactive wallet remains available to requests without
+a session cookie or run marker. Issuer trust and holder signing configuration
+are still shared process prerequisites; storage isolation is not an independent
+wallet interoperability or hardware custody qualification.
+
 ## Remote positive verifier input
 
 `marty-kms-positive-verifier-input` is a non-publishable acceptance binary. It

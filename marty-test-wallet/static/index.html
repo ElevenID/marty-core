@@ -63,7 +63,11 @@
       statusNode.classList.toggle('error', error);
     };
     const request = async (path, options = {}) => {
-      const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
+      const runId = new URLSearchParams(location.search).get('wallet_run');
+      const response = await fetch(path, { ...options, headers: {
+        'content-type': 'application/json', ...options.headers,
+        ...(runId !== null ? { 'x-marty-wallet-run-id': runId } : {}),
+      } });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Request failed (${response.status})`);

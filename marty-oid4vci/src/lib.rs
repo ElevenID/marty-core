@@ -65,6 +65,8 @@ pub mod jose;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
+#[cfg(any(feature = "wallet", feature = "lti"))]
+mod network;
 pub mod offer_uri;
 #[cfg(feature = "jose-verification")]
 pub mod oidc;

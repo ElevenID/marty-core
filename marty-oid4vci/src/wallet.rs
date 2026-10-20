@@ -1369,7 +1369,8 @@ impl WalletEngine {
     }
 
     async fn fetch_request_object_value(&self, uri: &str) -> Oid4vciResult<serde_json::Value> {
-        let resp = self.client.get(uri).send().await.map_err(|e| {
+        let (client, endpoint) = crate::network::public_request_client(uri).await?;
+        let resp = client.get(endpoint).send().await.map_err(|e| {
             Oid4vciError::InvalidRequest(format!("Request object fetch failed: {}", e))
         })?;
 
