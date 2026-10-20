@@ -539,7 +539,7 @@ impl StaticDiscoveryDocuments {
     ///
     /// This implements the language-neutral
     /// `marty.issuance-tenant-discovery/v1` behavior contract maintained by
-    /// `marty-credentials/contracts/issuance-tenant-discovery.json`.
+    /// [`marty-ui/contracts/issuance-tenant-discovery.json`](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-tenant-discovery.json).
     ///
     /// The caller reads [`TenantDiscoveryPlan::proof_policy_requests`], resolves
     /// those requests through its signing-context adapter, and then supplies all
