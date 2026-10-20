@@ -87,8 +87,13 @@ elif [[ "$cargo" == *.exe ]]; then
   # Linux CI continues to use its native cargo and inherited environment.
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
 fi
+if [[ "${MARTY_TEST_HOLDER_SIGNING_BINARIES_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
+  exit 0
+fi
 if [[ "${MARTY_TEST_HOLDER_SIGNING_PROBE_ONLY:-0}" == '1' ]]; then
   "$cargo" test --locked -p marty-test-wallet --lib holder_probe -- --include-ignored
+  "$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
   "$cargo" test --locked -p marty-oid4vci --lib jose::tests -- --include-ignored
   exit 0
 fi
@@ -187,6 +192,7 @@ fi
   jose::tests \
   -- --ignored
 "$cargo" test --locked -p marty-test-wallet --lib holder_probe -- --include-ignored
+"$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
   oidc::tests \

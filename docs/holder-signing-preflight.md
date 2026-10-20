@@ -62,3 +62,13 @@ The binary still needs integration
 into an approved source-bound capture image and a real scoped remote-signing run.
 Do not relabel existing older image receipts or approved Core pins as containing
 this new binary.
+
+The marked disposable runner also executes `holder_signing_binaries`: Cargo
+provides the real compiled agent and probe paths, and the shared KMS fixture
+configures only its exact-key leaf token into the agent. The probe starts with
+a cleared environment and receives no KMS token or disposable operator token.
+The test verifies distinct signatures, three confusion/authorization failures,
+and a fresh successful recovery, and kills/waits for owned children.
+For this focused binary check alone, run
+`MARTY_TEST_HOLDER_SIGNING_BINARIES_ONLY=1 bash scripts/test_remote_issuer_live_kms.sh`.
+This is a disposable-fixture integration check, never beta or Canvas proof.

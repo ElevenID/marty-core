@@ -29,7 +29,24 @@
   },
   "rustfmt": "PASS",
   "bashSyntax": "PASS",
-  "actualSignerAgentBinaryRoundTrip": "NOT_EXERCISED",
+  "actualSignerAgentBinaryRoundTrip": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "platform": "Windows named pipe",
+    "command": "MARTY_TEST_HOLDER_SIGNING_BINARIES_ONLY=1 bash scripts/test_remote_issuer_live_kms.sh",
+    "checks": [
+      "real compiled agent and probe binaries",
+      "shared marked disposable TLS OpenBao and exact-key leaf token",
+      "two fresh challenges independently verified with Core JOSE",
+      "wrong public key, wrong IPC authentication and unapproved holder fail with private errors",
+      "fresh successful challenge after negative operations",
+      "probe environment excludes fixture root and agent KMS token",
+      "owned subprocess termination and wait; fixture removed"
+    ],
+    "linuxBinaryRoundTrip": "CI_PENDING",
+    "productionDemoReady": false
+  },
   "betaRemoteSigning": "NOT_EXERCISED",
   "canvas": "NOT_EXERCISED",
   "captureImageIntegration": "NOT_EXERCISED",
