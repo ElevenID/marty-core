@@ -253,6 +253,34 @@ pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oi
         .map_err(|error| Oid4vciError::KeyError(format!("Invalid public JWK: {error}")))
 }
 
+#[cfg(any(test, feature = "jose-verification"))]
+fn parse_public_signing_jwk(public_jwk_json: &str, expected_algorithm: &str) -> Oid4vciResult<Jwk> {
+    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Public JWK exceeds its size limit".into(),
+        ));
+    }
+    let value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
+    validate_public_jwk(&value, expected_algorithm)
+}
+
+/// Check the same public-key policy used by JOSE verification before contacting a signer.
+///
+/// This validates bounded unique JSON, absence of private material, signing use,
+/// algorithm metadata and decoding-key construction. Signature verification is
+/// still required to prove that a signer controls the corresponding key.
+#[cfg(any(test, feature = "jose-verification"))]
+pub fn validate_public_signing_jwk_json(
+    public_jwk_json: &str,
+    expected_algorithm: &str,
+) -> Oid4vciResult<()> {
+    algorithm(expected_algorithm)?;
+    let jwk = parse_public_signing_jwk(public_jwk_json, expected_algorithm)?;
+    DecodingKey::from_jwk(&jwk).map(|_| ()).map_err(|_| {
+        Oid4vciError::KeyError("Could not construct public signature verification key".into())
+    })
+}
+
 /// Verify a compact JWT with an explicitly trusted public JWK.
 ///
 /// Registered-client and DPoP callers use this primitive after selecting the
@@ -282,13 +310,7 @@ pub fn verify_compact_jwt_with_public_jwk(
         ));
     }
 
-    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
-        return Err(Oid4vciError::KeyError(
-            "Public JWK exceeds its size limit".into(),
-        ));
-    }
-    let public_jwk_value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
-    let public_jwk = validate_public_jwk(&public_jwk_value, expected_algorithm)?;
+    let public_jwk = parse_public_signing_jwk(public_jwk_json, expected_algorithm)?;
     let decoding_key = DecodingKey::from_jwk(&public_jwk).map_err(|error| {
         Oid4vciError::KeyError(format!("Could not construct JWT verification key: {error}"))
     })?;
@@ -325,13 +347,7 @@ pub fn verify_detached_signature_with_public_jwk(
         Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
     })?;
     let expected = algorithm(expected_algorithm)?;
-    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
-        return Err(Oid4vciError::KeyError(
-            "Public JWK exceeds its size limit".into(),
-        ));
-    }
-    let public_jwk_value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
-    let public_jwk = validate_public_jwk(&public_jwk_value, expected_algorithm)?;
+    let public_jwk = parse_public_signing_jwk(public_jwk_json, expected_algorithm)?;
     let decoding_key = DecodingKey::from_jwk(&public_jwk).map_err(|error| {
         Oid4vciError::KeyError(format!(
             "Could not construct signature verification key: {error}"

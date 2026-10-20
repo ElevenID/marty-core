@@ -1,13 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+  # Windows Docker must receive container paths verbatim, not MSYS host paths.
+  docker() { MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 command docker "$@"; }
+fi
+
 # This process owns a fresh, disposable OpenBao. The Rust test checks its
 # marker before creating any key and receives only a scoped sign token.
 image='quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452'
 name="marty-core-issuer-kms-${GITHUB_RUN_ID:-local}-$$"
 token='core-issuer-test-only'
-nonce="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+python="${MARTY_TEST_PYTHON:-python3}"
+nonce="$("$python" -c 'import secrets; print(secrets.token_hex(24))' | tr -d '\r')"
+[[ "$nonce" =~ ^[0-9a-f]{48}$ ]] || { echo 'Invalid disposable marker nonce' >&2; exit 1; }
 ca_cert="$(mktemp)"
+curl_ca="$ca_cert"
+curl_options=(--noproxy '*')
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+  curl_ca="$(cygpath -w "$ca_cert")"
+  # This fresh disposable CA has no CRL. Schannel must still validate its
+  # chain/hostname; tolerate only unavailable revocation distribution points.
+  curl_options+=(--ssl-revoke-best-effort)
+fi
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -f "$ca_cert"' EXIT
 
 docker run --rm -d --name "$name" \
@@ -16,38 +31,42 @@ docker run --rm -d --name "$name" \
   -p 127.0.0.1::8200 \
   "$image" server -dev-tls -dev-tls-cert-dir=/tmp/certs '-dev-listen-address=:8200' >/dev/null
 
-binding="$(docker port "$name" 8200/tcp)"
+binding="$(docker port "$name" 8200/tcp | tr -d '\r')"
+[[ "$binding" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid disposable loopback binding' >&2; exit 1; }
 base="https://127.0.0.1:${binding##*:}"
 for attempt in {1..30}; do
   if docker exec "$name" cat /tmp/certs/vault-ca.pem > "$ca_cert" 2>/dev/null && [[ -s "$ca_cert" ]]; then
     break
   fi
   if (( attempt == 30 )); then
-    docker logs "$name" >&2
+    echo 'Disposable OpenBao public CA is unavailable' >&2
+    docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$name" >&2
     exit 1
   fi
   sleep 1
 done
 for attempt in {1..30}; do
-  if curl --silent --fail --cacert "$ca_cert" "$base/v1/sys/health" >/dev/null; then
+  if curl "${curl_options[@]}" --silent --fail --cacert "$curl_ca" "$base/v1/sys/health" >/dev/null; then
     break
   fi
   if (( attempt == 30 )); then
-    docker logs "$name" >&2
+    curl "${curl_options[@]}" --silent --show-error --fail --cacert "$curl_ca" "$base/v1/sys/health" >/dev/null || true
+    echo 'Disposable OpenBao verified TLS health is unavailable' >&2
+    docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$name" >&2
     exit 1
   fi
   sleep 1
 done
 
-curl --silent --show-error --fail \
-  --cacert "$ca_cert" \
+curl "${curl_options[@]}" --silent --show-error --fail \
+  --cacert "$curl_ca" \
   --header "X-Vault-Token: $token" \
   --header 'Content-Type: application/json' \
   --request POST \
   --data "{\"data\":{\"nonce\":\"$nonce\"}}" \
   "$base/v1/secret/data/marty-test-disposable-guard" >/dev/null
-curl --silent --show-error --fail \
-  --cacert "$ca_cert" \
+curl "${curl_options[@]}" --silent --show-error --fail \
+  --cacert "$curl_ca" \
   --header "X-Vault-Token: $token" \
   --header 'Content-Type: application/json' \
   --request POST \
@@ -60,11 +79,23 @@ export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
 export MARTY_TEST_OPENBAO_CA_CERT="$ca_cert"
 features='kms-only,issuer,verifier,wallet,jwt_vc_json,sd_jwt,mso_mdoc,lti'
 cargo="${MARTY_TEST_CARGO:-cargo}"
-if [[ "$cargo" == *.exe ]]; then
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+  export MARTY_TEST_OPENBAO_CA_CERT="$(cygpath -w "$ca_cert")"
+elif [[ "$cargo" == *.exe ]]; then
   # WSL does not forward newly created environment variables to Windows
   # executables unless they are named in WSLENV. This is local probe wiring;
   # Linux CI continues to use its native cargo and inherited environment.
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
+fi
+if [[ "${MARTY_TEST_HOLDER_SIGNING_BINARIES_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
+  exit 0
+fi
+if [[ "${MARTY_TEST_HOLDER_SIGNING_PROBE_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked -p marty-test-wallet --lib holder_probe -- --include-ignored
+  "$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
+  "$cargo" test --locked -p marty-oid4vci --lib jose::tests -- --include-ignored
+  exit 0
 fi
 if [[ "${MARTY_TEST_REMOTE_STATUS_ONLY:-0}" == '1' ]]; then
   "$cargo" test --locked -p marty-verification --lib \
@@ -160,6 +191,8 @@ fi
   --no-default-features --features "$features" \
   jose::tests \
   -- --ignored
+"$cargo" test --locked -p marty-test-wallet --lib holder_probe -- --include-ignored
+"$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
   oidc::tests \

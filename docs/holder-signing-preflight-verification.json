@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "scope": "CORE_MARKED_DISPOSABLE_KMS_AND_IPC_TESTS_ONLY",
+  "productionDemoReady": false,
+  "platform": "x86_64-pc-windows-msvc",
+  "rustToolchain": "1.95.0",
+  "command": "MARTY_TEST_HOLDER_SIGNING_PROBE_ONLY=1 bash scripts/test_remote_issuer_live_kms.sh",
+  "holderProbeTests": {
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0
+  },
+  "joseTests": {
+    "passed": 5,
+    "failed": 0,
+    "ignored": 0
+  },
+  "fixture": {
+    "backend": "separate marked disposable OpenBao TLS container",
+    "image": "quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452",
+    "keys": "shared marty-crypto-test-support non-exportable remote signers",
+    "privateKeysInTestProcess": false,
+    "ownedContainerRemoved": true
+  },
+  "cliDevBuild": "PASS",
+  "cliFailurePrivacyChecks": {
+    "passed": 2,
+    "failed": 0
+  },
+  "rustfmt": "PASS",
+  "bashSyntax": "PASS",
+  "actualSignerAgentBinaryRoundTrip": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "platform": "Windows named pipe",
+    "command": "MARTY_TEST_HOLDER_SIGNING_BINARIES_ONLY=1 bash scripts/test_remote_issuer_live_kms.sh",
+    "checks": [
+      "real compiled agent and probe binaries",
+      "shared marked disposable TLS OpenBao and exact-key leaf token",
+      "two fresh challenges independently verified with Core JOSE",
+      "wrong public key, wrong IPC authentication and unapproved holder fail with private errors",
+      "fresh successful challenge after negative operations",
+      "probe environment excludes fixture root and agent KMS token",
+      "owned subprocess termination and wait; fixture removed"
+    ],
+    "linuxBinaryRoundTrip": "CI_PENDING",
+    "productionDemoReady": false
+  },
+  "betaRemoteSigning": "NOT_EXERCISED",
+  "canvas": "NOT_EXERCISED",
+  "captureImageIntegration": "NOT_EXERCISED",
+  "initialLocalFixturePrototype": "REPLACED_BY_SHARED_REMOTE_FIXTURES",
+  "initialHarnessFailures": "Windows path/line-ending/Schannel issues fixed; failed fixtures cleaned up",
+  "dependencySecurityRepair": {
+    "rustls-webpki": "0.103.16",
+    "webpki-root-certs": "1.0.10",
+    "reason": "Merge-group advisory check exposed RUSTSEC-2026-0382 and RUSTSEC-2026-0383 after PR checks passed",
+    "advisoryCheck": "PASS: cargo +1.95.0 deny --locked --all-features check advisories --deny yanked",
+    "focusedTlsKmsRerun": {
+      "holderPassed": 3,
+      "josePassed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    "scope": "marked disposable TLS OpenBao only; no beta or Canvas qualification"
+  }
+}

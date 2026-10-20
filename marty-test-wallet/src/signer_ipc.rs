@@ -14,7 +14,7 @@ use zeroize::{Zeroize, Zeroizing};
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_FRAME_BYTES: usize = 96 * 1024;
 const MAX_SIGNING_INPUT_BYTES: usize = 64 * 1024;
-const MAX_KEY_ID_BYTES: usize = 512;
+pub(crate) const MAX_KEY_ID_BYTES: usize = 512;
 const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
 const MAX_REPLAY_ENTRIES: usize = 4096;
 const REQUEST_DOMAIN: &[u8] = b"marty-test-wallet/signer-request/v1\0";
@@ -1127,6 +1127,145 @@ mod tests {
         assert!(matches!(
             verify_response(&key, nonce, tampered),
             Err(SignerIpcError::AuthenticationFailed)
+        ));
+    }
+
+    async fn run_probe_with_fixture_signer(
+        wrong_public_key: bool,
+    ) -> Result<
+        crate::holder_signing_probe::HolderSigningProbeReceipt,
+        crate::holder_signing_probe::HolderSigningProbeError,
+    > {
+        let (endpoint, cleanup) = endpoint();
+        #[allow(unused_mut)]
+        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        // Shared marked remote fixture: private keys never enter this process.
+        let (signing_key, public_jwk) = tokio::task::spawn_blocking(move || {
+            let kms =
+                marty_crypto_test_support::openbao_transit::DisposableOpenBao::from_marked_env();
+            let signer = kms.create_es256();
+            let mut public: serde_json::Value = serde_json::from_str(signer.public_jwk()).unwrap();
+            if wrong_public_key {
+                public = serde_json::from_str(kms.create_es256().public_jwk()).unwrap();
+            }
+            public["unrelated_metadata"] = "CONTROLLED_PRIVATE_METADATA".into();
+            (signer, public)
+        })
+        .await
+        .unwrap();
+        let server = tokio::spawn(async move {
+            let mut stream = listener.accept().await.unwrap();
+            let authentication_key = SignerAuthenticationKey::from_bytes([0x5a; 32]);
+            let request = receive_request(
+                &mut stream,
+                &authentication_key,
+                &mut ReplayCache::default(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(request.algorithm, "ES256");
+            assert_eq!(request.key_id, "controlled-probe-holder");
+            assert!(request
+                .signing_input
+                .starts_with(b"marty-test-wallet/holder-signing-preflight/v1:"));
+            let message = request.signing_input.to_vec();
+            let signature =
+                tokio::task::spawn_blocking(move || signing_key.sign_es256(&message).unwrap())
+                    .await
+                    .unwrap();
+            send_response(
+                &mut stream,
+                &authentication_key,
+                &request,
+                signature.as_ref(),
+            )
+            .await
+            .unwrap();
+        });
+        let result = crate::holder_signing_probe::probe_holder_signing(
+            &endpoint,
+            &SignerAuthenticationKey::from_bytes([0x5a; 32]),
+            "controlled-probe-holder",
+            &public_jwk.to_string(),
+        )
+        .await;
+        server.await.unwrap();
+        if let Some(directory) = cleanup {
+            std::fs::remove_dir(directory).unwrap();
+        }
+        result
+    }
+
+    #[tokio::test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    async fn holder_probe_verifies_actual_authenticated_ipc_signature_and_fresh_public_challenge() {
+        let first = run_probe_with_fixture_signer(false).await.unwrap();
+        let second = run_probe_with_fixture_signer(false).await.unwrap();
+        assert_ne!(first.challenge, second.challenge);
+        assert!(first.verified && !first.production_demo_ready);
+        assert!(!serde_json::to_string(&first)
+            .unwrap()
+            .contains("CONTROLLED_PRIVATE_METADATA"));
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&first.signature_base64url)
+            .unwrap();
+        assert!(
+            marty_oid4vci::jose::verify_detached_signature_with_public_jwk(
+                first.challenge.as_bytes(),
+                &signature,
+                &first.public_jwk.to_string(),
+                "ES256"
+            )
+            .unwrap()
+        );
+        assert!(
+            !marty_oid4vci::jose::verify_detached_signature_with_public_jwk(
+                second.challenge.as_bytes(),
+                &signature,
+                &first.public_jwk.to_string(),
+                "ES256"
+            )
+            .unwrap_or(false)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    async fn holder_probe_rejects_signature_from_another_key_even_with_valid_ipc_authentication() {
+        assert!(matches!(
+            run_probe_with_fixture_signer(true).await,
+            Err(crate::holder_signing_probe::HolderSigningProbeError::Verification)
+        ));
+    }
+
+    #[tokio::test]
+    async fn holder_probe_rejects_private_and_confused_public_config_before_ipc() {
+        use crate::holder_signing_probe::{probe_holder_signing, HolderSigningProbeError};
+        let key = SignerAuthenticationKey::from_bytes([0x5a; 32]);
+        let public_jwk = serde_json::json!({"kty":"EC","crv":"P-256",
+            "x":marty_crypto_test_support::P256_PUBLIC_JWK_X,
+            "y":marty_crypto_test_support::P256_PUBLIC_JWK_Y});
+        for (field, value) in [
+            ("d", "CONTROLLED_PRIVATE_FIELD"),
+            ("alg", "ES384"),
+            ("use", "enc"),
+            ("crv", "P-384"),
+        ] {
+            let mut bad = public_jwk.clone();
+            bad[field] = value.into();
+            assert!(matches!(
+                probe_holder_signing("nonexistent-endpoint", &key, "controlled", &bad.to_string())
+                    .await,
+                Err(HolderSigningProbeError::Configuration)
+            ));
+        }
+        let duplicate = format!(
+            "{{\"kty\":\"EC\",{}",
+            public_jwk.to_string().trim_start_matches('{')
+        );
+        assert!(matches!(
+            probe_holder_signing("nonexistent-endpoint", &key, "controlled", &duplicate).await,
+            Err(HolderSigningProbeError::Configuration)
         ));
     }
 

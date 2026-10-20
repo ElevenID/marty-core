@@ -229,6 +229,22 @@ impl std::fmt::Debug for ScopedTransitSigner {
 }
 
 impl ScopedTransitSigner {
+    /// Configure a real agent subprocess with only this disposable sign authority.
+    /// Keep the token out of return values, diagnostics and probe environments.
+    pub fn configure_signer_agent(&self, command: &mut std::process::Command, key_id: &str) {
+        command
+            .env("MARTY_TEST_SIGNER_AGENT_KMS_PROVIDER", "openbao-transit")
+            .env(
+                "MARTY_TEST_SIGNER_AGENT_KMS_URL",
+                format!(
+                    "https://127.0.0.1:{}/v1/transit/sign/{}",
+                    self.port, self.name
+                ),
+            )
+            .env("MARTY_TEST_SIGNER_AGENT_KMS_BEARER_TOKEN", &self.token)
+            .env("MARTY_TEST_SIGNER_AGENT_ALLOWED_KEY_ID", key_id);
+    }
+
     pub fn key_id(&self, issuer_did: &str) -> String {
         format!("{issuer_did}#{}", self.name)
     }
