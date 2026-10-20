@@ -56,6 +56,12 @@ holder agents different Transit keys and tokens whose policies allow only
 their respective sign routes. The existing generic HTTPS contract remains
 the default when the provider variable is omitted.
 
+Before credential operations, `marty-test-holder-signing-probe` can verify a fresh
+challenge through that same authenticated agent and the configured public holder
+key. It opens no HTTP endpoint and receives no KMS token. See
+[holder signing preflight](../docs/holder-signing-preflight.md) for source-bound
+capture integration, public receipts and focused disposable-KMS checks.
+
 The browser API returns display metadata only. Run it after configuring those
 values:
 

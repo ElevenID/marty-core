@@ -4039,6 +4039,7 @@ dependencies = [
  "chrono",
  "hex",
  "marty-crypto",
+ "marty-crypto-test-support",
  "marty-oid4vci",
  "reqwest",
  "serde",

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "scope": "CORE_MARKED_DISPOSABLE_KMS_AND_IPC_TESTS_ONLY",
+  "productionDemoReady": false,
+  "platform": "x86_64-pc-windows-msvc",
+  "rustToolchain": "1.95.0",
+  "command": "MARTY_TEST_HOLDER_SIGNING_PROBE_ONLY=1 bash scripts/test_remote_issuer_live_kms.sh",
+  "holderProbeTests": {"passed": 3, "failed": 0, "ignored": 0},
+  "joseTests": {"passed": 5, "failed": 0, "ignored": 0},
+  "fixture": {
+    "backend": "separate marked disposable OpenBao TLS container",
+    "image": "quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452",
+    "keys": "shared marty-crypto-test-support non-exportable remote signers",
+    "privateKeysInTestProcess": false,
+    "ownedContainerRemoved": true
+  },
+  "cliDevBuild": "PASS",
+  "cliFailurePrivacyChecks": {"passed": 2, "failed": 0},
+  "rustfmt": "PASS",
+  "bashSyntax": "PASS",
+  "actualSignerAgentBinaryRoundTrip": "NOT_EXERCISED",
+  "betaRemoteSigning": "NOT_EXERCISED",
+  "canvas": "NOT_EXERCISED",
+  "captureImageIntegration": "NOT_EXERCISED",
+  "initialLocalFixturePrototype": "REPLACED_BY_SHARED_REMOTE_FIXTURES",
+  "initialHarnessFailures": "Windows path/line-ending/Schannel issues fixed; failed fixtures cleaned up"
+}
