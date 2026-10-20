@@ -26,6 +26,6 @@ jobs:
       pull-requests: read
     steps:
       - name: Clean closed-PR caches
-        uses: ElevenID/.github/actions/cleanup-ci-caches@38ba2bdada295672765bf600203604884323f14a
+        uses: ElevenID/.github/actions/cleanup-ci-caches@3883ccbf1f612a43a746db1d9321015d561efeb1
         with:
           max-deletions: "300"
