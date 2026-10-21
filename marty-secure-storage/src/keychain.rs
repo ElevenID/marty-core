@@ -57,10 +57,12 @@ static PLATFORM_STORE: LazyLock<keyring_core::Result<Arc<keyring_core::Credentia
         #[cfg(target_os = "windows")]
         {
             windows_native_keyring_store::Store::new()
+                .map(|store| store as Arc<keyring_core::CredentialStore>)
         }
         #[cfg(target_os = "macos")]
         {
             apple_native_keyring_store::keychain::Store::new()
+                .map(|store| store as Arc<keyring_core::CredentialStore>)
         }
         #[cfg(all(
             unix,
@@ -68,6 +70,7 @@ static PLATFORM_STORE: LazyLock<keyring_core::Result<Arc<keyring_core::Credentia
         ))]
         {
             zbus_secret_service_keyring_store::Store::new()
+                .map(|store| store as Arc<keyring_core::CredentialStore>)
         }
         #[cfg(not(all(any(unix, windows), not(any(target_os = "ios", target_os = "android")))))]
         Err(keyring_core::Error::Invalid(
