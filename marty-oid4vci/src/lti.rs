@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use jsonwebtoken::{decode, decode_header, jwk::Jwk, DecodingKey, Validation};
 use reqwest::{redirect::Policy, Client};
@@ -296,52 +296,69 @@ fn normalize_url(
     Ok(normalized)
 }
 
-async fn validate_resolved_host(
+fn validate_canvas_addresses(
     url: &Url,
+    addresses: &[SocketAddr],
     allow_private_networks: bool,
     allow_http_localhost: bool,
 ) -> Oid4vciResult<()> {
-    if allow_private_networks {
-        return Ok(());
+    if addresses.is_empty() {
+        return Err(invalid_request(
+            "Canvas host did not resolve to any addresses",
+        ));
     }
-
-    let host = url
-        .host_str()
-        .ok_or_else(|| invalid_request("Canvas URL must include a host"))?;
-
-    if host.parse::<IpAddr>().is_ok() {
-        return Ok(());
-    }
-
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| invalid_request("Canvas URL must include a resolvable port"))?;
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|e| invalid_request(format!("Failed to resolve Canvas host {host}: {e}")))?;
-
-    let mut resolved_any = false;
+    let host = url.host_str().unwrap_or_default();
     for address in addresses {
-        resolved_any = true;
         let ip = address.ip();
         let allowed_localhost = allow_http_localhost
             && url.scheme() == "http"
             && ip.is_loopback()
-            && is_loopback_hostname(host);
-        if is_private_ip(ip) && !allowed_localhost {
+            && (is_loopback_hostname(host)
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback()));
+        if !allow_private_networks && is_private_ip(ip) && !allowed_localhost {
             return Err(invalid_request(
                 "Canvas host resolves to a private or loopback IP that is blocked in hardened mode",
             ));
         }
     }
-
-    if !resolved_any {
-        return Err(invalid_request(format!(
-            "Canvas host {host} did not resolve to any addresses"
-        )));
-    }
-
     Ok(())
+}
+
+async fn resolve_canvas_addresses(
+    url: &Url,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+    timeout_seconds: u64,
+) -> Oid4vciResult<Vec<SocketAddr>> {
+    validate_url(url, allow_private_networks, allow_http_localhost, false)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| invalid_request("Canvas URL must include a resolvable port"))?;
+    let addresses = match url
+        .host()
+        .ok_or_else(|| invalid_request("Canvas URL must include a host"))?
+    {
+        url::Host::Ipv4(ip) => vec![SocketAddr::new(IpAddr::V4(ip), port)],
+        url::Host::Ipv6(ip) => vec![SocketAddr::new(IpAddr::V6(ip), port)],
+        url::Host::Domain(host) => tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_seconds.clamp(1, 5)),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        .map_err(|_| invalid_request("Canvas DNS resolution timed out"))?
+        .map_err(|_| invalid_request("Canvas DNS resolution failed closed"))?
+        .collect(),
+    };
+    validate_canvas_addresses(
+        url,
+        &addresses,
+        allow_private_networks,
+        allow_http_localhost,
+    )?;
+    Ok(addresses)
 }
 
 pub fn normalize_canvas_base_url(
@@ -585,9 +602,8 @@ pub async fn probe_canvas_lti_registration(
         trust_profile,
         self_managed_origin_allowlist,
     )?;
-    let client = canvas_probe_http_client(timeout_seconds)?;
     let jwks_json = fetch_canvas_lti_jwks(
-        &client,
+        timeout_seconds,
         &profile.jwks_uri,
         allow_private_networks,
         allow_http_localhost,
@@ -615,23 +631,55 @@ pub async fn probe_canvas_lti_registration(
     })
 }
 
-fn canvas_probe_http_client(timeout_seconds: u64) -> Oid4vciResult<Client> {
-    Client::builder()
+fn build_pinned_canvas_client(
+    builder: reqwest::ClientBuilder,
+    url: &Url,
+    addresses: &[SocketAddr],
+    timeout_seconds: u64,
+) -> Oid4vciResult<Client> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| invalid_request("Canvas URL must include a host"))?;
+    builder
+        .no_proxy()
         .timeout(std::time::Duration::from_secs(timeout_seconds.max(1)))
         .redirect(Policy::none())
+        .resolve_to_addrs(host.trim_matches(['[', ']']), addresses)
         .build()
         .map_err(|e| Oid4vciError::ConfigError(e.to_string()))
 }
 
+async fn canvas_probe_http_client(
+    url: &Url,
+    timeout_seconds: u64,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> Oid4vciResult<Client> {
+    let addresses = resolve_canvas_addresses(
+        url,
+        allow_private_networks,
+        allow_http_localhost,
+        timeout_seconds,
+    )
+    .await?;
+    build_pinned_canvas_client(Client::builder(), url, &addresses, timeout_seconds)
+}
+
 async fn fetch_canvas_lti_jwks(
-    client: &Client,
+    timeout_seconds: u64,
     jwks_uri: &str,
     allow_private_networks: bool,
     allow_http_localhost: bool,
 ) -> Oid4vciResult<Value> {
     let parsed = Url::parse(jwks_uri)?;
-    validate_resolved_host(&parsed, allow_private_networks, allow_http_localhost).await?;
-    let jwks: Value = fetch_limited_json(client, jwks_uri, "JWKS", MAX_JWKS_BYTES).await?;
+    let client = canvas_probe_http_client(
+        &parsed,
+        timeout_seconds,
+        allow_private_networks,
+        allow_http_localhost,
+    )
+    .await?;
+    let jwks: Value = fetch_limited_json(&client, jwks_uri, "JWKS", MAX_JWKS_BYTES).await?;
     if jwks
         .get("keys")
         .and_then(Value::as_array)
@@ -653,14 +701,13 @@ pub async fn probe_canvas_lti_platform(
         normalize_canvas_base_url(base_url, allow_private_networks, allow_http_localhost)?;
     let configuration_url = format!("{normalized_base_url}{CANVAS_OPENID_CONFIGURATION_PATH}");
     let parsed_configuration_url = Url::parse(&configuration_url)?;
-    validate_resolved_host(
+    let client = canvas_probe_http_client(
         &parsed_configuration_url,
+        timeout_seconds,
         allow_private_networks,
         allow_http_localhost,
     )
     .await?;
-
-    let client = canvas_probe_http_client(timeout_seconds)?;
 
     let openid_configuration: Value = fetch_limited_json(
         &client,
@@ -690,7 +737,7 @@ pub async fn probe_canvas_lti_platform(
         false,
     )?;
     let jwks_json = fetch_canvas_lti_jwks(
-        &client,
+        timeout_seconds,
         &normalized_jwks_uri,
         allow_private_networks,
         allow_http_localhost,
@@ -829,6 +876,70 @@ pub fn verify_lti_launch_jwt(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canvas_probe_rejects_empty_and_mixed_private_dns_answers() {
+        let public: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        let url = Url::parse("https://canvas.example/api/lti/security/jwks").unwrap();
+        assert!(validate_canvas_addresses(&url, &[], false, false).is_err());
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "::1",
+            "::ffff:127.0.0.1",
+        ] {
+            let private = SocketAddr::new(ip.parse().unwrap(), 443);
+            assert!(validate_canvas_addresses(&url, &[public, private], false, false).is_err());
+        }
+        assert!(validate_canvas_addresses(&url, &[public], false, false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn canvas_probe_pins_addresses_without_second_dns_or_proxy() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        struct RejectDns(Arc<AtomicUsize>);
+        impl reqwest::dns::Resolve for RejectDns {
+            fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err(std::io::Error::other("second DNS lookup is forbidden").into())
+                })
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let url = Url::parse(&format!("http://localhost:{}/jwks", address.port())).unwrap();
+        validate_canvas_addresses(&url, &[address], false, true).unwrap();
+        let dns_calls = Arc::new(AtomicUsize::new(0));
+        let builder = Client::builder()
+            .dns_resolver(Arc::new(RejectDns(dns_calls.clone())))
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:1").unwrap());
+        let client = build_pinned_canvas_client(builder, &url, &[address], 2).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(3), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let mut request = vec![0; 4096];
+            let size = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..size]).to_lowercase();
+            assert!(request.contains(&format!("host: localhost:{}", address.port())));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .unwrap();
+        });
+        let response = fetch_limited_json(&client, url.as_str(), "JWKS", 1024).await;
+        server.await.unwrap();
+        assert_eq!(response.unwrap(), json!({}));
+        assert_eq!(dns_calls.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn manual_registration_refuses_unapproved_origin_and_unknown_profile_before_network() {
         for (profile, allowlist) in [
