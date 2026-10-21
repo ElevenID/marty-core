@@ -80,6 +80,14 @@ The default browser URL is `http://127.0.0.1:8787`.
 
 ## Isolated demo sessions
 
+`POST /api/present` preserves verifier rejection as HTTP 400 with `ok: false`.
+When the verifier actually responded, `submission` records `submitted`,
+`verifier_http_status`, and `verifier_error`. A failed request before submission
+does not produce that record. This transport evidence does not establish a
+relying party decision: negative demos must independently corroborate the fresh
+verifier session's terminal denial and its expected reason. Successful demos
+still require successful submission and a terminal allow decision.
+
 Automated browser demos must create a session in a fresh browser context before
 receiving credentials or resetting wallet storage. `GET /ready` advertises
 `features.isolated_sessions: 1` and the current process `instance_id`.

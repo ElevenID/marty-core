@@ -210,6 +210,9 @@ pub struct ParsedPresentationRequest {
 pub struct PresentationResponse {
     /// Whether the verifier accepted the presentation.
     pub ok: bool,
+    /// Actual verifier HTTP response, distinct from the relying party decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
     /// Optional redirect URI returned by the verifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub redirect_uri: Option<String>,
@@ -1268,6 +1271,7 @@ impl WalletEngine {
         if status.is_success() {
             Ok(PresentationResponse {
                 ok: true,
+                http_status: Some(status.as_u16()),
                 redirect_uri: body
                     .get("redirect_uri")
                     .and_then(|v| v.as_str())
@@ -1291,6 +1295,7 @@ impl WalletEngine {
             );
             Ok(PresentationResponse {
                 ok: false,
+                http_status: Some(status.as_u16()),
                 redirect_uri: None,
                 error,
                 error_description,
@@ -1786,6 +1791,7 @@ mod tests {
                 .unwrap();
 
             assert!(!response.ok);
+            assert_eq!(response.http_status, Some(400));
             assert_eq!(response.error.as_deref(), Some("invalid_request"));
             assert_eq!(
                 response.error_description.as_deref(),

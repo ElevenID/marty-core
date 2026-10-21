@@ -565,7 +565,7 @@ async fn present_credential(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<PresentRequest>,
-) -> Result<Json<PresentResponse>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let wallet = state.wallet_for(&headers).await?;
     let presentation_request = state
         .engine
@@ -640,18 +640,36 @@ async fn present_credential(
         .submit_presentation_for_request(&presentation_request, &vp_token, submission.as_ref())
         .await
         .map_err(|error| AppError::bad_request(error.to_string()))?;
+    Ok(presentation_response(response))
+}
+
+fn presentation_response(
+    response: marty_oid4vci::PresentationResponse,
+) -> axum::response::Response {
     if !response.ok {
-        return Err(AppError::bad_request(
-            response
-                .error_description
-                .or(response.error)
-                .unwrap_or_else(|| "Verifier rejected the presentation".to_string()),
-        ));
+        // Retain the real rejection. A submitted negative presentation is not
+        // a successful verification, nor a network failure. The demo must also
+        // corroborate its expected denial against the fresh verifier session.
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": response.error_description.as_deref().or(response.error.as_deref())
+                    .unwrap_or("Verifier rejected the presentation"),
+                "submission": {
+                    "submitted": true,
+                    "verifier_http_status": response.http_status,
+                    "verifier_error": response.error,
+                }
+            })),
+        )
+            .into_response();
     }
-    Ok(Json(PresentResponse {
+    Json(PresentResponse {
         ok: true,
         redirect_uri: response.redirect_uri,
-    }))
+    })
+    .into_response()
 }
 
 fn extract_credential(response: &marty_oid4vci::types::CredentialResponse) -> Option<String> {
@@ -801,6 +819,29 @@ fn disclosed_claim_names(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn verifier_rejection_retains_transport_evidence_without_success() {
+        let response = presentation_response(marty_oid4vci::PresentationResponse {
+            ok: false,
+            http_status: Some(400),
+            redirect_uri: None,
+            error: Some("invalid_presentation".into()),
+            error_description: None,
+        });
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "invalid_presentation");
+        assert_eq!(body["submission"]["submitted"], true);
+        assert_eq!(body["submission"]["verifier_http_status"], 400);
+        assert_eq!(body["submission"]["verifier_error"], "invalid_presentation");
+    }
 
     #[tokio::test]
     async fn wallet_sessions_http_bind_run_ownership_and_preserve_other_wallets() {
