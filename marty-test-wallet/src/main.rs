@@ -652,7 +652,8 @@ fn presentation_response(
         // corroborate its expected denial against the fresh verifier session.
         return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
             "ok": false,
-            "error": response.error_description.as_deref().unwrap_or("Verifier rejected the presentation"),
+            "error": response.error_description.as_deref().or(response.error.as_deref())
+                .unwrap_or("Verifier rejected the presentation"),
             "submission": {
                 "submitted": true,
                 "verifier_http_status": response.http_status,
@@ -832,6 +833,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(body["ok"], false);
+        assert_eq!(body["error"], "invalid_presentation");
         assert_eq!(body["submission"]["submitted"], true);
         assert_eq!(body["submission"]["verifier_http_status"], 400);
         assert_eq!(body["submission"]["verifier_error"], "invalid_presentation");
