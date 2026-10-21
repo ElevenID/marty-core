@@ -1,6 +1,7 @@
 //! Platform keychain integration for secure key storage
 
 use crate::error::StorageError;
+use std::sync::{Arc, LazyLock};
 
 const SERVICE_NAME: &str = "com.marty.verifier";
 const DB_KEY_NAME: &str = "database_encryption_key";
@@ -44,11 +45,36 @@ pub struct KeychainManager {
     store_selection: StoreSelection,
 }
 
-#[derive(Clone, Copy)]
 enum StoreSelection {
     Platform,
-    InstalledDefault,
+    Bound(Arc<keyring_core::CredentialStore>),
 }
+
+// Own the selected native store; another consumer may replace keyring-core's
+// process-global default with a transient test store after native initialization.
+static PLATFORM_STORE: LazyLock<keyring_core::Result<Arc<keyring_core::CredentialStore>>> =
+    LazyLock::new(|| {
+        #[cfg(target_os = "windows")]
+        {
+            windows_native_keyring_store::Store::new()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            apple_native_keyring_store::keychain::Store::new()
+        }
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+        ))]
+        {
+            zbus_secret_service_keyring_store::Store::new()
+        }
+        #[cfg(not(all(any(unix, windows), not(any(target_os = "ios", target_os = "android")))))]
+        Err(keyring_core::Error::Invalid(
+            "platform".into(),
+            "unsupported platform credential store".into(),
+        ))
+    });
 
 impl KeychainManager {
     pub(crate) fn for_instance(instance: &InstanceNamespace) -> Self {
@@ -67,10 +93,8 @@ impl KeychainManager {
                 "refusing default key removal".into(),
             ));
         }
-        self.ensure_store()?;
         for name in [DB_KEY_NAME, PII_KEY_NAME] {
-            let entry = keyring_core::Entry::new(&self.service, name)
-                .map_err(|e| StorageError::Keychain(e.to_string()))?;
+            let entry = self.entry(name)?;
             match entry.delete_credential() {
                 Ok(()) | Err(keyring_core::Error::NoEntry) => (),
                 Err(e) => return Err(StorageError::Keychain(e.to_string())),
@@ -79,13 +103,16 @@ impl KeychainManager {
         Ok(())
     }
 
-    fn ensure_store(&self) -> Result<(), StorageError> {
-        if matches!(self.store_selection, StoreSelection::Platform) {
-            if let Err(error) = keyring::Entry::store_status() {
-                return Err(StorageError::Keychain(error.to_string()));
-            }
-        }
-        Ok(())
+    fn entry(&self, name: &str) -> Result<keyring_core::Entry, StorageError> {
+        let store = match &self.store_selection {
+            StoreSelection::Platform => PLATFORM_STORE
+                .as_ref()
+                .map_err(|error| StorageError::Keychain(error.to_string()))?,
+            StoreSelection::Bound(store) => store,
+        };
+        store
+            .build(&self.service, name, None)
+            .map_err(|error| StorageError::Keychain(error.to_string()))
     }
     /// Create new keychain manager
     pub fn new() -> Self {
@@ -108,7 +135,7 @@ impl KeychainManager {
         }
         Ok(Self {
             service: SERVICE_NAME.to_string(),
-            store_selection: StoreSelection::InstalledDefault,
+            store_selection: StoreSelection::Bound(store),
         })
     }
 
@@ -124,9 +151,7 @@ impl KeychainManager {
 
     /// Get or create a key by name
     fn get_or_create_key(&self, key_name: &str) -> Result<Vec<u8>, StorageError> {
-        self.ensure_store()?;
-        let entry = keyring_core::Entry::new(&self.service, key_name)
-            .map_err(|e| StorageError::Keychain(e.to_string()))?;
+        let entry = self.entry(key_name)?;
 
         // Try to get existing key
         match entry.get_password() {
@@ -175,7 +200,6 @@ impl Default for KeychainManager {
 mod tests {
     use super::*;
     use crate::database::SecureStorage;
-    use std::sync::Arc;
 
     struct RestoreDefaultStore(Option<Arc<keyring_core::CredentialStore>>);
 
@@ -231,21 +255,44 @@ mod tests {
             keyring_core::Entry::new(other_instance.service_name(), DB_KEY_NAME).unwrap();
         other_entry.set_password("other instance sentinel").unwrap();
         let mut scoped = KeychainManager::for_instance(&instance);
-        scoped.store_selection = StoreSelection::InstalledDefault;
+        scoped.store_selection = StoreSelection::Bound(selected.clone());
         let db_key = scoped.get_or_create_db_key().unwrap();
         let pii_key = scoped.get_or_create_pii_key().unwrap();
         assert_eq!(db_key.len(), 32);
         assert_eq!(pii_key.len(), 32);
         assert_ne!(db_key, pii_key);
         assert_eq!(scoped.get_or_create_db_key().unwrap(), db_key);
+        // Changing the global default must redirect neither instance reads nor
+        // cleanup, and must preserve the replacement store's identically named keys.
+        let replacement: Arc<keyring_core::CredentialStore> =
+            keyring_core::mock::Store::new().unwrap();
+        keyring_core::set_default_store(replacement.clone());
+        for name in [DB_KEY_NAME, PII_KEY_NAME] {
+            replacement
+                .build(instance.service_name(), name, None)
+                .unwrap()
+                .set_password("replacement store sentinel")
+                .unwrap();
+        }
+        assert_eq!(scoped.get_or_create_db_key().unwrap(), db_key);
+        assert_eq!(first.decrypt(&ciphertext).unwrap(), "persisted PII");
         scoped.remove_instance_keys().unwrap();
         for name in [DB_KEY_NAME, PII_KEY_NAME] {
             assert!(matches!(
-                keyring_core::Entry::new(instance.service_name(), name)
+                selected
+                    .build(instance.service_name(), name, None)
                     .unwrap()
                     .get_password(),
                 Err(keyring_core::Error::NoEntry)
             ));
+            assert_eq!(
+                replacement
+                    .build(instance.service_name(), name, None)
+                    .unwrap()
+                    .get_password()
+                    .unwrap(),
+                "replacement store sentinel"
+            );
         }
         assert_eq!(db_entry.get_password().unwrap(), "default DB sentinel");
         assert_eq!(
