@@ -14,6 +14,13 @@ pub struct PiiEncryptor {
 }
 
 impl PiiEncryptor {
+    pub fn from_platform_instance(
+        instance: &crate::InstanceNamespace,
+    ) -> Result<Self, StorageError> {
+        Self::new(
+            &crate::keychain::KeychainManager::for_instance(instance).get_or_create_pii_key()?,
+        )
+    }
     /// Load the existing PII key, or create it in the platform keychain.
     pub fn from_platform_keyring() -> Result<Self, StorageError> {
         Self::new(&crate::keychain::KeychainManager::new().get_or_create_pii_key()?)

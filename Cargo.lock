@@ -3361,18 +3361,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyring"
-version = "4.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72585bb6cc9bc370d1d545b7e23fcce71dfd4461c5e15275e3cf51bdfd9a980a"
-dependencies = [
- "apple-native-keyring-store",
- "keyring-core",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
-]
-
-[[package]]
 name = "keyring-core"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3996,12 +3984,12 @@ name = "marty-secure-storage"
 version = "0.2.2"
 dependencies = [
  "aes-gcm",
+ "apple-native-keyring-store",
  "base64 0.22.1",
  "blake3",
  "chrono",
  "directories",
  "hex",
- "keyring",
  "keyring-core",
  "marty-types",
  "rand 0.8.7",
@@ -4013,6 +4001,8 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
 ]
 
 [[package]]

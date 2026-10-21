@@ -78,6 +78,14 @@ impl SecureStorage {
         Self::new_with_keychain(data_dir, KeychainManager::new())
     }
 
+    /// Use real platform storage under an explicitly isolated instance service.
+    pub fn new_for_instance(
+        data_dir: &Path,
+        instance: &crate::InstanceNamespace,
+    ) -> Result<Self, StorageError> {
+        Self::new_with_keychain(data_dir, KeychainManager::for_instance(instance))
+    }
+
     /// Create storage using a caller-installed process-local keyring.
     ///
     /// This is an explicit test and startup-self-check boundary. Normal application

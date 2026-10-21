@@ -14,6 +14,7 @@ mod schema;
 pub use database::SecureStorage;
 pub use encryption::PiiEncryptor;
 pub use error::StorageError;
+pub use keychain::InstanceNamespace;
 pub use models::*;
 
 /// Re-export for command handlers
