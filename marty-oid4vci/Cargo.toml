@@ -174,3 +174,7 @@ required-features = ["issuer", "mso_mdoc", "sd_jwt"]
 name = "wasm_crypto_provider"
 path = "tests/wasm_crypto_provider.rs"
 required-features = ["verifier"]
+
+[[example]]
+name = "canvas_lti_registration_probe"
+required-features = ["lti"]

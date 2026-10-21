@@ -564,6 +564,85 @@ async fn fetch_limited_json(
         .map_err(|e| invalid_request(format!("Failed to decode Canvas {label}: {e}")))
 }
 
+/// Probe a manually registered stock Canvas installation using server-owned
+/// endpoint policy, rather than requiring Canvas dynamic-registration discovery.
+/// Stock Canvas protects its discovery document with a registration token; manual
+/// Developer Key registration does not supply that token. Only the public JWKS
+/// is observed here. Issuer and service endpoints remain operator-pinned and a
+/// subsequent signed LTI launch must still prove its issuer/client/deployment.
+pub async fn probe_canvas_lti_registration(
+    base_url: &str,
+    trust_profile: &str,
+    self_managed_origin_allowlist: &[String],
+    timeout_seconds: u64,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> Oid4vciResult<CanvasLtiPlatformProbe> {
+    let normalized_base_url =
+        normalize_canvas_base_url(base_url, allow_private_networks, allow_http_localhost)?;
+    let profile = canvas_lti_trust_profile(
+        &normalized_base_url,
+        trust_profile,
+        self_managed_origin_allowlist,
+    )?;
+    let client = canvas_probe_http_client(timeout_seconds)?;
+    let jwks_json = fetch_canvas_lti_jwks(
+        &client,
+        &profile.jwks_uri,
+        allow_private_networks,
+        allow_http_localhost,
+    )
+    .await?;
+    // Preserve explicit provenance in the legacy metadata field. These are
+    // configuration inputs, never a claimed remote discovery response.
+    let configuration = serde_json::json!({
+        "elevenid_metadata_source": "operator_trust_profile",
+        "discovery_document_observed": false,
+        "issuer": profile.issuer,
+        "authorization_endpoint": profile.authorization_endpoint,
+        "token_endpoint": profile.token_endpoint,
+        "jwks_uri": profile.jwks_uri,
+    });
+    Ok(CanvasLtiPlatformProbe {
+        canvas_base_url: normalized_base_url,
+        issuer: profile.issuer,
+        authorization_endpoint: Some(profile.authorization_endpoint),
+        token_endpoint: Some(profile.token_endpoint),
+        jwks_uri: profile.jwks_uri,
+        registration_endpoint: None,
+        raw_openid_configuration: configuration,
+        jwks_json,
+    })
+}
+
+fn canvas_probe_http_client(timeout_seconds: u64) -> Oid4vciResult<Client> {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_seconds.max(1)))
+        .redirect(Policy::none())
+        .build()
+        .map_err(|e| Oid4vciError::ConfigError(e.to_string()))
+}
+
+async fn fetch_canvas_lti_jwks(
+    client: &Client,
+    jwks_uri: &str,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> Oid4vciResult<Value> {
+    let parsed = Url::parse(jwks_uri)?;
+    validate_resolved_host(&parsed, allow_private_networks, allow_http_localhost).await?;
+    let jwks: Value = fetch_limited_json(client, jwks_uri, "JWKS", MAX_JWKS_BYTES).await?;
+    if jwks
+        .get("keys")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        return Err(invalid_request("Canvas JWKS does not include any keys"));
+    }
+    ensure_canvas_metadata_public_only(&jwks, &Value::Null)?;
+    Ok(jwks)
+}
+
 pub async fn probe_canvas_lti_platform(
     base_url: &str,
     timeout_seconds: u64,
@@ -581,11 +660,7 @@ pub async fn probe_canvas_lti_platform(
     )
     .await?;
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_seconds.max(1)))
-        .redirect(Policy::none())
-        .build()
-        .map_err(|e| Oid4vciError::ConfigError(e.to_string()))?;
+    let client = canvas_probe_http_client(timeout_seconds)?;
 
     let openid_configuration: Value = fetch_limited_json(
         &client,
@@ -614,24 +689,13 @@ pub async fn probe_canvas_lti_platform(
         allow_http_localhost,
         false,
     )?;
-    let parsed_jwks_uri = Url::parse(&normalized_jwks_uri)?;
-    validate_resolved_host(
-        &parsed_jwks_uri,
+    let jwks_json = fetch_canvas_lti_jwks(
+        &client,
+        &normalized_jwks_uri,
         allow_private_networks,
         allow_http_localhost,
     )
     .await?;
-
-    let jwks_json: Value =
-        fetch_limited_json(&client, &normalized_jwks_uri, "JWKS", MAX_JWKS_BYTES).await?;
-
-    if jwks_json
-        .get("keys")
-        .and_then(Value::as_array)
-        .is_none_or(|keys| keys.is_empty())
-    {
-        return Err(invalid_request("Canvas JWKS does not include any keys"));
-    }
     ensure_canvas_metadata_public_only(&jwks_json, &openid_configuration)?;
 
     Ok(CanvasLtiPlatformProbe {
@@ -765,6 +829,30 @@ pub fn verify_lti_launch_jwt(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn manual_registration_refuses_unapproved_origin_and_unknown_profile_before_network() {
+        for (profile, allowlist) in [
+            (CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN, vec![]),
+            (
+                CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
+                vec!["https://other.example".to_owned()],
+            ),
+            ("unknown", vec!["https://canvas.example".to_owned()]),
+        ] {
+            let error = probe_canvas_lti_registration(
+                "https://canvas.example",
+                profile,
+                &allowlist,
+                1,
+                false,
+                false,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("trust"));
+        }
+    }
+
     use super::*;
     #[cfg(not(target_family = "wasm"))]
     use crate::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
