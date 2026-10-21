@@ -16,8 +16,9 @@
 //! ├─ BacSession::establish()  ← derives session keys, runs EXTERNAL AUTHENTICATE
 //! │   └─ SecureMessagingSession (3DES-CBC + Retail-MAC)
 //! │
-//! └─ PaceSession::establish() ← derives keys from password, runs GENERAL AUTHENTICATE
-//!     └─ SecureMessagingSession (AES-CBC-nopad + AES-CMAC)
+//! └─ PaceCompatibilityHandshake ← derives keys from password and consumes
+//!     the ephemeral agreement state while the caller runs GENERAL AUTHENTICATE
+//!     └─ BacSession (opaque AES-CBC-nopad + AES-CMAC state)
 //! ```
 
 use std::collections::HashMap;
@@ -39,10 +40,7 @@ use crate::verification::emrtd::{verify_emrtd, SecurityObject};
 /// ```
 pub struct NoEphemeralSessionKeys;
 
-#[cfg(all(
-    feature = "ephemeral-session-keys",
-    not(feature = "local-key-operations")
-))]
+#[cfg(feature = "ephemeral-session-keys")]
 /// Marker documenting raw BAC/PACE key APIs excluded from production session builds.
 ///
 /// ```compile_fail
@@ -84,6 +82,13 @@ pub struct NoEphemeralSessionKeys;
 pub struct NoRawSessionKeyApis;
 
 // ─── APDU primitives ──────────────────────────────────────────────────────────
+
+/// Maximum data carried by an ISO/IEC 7816-4 extended APDU.
+pub const MAX_APDU_DATA_BYTES: usize = u16::MAX as usize;
+/// Largest plaintext command that always fits after BAC secure-messaging overhead.
+pub const MAX_BAC_COMMAND_DATA_BYTES: usize = 65_511;
+/// Largest protected BAC response accepted by a live secure-messaging session.
+pub const MAX_BAC_PROTECTED_RESPONSE_BYTES: usize = MAX_APDU_DATA_BYTES;
 
 /// ISO/IEC 7816-4 command APDU.
 #[derive(Debug, Clone)]
@@ -182,7 +187,7 @@ impl ApduCommand {
     }
 
     /// Serialise to ISO/IEC 7816-4 byte wire format.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> VerificationResult<Vec<u8>> {
         encode_apdu_command(
             self.cla,
             self.ins,
@@ -191,7 +196,6 @@ impl ApduCommand {
             (!self.data.is_empty()).then_some(self.data.as_slice()),
             self.le,
         )
-        .expect("validated APDU command")
     }
 }
 
@@ -205,7 +209,7 @@ pub fn encode_apdu_command(
     le: Option<usize>,
 ) -> VerificationResult<Vec<u8>> {
     let data_len = data.map_or(0, <[u8]>::len);
-    if data_len > u16::MAX as usize {
+    if data_len > MAX_APDU_DATA_BYTES {
         return Err(VerificationError::internal(
             "APDU command data exceeds extended-length capacity",
         ));
@@ -265,6 +269,11 @@ impl ApduResponse {
         if raw.len() < 2 {
             return Err(VerificationError::internal(
                 "APDU response too short (need at least SW1 SW2)".to_string(),
+            ));
+        }
+        if raw.len() > MAX_APDU_DATA_BYTES + 2 {
+            return Err(VerificationError::internal(
+                "APDU response data exceeds extended-length capacity",
             ));
         }
         let (data, sw) = raw.split_at(raw.len() - 2);
@@ -502,7 +511,7 @@ pub fn verify_from_reader<R: PassportReader>(
 /// - Document Number: MRZ chars 1–9, check digit at char 10.
 /// - Date of Birth: MRZ chars 62–67, check digit at char 68.
 /// - Date of Expiry: MRZ chars 92–97, check digit at char 98.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct MrzKeyInfo {
     /// Document number (9 chars) + check digit (1 char) = 10 chars.
@@ -514,44 +523,79 @@ pub struct MrzKeyInfo {
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
+impl std::fmt::Debug for MrzKeyInfo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MrzKeyInfo([REDACTED])")
+    }
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+impl Drop for MrzKeyInfo {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.doc_number_with_check.zeroize();
+        self.dob_with_check.zeroize();
+        self.expiry_with_check.zeroize();
+    }
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl MrzKeyInfo {
     /// Construct from the three MRZ key fields (without check digits) and
     /// compute the Luhn-style check digits automatically.
     ///
-    /// Use [`MrzKeyInfo { … }`] directly if you already have check digits.
-    pub fn from_mrz_fields(doc_number: &str, dob: &str, expiry: &str) -> Self {
+    /// Use this validated constructor (or a validated MRZ parser) rather than
+    /// retaining raw MRZ/check-digit material in application code.
+    pub fn try_from_mrz_fields(
+        doc_number: &str,
+        dob: &str,
+        expiry: &str,
+    ) -> VerificationResult<Self> {
+        if doc_number.len() != 9
+            || !doc_number
+                .bytes()
+                .all(|value| value.is_ascii_uppercase() || value.is_ascii_digit() || value == b'<')
+        {
+            return Err(VerificationError::internal(
+                "BAC document number must be exactly 9 uppercase MRZ characters",
+            ));
+        }
+        if dob.len() != 6
+            || expiry.len() != 6
+            || !dob.bytes().all(|value| value.is_ascii_digit())
+            || !expiry.bytes().all(|value| value.is_ascii_digit())
+        {
+            return Err(VerificationError::internal(
+                "BAC dates must be exactly 6 ASCII digits",
+            ));
+        }
         let doc_cd = mrz_check_digit(doc_number.as_bytes()) as char;
         let dob_cd = mrz_check_digit(dob.as_bytes()) as char;
         let exp_cd = mrz_check_digit(expiry.as_bytes()) as char;
-        Self {
+        Ok(Self {
             doc_number_with_check: format!("{}{}", doc_number, doc_cd),
             dob_with_check: format!("{}{}", dob, dob_cd),
             expiry_with_check: format!("{}{}", expiry, exp_cd),
-        }
+        })
+    }
+
+    #[cfg(test)]
+    pub fn from_mrz_fields(doc_number: &str, dob: &str, expiry: &str) -> Self {
+        Self::try_from_mrz_fields(doc_number, dob, expiry).expect("valid MRZ test fields")
     }
 }
 
 /// Derived BAC session keys.
 #[derive(Clone)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct BacKeys {
     /// 16-byte 3DES encryption key (K1‖K2).
-    pub k_enc: [u8; 16],
+    pub(crate) k_enc: [u8; 16],
     /// 16-byte 3DES MAC key (K1‖K2).
-    pub k_mac: [u8; 16],
+    pub(crate) k_mac: [u8; 16],
     /// First 16 bytes of SHA-1(MRZ information).
-    pub k_seed: [u8; 16],
-}
-
-#[derive(Clone)]
-#[cfg(all(
-    not(feature = "local-key-operations"),
-    not(test),
-    feature = "ephemeral-session-keys"
-))]
-pub(crate) struct BacKeys {
-    k_enc: [u8; 16],
-    k_mac: [u8; 16],
+    #[cfg(test)]
+    pub(crate) k_seed: [u8; 16],
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
@@ -566,14 +610,14 @@ impl Drop for BacKeys {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
         zeroize::Zeroize::zeroize(&mut self.k_mac);
-        #[cfg(any(test, feature = "local-key-operations"))]
+        #[cfg(test)]
         zeroize::Zeroize::zeroize(&mut self.k_seed);
     }
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl BacKeys {
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn from_parts(k_enc: [u8; 16], k_mac: [u8; 16], k_seed: [u8; 16]) -> Self {
         Self {
             k_enc,
@@ -631,7 +675,7 @@ impl BacHandshake {
     }
 
     /// Start a BAC exchange from previously derived base keys.
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn begin_with_keys(base_keys: BacKeys, rnd_ic: &[u8]) -> VerificationResult<Self> {
         use rand::RngCore;
 
@@ -651,7 +695,7 @@ impl BacHandshake {
     }
 
     /// Start a deterministic BAC exchange for conformance-vector testing.
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn begin_with_random(
         mrz: &MrzKeyInfo,
         rnd_ic: &[u8],
@@ -685,12 +729,9 @@ impl BacHandshake {
         plaintext.extend_from_slice(&self.rnd_ic);
         plaintext.extend_from_slice(&self.k_ifd);
         let iv = icao_3des_cbc_iv();
-        let encrypted = marty_crypto::des::tdes_cbc_encrypt(
-            &extend_to_24_bytes(&self.base_keys.k_enc),
-            &iv,
-            &plaintext,
-        )
-        .map_err(|error| VerificationError::internal(format!("BAC encrypt failed: {error}")))?;
+        let k24 = extend_to_24_bytes(&self.base_keys.k_enc);
+        let encrypted = marty_crypto::des::tdes_cbc_encrypt(&k24[..], &iv, &plaintext)
+            .map_err(|error| VerificationError::internal(format!("BAC encrypt failed: {error}")))?;
         let mac = retail_mac_3des(&self.base_keys.k_mac, &encrypted)?;
         let mut result = encrypted;
         result.extend_from_slice(&mac);
@@ -713,13 +754,11 @@ impl BacHandshake {
             ));
         }
         let iv = icao_3des_cbc_iv();
+        let k24 = extend_to_24_bytes(&self.base_keys.k_enc);
         let plaintext = zeroize::Zeroizing::new(
-            marty_crypto::des::tdes_cbc_decrypt(
-                &extend_to_24_bytes(&self.base_keys.k_enc),
-                &iv,
-                encrypted,
-            )
-            .map_err(|error| VerificationError::internal(format!("BAC decrypt failed: {error}")))?,
+            marty_crypto::des::tdes_cbc_decrypt(&k24[..], &iv, encrypted).map_err(|error| {
+                VerificationError::internal(format!("BAC decrypt failed: {error}"))
+            })?,
         );
         if plaintext[..8] != self.rnd_ic {
             return Err(VerificationError::internal(
@@ -738,22 +777,22 @@ impl BacHandshake {
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl BacSession {
     /// Restore a BAC secure-messaging session from established key material.
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn from_session_keys(k_enc: [u8; 16], k_mac: [u8; 16], ssc: [u8; 8]) -> Self {
         Self { k_enc, k_mac, ssc }
     }
 
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn encryption_key(&self) -> &[u8; 16] {
         &self.k_enc
     }
 
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn mac_key(&self) -> &[u8; 16] {
         &self.k_mac
     }
 
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn send_sequence_counter(&self) -> &[u8; 8] {
         &self.ssc
     }
@@ -848,7 +887,17 @@ impl BacSession {
     /// Increments the internal Send Sequence Counter.  The returned command
     /// carries the DO'87 (encrypted data) and DO'8E (MAC) objects.
     pub fn protect_command(&mut self, cmd: &ApduCommand) -> VerificationResult<ApduCommand> {
-        increment_ssc(&mut self.ssc);
+        if cmd.data.len() > MAX_BAC_COMMAND_DATA_BYTES {
+            return Err(VerificationError::internal(format!(
+                "BAC SM command data exceeds {MAX_BAC_COMMAND_DATA_BYTES} bytes"
+            )));
+        }
+        if cmd.le.is_some_and(|le| le > 256) {
+            return Err(VerificationError::internal(
+                "BAC SM supports only short-form Le values up to 256",
+            ));
+        }
+        let next_ssc = checked_next_ssc(&self.ssc)?;
 
         // Build protected data object (DO'87) when command has data
         let mut do87: Vec<u8> = Vec::new();
@@ -856,7 +905,7 @@ impl BacSession {
             let padded = iso7816_pad(&cmd.data);
             let k24 = extend_to_24_bytes(&self.k_enc);
             let iv = icao_3des_cbc_iv();
-            let enc = marty_crypto::des::tdes_cbc_encrypt(&k24, &iv, &padded)
+            let enc = marty_crypto::des::tdes_cbc_encrypt(&k24[..], &iv, &padded)
                 .map_err(|e| VerificationError::internal(format!("SM encrypt: {}", e)))?;
             // DO'87 = tag 87, BER length, 01 (padding indicator), ciphertext.
             let mut value = Vec::with_capacity(enc.len() + 1);
@@ -867,7 +916,7 @@ impl BacSession {
 
         // Build expected length object (DO'97) when cmd has Le
         let do97 = if let Some(le) = cmd.le {
-            vec![0x97, 0x01, le as u8]
+            vec![0x97, 0x01, if le == 256 { 0 } else { le as u8 }]
         } else {
             Vec::new()
         };
@@ -884,7 +933,7 @@ impl BacSession {
             0x00,
         ];
         let mut mac_input = Vec::new();
-        mac_input.extend_from_slice(&self.ssc);
+        mac_input.extend_from_slice(&next_ssc);
         mac_input.extend_from_slice(&masked_header);
         mac_input.extend_from_slice(&do87);
         mac_input.extend_from_slice(&do97);
@@ -898,20 +947,32 @@ impl BacSession {
         sm_data.push(0x8E);
         sm_data.push(0x08);
         sm_data.extend_from_slice(&mac);
+        if sm_data.len() > MAX_APDU_DATA_BYTES {
+            return Err(VerificationError::internal(
+                "BAC SM protected command exceeds extended APDU capacity",
+            ));
+        }
 
-        Ok(ApduCommand {
+        let protected = ApduCommand {
             cla: cmd.cla | 0x0C, // set secure messaging bit
             ins: cmd.ins,
             p1: cmd.p1,
             p2: cmd.p2,
             data: sm_data,
             le: Some(0),
-        })
+        };
+        self.ssc = next_ssc;
+        Ok(protected)
     }
 
     /// Strip and verify 3DES-MAC secure messaging from a chip response.
     pub fn unprotect_response(&mut self, resp: &ApduResponse) -> VerificationResult<ApduResponse> {
-        increment_ssc(&mut self.ssc);
+        if resp.data.len() > MAX_BAC_PROTECTED_RESPONSE_BYTES {
+            return Err(VerificationError::internal(format!(
+                "BAC SM protected response exceeds {MAX_BAC_PROTECTED_RESPONSE_BYTES} bytes"
+            )));
+        }
+        let next_ssc = checked_next_ssc(&self.ssc)?;
 
         let data = &resp.data;
         let mut received_mac = None;
@@ -962,7 +1023,7 @@ impl BacSession {
         })?;
         // Verify MAC: SSC || DO'87 || DO'99
         let mut mac_input = Vec::new();
-        mac_input.extend_from_slice(&self.ssc);
+        mac_input.extend_from_slice(&next_ssc);
         if let Some(do87_bytes) = do87_bytes {
             mac_input.extend_from_slice(do87_bytes);
         }
@@ -979,19 +1040,23 @@ impl BacSession {
             let k24 = extend_to_24_bytes(&self.k_enc);
             let iv = icao_3des_cbc_iv();
             let decrypted = zeroize::Zeroizing::new(
-                marty_crypto::des::tdes_cbc_decrypt(&k24, &iv, ciphertext)
+                marty_crypto::des::tdes_cbc_decrypt(&k24[..], &iv, ciphertext)
                     .map_err(|e| VerificationError::internal(format!("SM decrypt: {e}")))?,
             );
             iso7816_unpad(&decrypted)?
         } else {
             Vec::new()
         };
-        let (sw1, sw2) = status.expect("status checked above");
-        Ok(ApduResponse {
+        let (sw1, sw2) = status.ok_or_else(|| {
+            VerificationError::internal("BAC SM: protected response missing DO99")
+        })?;
+        let plaintext = ApduResponse {
             data: plain_data,
             sw1,
             sw2,
-        })
+        };
+        self.ssc = next_ssc;
+        Ok(plaintext)
     }
 }
 
@@ -1022,7 +1087,7 @@ impl Drop for BacSession {
 
 /// Password type for PACE key derivation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub enum PacePassword {
     /// 6-digit Card Access Number (printed on the card).
     Can(String),
@@ -1032,7 +1097,7 @@ pub enum PacePassword {
     Pin(String),
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl PacePassword {
     fn as_bytes(&self) -> &[u8] {
         match self {
@@ -1045,20 +1110,57 @@ impl PacePassword {
 ///
 /// This preserves the established application contract while ensuring its
 /// password processing, nonce decryption, ECDH, and session derivation have a
-/// single Rust implementation. New protocol integrations should use the full
-/// [`PaceSession`] state machine as it evolves rather than reproducing these
-/// compatibility steps in another language.
+/// single Rust implementation. New protocol integrations should use this
+/// opaque, one-use handshake flow rather than reproducing its compatibility
+/// steps or retaining derived keys in another language.
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 pub struct PaceCompatibilityHandshake {
-    private_key: [u8; 32],
+    key_pair: Option<PaceKeyPair>,
     public_key: Vec<u8>,
     nonce: Vec<u8>,
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
+enum PaceKeyPair {
+    Ephemeral(marty_crypto::ecdh::P256KeyPair),
+    #[cfg(test)]
+    Deterministic(p256::SecretKey),
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
+impl PaceKeyPair {
+    fn public_key(&self) -> Vec<u8> {
+        match self {
+            Self::Ephemeral(key) => key.public_key_uncompressed(),
+            #[cfg(test)]
+            Self::Deterministic(key) => {
+                use elliptic_curve::sec1::ToEncodedPoint;
+                key.public_key().to_encoded_point(false).as_bytes().to_vec()
+            }
+        }
+    }
+
+    fn agree(self, peer_public_key: &[u8]) -> VerificationResult<zeroize::Zeroizing<Vec<u8>>> {
+        match self {
+            Self::Ephemeral(key) => key.agree(peer_public_key).map_err(Into::into),
+            #[cfg(test)]
+            Self::Deterministic(key) => {
+                let peer = p256::PublicKey::from_sec1_bytes(peer_public_key).map_err(|error| {
+                    VerificationError::internal(format!("Invalid P-256 peer key: {error}"))
+                })?;
+                Ok(zeroize::Zeroizing::new(
+                    p256::ecdh::diffie_hellman(key.to_nonzero_scalar(), peer.as_affine())
+                        .raw_secret_bytes()
+                        .to_vec(),
+                ))
+            }
+        }
+    }
+}
+
+#[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl Drop for PaceCompatibilityHandshake {
     fn drop(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.private_key);
         zeroize::Zeroize::zeroize(&mut self.nonce);
     }
 }
@@ -1066,35 +1168,41 @@ impl Drop for PaceCompatibilityHandshake {
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl PaceCompatibilityHandshake {
     pub fn begin(password: &str, encrypted_nonce: &[u8]) -> VerificationResult<Self> {
-        let (private_key, _) = marty_crypto::ecdh::p256_generate_keypair();
-        let private_key = zeroize::Zeroizing::new(private_key);
-        Self::begin_with_private_key_inner(password, encrypted_nonce, &private_key)
+        Self::begin_with_key(
+            password,
+            encrypted_nonce,
+            PaceKeyPair::Ephemeral(marty_crypto::ecdh::P256KeyPair::generate()),
+        )
     }
 
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn begin_with_private_key(
         password: &str,
         encrypted_nonce: &[u8],
         private_key: &[u8],
     ) -> VerificationResult<Self> {
-        Self::begin_with_private_key_inner(password, encrypted_nonce, private_key)
+        let private_key = p256::SecretKey::from_slice(private_key).map_err(|error| {
+            VerificationError::internal(format!("Invalid PACE P-256 private key: {error}"))
+        })?;
+        Self::begin_with_key(
+            password,
+            encrypted_nonce,
+            PaceKeyPair::Deterministic(private_key),
+        )
     }
 
-    fn begin_with_private_key_inner(
+    fn begin_with_key(
         password: &str,
         encrypted_nonce: &[u8],
-        private_key: &[u8],
+        key_pair: PaceKeyPair,
     ) -> VerificationResult<Self> {
-        if encrypted_nonce.is_empty() || !encrypted_nonce.len().is_multiple_of(8) {
+        if encrypted_nonce.len() != 16 {
             return Err(VerificationError::internal(
-                "PACE encrypted nonce must be non-empty and block aligned",
+                "PACE encrypted nonce must be exactly 16 bytes",
             ));
         }
-        let private_key: &[u8; 32] = private_key
-            .try_into()
-            .map_err(|_| VerificationError::internal("PACE P-256 private key must be 32 bytes"))?;
         let key = zeroize::Zeroizing::new(derive_compatibility_pace_password_key_inner(password)?);
-        let expanded_key = zeroize::Zeroizing::new(extend_to_24_bytes(&key));
+        let expanded_key = extend_to_24_bytes(&key);
         let iv = icao_3des_cbc_iv();
         let decrypted = zeroize::Zeroizing::new(
             marty_crypto::des::tdes_cbc_decrypt(&expanded_key[..], &iv, encrypted_nonce).map_err(
@@ -1107,10 +1215,9 @@ impl PaceCompatibilityHandshake {
                 "PACE decrypted nonce must not be empty",
             ));
         }
-        let key_pair = marty_crypto::ecdh::P256KeyPair::from_secret_key(private_key)?;
-        let public_key = key_pair.public_key_uncompressed();
+        let public_key = key_pair.public_key();
         Ok(Self {
-            private_key: *private_key,
+            key_pair: Some(key_pair),
             public_key,
             nonce: nonce.to_vec(),
         })
@@ -1120,23 +1227,21 @@ impl PaceCompatibilityHandshake {
         &self.public_key
     }
 
-    #[cfg(any(test, feature = "local-key-operations"))]
+    #[cfg(test)]
     pub fn decrypted_nonce(&self) -> &[u8] {
         &self.nonce
     }
 
     pub fn complete(mut self, chip_public_key: &[u8]) -> VerificationResult<BacSession> {
         use sha2::{Digest, Sha256};
-        use zeroize::Zeroize;
-
-        let shared_secret = zeroize::Zeroizing::new(marty_crypto::ecdh::p256_agree(
-            &self.private_key,
-            chip_public_key,
-        )?);
-        self.private_key.zeroize();
+        let shared_secret = self
+            .key_pair
+            .take()
+            .ok_or_else(|| VerificationError::internal("PACE handshake already consumed"))?
+            .agree(chip_public_key)?;
         let mut input = zeroize::Zeroizing::new(shared_secret.to_vec());
         input.extend_from_slice(&self.nonce);
-        let digest = Sha256::digest(&input);
+        let digest = zeroize::Zeroizing::new(Sha256::digest(&input));
         let seed = &digest[..16];
         let k_enc = bac_kdf_16(seed, 1)?;
         let k_mac = bac_kdf_16(seed, 2)?;
@@ -1147,7 +1252,7 @@ impl PaceCompatibilityHandshake {
 }
 
 /// Derive the 3DES password key used by the established compatibility API.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationResult<[u8; 16]> {
     derive_compatibility_pace_password_key_inner(password)
 }
@@ -1155,6 +1260,12 @@ pub fn derive_compatibility_pace_password_key(password: &str) -> VerificationRes
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 fn derive_compatibility_pace_password_key_inner(password: &str) -> VerificationResult<[u8; 16]> {
     use sha1::{Digest, Sha1};
+
+    if password.len() > 128 {
+        return Err(VerificationError::internal(
+            "PACE password or MRZ input must not exceed 128 bytes",
+        ));
+    }
 
     let seed = zeroize::Zeroizing::new(
         if password.chars().all(|value| value.is_ascii_digit())
@@ -1196,7 +1307,7 @@ fn derive_compatibility_pace_password_key_inner(password: &str) -> VerificationR
 
 /// PACE-specific symmetric keys.
 #[derive(Clone)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub struct PaceKeys {
     /// Encryption key (KSenc) — 16 bytes for AES-128.
     pub k_enc: [u8; 16],
@@ -1204,14 +1315,14 @@ pub struct PaceKeys {
     pub k_mac: [u8; 16],
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl std::fmt::Debug for PaceKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PaceKeys { … }")
     }
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl Drop for PaceKeys {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -1220,7 +1331,7 @@ impl Drop for PaceKeys {
 }
 
 /// Established PACE secure-messaging session (AES-128-CBC + AES-CMAC).
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub struct PaceSession {
     k_enc: [u8; 16],
     k_mac: [u8; 16],
@@ -1228,7 +1339,7 @@ pub struct PaceSession {
     ssc: [u8; 16],
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl Drop for PaceSession {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.k_enc);
@@ -1237,7 +1348,7 @@ impl Drop for PaceSession {
     }
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 impl PaceSession {
     /// Derive the initial password-encryption key for decrypting the chip nonce.
     ///
@@ -1502,7 +1613,7 @@ fn push_ber_tlv(tag: u8, value: &[u8], output: &mut Vec<u8>) -> VerificationResu
     Ok(())
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn pace_encryption_iv(k_enc: &[u8; 16], ssc: &[u8; 16]) -> VerificationResult<[u8; 16]> {
     let encrypted = marty_crypto::symmetric::aes_128_cbc_encrypt_nopad(k_enc, &[0u8; 16], ssc)
         .map_err(|error| VerificationError::internal(format!("PACE IV derivation: {error}")))?;
@@ -1518,7 +1629,7 @@ fn pace_encryption_iv(k_enc: &[u8; 16], ssc: &[u8; 16]) -> VerificationResult<[u
 /// 2. `Kseed` = SHA-1(MRZ_info)[0..16]
 /// 3. `K_ENC` = adjust_parity(SHA-1(Kseed ‖ 0x00000001)[0..16])
 /// 4. `K_MAC` = adjust_parity(SHA-1(Kseed ‖ 0x00000002)[0..16])
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn derive_bac_base_keys(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
     derive_bac_base_keys_inner(mrz)
 }
@@ -1545,18 +1656,22 @@ fn derive_bac_base_keys_inner(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
     let k_enc = bac_kdf_16(kseed, 1)?;
     let k_mac = bac_kdf_16(kseed, 2)?;
 
-    let mut k_seed = [0u8; 16];
-    k_seed.copy_from_slice(kseed);
+    #[cfg(test)]
+    let k_seed = {
+        let mut value = [0u8; 16];
+        value.copy_from_slice(kseed);
+        value
+    };
     Ok(BacKeys {
         k_enc,
         k_mac,
-        #[cfg(any(test, feature = "local-key-operations"))]
+        #[cfg(test)]
         k_seed,
     })
 }
 
 /// Derive BAC secure-messaging keys from authenticated reader/chip material.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 pub fn derive_bac_session_keys(
     k_ifd: &[u8],
     k_ic: &[u8],
@@ -1573,12 +1688,12 @@ fn derive_bac_session_keys_inner(
     rnd_ic: &[u8],
     rnd_ifd: &[u8],
 ) -> VerificationResult<BacSession> {
-    let k_ifd: [u8; 16] = k_ifd.try_into().map_err(|_| {
+    let k_ifd = zeroize::Zeroizing::new(<[u8; 16]>::try_from(k_ifd).map_err(|_| {
         VerificationError::internal("BAC: K.IFD must be exactly 16 bytes".to_string())
-    })?;
-    let k_ic: [u8; 16] = k_ic.try_into().map_err(|_| {
+    })?);
+    let k_ic = zeroize::Zeroizing::new(<[u8; 16]>::try_from(k_ic).map_err(|_| {
         VerificationError::internal("BAC: K.ICC must be exactly 16 bytes".to_string())
-    })?;
+    })?);
     let rnd_ic: [u8; 8] = rnd_ic.try_into().map_err(|_| {
         VerificationError::internal("BAC: Rnd.IC must be exactly 8 bytes".to_string())
     })?;
@@ -1613,7 +1728,7 @@ fn bac_kdf_16(seed: &[u8], counter: u8) -> VerificationResult<[u8; 16]> {
 }
 
 /// PACE KDF — SHA-256 based, derives a 16-byte AES key.
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn pace_kdf_16(seed: &[u8], counter: u8) -> [u8; 16] {
     use sha2::{Digest, Sha256};
     let mut input = seed.to_vec();
@@ -1637,12 +1752,12 @@ fn adjust_des_parity(key: &mut [u8]) {
 
 /// Extend a 16-byte 2-key 3DES key to the 24-byte 3-key form K1‖K2‖K1.
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
-fn extend_to_24_bytes(key16: &[u8; 16]) -> [u8; 24] {
+fn extend_to_24_bytes(key16: &[u8; 16]) -> zeroize::Zeroizing<[u8; 24]> {
     let mut k24 = [0u8; 24];
     k24[..8].copy_from_slice(&key16[..8]);
     k24[8..16].copy_from_slice(&key16[8..]);
     k24[16..].copy_from_slice(&key16[..8]);
-    k24
+    zeroize::Zeroizing::new(k24)
 }
 
 /// ICAO Doc 9303 BAC/secure-messaging and the compatibility PACE exchange
@@ -1693,12 +1808,12 @@ fn retail_mac_3des(key16: &[u8; 16], data: &[u8]) -> VerificationResult<[u8; 8]>
     let k1_only = extend_single_des(&key16[..8]);
     let k_full = extend_to_24_bytes(key16);
 
-    let iv = [0u8; 8];
+    let iv = icao_3des_cbc_iv();
 
     // CBC-MAC of all blocks except last under single-DES(K1)
     let intermediate = if n > 1 {
         let prefix = &padded[..(n - 1) * 8];
-        let cbc = marty_crypto::des::tdes_cbc_encrypt(&k1_only, &iv, prefix)
+        let cbc = marty_crypto::des::tdes_cbc_encrypt(&k1_only[..], &iv, prefix)
             .map_err(|e| VerificationError::internal(format!("Retail-MAC single-DES: {}", e)))?;
         let mut s = [0u8; 8];
         s.copy_from_slice(&cbc[cbc.len() - 8..]);
@@ -1713,7 +1828,7 @@ fn retail_mac_3des(key16: &[u8; 16], data: &[u8]) -> VerificationResult<[u8; 8]>
     for i in 0..8 {
         xored[i] = intermediate[i] ^ last_block[i];
     }
-    let final_mac = marty_crypto::des::tdes_cbc_encrypt(&k_full, &iv, &xored)
+    let final_mac = marty_crypto::des::tdes_cbc_encrypt(&k_full[..], &iv, &xored)
         .map_err(|e| VerificationError::internal(format!("Retail-MAC 3DES: {}", e)))?;
 
     let mut result = [0u8; 8];
@@ -1723,27 +1838,32 @@ fn retail_mac_3des(key16: &[u8; 16], data: &[u8]) -> VerificationResult<[u8; 8]>
 
 /// Build a 24-byte key K‖K‖K so `tdes_cbc_encrypt` acts as single DES.
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
-fn extend_single_des(k8: &[u8]) -> [u8; 24] {
+fn extend_single_des(k8: &[u8]) -> zeroize::Zeroizing<[u8; 24]> {
     let mut out = [0u8; 24];
     out[..8].copy_from_slice(k8);
     out[8..16].copy_from_slice(k8);
     out[16..].copy_from_slice(k8);
-    out
+    zeroize::Zeroizing::new(out)
 }
 
-/// Increment an 8-byte big-endian counter.
+/// Return the next 8-byte big-endian counter without permitting wraparound.
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
-fn increment_ssc(ssc: &mut [u8; 8]) {
+fn checked_next_ssc(ssc: &[u8; 8]) -> VerificationResult<[u8; 8]> {
+    let mut next = *ssc;
     for i in (0..8).rev() {
-        ssc[i] = ssc[i].wrapping_add(1);
-        if ssc[i] != 0 {
-            break;
+        if next[i] != u8::MAX {
+            next[i] += 1;
+            return Ok(next);
         }
+        next[i] = 0;
     }
+    Err(VerificationError::internal(
+        "BAC secure-messaging counter exhausted",
+    ))
 }
 
 /// Increment a 16-byte big-endian counter (PACE).
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn increment_ssc_16(ssc: &mut [u8; 16]) {
     for i in (0..16).rev() {
         ssc[i] = ssc[i].wrapping_add(1);
@@ -1876,7 +1996,13 @@ mod tests {
         let select_ef_com =
             ApduCommand::from_bytes(&hex::decode("00A4020C02011E").unwrap()).unwrap();
         assert_eq!(
-            hex::encode_upper(session.protect_command(&select_ef_com).unwrap().to_bytes()),
+            hex::encode_upper(
+                session
+                    .protect_command(&select_ef_com)
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap()
+            ),
             "0CA4020C158709016375432908C044F68E08BF8B92D635FF24F800"
         );
     }
@@ -1890,6 +2016,21 @@ mod tests {
     }
 
     #[test]
+    fn session_inputs_are_bounded_before_parsing_or_crypto() {
+        use rand::{distributions::Alphanumeric, Rng};
+
+        let test_password: String = rand::rngs::OsRng
+            .sample_iter(&Alphanumeric)
+            .take(6)
+            .map(char::from)
+            .collect();
+        assert!(MrzKeyInfo::try_from_mrz_fields("TOO-LONG-1", "740812", "120415").is_err());
+        assert!(MrzKeyInfo::try_from_mrz_fields("L898902C3", "74081", "120415").is_err());
+        assert!(PaceCompatibilityHandshake::begin(&test_password, &[0u8; 8]).is_err());
+        assert!(PaceCompatibilityHandshake::begin(&"A".repeat(129), &[0u8; 16]).is_err());
+    }
+
+    #[test]
     fn test_iso7816_pad_unpad_roundtrip() {
         let original = b"Hello World";
         let padded = iso7816_pad(original);
@@ -1900,9 +2041,70 @@ mod tests {
 
     #[test]
     fn test_increment_ssc_overflow() {
-        let mut ssc = [0xFF; 8];
-        increment_ssc(&mut ssc);
-        assert_eq!(ssc, [0x00; 8]);
+        assert!(checked_next_ssc(&[0xFF; 8]).is_err());
+        assert_eq!(checked_next_ssc(&[0; 8]).unwrap(), [0, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn bac_command_bounds_and_counter_updates_are_transactional() {
+        let initial_ssc = [0x33; 8];
+        let mut session = BacSession::from_session_keys([0x11; 16], [0x22; 16], initial_ssc);
+        let maximum = ApduCommand {
+            cla: 0,
+            ins: 0xa4,
+            p1: 0,
+            p2: 0,
+            data: vec![0x5a; MAX_BAC_COMMAND_DATA_BYTES],
+            le: Some(256),
+        };
+        let protected = session.protect_command(&maximum).unwrap();
+        assert!(protected.data.len() <= MAX_APDU_DATA_BYTES);
+        assert!(protected.to_bytes().is_ok());
+        assert_eq!(
+            session.send_sequence_counter(),
+            &checked_next_ssc(&initial_ssc).unwrap()
+        );
+
+        let stable_ssc = *session.send_sequence_counter();
+        let oversized = ApduCommand {
+            data: vec![0; MAX_BAC_COMMAND_DATA_BYTES + 1],
+            ..maximum.clone()
+        };
+        assert!(session.protect_command(&oversized).is_err());
+        assert_eq!(session.send_sequence_counter(), &stable_ssc);
+
+        let unsupported_le = ApduCommand {
+            data: Vec::new(),
+            le: Some(257),
+            ..maximum
+        };
+        assert!(session.protect_command(&unsupported_le).is_err());
+        assert_eq!(session.send_sequence_counter(), &stable_ssc);
+
+        let mut exhausted = BacSession::from_session_keys([0x11; 16], [0x22; 16], [0xff; 8]);
+        let valid = ApduCommand {
+            cla: 0,
+            ins: 0xa4,
+            p1: 0,
+            p2: 0,
+            data: Vec::new(),
+            le: None,
+        };
+        assert!(exhausted.protect_command(&valid).is_err());
+        assert_eq!(exhausted.send_sequence_counter(), &[0xff; 8]);
+    }
+
+    #[test]
+    fn bac_response_bound_rejection_preserves_counter() {
+        let initial_ssc = [0x44; 8];
+        let mut session = BacSession::from_session_keys([0x11; 16], [0x22; 16], initial_ssc);
+        let oversized = ApduResponse {
+            data: vec![0; MAX_BAC_PROTECTED_RESPONSE_BYTES + 1],
+            sw1: 0x90,
+            sw2: 0,
+        };
+        assert!(session.unprotect_response(&oversized).is_err());
+        assert_eq!(session.send_sequence_counter(), &initial_ssc);
     }
 
     #[test]
@@ -1919,6 +2121,7 @@ mod tests {
         malformed_bac.extend_from_slice(&[0x99, 0x02, 0x90, 0x00, 0x8e, 0x08]);
         malformed_bac.extend_from_slice(&[0u8; 8]);
         let mut bac = BacSession::from_session_keys([0x11; 16], [0x22; 16], [0x33; 8]);
+        let initial_bac_ssc = *bac.send_sequence_counter();
         let error = bac
             .unprotect_response(&ApduResponse {
                 data: malformed_bac,
@@ -1930,6 +2133,7 @@ mod tests {
             .to_string()
             .contains("response MAC verification failed"));
         assert!(!error.to_string().contains("padding"));
+        assert_eq!(bac.send_sequence_counter(), &initial_bac_ssc);
 
         let mut malformed_pace = vec![0x87, 0x11, 0x01];
         malformed_pace.extend_from_slice(&[0u8; 16]);

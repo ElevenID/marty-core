@@ -4,10 +4,11 @@
 //! module owns JOSE encoding, parsing, key validation, signing, and verification.
 
 use base64::Engine;
+#[cfg(any(test, feature = "jose-verification"))]
 use jsonwebtoken::{
-    crypto::verify as verify_jws_signature, decode, decode_header, jwk::Jwk, Algorithm,
-    DecodingKey, Validation,
+    crypto::verify as verify_jws_signature, decode, decode_header, DecodingKey, Validation,
 };
+use jsonwebtoken::{jwk::Jwk, Algorithm};
 use serde::de::{self, Error as DeError, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -16,35 +17,20 @@ use std::fmt;
 use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
 use crate::error::{Oid4vciError, Oid4vciResult};
 
-#[cfg(any(test, feature = "local-key-operations"))]
-use ssi_jwk::JWK;
-
-/// Encode header and payload as base64url, sign, and produce a compact JWT.
-#[cfg(any(test, feature = "local-key-operations"))]
-pub fn sign_compact_jwt(
-    jwk: &JWK,
+/// Construct an ES256 compact JWS with a scoped, non-exportable test KMS key.
+#[cfg(test)]
+pub(crate) fn sign_test_compact_es256(
+    signer: &crate::openbao_transit::ScopedTransitSigner,
     header: &serde_json::Value,
     payload: &serde_json::Value,
-) -> Oid4vciResult<String> {
-    let algorithm = crate::signer::derive_typed_jwk_algorithm(jwk)?;
-    let declared = header
-        .get("alg")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| Oid4vciError::KeyError("JWT header must contain a string alg".into()))?;
-    crate::signer::validate_declared_jwk_algorithm(algorithm, Some(declared))?;
-    let header_str = serde_json::to_string(header)
-        .map_err(|e| Oid4vciError::SigningError(format!("Header serialization failed: {}", e)))?;
-    let payload_str = serde_json::to_string(payload)
-        .map_err(|e| Oid4vciError::SigningError(format!("Payload serialization failed: {}", e)))?;
-
-    let header_b64 = B64.encode(header_str.as_bytes());
-    let payload_b64 = B64.encode(payload_str.as_bytes());
-
-    let message = format!("{}.{}", header_b64, payload_b64);
-    let signature = crate::signer::sign_with_jwk(jwk, message.as_bytes())?;
-    let signature_b64 = B64.encode(&signature);
-
-    Ok(format!("{}.{}", message, signature_b64))
+) -> String {
+    let protected = B64.encode(serde_json::to_vec(header).expect("test header JSON"));
+    let payload = B64.encode(serde_json::to_vec(payload).expect("test payload JSON"));
+    let signing_input = format!("{protected}.{payload}");
+    let signature = signer
+        .sign(signing_input.as_bytes())
+        .expect("remote ES256 signature");
+    format!("{signing_input}.{}", B64.encode(signature))
 }
 
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -169,8 +155,9 @@ pub(crate) fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Va
 /// Decode the protected header of a compact JWT without treating its claims as trusted.
 ///
 /// This is crate-private so protocol validators can select an externally trusted
-/// key before calling [`verify_compact_jwt_with_public_jwk`]. Callers must never
+/// key before calling `verify_compact_jwt_with_public_jwk`. Callers must never
 /// use the returned header as proof that the JWT is authentic.
+#[cfg(feature = "jose-verification")]
 pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vciResult<Value> {
     decode_unverified_compact_jwt(compact_jwt).map(|(header, _)| header)
 }
@@ -178,7 +165,7 @@ pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vci
 /// Decode unique JOSE header and claim objects for protocol-specific key selection.
 ///
 /// The values remain untrusted until a protocol validator selects an allowed key
-/// and calls [`verify_compact_jwt_with_public_jwk`].
+/// and calls `verify_compact_jwt_with_public_jwk`.
 pub(crate) fn decode_unverified_compact_jwt(compact_jwt: &str) -> Oid4vciResult<(Value, Value)> {
     let parts = split_compact_jwt(compact_jwt, JWT_LIMITS)
         .map_err(|message| Oid4vciError::JwtError(message.into()))?;
@@ -215,7 +202,11 @@ fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
         "ES384" => Ok(Algorithm::ES384),
         "EdDSA" => Ok(Algorithm::EdDSA),
         "RS256" => Ok(Algorithm::RS256),
+        "RS384" => Ok(Algorithm::RS384),
+        "RS512" => Ok(Algorithm::RS512),
         "PS256" => Ok(Algorithm::PS256),
+        "PS384" => Ok(Algorithm::PS384),
+        "PS512" => Ok(Algorithm::PS512),
         _ => Err(Oid4vciError::JwtError(format!(
             "Unsupported JWT signature algorithm: {name}"
         ))),
@@ -262,6 +253,34 @@ pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oi
         .map_err(|error| Oid4vciError::KeyError(format!("Invalid public JWK: {error}")))
 }
 
+#[cfg(any(test, feature = "jose-verification"))]
+fn parse_public_signing_jwk(public_jwk_json: &str, expected_algorithm: &str) -> Oid4vciResult<Jwk> {
+    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Public JWK exceeds its size limit".into(),
+        ));
+    }
+    let value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
+    validate_public_jwk(&value, expected_algorithm)
+}
+
+/// Check the same public-key policy used by JOSE verification before contacting a signer.
+///
+/// This validates bounded unique JSON, absence of private material, signing use,
+/// algorithm metadata and decoding-key construction. Signature verification is
+/// still required to prove that a signer controls the corresponding key.
+#[cfg(any(test, feature = "jose-verification"))]
+pub fn validate_public_signing_jwk_json(
+    public_jwk_json: &str,
+    expected_algorithm: &str,
+) -> Oid4vciResult<()> {
+    algorithm(expected_algorithm)?;
+    let jwk = parse_public_signing_jwk(public_jwk_json, expected_algorithm)?;
+    DecodingKey::from_jwk(&jwk).map(|_| ()).map_err(|_| {
+        Oid4vciError::KeyError("Could not construct public signature verification key".into())
+    })
+}
+
 /// Verify a compact JWT with an explicitly trusted public JWK.
 ///
 /// Registered-client and DPoP callers use this primitive after selecting the
@@ -269,11 +288,15 @@ pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oi
 /// not trust an embedded key, perform network resolution, or apply claim
 /// defaults. Duplicate JOSE or claim members and private JWK material fail
 /// closed.
+#[cfg(any(test, feature = "jose-verification"))]
 pub fn verify_compact_jwt_with_public_jwk(
     compact_jwt: &str,
     public_jwk_json: &str,
     expected_algorithm: &str,
 ) -> Oid4vciResult<VerifiedCompactJwt> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let (header_value, claims) = decode_unverified_compact_jwt(compact_jwt)?;
 
     let expected = algorithm(expected_algorithm)?;
@@ -287,13 +310,7 @@ pub fn verify_compact_jwt_with_public_jwk(
         ));
     }
 
-    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
-        return Err(Oid4vciError::KeyError(
-            "Public JWK exceeds its size limit".into(),
-        ));
-    }
-    let public_jwk_value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
-    let public_jwk = validate_public_jwk(&public_jwk_value, expected_algorithm)?;
+    let public_jwk = parse_public_signing_jwk(public_jwk_json, expected_algorithm)?;
     let decoding_key = DecodingKey::from_jwk(&public_jwk).map_err(|error| {
         Oid4vciError::KeyError(format!("Could not construct JWT verification key: {error}"))
     })?;
@@ -319,20 +336,18 @@ pub fn verify_compact_jwt_with_public_jwk(
 /// challenges. Public-key policy is identical to compact JWT verification:
 /// private fields, algorithm confusion, non-signing use, and unexpected
 /// `key_ops` fail closed. ECDSA signatures may use JOSE raw or ASN.1 DER form.
+#[cfg(any(test, feature = "jose-verification"))]
 pub fn verify_detached_signature_with_public_jwk(
     message: &[u8],
     signature: &[u8],
     public_jwk_json: &str,
     expected_algorithm: &str,
 ) -> Oid4vciResult<bool> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let expected = algorithm(expected_algorithm)?;
-    if public_jwk_json.len() > MAX_PUBLIC_JWK_BYTES {
-        return Err(Oid4vciError::KeyError(
-            "Public JWK exceeds its size limit".into(),
-        ));
-    }
-    let public_jwk_value = parse_unique_object(public_jwk_json.as_bytes(), "public JWK")?;
-    let public_jwk = validate_public_jwk(&public_jwk_value, expected_algorithm)?;
+    let public_jwk = parse_public_signing_jwk(public_jwk_json, expected_algorithm)?;
     let decoding_key = DecodingKey::from_jwk(&public_jwk).map_err(|error| {
         Oid4vciError::KeyError(format!(
             "Could not construct signature verification key: {error}"
@@ -367,29 +382,22 @@ pub fn normalize_ecdsa_signature(
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::pkcs8::EncodePrivateKey;
-    use p256::SecretKey;
     use serde_json::json;
 
     fn signed_token() -> (String, String) {
-        let secret = SecretKey::random(&mut rand::rngs::OsRng);
-        let public = secret.public_key().to_encoded_point(false);
-        let x = URL_SAFE_NO_PAD.encode(public.x().expect("x coordinate"));
-        let y = URL_SAFE_NO_PAD.encode(public.y().expect("y coordinate"));
-        let jwk = json!({"kty":"EC","crv":"P-256","alg":"ES256","x":x,"y":y});
-        let der = secret.to_pkcs8_der().expect("PKCS#8 key");
-        let token = encode(
-            &Header::new(Algorithm::ES256),
+        let signer = crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let mut jwk: Value = serde_json::from_str(signer.public_jwk()).expect("public JWK");
+        jwk["alg"] = json!("ES256");
+        let token = sign_test_compact_es256(
+            &signer,
+            &json!({"alg":"ES256","typ":"JWT"}),
             &json!({"sub":"wallet","jti":"assertion-1"}),
-            &EncodingKey::from_ec_der(der.as_bytes()),
-        )
-        .expect("signed JWT");
+        );
         (token, jwk.to_string())
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn verifies_public_jwk_and_returns_unique_json_objects() {
         let (token, jwk) = signed_token();
         let verified = verify_compact_jwt_with_public_jwk(&token, &jwk, "ES256")
@@ -406,28 +414,30 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn rejects_tampering_private_material_and_algorithm_confusion() {
         let (token, jwk) = signed_token();
-        let mut tampered = token.into_bytes();
-        let index = tampered.len() - 1;
-        tampered[index] = if tampered[index] == b'A' { b'B' } else { b'A' };
-        let tampered = String::from_utf8(tampered).expect("ASCII JWT");
+        let (input, encoded_signature) = token.rsplit_once('.').expect("compact JWS");
+        let mut signature = URL_SAFE_NO_PAD
+            .decode(encoded_signature)
+            .expect("signature encoding");
+        signature[0] ^= 1;
+        let tampered = format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature));
         assert!(verify_compact_jwt_with_public_jwk(&tampered, &jwk, "ES256").is_err());
 
         for member in PRIVATE_JWK_FIELDS {
             let mut private_jwk: Value = serde_json::from_str(&jwk).expect("public JWK");
             private_jwk[*member] = Value::String("private".into());
-            assert!(verify_compact_jwt_with_public_jwk(
-                &signed_token().0,
-                &private_jwk.to_string(),
-                "ES256"
-            )
-            .is_err());
+            assert!(
+                verify_compact_jwt_with_public_jwk(&token, &private_jwk.to_string(), "ES256")
+                    .is_err()
+            );
         }
-        assert!(verify_compact_jwt_with_public_jwk(&signed_token().0, &jwk, "PS256").is_err());
+        assert!(verify_compact_jwt_with_public_jwk(&token, &jwk, "PS256").is_err());
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn direct_jose_inputs_are_bounded_before_decode_and_key_parsing() {
         let oversized =
             "secret-sentinel".repeat(MAX_COMPACT_JWT_BYTES / "secret-sentinel".len() + 1);
@@ -452,6 +462,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
     fn verifies_detached_raw_and_der_ecdsa_signatures() {
         let (token, jwk) = signed_token();
         let parts: Vec<&str> = token.split('.').collect();

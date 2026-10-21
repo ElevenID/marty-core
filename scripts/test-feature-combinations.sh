@@ -73,37 +73,41 @@ info "Cargo target dir: $CARGO_TARGET_DIR"
 # =============================================================================
 info "── marty-crypto ──"
 
-run_check \
-    "marty-crypto: ecdsa alone" \
+run_check_xfail \
+    "marty-crypto: removed ecdsa umbrella feature" \
     cargo check -p marty-crypto --no-default-features --features ecdsa
 
-run_check \
-    "marty-crypto: eddsa alone" \
+run_check_xfail \
+    "marty-crypto: removed eddsa umbrella feature" \
     cargo check -p marty-crypto --no-default-features --features eddsa
 
-run_check \
-    "marty-crypto: bbs standalone" \
+run_check_xfail \
+    "marty-crypto: removed BBS signing feature" \
     cargo check -p marty-crypto --no-default-features --features bbs
 
 run_check \
+    "marty-crypto: BBS verification and holder proofs" \
+    cargo test -p marty-crypto --no-default-features --features bbs-verification
+
+run_check \
     "marty-crypto: symmetric + kdf" \
-    cargo check -p marty-crypto --no-default-features --features symmetric,kdf
+    cargo test -p marty-crypto --no-default-features --features symmetric,kdf
 
 run_check \
     "marty-crypto: default features" \
     cargo test -p marty-crypto
 
 run_check \
-    "marty-crypto: explicit algorithm mix (ecdsa,rsa,x509)" \
-    cargo test -p marty-crypto --no-default-features --features ecdsa,rsa,x509
+    "marty-crypto: explicit verification mix" \
+    cargo test -p marty-crypto --no-default-features --features signature-verification,x509
 
 run_check \
     "marty-crypto: CRL verification without builders" \
     cargo check -p marty-crypto --no-default-features --features crl
 
 run_check \
-    "marty-crypto: full feature set" \
-    cargo test -p marty-crypto --no-default-features --features full
+    "marty-crypto: non-publishable local fixture support" \
+    cargo test -p marty-crypto-test-support
 
 # =============================================================================
 # 2. marty-verification — trust chain isolation + clients
@@ -129,10 +133,6 @@ run_check \
 run_check \
     "marty-verification: default features" \
     cargo build -p marty-verification
-
-run_check \
-    "marty-verification: explicit authority issuance" \
-    cargo test -p marty-verification --no-default-features --features authority-issuance issuance::tests
 
 run_check \
     "marty-verification: full client stack" \

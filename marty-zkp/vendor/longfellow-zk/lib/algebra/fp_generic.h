@@ -26,6 +26,7 @@
 #include "algebra/static_string.h"
 #include "algebra/sysdep.h"
 #include "util/panic.h"
+#include "util/secure_wipe.h"
 
 namespace proofs {
 struct PrimeFieldTypeTag {};
@@ -52,6 +53,12 @@ class FpGeneric {
   static constexpr bool kCharacteristicTwo = false;
   static constexpr bool kSupportsDot = true;
   static constexpr size_t kNPolyEvaluationPoints = 6;
+
+  // Number of extra 64-bit limbs for the accumulator.  The
+  // accumulator is designed to store dot products of length less than
+  // 2^64, so (2*W64 + 1) 64-bit words is enough.  We name the
+  // constant to document all places where this choice matters.
+  static constexpr size_t kAccumulatorExtraW64 = 1;
   N m_;
   size_t exact_bits_;
 
@@ -61,6 +68,14 @@ class FpGeneric {
     N n;
     bool operator==(const Elt& y) const { return n == y.n; }
     bool operator!=(const Elt& y) const { return !operator==(y); }
+
+    bool constant_time_eq(const Elt& y) const {
+      return n.constant_time_eq(y.n);
+    }
+    Elt& cmovnz(limb_t nz, const Elt& y) {
+      n.cmovnz(nz, y.n);
+      return *this;
+    }
   };
 
   explicit FpGeneric(const N& modulus)
@@ -105,6 +120,7 @@ class FpGeneric {
         inv_small_scalars_[i] = invertf(poly_evaluation_points_[i]);
       }
     }
+    accum_scale_ = reduce_scale<kAccumulatorExtraW64>().e;
   }
 
   explicit FpGeneric(const StaticString s) : FpGeneric(N(s)) {}
@@ -344,13 +360,26 @@ class FpGeneric {
   // an exact multiple of the number of limbs.
   Elt sample(
       const std::function<void(size_t n, uint8_t buf[])>& fill_bytes) const {
-    size_t total_l = (exact_bits_ + 7) / 8;
-    uint8_t buf[kBytes] = {0};
+    std::array<uint8_t, kBytes> buf{};
+    N candidate{};
+    return sample_with_scratch(fill_bytes, buf, candidate);
+  }
+
+  // Scratch-aware sampling seam used to verify that every exit path clears
+  // the random bytes and decoded candidate. Normal callers should use sample.
+  Elt sample_with_scratch(
+      const std::function<void(size_t n, uint8_t buf[])>& fill_bytes,
+      std::array<uint8_t, kBytes>& buf, N& candidate) const {
+    SecureObjectWipeGuard<std::array<uint8_t, kBytes>> wipe_buf(buf);
+    SecureObjectWipeGuard<N> wipe_candidate(candidate);
+    const size_t total_l = (exact_bits_ + 7) / 8;
     for (;;) {
-      fill_bytes(total_l, buf);
-      N an = N::of_bytes(buf, exact_bits_);
-      if (an < m_) {
-        return to_montgomery(an);
+      secure_wipe_object(buf);
+      secure_wipe_object(candidate);
+      fill_bytes(total_l, buf.data());
+      candidate = N::of_bytes(buf.data(), exact_bits_);
+      if (candidate < m_) {
+        return to_montgomery(candidate);
       }
     }
   }
@@ -399,10 +428,30 @@ class FpGeneric {
     Elt e;
   };
   CElt as_counter(uint64_t a) const { return CElt{of_scalar_field(a)}; }
+  CElt negf(const CElt& a) const { return CElt{negf(a.e)}; }
 
   // Convert a counter into *some* field element such that the counter is
   // zero (as a counter) iff the field element is zero.
   Elt znz_indicator(const CElt& celt) const { return celt.e; }
+
+  // accumulators
+  struct Accum {
+    Nat<2 * W64 + kAccumulatorExtraW64> acc;
+  };
+
+  Elt reduce(const Accum& a) const {
+    Elt r;
+    r.n = reduce_nat(a.acc);
+    mul(r, accum_scale_);
+    return r;
+  }
+
+  void mac(Accum& a, const Elt& x, const Elt& y) const {
+    if (optimized_mul && (x == zero() || y == zero())) {
+      return;
+    }
+    a.acc.mac(x.n, y.n);
+  }
 
   // dot product
   struct NatScaledForDot {
@@ -488,14 +537,16 @@ class FpGeneric {
   // private to prevent misuse.
   Elt of_charp(const char* s) const {
     Elt a(k_[0]);
+    size_t zbase = 10;
     Elt base = of_scalar(10);
     if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
       s += 2;
+      zbase = 16;
       base = of_scalar(16);
     }
 
     for (; *s; s++) {
-      Elt d = of_scalar(digit(*s));
+      Elt d = of_scalar(digit(*s, zbase));
       mul(a, base);
       add(a, d);
     }
@@ -527,6 +578,7 @@ class FpGeneric {
   Elt mone_;  // minus one
   Elt poly_evaluation_points_[kNPolyEvaluationPoints];
   Elt inv_small_scalars_[kNPolyEvaluationPoints];
+  Elt accum_scale_;
 };
 }  // namespace proofs
 

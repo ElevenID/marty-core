@@ -34,6 +34,8 @@ Repository = "https://github.com/ElevenID/marty-core"
 Documentation = "https://docs.marty.dev"
 
 [tool.maturin]
+# Local interpreter caches and repository rules are not package data.
+exclude = ["**/__pycache__/**", "**/*.pyc", "**/.gitignore"]
 python-source = "python"
 module-name = "marty_verification_py._marty_verification"
 python-packages = ["marty_verification_py", "marty_verification"]

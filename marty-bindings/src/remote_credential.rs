@@ -2,7 +2,8 @@ use base64::Engine;
 use marty_oid4vci::signer::MAX_REMOTE_RSA_SIGNATURE_BYTES;
 use marty_oid4vci::{
     remote_credential::{
-        prepare_remote_jwt_vc, prepare_remote_sd_jwt, RemoteJwtVcRequest, RemoteSdJwtRequest,
+        prepare_remote_jwt_vc, prepare_remote_sd_jwt, prepare_remote_sd_jwt_batch,
+        RemoteJwtVcRequest, RemoteSdJwtBatchItem, RemoteSdJwtRequest,
     },
     types::SignedCredential,
 };
@@ -104,6 +105,7 @@ mod signature_decode_tests {
     issuer_id,
     verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     subject_id,
     credential_type,
     claims_json,
@@ -118,6 +120,7 @@ fn oid4vci_prepare_sd_jwt(
     issuer_id: &str,
     verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     subject_id: Option<&str>,
     credential_type: &str,
     claims_json: &str,
@@ -138,6 +141,7 @@ fn oid4vci_prepare_sd_jwt(
         issuer_id: issuer_id.to_owned(),
         verification_method_id: verification_method_id.to_owned(),
         algorithm: algorithm.to_owned(),
+        issuer_public_jwk: issuer_public_jwk_json.to_owned(),
         subject_id: subject_id.map(str::to_owned),
         credential_type: credential_type.to_owned(),
         claims: parse_claims(claims_json)?,
@@ -152,6 +156,73 @@ fn oid4vci_prepare_sd_jwt(
     Ok(PreparedRemoteCredential {
         inner: Some(PreparedCredential::SdJwt(prepared)),
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteSdJwtBatchInput {
+    batch_id: u64,
+    issuer_id: String,
+    verification_method_id: String,
+    algorithm: String,
+    issuer_public_jwk: String,
+    subject_id: Option<String>,
+    credential_type: String,
+    claims: std::collections::HashMap<String, serde_json::Value>,
+    expiration_seconds: Option<i64>,
+    #[serde(default)]
+    selective_disclosure_claims: Vec<String>,
+    credential_format: Option<String>,
+    credential_id: Option<String>,
+    holder_jwk: Option<serde_json::Value>,
+    #[serde(default)]
+    issuer_certificate_chain: Vec<String>,
+}
+
+/// Prepare a caller-ordered batch while retaining each opaque signing handle
+/// in Rust. Sign each exact input and use the existing SD-JWT assembler.
+#[pyfunction]
+fn oid4vci_prepare_sd_jwt_batch(
+    batch_json: &str,
+) -> PyResult<Vec<(u64, PreparedRemoteCredential)>> {
+    let batch: Vec<RemoteSdJwtBatchInput> = serde_json::from_str(batch_json)
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid remote SD-JWT batch JSON"))?;
+    let batch = batch
+        .into_iter()
+        .map(|item| {
+            RemoteSdJwtBatchItem::new(
+                item.batch_id,
+                RemoteSdJwtRequest {
+                    issuer_id: item.issuer_id,
+                    verification_method_id: item.verification_method_id,
+                    algorithm: item.algorithm,
+                    issuer_public_jwk: item.issuer_public_jwk,
+                    subject_id: item.subject_id,
+                    credential_type: item.credential_type,
+                    claims: item.claims,
+                    expiration_seconds: item.expiration_seconds,
+                    selective_disclosure_claims: item.selective_disclosure_claims,
+                    credential_format: item.credential_format,
+                    credential_id: item.credential_id,
+                    holder_jwk: item.holder_jwk,
+                    issuer_certificate_chain: item.issuer_certificate_chain,
+                },
+            )
+        })
+        .collect();
+    let prepared = prepare_remote_sd_jwt_batch(batch).map_err(remote_pyerr)?;
+    Ok(prepared
+        .into_iter()
+        .map(|item| {
+            let batch_id = item.batch_id();
+            (
+                batch_id,
+                PreparedRemoteCredential {
+                    inner: Some(PreparedCredential::SdJwt(item.into_prepared_sd_jwt())),
+                },
+            )
+        })
+        .collect())
 }
 
 #[pyfunction]
@@ -208,6 +279,7 @@ fn assemble_sd_jwt_impl(
     issuer_id,
     verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     subject_id,
     credential_type,
     claims_json,
@@ -221,6 +293,7 @@ fn oid4vci_prepare_jwt_vc(
     issuer_id: &str,
     verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     subject_id: Option<&str>,
     credential_type: &str,
     claims_json: &str,
@@ -242,6 +315,7 @@ fn oid4vci_prepare_jwt_vc(
         issuer_id: issuer_id.to_owned(),
         verification_method_id: verification_method_id.to_owned(),
         algorithm: algorithm.to_owned(),
+        issuer_public_jwk: issuer_public_jwk_json.to_owned(),
         subject_id: subject_id.map(str::to_owned),
         credential_type: credential_type.to_owned(),
         claims: parse_claims(claims_json)?,
@@ -268,6 +342,7 @@ fn oid4vci_prepare_jwt_vc(
     issuer_id,
     verification_method_id,
     algorithm,
+    issuer_public_jwk_json,
     subject_id,
     credential_type,
     claims_json,
@@ -281,6 +356,7 @@ fn oid4vci_prepare_open_badge_v3_jwt_vc(
     issuer_id: &str,
     verification_method_id: &str,
     algorithm: &str,
+    issuer_public_jwk_json: &str,
     subject_id: Option<&str>,
     credential_type: &str,
     claims_json: &str,
@@ -293,6 +369,7 @@ fn oid4vci_prepare_open_badge_v3_jwt_vc(
         issuer_id,
         verification_method_id,
         algorithm,
+        issuer_public_jwk_json,
         subject_id,
         credential_type,
         claims_json,
@@ -351,6 +428,7 @@ fn assemble_jwt_vc_impl(
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PreparedRemoteCredential>()?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_sd_jwt, m)?)?;
+    m.add_function(wrap_pyfunction!(oid4vci_prepare_sd_jwt_batch, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_assemble_sd_jwt, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_jwt_vc, m)?)?;
     m.add_function(wrap_pyfunction!(oid4vci_prepare_open_badge_v3_jwt_vc, m)?)?;
@@ -361,6 +439,19 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marty_crypto_test_support::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
+
+    fn issuer_public_jwk() -> String {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/public_issuer_jwks.json"))
+                .unwrap();
+        vectors["ES256"].to_string()
+    }
+
+    fn sign_payload(signer: &ScopedTransitSigner, payload: &[u8]) -> String {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signer.sign(payload).expect("remote test signature"))
+    }
 
     fn decode_segment(segment: &str) -> serde_json::Value {
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -375,6 +466,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -406,6 +498,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -422,11 +515,79 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped issuer signer"]
+    fn remote_sd_jwt_batch_binding_preserves_route_and_assembly_handle() {
+        Python::initialize();
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../marty-oid4vci/tests/contracts/sd_jwt_remote_batch_v1.json"
+        ))
+        .unwrap();
+        let item = |case: &serde_json::Value| {
+            serde_json::json!({
+                "batch_id": case["batch_id"],
+                "issuer_id": contract["issuer_id"],
+                "verification_method_id": contract["verification_method_id"],
+                "algorithm": contract["algorithm"],
+                "issuer_public_jwk": signer.public_jwk(),
+                "subject_id": contract["subject_id"],
+                "credential_type": contract["credential_type"],
+                "claims": contract["claims"],
+                "expiration_seconds": contract["expiration_seconds"],
+                "selective_disclosure_claims": contract["selectors"],
+                "credential_format": contract["typ"],
+                "credential_id": case["credential_id"],
+                "holder_jwk": contract["confirmation"]["jwk"],
+                "issuer_certificate_chain": contract["x5c"],
+            })
+        };
+        let input = serde_json::Value::Array(
+            contract["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(item)
+                .collect(),
+        )
+        .to_string();
+        let prepared = oid4vci_prepare_sd_jwt_batch(&input).expect("batch preparation");
+        assert_eq!(prepared.len(), contract["items"].as_array().unwrap().len());
+        for (case, (route, mut handle)) in
+            contract["items"].as_array().unwrap().iter().zip(prepared)
+        {
+            assert_eq!(route, case["batch_id"].as_u64().unwrap());
+            let signing_input = match handle.inner.as_ref().unwrap() {
+                PreparedCredential::SdJwt(state) => state.signing_input().to_owned(),
+                _ => panic!("expected SD-JWT state"),
+            };
+            let header = decode_segment(signing_input.split('.').next().unwrap());
+            let payload = decode_segment(signing_input.split('.').nth(1).unwrap());
+            assert_eq!(header["kid"], contract["verification_method_id"]);
+            assert_eq!(payload["iss"], contract["issuer_id"]);
+            let (compact, credential_id) = assemble_sd_jwt_impl(
+                &mut handle,
+                &sign_payload(&signer, signing_input.as_bytes()),
+            )
+            .unwrap();
+            assert!(compact.starts_with(&format!("{signing_input}.")));
+            assert_eq!(credential_id, case["credential_id"].as_str().unwrap());
+        }
+        assert!(
+            oid4vci_prepare_sd_jwt_batch("[{\"batch_id\":1,\"unknown\":true}]")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Invalid remote SD-JWT batch JSON")
+        );
+    }
+
+    #[test]
     fn remote_jwt_vc_preparation_preserves_explicit_subject_and_status() {
         let prepared = oid4vci_prepare_jwt_vc(
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "AccessBadge",
             r#"{"credentialStatus":{"type":"BitstringStatusListEntry"}}"#,
@@ -464,6 +625,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "open_badge",
             r#"{"achievement_name":"Member Badge","achievement_description":"Verified member","email":"holder@example.test"}"#,
@@ -494,6 +656,7 @@ mod tests {
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            &issuer_public_jwk(),
             Some("did:key:holder"),
             "open_badge",
             r#"{"achievement_name":"Member Badge"}"#,
@@ -507,11 +670,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped issuer signer"]
     fn malformed_remote_signature_does_not_consume_sd_jwt_state() {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
         let mut prepared = oid4vci_prepare_sd_jwt(
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            signer.public_jwk(),
             None,
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -528,20 +694,23 @@ mod tests {
         assert!(assemble_sd_jwt_impl(&mut prepared, &malformed).is_err());
         assert!(prepared.inner.is_some());
 
-        let mut valid_signature = [0u8; 64];
-        valid_signature[31] = 1;
-        valid_signature[63] = 1;
-        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
-        assert!(assemble_sd_jwt_impl(&mut prepared, &valid_width).is_ok());
+        let signature = match prepared.inner.as_ref().unwrap() {
+            PreparedCredential::SdJwt(state) => sign_payload(&signer, state.signing_payload()),
+            _ => unreachable!(),
+        };
+        assert!(assemble_sd_jwt_impl(&mut prepared, &signature).is_ok());
         assert!(prepared.inner.is_none());
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped issuer signer"]
     fn malformed_remote_signature_does_not_consume_jwt_vc_state() {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
         let mut prepared = oid4vci_prepare_jwt_vc(
             "did:web:issuer.example",
             "did:web:issuer.example#key-1",
             "ES256",
+            signer.public_jwk(),
             None,
             "AccessBadge",
             r#"{"name":"Alice"}"#,
@@ -557,11 +726,11 @@ mod tests {
         assert!(assemble_jwt_vc_impl(&mut prepared, &malformed).is_err());
         assert!(prepared.inner.is_some());
 
-        let mut valid_signature = [0u8; 64];
-        valid_signature[31] = 1;
-        valid_signature[63] = 1;
-        let valid_width = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(valid_signature);
-        assert!(assemble_jwt_vc_impl(&mut prepared, &valid_width).is_ok());
+        let signature = match prepared.inner.as_ref().unwrap() {
+            PreparedCredential::JwtVc(state) => sign_payload(&signer, state.signing_payload()),
+            _ => unreachable!(),
+        };
+        assert!(assemble_jwt_vc_impl(&mut prepared, &signature).is_ok());
         assert!(prepared.inner.is_none());
     }
 }

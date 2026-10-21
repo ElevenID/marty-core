@@ -32,7 +32,7 @@
 //!
 //! ```rust,ignore
 //! use marty_oid4vci::issuer::IssuanceEngine;
-//! use marty_oid4vci::types::{IssuerConfig, IssuerKey, OfferConfig, SigningAlgorithm};
+//! use marty_oid4vci::types::{IssuerConfig, OfferConfig};
 //!
 //! let config = IssuerConfig { /* ... */ };
 //! let engine = IssuanceEngine::new(config);
@@ -46,35 +46,48 @@
 //! }).unwrap();
 //! ```
 
-#[cfg(all(
-    feature = "kms-only",
-    any(feature = "holder-key-operations", feature = "local-key-operations")
-))]
-compile_error!("kms-only builds cannot include local issuer or holder key operations");
+#[cfg(test)]
+extern crate self as marty_oid4vci;
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "../tests/support/openbao_transit.rs"]
+mod openbao_transit;
 
 mod bounded_jwt;
 pub mod discovery;
 pub mod error;
 pub mod formats;
-#[cfg(any(test, feature = "holder-key-operations"))]
-pub mod holder_key;
 pub mod issuance_input;
 #[cfg(feature = "issuer")]
 pub mod issuer;
+#[cfg(any(test, feature = "jose-verification"))]
 pub mod jose;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
+#[cfg(any(feature = "wallet", feature = "lti"))]
+mod network;
 pub mod offer_uri;
+#[cfg(feature = "jose-verification")]
 pub mod oidc;
 pub mod presentation_request;
 pub mod proof;
-#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
+#[cfg(all(
+    feature = "issuer",
+    any(
+        all(feature = "mso_mdoc", feature = "sd_jwt"),
+        all(test, feature = "sd_jwt")
+    )
+))]
 pub mod remote_credential;
 #[cfg(any(test, feature = "issuer"))]
 pub mod signer;
-#[cfg(all(feature = "issuer", feature = "mso_mdoc", feature = "sd_jwt"))]
+#[cfg(all(
+    feature = "issuer",
+    any(test, all(feature = "mso_mdoc", feature = "sd_jwt"))
+))]
 pub mod signing_batch;
+#[cfg(feature = "jose-verification")]
 pub mod siop;
 pub mod types;
 #[cfg(feature = "verifier")]
@@ -87,13 +100,7 @@ pub mod wallet;
 mod wallet_sd_jwt;
 
 pub use error::{Oid4vciError, Oid4vciResult};
-#[cfg(feature = "holder-key-operations")]
-pub use holder_key::{
-    generate_p256_did_jwk_holder_key, p256_did_jwk_holder_key_from_private_jwk,
-    DidJwkHolderKeyMaterial,
-};
 
-#[cfg(not(feature = "local-key-operations"))]
 /// The default issuer surface cannot construct or use an in-process issuer key.
 ///
 /// ```compile_fail
@@ -122,7 +129,15 @@ pub use holder_key::{
 /// ```
 mod local_issuer_key_compile_boundary {}
 
-#[cfg(not(feature = "holder-key-operations"))]
+// These suites stay crate-internal because automatic integration tests are
+// disabled. Wallet verification uses a public vector signed by remote keys.
+#[cfg(test)]
+#[path = "../tests/issuance_input.rs"]
+mod issuance_input_tests;
+#[cfg(all(test, feature = "wallet"))]
+#[path = "../tests/sd_jwt_wallet_verified_presentation.rs"]
+mod sd_jwt_wallet_verified_presentation;
+
 /// Issuer and verifier artifacts cannot create holder proof keys.
 ///
 /// ```compile_fail
@@ -177,7 +192,10 @@ pub use wallet::{
     PresentationRequestQueryType, PresentationResponse, WalletEngine, ZkProofEntry,
 };
 #[cfg(feature = "wallet")]
-pub use wallet_sd_jwt::{ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver};
+pub use wallet_sd_jwt::{
+    PreparedSdJwtPresentation, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
+    TrustedSdJwtIssuerKeys, VerifiedSdJwtCredential,
+};
 
 #[cfg(feature = "lti")]
 pub use lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};

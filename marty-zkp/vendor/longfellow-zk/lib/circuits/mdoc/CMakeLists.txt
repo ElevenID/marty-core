@@ -28,6 +28,9 @@ add_library(mdoc_static STATIC
 proofs_add_test(mdoc_signature_test)
 target_link_libraries(mdoc_signature_test mdoc)
 
+proofs_add_test(mdoc_parser_test)
+target_link_libraries(mdoc_parser_test mdoc)
+
 #proofs_add_test(zk_spec_test)
 #target_link_libraries(zk_spec_test mdoc)
 

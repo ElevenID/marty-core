@@ -3,40 +3,28 @@
 
 from __future__ import annotations
 
-import re
 import sys
 import tomllib
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FORBIDDEN_CRYPTO_FEATURES = {
+REMOVED_CRYPTO_FEATURES = {
     "default",
     "full",
+    "bbs",
     "cert-builder",
     "crl-builder",
-    "keygen",
-    "sod-builder",
-}
-FORBIDDEN_KMS_CRYPTO_FEATURES = FORBIDDEN_CRYPTO_FEATURES | {
-    "bbs",
+    "ecdsa",
     "ecdsa-local-signing",
+    "eddsa",
     "eddsa-local-signing",
+    "keygen",
     "pkcs12",
     "private-key-codec",
+    "rsa",
     "rsa-local-signing",
     "serialization",
-}
-KMS_GUARDED_CRYPTO_FEATURES = {
-    "bbs",
-    "cert-builder",
-    "crl-builder",
-    "ecdsa-local-signing",
-    "eddsa-local-signing",
-    "keygen",
-    "pkcs12",
-    "private-key-codec",
-    "rsa-local-signing",
     "sod-builder",
 }
 
@@ -53,15 +41,30 @@ def require(condition: bool, message: str) -> None:
 
 def check_repository(root: Path = ROOT) -> None:
     workspace = load_toml(root / "Cargo.toml")
+    canonical_digest = load_toml(root / "marty-canonical-digest" / "Cargo.toml")
     crypto = load_toml(root / "marty-crypto" / "Cargo.toml")
     verification = load_toml(root / "marty-verification" / "Cargo.toml")
     oid4vci = load_toml(root / "marty-oid4vci" / "Cargo.toml")
     iso18013 = load_toml(root / "marty-iso18013" / "Cargo.toml")
     didcomm = load_toml(root / "marty-didcomm" / "Cargo.toml")
     bindings = load_toml(root / "marty-bindings" / "Cargo.toml")
+    test_support = load_toml(root / "marty-crypto-test-support" / "Cargo.toml")
     verification_python = load_toml(root / "marty-verification" / "pyproject.toml")
 
     workspace_dependencies = workspace["workspace"]["dependencies"]
+    require(
+        set(canonical_digest["dependencies"]) == {"serde_json", "sha2"}
+        and not canonical_digest.get("build-dependencies")
+        and all(
+            dependency.get("workspace") is True
+            for dependency in canonical_digest["dependencies"].values()
+        )
+        and workspace_dependencies["marty-canonical-digest"]
+        == {"version": "0.2.2", "path": "marty-canonical-digest"}
+        and verification["dependencies"].get("marty-canonical-digest")
+        == {"workspace": True},
+        "canonical digest boundary must contain only shared JSON/SHA-256 and feed verification",
+    )
     for curve in ("p256", "p384", "p521"):
         dependency = workspace_dependencies[curve]
         require(
@@ -98,12 +101,12 @@ def check_repository(root: Path = ROOT) -> None:
 
     crypto_features = crypto["features"]
     require(
-        set(crypto_features["crl"]) == {"x509", "dep:pem-rfc7468"},
-        "CRL parsing must not enable builders",
+        crypto_features["default"] == [],
+        "marty-crypto defaults must not select local private-key capabilities",
     )
     require(
-        crypto_features["crl-builder"] == ["crl", "cert-builder"],
-        "CRL construction must remain an explicit builder feature",
+        set(crypto_features["crl"]) == {"x509", "dep:pem-rfc7468"},
+        "CRL parsing must not enable builders",
     )
     require(
         set(crypto_features["ocsp"]) == {"x509", "dep:x509-ocsp"},
@@ -120,14 +123,23 @@ def check_repository(root: Path = ROOT) -> None:
         "ECDSA verification must use verification-only primitives",
     )
     require(
-        {"ecdsa-core/signing", "p256/ecdsa", "p384/ecdsa", "p521/ecdsa"}
-        <= set(crypto_features["ecdsa-local-signing"]),
-        "ECDSA signing primitives must require the local-signing capability",
+        not (REMOVED_CRYPTO_FEATURES - {"default"}) & set(crypto_features),
+        "marty-crypto must not expose production-selectable private-key features",
     )
     require(
-        crypto["dependencies"]["ecdsa-core"].get("default-features") is False
-        and crypto["dependencies"]["ecdsa-core"].get("optional") is True,
-        "the direct ECDSA primitive dependency must be optional and default-free",
+        workspace_dependencies["rsa"].get("default-features") is False
+        and "pem" not in workspace_dependencies["rsa"].get("features", []),
+        "workspace RSA verification must not enable private-key PEM support",
+    )
+    require(
+        workspace_dependencies["ecdsa-core"].get("package") == "ecdsa"
+        and workspace_dependencies["ecdsa-core"].get("default-features") is False
+        and not workspace_dependencies["ecdsa-core"].get("features", [])
+        and crypto["dependencies"]["ecdsa-core"].get("workspace") is True
+        and crypto["dependencies"]["ecdsa-core"].get("optional") is True
+        and crypto["dependencies"]["ecdsa-core"].get("default-features") is not True
+        and not crypto["dependencies"]["ecdsa-core"].get("features", []),
+        "the direct ECDSA primitive dependency must inherit an optional, default-free workspace declaration",
     )
 
     verification_features = verification["features"]
@@ -137,38 +149,23 @@ def check_repository(root: Path = ROOT) -> None:
         "verification KMS enforcement must propagate to cryptographic dependencies",
     )
     require(
-        "authority-issuance" not in verification_features["default"],
-        "default verification must exclude authority issuance",
+        not {"authority-issuance", "cert-builder", "local-key-operations"}
+        & set(verification_features),
+        "marty-verification must not expose local-key or authority-builder features",
     )
     require(
-        set(verification_features["authority-issuance"])
-        == {
-            "csca",
-            "marty-crypto/sod-builder",
-            "cms/builder",
-            "x509-cert/builder",
-        },
-        "authority issuance must explicitly select CSCA verification and SOD construction",
+        "ephemeral-session-keys" not in verification_features["default"],
+        "default verification must not create protocol session keys",
     )
-
     for curve in ("p256", "p384", "p521"):
         require(
             verification["dependencies"][curve].get("features") == ["ecdsa-core"],
             f"marty-verification {curve} must select signature types without signing",
         )
     require(
-        {"p256/ecdh", "p384/ecdh"}
+        {"marty-crypto/kdf", "p256/ecdh", "p384/ecdh"}
         <= set(verification_features["ephemeral-session-keys"]),
-        "curve ECDH must require the explicit ephemeral-session-keys capability",
-    )
-    require(
-        "authority-issuance" in verification_features["full"],
-        "the explicitly feature-complete matrix must continue to exercise authority issuance",
-    )
-
-    require(
-        "python" not in verification["features"]["local-key-operations"],
-        "native and browser local-key operations must not select Python bindings",
+        "session KDF and curve ECDH must require the explicit ephemeral-session-keys capability",
     )
     verification_crypto = verification["dependencies"]["marty-crypto"]
     require(
@@ -176,8 +173,12 @@ def check_repository(root: Path = ROOT) -> None:
         "marty-verification must disable marty-crypto defaults",
     )
     require(
-        not (set(verification_crypto["features"]) & FORBIDDEN_CRYPTO_FEATURES),
+        not (set(verification_crypto["features"]) & REMOVED_CRYPTO_FEATURES),
         "marty-verification normal dependencies must exclude authority-only crypto features",
+    )
+    require(
+        "kdf" not in verification_crypto["features"],
+        "passive marty-verification builds must not compile key derivation",
     )
 
     oid4vci_crypto = oid4vci["dependencies"]["marty-crypto"]
@@ -202,43 +203,52 @@ def check_repository(root: Path = ROOT) -> None:
         "remote-signature issuer assembly must select signature codecs without signing",
     )
     require(
-        oid4vci["dependencies"]["k256"].get("default-features") is False
+        oid4vci["dependencies"]["ecdsa-core"].get("workspace") is True
+        and oid4vci["dependencies"]["ecdsa-core"].get("default-features") is not True
+        and oid4vci["dependencies"]["ecdsa-core"].get("features") == ["verifying"],
+        "OID4VCI ECDSA primitives must remain verification-only",
+    )
+    require(
+        workspace_dependencies["k256"].get("default-features") is False
+        and not workspace_dependencies["k256"].get("features", [])
+        and oid4vci["dependencies"]["k256"].get("workspace") is True
+        and oid4vci["dependencies"]["k256"].get("default-features") is not True
         and set(oid4vci["dependencies"]["k256"].get("features", []))
         == {"arithmetic", "ecdsa-core", "sha256"},
         "secp256k1 proof verification must omit combined signing support",
     )
     require(
-        oid4vci["dependencies"]["ssi-crypto"].get("optional") is True
-        and not oid4vci["dependencies"]["ssi-crypto"].get("features", [])
+        workspace_dependencies["ssi-jwk"].get("default-features") is False
+        and not workspace_dependencies["ssi-jwk"].get("features", [])
+        and oid4vci["dependencies"]["ssi-jwk"].get("workspace") is True
+        and oid4vci["dependencies"]["ssi-jwk"].get("default-features") is not True
+        and "ssi-crypto" not in oid4vci["dependencies"]
         and not oid4vci["dependencies"]["ssi-jwk"].get("features", []),
-        "SSI signing and key-generation algorithms must be absent from normal roles",
+        "SSI signing and key-generation algorithms must be absent from production dependencies",
     )
     require(
-        {
-            "dep:ssi-crypto",
-            "ssi-crypto/ed25519",
-            "ssi-crypto/secp256r1",
-            "ssi-crypto/secp256k1",
-            "ssi-crypto/secp384r1",
-            "ssi-jwk/ed25519",
-            "ssi-jwk/secp256r1",
-            "ssi-jwk/secp256k1",
-            "ssi-jwk/secp384r1",
-        }
-        <= set(oid4vci["features"]["local-key-operations"]),
-        "legacy SSI signing support must require local-key-operations",
+        "local-key-operations" not in oid4vci["features"],
+        "OID4VCI local issuer keys must not be a downstream-selectable capability",
     )
     require(
         oid4vci["dependencies"]["jsonwebtoken"].get("default-features") is False
         and not oid4vci["dependencies"]["jsonwebtoken"].get("features", []),
         "jsonwebtoken crypto providers must be role-selected rather than globally enabled",
     )
+    issuer_features = set(oid4vci["features"]["issuer"])
+    verifier_features = set(oid4vci["features"]["verifier"])
     require(
-        "jsonwebtoken/rust_crypto" not in oid4vci["features"]["issuer"]
-        and "jsonwebtoken/rust_crypto" in oid4vci["features"]["verifier"]
+        oid4vci["features"]["jose-verification"]
+        == ["sd-jwt-rs/crypto-provider"]
+        and "jose-verification" in issuer_features
+        and "sd-jwt-rs/issuer-completion" in issuer_features
+        and "jose-verification" in verifier_features
+        and "sd-jwt-rs/verifier" in verifier_features
         and "jsonwebtoken/rust_crypto"
-        in oid4vci["features"]["holder-key-operations"],
-        "JWT crypto must be absent from issuer planning and explicit for verification/holders",
+        not in (issuer_features | verifier_features)
+        and "holder-key-operations" not in oid4vci["features"]
+        and "verifier" in oid4vci["features"]["wallet"],
+        "JWT verification must use the signing-free SD-JWT crypto provider for remote completion and verifier roles",
     )
 
     bindings_crypto = bindings["dependencies"]["marty-crypto"]
@@ -247,7 +257,7 @@ def check_repository(root: Path = ROOT) -> None:
         "released bindings must disable marty-crypto defaults",
     )
     require(
-        not (set(bindings_crypto["features"]) & FORBIDDEN_CRYPTO_FEATURES),
+        not (set(bindings_crypto["features"]) & REMOVED_CRYPTO_FEATURES),
         "released bindings must exclude authority-only crypto features",
     )
     require(
@@ -277,33 +287,33 @@ def check_repository(root: Path = ROOT) -> None:
             "local-key-operations",
         }
         & set(bindings["dependencies"]["marty-didcomm"].get("features", []))
-        and bindings["features"]["didcomm-local-keys"]
-        == [
-            "didcomm-encrypted-envelope",
-            "marty-didcomm/local-key-operations",
-        ],
-        "DIDComm software envelopes and caller-private-key APIs must require their own capabilities",
+        and "didcomm-local-keys" not in bindings["features"],
+        "released bindings must not expose caller-private-key DIDComm APIs",
     )
     require(
         didcomm["features"]["kms-only"] == []
         and didcomm["features"]["encrypted-envelope"]
         == ["dep:affinidi-messaging-didcomm"]
-        and didcomm["features"]["local-key-operations"]
-        == ["encrypted-envelope"]
+        and "local-key-operations" not in didcomm["features"]
         and didcomm["dependencies"]["affinidi-messaging-didcomm"].get("optional")
         is True
         and didcomm["dependencies"]["affinidi-messaging-didcomm"].get(
             "default-features"
         )
         is False
-        and "local-key-operations" in didcomm["features"]["default"],
+        and "local-key-operations" not in didcomm["features"]["default"]
+        and "encrypted-envelope" not in didcomm["features"]["default"],
         "DIDComm software envelopes must be explicit and absent from the KMS marker",
     )
     require(
         bindings["features"]["didcomm-encrypted-envelope"]
         == ["marty-didcomm/encrypted-envelope"]
-        and "didcomm-encrypted-envelope" in bindings["features"]["default"],
-        "bindings must preserve default DIDComm envelopes behind an explicit capability",
+        and "didcomm-encrypted-envelope" not in bindings["features"]["default"],
+        "bindings must keep DIDComm envelopes out of the default artifact",
+    )
+    require(
+        "local-key-operations" not in bindings["features"],
+        "released bindings must not offer a feature that restores private-key APIs",
     )
     require(
         didcomm["dependencies"]["p256"].get("features") == ["arithmetic"],
@@ -329,8 +339,9 @@ def check_repository(root: Path = ROOT) -> None:
         "ISO 18013 session cryptography must require an explicit capability",
     )
     require(
-        iso18013["features"]["default"] == ["session-protocol"],
-        "the historical ISO 18013 API must remain available in default builds",
+        set(iso18013["features"]["default"])
+        == {"session-protocol", "qr-render"},
+        "the historical ISO 18013 session and QR APIs must remain available in default builds",
     )
     require(
         bindings["dependencies"]["marty-iso18013"].get("default-features") is False
@@ -351,43 +362,116 @@ def check_repository(root: Path = ROOT) -> None:
 
     bindings_wheel = load_toml(root / "marty-bindings" / "pyproject.toml")
     bindings_wheel_config = bindings_wheel["tool"]["maturin"]
+    bindings_wheel_features = set(bindings_wheel_config["features"])
     require(
         bindings_wheel_config.get("no-default-features") is True
-        and "kms-only" in bindings_wheel_config["features"],
-        "the released aggregate wheel must use an explicit KMS-only feature set",
+        and bindings_wheel_features == {"extension-module", "kms-only"}
+        and bindings["features"].get("extension-module")
+        == ["pyo3/extension-module"],
+        "the released aggregate wheel must select its crate-level extension-module "
+        "alias and the explicit KMS-only feature set",
+    )
+
+    bindings_source = (root / "marty-bindings" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    require(
+        'feature = "local-key-operations"' not in bindings_source
+        and 'feature = "didcomm-local-keys"' not in bindings_source,
+        "binding source must not contain production-selectable private-key API gates",
+    )
+    for raw_secret_api in (
+        "aes_256_cbc_encrypt",
+        "aes_256_cbc_decrypt",
+        "hmac_sha256",
+    ):
+        require(
+            f"fn {raw_secret_api}" not in bindings_source,
+            f"aggregate Python bindings must not expose raw {raw_secret_api}",
+        )
+
+    verification_bindings_source = (
+        root / "marty-verification" / "src" / "bindings" / "crypto.rs"
+    ).read_text(encoding="utf-8")
+    for raw_secret_api in (
+        "hkdf_sha256",
+        "hkdf_sha384",
+        "pbkdf2_sha256",
+        "generate_random_bytes",
+        "aes_gcm_encrypt",
+        "aes_gcm_decrypt",
+        "tdes_cbc_encrypt",
+        "tdes_cbc_decrypt",
+    ):
+        require(
+            f"fn {raw_secret_api}" not in verification_bindings_source,
+            f"verification Python bindings must not expose raw {raw_secret_api}",
+        )
+
+    ci_source = (root / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    didcomm_boundary_condition = (
+        "contains(steps.affected.outputs.packages, 'marty-didcomm')"
+    )
+    require(
+        didcomm_boundary_condition in ci_source,
+        "DIDComm-only PRs must run the full encrypted-envelope/local-key agent suite",
+    )
+    ephemeral_binding_test = "ephemeral_session_module_exports_only_opaque_session_crypto"
+    require(
+        ephemeral_binding_test in ci_source
+        and f"fn {ephemeral_binding_test}" in bindings_source
+        and "ephemeral_session_module_does_not_restore_credential_keys" not in ci_source,
+        "CI must execute a currently defined opaque-session Python binding boundary test",
     )
 
     lib_source = (root / "marty-verification" / "src" / "lib.rs").read_text(
         encoding="utf-8"
     )
     require(
-        re.search(
-            r'#\[cfg\(feature = "authority-issuance"\)\]\s*pub mod issuance;',
-            lib_source,
-        )
-        is not None,
-        "the public issuance module must be gated by authority-issuance",
-    )
-    require(
-        re.search(r'#\[cfg\(feature = "csca"\)\]\s*pub mod issuance;', lib_source)
-        is None,
-        "ordinary CSCA verification must not expose authority issuance",
+        "pub mod issuance;" not in lib_source,
+        "marty-verification must not expose authority issuance",
     )
 
     crypto_source = (root / "marty-crypto" / "src" / "lib.rs").read_text(
         encoding="utf-8"
     )
-    for forbidden_feature in KMS_GUARDED_CRYPTO_FEATURES:
-        require(
-            f'feature = "{forbidden_feature}"' in crypto_source,
-            f"marty-crypto KMS guard must reject {forbidden_feature}",
-        )
-
-    benches = verification.get("bench", [])
-    kernel_bench = next(bench for bench in benches if bench["name"] == "verification_kernels")
     require(
-        kernel_bench.get("required-features") == ["authority-issuance"],
-        "the authority-dependent benchmark must select the authority feature",
+        not any(f'feature = "{feature}"' in crypto_source for feature in REMOVED_CRYPTO_FEATURES),
+        "marty-crypto source must not retain Cargo gates for removed private-key features",
+    )
+    require(
+        test_support["package"].get("publish") is False
+        and "marty-crypto-test-support" not in bindings["dependencies"]
+        and "marty-crypto-test-support" in bindings["dev-dependencies"],
+        "local signing fixtures must remain publish-disabled and dev-only",
+    )
+
+    def normal_or_build_dependency(table: object) -> bool:
+        if not isinstance(table, dict):
+            return False
+        for key, value in table.items():
+            # Workspace dependency declarations are inert until a member uses
+            # them; only member normal/build edges can ship test support.
+            if key == "workspace":
+                continue
+            if key in {"dependencies", "build-dependencies"} and isinstance(value, dict):
+                if "marty-crypto-test-support" in value:
+                    return True
+            if key != "dev-dependencies" and normal_or_build_dependency(value):
+                return True
+        return False
+
+    shipping_edges = [
+        str(manifest.relative_to(root))
+        for manifest in root.rglob("Cargo.toml")
+        if normal_or_build_dependency(load_toml(manifest))
+    ]
+    require(
+        not shipping_edges,
+        "marty-crypto-test-support must have no normal/build dependency edges; found: "
+        + ", ".join(shipping_edges),
     )
 
 

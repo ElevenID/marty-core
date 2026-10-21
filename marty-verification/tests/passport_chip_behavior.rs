@@ -135,7 +135,13 @@ fn rust_matches_shared_icao_bac_vector() {
     let command =
         ApduCommand::from_bytes(&hex::decode(vector.plain_select_ef_com).unwrap()).unwrap();
     assert_eq!(
-        hex::encode_upper(session.protect_command(&command).unwrap().to_bytes()),
+        hex::encode_upper(
+            session
+                .protect_command(&command)
+                .unwrap()
+                .to_bytes()
+                .unwrap()
+        ),
         vector.protected_select_ef_com
     );
 }
@@ -240,7 +246,7 @@ fn rust_matches_shared_apdu_behavior() {
         build_read_binary_commands(vector.read_length, vector.read_offset)
             .unwrap()
             .iter()
-            .map(|command| hex::encode_upper(command.to_bytes()))
+            .map(|command| hex::encode_upper(command.to_bytes().unwrap()))
             .collect::<Vec<_>>(),
         vector.read_commands
     );

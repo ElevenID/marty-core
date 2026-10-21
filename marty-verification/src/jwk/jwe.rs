@@ -24,23 +24,6 @@ const MODELED_JWE_HEADER_MEMBERS: [&str; 11] = [
     "alg", "enc", "typ", "cty", "kid", "jku", "jwk", "epk", "apu", "apv", "zip",
 ];
 
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct HaipSessionPrivateJwk {
-    kty: String,
-    crv: String,
-    x: String,
-    y: String,
-    d: zeroize::Zeroizing<String>,
-    #[serde(default)]
-    kid: Option<String>,
-    #[serde(default)]
-    alg: Option<String>,
-    #[serde(rename = "use", default)]
-    use_: Option<String>,
-}
-
 // ============================================================================
 // JWE Header
 // ============================================================================
@@ -192,111 +175,56 @@ fn decode_party_info(value: Option<&str>) -> VerificationResult<Vec<u8>> {
     Ok(decoded)
 }
 
-/// Generate a fresh P-256 key pair for one HAIP encrypted response.
+/// One-use HAIP response decryption state.
 ///
-/// The public and private JSON values carry the same random key identifier and
-/// JOSE encryption metadata. Callers may wrap the private JSON with their KMS,
-/// but key generation and JWK construction remain canonical Rust behavior.
+/// The private P-256 key never crosses the Rust API boundary. Callers receive
+/// only the public JWK and consume this object when decrypting one response.
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
-pub fn generate_haip_response_encryption_jwk_pair() -> VerificationResult<(String, String)> {
-    use elliptic_curve::sec1::ToEncodedPoint;
-    use p256::SecretKey;
-    use rand::rngs::OsRng;
-
-    let secret = SecretKey::random(&mut OsRng);
-    let point = secret.public_key().to_encoded_point(false);
-    let mut private = Jwk {
-        kty: "EC".to_string(),
-        crv: Some("P-256".to_string()),
-        x: Some(base64url_encode(point.x().ok_or_else(|| {
-            VerificationError::internal("HAIP P-256 key has no x coordinate".to_string())
-        })?)),
-        y: Some(base64url_encode(point.y().ok_or_else(|| {
-            VerificationError::internal("HAIP P-256 key has no y coordinate".to_string())
-        })?)),
-        d: Some(base64url_encode(&secret.to_bytes())),
-        ..Default::default()
-    };
-    private.kid = Some(format!("oid4vp-haip-{}", uuid::Uuid::new_v4()));
-    private.alg = Some("ECDH-ES".to_string());
-    private.use_ = Some("enc".to_string());
-    let public = private.to_public();
-    Ok((public.to_json()?, private.to_json()?))
-}
-
-/// Decrypt a bounded ECDH-ES compact JWE using a P-256 private JWK JSON value.
-///
-/// The private JSON is accepted only by this session-scoped HAIP entry point;
-/// generic [`Jwk::from_json`] remains public-key-only without
-/// `local-key-operations`.
-///
-/// ```
-/// use marty_verification::jwk::{
-///     decrypt_haip_response, generate_haip_response_encryption_jwk_pair,
-///     jwe_encrypt_direct, Jwk,
-/// };
-///
-/// let (public_json, private_json) = generate_haip_response_encryption_jwk_pair()?;
-/// let public = Jwk::from_json(&public_json)?;
-/// let encrypted = jwe_encrypt_direct(b"session payload", &public, "A256GCM")?;
-/// assert_eq!(decrypt_haip_response(&encrypted, &private_json)?, b"session payload");
-/// # Ok::<(), Box<marty_verification::VerificationError>>(())
-/// ```
-#[cfg(any(test, feature = "ephemeral-session-keys"))]
-pub fn decrypt_haip_response(
-    compact_jwe: &str,
-    private_jwk_json: &str,
-) -> VerificationResult<Vec<u8>> {
-    if private_jwk_json.len() > 16 * 1024 {
-        return Err(VerificationError::internal(
-            "HAIP private JWK exceeds the configured size limit".to_string(),
-        ));
-    }
-    let private_key = parse_haip_session_private_jwk(private_jwk_json)?;
-    validate_haip_response_header(compact_jwe)?;
-    jwe_decrypt_with_p256_session_key(compact_jwe, &private_key)
+pub struct HaipResponseDecryptionSession {
+    private_key: Option<p256::SecretKey>,
+    public_jwk: Jwk,
 }
 
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
-fn parse_haip_session_private_jwk(private_jwk_json: &str) -> VerificationResult<p256::SecretKey> {
-    use elliptic_curve::sec1::ToEncodedPoint;
-    use p256::SecretKey;
+impl HaipResponseDecryptionSession {
+    pub fn generate() -> VerificationResult<Self> {
+        use elliptic_curve::sec1::ToEncodedPoint;
+        use rand::rngs::OsRng;
 
-    let raw: HaipSessionPrivateJwk = serde_json::from_str(private_jwk_json).map_err(|_| {
-        VerificationError::internal("HAIP private session JWK is invalid".to_string())
-    })?;
-    if raw.kty != "EC"
-        || raw.crv != "P-256"
-        || raw.alg.as_deref().is_some_and(|alg| alg != "ECDH-ES")
-        || raw.use_.as_deref().is_some_and(|usage| usage != "enc")
-        || raw.kid.as_deref().is_some_and(str::is_empty)
-    {
-        return Err(VerificationError::internal(
-            "HAIP decryption requires a private P-256 ECDH-ES encryption JWK".to_string(),
-        ));
+        let private_key = p256::SecretKey::random(&mut OsRng);
+        let point = private_key.public_key().to_encoded_point(false);
+        let mut public_jwk = Jwk {
+            kty: "EC".to_string(),
+            crv: Some("P-256".to_string()),
+            x: Some(base64url_encode(point.x().ok_or_else(|| {
+                VerificationError::internal("HAIP P-256 key has no x coordinate".to_string())
+            })?)),
+            y: Some(base64url_encode(point.y().ok_or_else(|| {
+                VerificationError::internal("HAIP P-256 key has no y coordinate".to_string())
+            })?)),
+            ..Default::default()
+        };
+        public_jwk.kid = Some(format!("oid4vp-haip-{}", uuid::Uuid::new_v4()));
+        public_jwk.alg = Some("ECDH-ES".to_string());
+        public_jwk.use_ = Some("enc".to_string());
+        Ok(Self {
+            private_key: Some(private_key),
+            public_jwk,
+        })
     }
 
-    let secret_bytes = zeroize::Zeroizing::new(base64url_decode(raw.d.as_str())?);
-    let supplied_x = base64url_decode(&raw.x)?;
-    let supplied_y = base64url_decode(&raw.y)?;
-    if secret_bytes.len() != 32 || supplied_x.len() != 32 || supplied_y.len() != 32 {
-        return Err(VerificationError::internal(
-            "HAIP P-256 private and public parameters must be 32 bytes".to_string(),
-        ));
-    }
-    let secret = SecretKey::from_slice(&secret_bytes).map_err(|_| {
-        VerificationError::internal("HAIP P-256 private key is invalid".to_string())
-    })?;
-    let expected = secret.public_key().to_encoded_point(false);
-    if expected.x().is_none_or(|x| x.as_slice() != supplied_x)
-        || expected.y().is_none_or(|y| y.as_slice() != supplied_y)
-    {
-        return Err(VerificationError::internal(
-            "HAIP P-256 private and public JWK parameters do not match".to_string(),
-        ));
+    pub fn public_jwk_json(&self) -> VerificationResult<String> {
+        self.public_jwk.to_json()
     }
 
-    Ok(secret)
+    pub fn decrypt(mut self, compact_jwe: &str) -> VerificationResult<Vec<u8>> {
+        validate_haip_response_header(compact_jwe)?;
+        let private_key = self
+            .private_key
+            .take()
+            .ok_or_else(|| VerificationError::internal("HAIP session already consumed"))?;
+        jwe_decrypt_with_p256_session_key(compact_jwe, &private_key)
+    }
 }
 
 /// Validate a HAIP compact-JWE envelope before a caller performs KMS unwrap.
@@ -447,13 +375,8 @@ pub fn jwe_encrypt_direct(
     let shared_secret = zeroize::Zeroizing::new(shared_secret);
 
     // RFC 7518 section 4.6.2: direct ECDH-ES uses `enc` as AlgorithmID.
-    let cek = zeroize::Zeroizing::new(marty_crypto::kdf::concat_kdf_sha256(
-        &shared_secret,
-        enc.as_bytes(),
-        &[],
-        &[],
-        key_len,
-    )?);
+    let cek =
+        marty_crypto::kdf::concat_kdf_sha256(&shared_secret, enc.as_bytes(), &[], &[], key_len)?;
 
     // Generate IV
     use rand::RngCore;
@@ -627,18 +550,12 @@ fn parse_and_validate_direct_jwe(jwe: &str) -> VerificationResult<ParsedDirectJw
 /// # Returns
 ///
 /// Decrypted plaintext.
-#[cfg(any(
-    test,
-    all(feature = "ephemeral-session-keys", feature = "local-key-operations")
-))]
+#[cfg(test)]
 pub fn jwe_decrypt(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>> {
     jwe_decrypt_with_session_key(jwe, recipient_key)
 }
 
-#[cfg(any(
-    test,
-    all(feature = "ephemeral-session-keys", feature = "local-key-operations")
-))]
+#[cfg(test)]
 fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationResult<Vec<u8>> {
     let parsed = parse_and_validate_direct_jwe(jwe)?;
 
@@ -658,8 +575,6 @@ fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationR
 
             match (recipient_key.kty.as_str(), recipient_key.crv.as_deref()) {
                 ("OKP", Some("X25519")) => {
-                    use marty_crypto::ecdh::X25519KeyPair;
-
                     if epk.kty != "OKP" || epk.crv.as_deref() != Some("X25519") {
                         return Err(VerificationError::internal(
                             "ECDH-ES epk does not match the X25519 recipient key".to_string(),
@@ -689,9 +604,16 @@ fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationR
                         ));
                     }
 
-                    let keypair = X25519KeyPair::from_secret_key(&d_bytes)?;
-                    let shared = keypair.agree(&epk_bytes)?;
-                    shared.to_vec()
+                    let secret_bytes: [u8; 32] = d_bytes.as_slice().try_into().map_err(|_| {
+                        VerificationError::internal("X25519 private key must be 32 bytes")
+                    })?;
+                    let public_bytes: [u8; 32] = epk_bytes
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| VerificationError::internal("X25519 epk must be 32 bytes"))?;
+                    let secret = x25519_dalek::StaticSecret::from(secret_bytes);
+                    let public = x25519_dalek::PublicKey::from(public_bytes);
+                    secret.diffie_hellman(&public).as_bytes().to_vec()
                 }
                 ("EC", Some("P-256")) => {
                     use elliptic_curve::sec1::ToEncodedPoint;
@@ -834,13 +756,13 @@ fn decrypt_parsed_direct_jwe(
 ) -> VerificationResult<Vec<u8>> {
     let party_u_info = decode_party_info(parsed.header.apu.as_deref())?;
     let party_v_info = decode_party_info(parsed.header.apv.as_deref())?;
-    let cek = zeroize::Zeroizing::new(marty_crypto::kdf::concat_kdf_sha256(
+    let cek = marty_crypto::kdf::concat_kdf_sha256(
         shared_secret,
         parsed.header.enc.as_bytes(),
         &party_u_info,
         &party_v_info,
         parsed.key_len,
-    )?);
+    )?;
 
     // Combine ciphertext and tag for decryption
     let mut ciphertext_with_tag = parsed.ciphertext;
@@ -877,7 +799,7 @@ pub fn jwe_get_header(jwe: &str) -> VerificationResult<JweHeader> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{generate_ec_p256, generate_x25519};
+    use super::super::generate_x25519;
     use super::*;
 
     #[test]
@@ -956,44 +878,44 @@ mod tests {
     }
 
     #[test]
-    fn generated_haip_key_pair_has_matching_metadata() {
-        let (public_json, private_json) = generate_haip_response_encryption_jwk_pair().unwrap();
+    fn opaque_haip_session_exposes_only_public_metadata() {
+        let session = HaipResponseDecryptionSession::generate().unwrap();
+        let public_json = session.public_jwk_json().unwrap();
         let public = Jwk::from_json(&public_json).unwrap();
-        let private = Jwk::from_json(&private_json).unwrap();
 
         assert!(!public.is_private());
-        assert!(private.is_private());
-        assert_eq!(public.kid, private.kid);
+        assert_eq!(public.kty, "EC");
+        assert_eq!(public.crv.as_deref(), Some("P-256"));
+        assert!(public.kid.as_deref().is_some_and(|kid| !kid.is_empty()));
         assert_eq!(public.alg.as_deref(), Some("ECDH-ES"));
         assert_eq!(public.use_.as_deref(), Some("enc"));
         assert!(public_json.contains("\"use\":\"enc\""));
         assert!(!public_json.contains("\"use_\""));
-        assert_eq!(public.x, private.x);
-        assert_eq!(public.y, private.y);
+        assert!(!public_json.contains("\"d\""));
     }
 
     #[test]
-    fn haip_helper_decrypts_a256gcm() {
-        let (public_json, private_json) = generate_haip_response_encryption_jwk_pair().unwrap();
-        let public = Jwk::from_json(&public_json).unwrap();
+    fn opaque_haip_session_decrypts_a256gcm() {
+        let session = HaipResponseDecryptionSession::generate().unwrap();
+        let public = Jwk::from_json(&session.public_jwk_json().unwrap()).unwrap();
         let compact =
             jwe_encrypt_direct(b"{\"vp_token\":\"fixture\"}", &public, "A256GCM").unwrap();
 
         assert_eq!(
-            decrypt_haip_response(&compact, &private_json).unwrap(),
+            session.decrypt(&compact).unwrap(),
             b"{\"vp_token\":\"fixture\"}"
         );
     }
 
     #[test]
-    fn decrypts_jwcrypto_interoperability_vector() {
+    fn accepts_public_jwcrypto_interoperability_header() {
         let vector: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/vectors/haip_jwe.json")).unwrap();
-        let private_jwk = serde_json::to_string(&vector["private_jwk"]).unwrap();
-        validate_haip_response_header(vector["compact_jwe"].as_str().unwrap()).unwrap();
-        let plaintext =
-            decrypt_haip_response(vector["compact_jwe"].as_str().unwrap(), &private_jwk).unwrap();
-        assert_eq!(plaintext, vector["plaintext"].as_str().unwrap().as_bytes());
+        let header =
+            validate_haip_response_header(vector["compact_jwe"].as_str().unwrap()).unwrap();
+        assert_eq!(header.alg, "ECDH-ES");
+        assert_eq!(header.enc, "A256GCM");
+        assert!(!header.epk.unwrap().is_private());
     }
 
     #[test]
@@ -1028,26 +950,57 @@ mod tests {
     }
 
     #[test]
-    fn haip_rejects_inconsistent_private_and_public_parameters() {
-        let (_, private_json) = generate_haip_response_encryption_jwk_pair().unwrap();
-        let mut private = Jwk::from_json(&private_json).unwrap();
-        let other = generate_ec_p256().unwrap();
-        private.x = other.x;
-        private.y = other.y;
-        let compact = jwe_encrypt_direct(b"secret", &private.to_public(), "A256GCM").unwrap();
-        assert!(decrypt_haip_response(&compact, &private.to_json().unwrap()).is_err());
+    fn opaque_haip_session_rejects_wrong_recipient_key() {
+        let expected = HaipResponseDecryptionSession::generate().unwrap();
+        let wrong = HaipResponseDecryptionSession::generate().unwrap();
+        let public = Jwk::from_json(&expected.public_jwk_json().unwrap()).unwrap();
+        let compact = jwe_encrypt_direct(b"secret", &public, "A256GCM").unwrap();
+        assert!(wrong.decrypt(&compact).is_err());
+        assert_eq!(expected.decrypt(&compact).unwrap(), b"secret");
     }
 
     #[test]
-    fn haip_private_parser_accepts_only_the_session_key_schema() {
-        let (_, private_json) = generate_haip_response_encryption_jwk_pair().unwrap();
-        let mut private: serde_json::Value = serde_json::from_str(&private_json).unwrap();
-        private["p"] = serde_json::json!("credential-private-material");
-        assert!(parse_haip_session_private_jwk(&private.to_string()).is_err());
+    #[ignore = "requires Python cryptography external HAIP encryptor"]
+    fn opaque_haip_session_decrypts_external_python_jwe() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
 
-        let mut private: serde_json::Value = serde_json::from_str(&private_json).unwrap();
-        private["alg"] = serde_json::json!("ES256");
-        assert!(parse_haip_session_private_jwk(&private.to_string()).is_err());
+        let session = HaipResponseDecryptionSession::generate().unwrap();
+        let public = session.public_jwk_json().unwrap();
+        let python = std::env::var("MARTY_TEST_HAIP_PYTHON").unwrap_or_else(|_| {
+            if cfg!(windows) {
+                "python".to_string()
+            } else {
+                "python3".to_string()
+            }
+        });
+        let script = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/haip_external_encrypt.py"
+        );
+        let mut child = Command::new(python)
+            .arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(public.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "external HAIP encryptor failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let vector: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let compact = vector["compact_jwe"].as_str().unwrap();
+        let plaintext = vector["plaintext"].as_str().unwrap();
+        assert_eq!(session.decrypt(compact).unwrap(), plaintext.as_bytes());
     }
 
     #[test]

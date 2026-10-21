@@ -47,6 +47,6 @@ mod tests {
         let uri = engagement.to_qr_uri().unwrap();
         let (decoded, reader) = Reader::new().begin_qr_session(&uri).await.unwrap();
         assert_eq!(decoded.device_key, engagement.device_key);
-        assert_ne!(reader.public_key().await, decoded.device_key);
+        assert_ne!(reader.public_key().await.unwrap(), decoded.device_key);
     }
 }

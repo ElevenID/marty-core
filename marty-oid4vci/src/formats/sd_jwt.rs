@@ -12,29 +12,29 @@
 //!   SD JSONPath selectors: `$.credentialSubject.claim_name`
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-#[cfg(any(test, feature = "local-key-operations"))]
-use p256::pkcs8::EncodePrivateKey;
+#[cfg(any(test, feature = "issuer"))]
+use isomdl::{
+    definitions::DigestAlgorithm,
+    digest_executor::{DigestExecutor, DigestJob, SerialDigestExecutor},
+};
 #[cfg(any(test, feature = "issuer"))]
 use rand::RngCore;
-#[cfg(any(test, feature = "local-key-operations"))]
-use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
-#[cfg(any(test, feature = "local-key-operations"))]
-use sd_jwt_rs::SDJWTIssuer;
-#[cfg(any(test, feature = "local-key-operations", feature = "verifier"))]
+#[cfg(any(test, feature = "verifier"))]
 use sd_jwt_rs::SDJWTSerializationFormat;
 use sha2::{Digest, Sha256};
-#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
+#[cfg(any(test, feature = "issuer"))]
 use ssi_jwk::Params;
-#[cfg(any(test, feature = "issuer", feature = "local-key-operations"))]
+#[cfg(any(test, feature = "issuer"))]
 use ssi_jwk::JWK;
 
 use crate::error::{Oid4vciError, Oid4vciResult};
 #[cfg(any(test, feature = "issuer"))]
-use crate::signer::{validate_remote_signature, CredentialSigner};
-#[cfg(any(test, feature = "local-key-operations"))]
-use crate::types::IssuerKey;
+use crate::signer::{validate_signer_public_jwk, verify_remote_signature, CredentialSigner};
 #[cfg(any(test, feature = "issuer"))]
 use crate::types::{CredentialClaims, CredentialPayloadFormat, SignedCredential};
+
+#[cfg(any(test, feature = "issuer"))]
+const SD_JWT_BATCH_DIGEST_FAILURE: &str = "SD-JWT disclosure batch digest failed";
 
 #[cfg(any(test, feature = "issuer"))]
 const SD_JWT_EXPIRATION_OUT_OF_RANGE: &str = "SD-JWT expiration is out of range";
@@ -237,32 +237,6 @@ fn checked_sd_jwt_vcdm_expiration(
         .transpose()
 }
 
-/// Sign an SD-JWT verifiable credential.
-///
-/// Claims listed in `selective_disclosure_claims` will be made selectively
-/// disclosable. All other claims are included directly in the JWT payload.
-#[cfg(any(test, feature = "local-key-operations"))]
-pub fn sign_sd_jwt(
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-) -> Oid4vciResult<SignedCredential> {
-    sign_sd_jwt_with_optional_confirmation(issuer_key, claims, None)
-}
-
-/// Sign an SD-JWT bound to the public key that verified an OID4VCI proof.
-///
-/// Scalar local issuance uses this boundary after proof verification. Direct
-/// format issuance remains unbound because it has no proof context.
-#[cfg(any(test, all(feature = "issuer", feature = "local-key-operations")))]
-pub(crate) fn sign_sd_jwt_with_holder_public_jwk(
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-    holder_jwk: &JWK,
-) -> Oid4vciResult<SignedCredential> {
-    let confirmation = holder_public_jwk_confirmation(holder_jwk)?;
-    sign_sd_jwt_with_optional_confirmation(issuer_key, claims, Some(&confirmation))
-}
-
 #[cfg(any(test, feature = "issuer"))]
 fn holder_public_jwk_confirmation(holder_jwk: &JWK) -> Oid4vciResult<serde_json::Value> {
     let contains_private_material = match &holder_jwk.params {
@@ -289,164 +263,6 @@ fn holder_public_jwk_confirmation(holder_jwk: &JWK) -> Oid4vciResult<serde_json:
     }))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
-fn sign_sd_jwt_with_optional_confirmation(
-    issuer_key: &IssuerKey,
-    claims: &CredentialClaims,
-    confirmation: Option<&serde_json::Value>,
-) -> Oid4vciResult<SignedCredential> {
-    validate_sd_jwt_managed_claims(claims, false, confirmation.is_some())?;
-    validate_sd_jwt_structural_markers(claims, confirmation)?;
-    validate_sd_jwt_confirmation_inputs(claims, confirmation)?;
-
-    let jwk: JWK = serde_json::from_str(&issuer_key.jwk_json)
-        .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
-
-    let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now();
-
-    let vct = if claims.credential_type.is_empty() {
-        "VerifiableCredential".to_string()
-    } else {
-        claims.credential_type.clone()
-    };
-
-    // Build the JWT payload and SD JSONPath selectors based on the payload format.
-    let (mut payload, sd_path_prefix) = match &claims.credential_payload_format {
-        CredentialPayloadFormat::IetfSdJwt => {
-            // ── IETF flat SD-JWT VC ──────────────────────────────────────────
-            // Top-level claims: vct, iss, iat, jti, sub, exp, plus all credential claims.
-            // Selective disclosure JSONPath: `$.claim_name`
-            let mut p = serde_json::json!({
-                "iss": issuer_key.issuer_id,
-                "iat": now.timestamp(),
-                "jti": credential_id,
-                "vct": vct,
-            });
-            if let Some(ref subject_id) = claims.subject_id {
-                p["sub"] = serde_json::json!(subject_id);
-            }
-            if let Some(expiration_timestamp) =
-                checked_sd_jwt_expiration_timestamp(now, claims.expiration_seconds)?
-            {
-                p["exp"] = serde_json::json!(expiration_timestamp);
-            }
-            if let Some(obj) = p.as_object_mut() {
-                for (key, value) in &claims.claims {
-                    obj.insert(key.clone(), value.clone());
-                }
-            }
-            (p, "$.")
-        }
-
-        CredentialPayloadFormat::W3cVcdmV2SdJwt => {
-            // ── W3C VCDM v2 SD-JWT ──────────────────────────────────────────
-            // Claims are nested under `credentialSubject`.
-            // Selective disclosure JSONPath: `$.credentialSubject.claim_name`
-            let mut credential_subject = serde_json::json!({});
-            if let Some(ref subject_id) = claims.subject_id {
-                credential_subject["id"] = serde_json::json!(subject_id);
-            }
-            if let Some(obj) = credential_subject.as_object_mut() {
-                for (key, value) in &claims.claims {
-                    obj.insert(key.clone(), value.clone());
-                }
-            }
-
-            let valid_from = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-            let mut context = vec!["https://www.w3.org/ns/credentials/v2".to_string()];
-            context.extend(claims.w3c_context.iter().cloned());
-
-            let mut types = vec!["VerifiableCredential".to_string()];
-            types.extend(claims.w3c_types.iter().cloned());
-
-            let mut p = serde_json::json!({
-                "iss": issuer_key.issuer_id,
-                "iat": now.timestamp(),
-                "jti": credential_id,
-                "vct": vct,
-                "@context": context,
-                "type": types,
-                "issuer": issuer_key.issuer_id,
-                "validFrom": valid_from,
-                "credentialSubject": credential_subject,
-            });
-            if let Some(ref subject_id) = claims.subject_id {
-                p["sub"] = serde_json::json!(subject_id);
-            }
-            if let Some((expiration_timestamp, expires_at)) =
-                checked_sd_jwt_vcdm_expiration(now, claims.expiration_seconds)?
-            {
-                p["exp"] = serde_json::json!(expiration_timestamp);
-                let valid_until = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-                p["validUntil"] = serde_json::json!(valid_until);
-            }
-            (p, "$.credentialSubject.")
-        }
-
-        CredentialPayloadFormat::W3cVcdmV2JwtVc => {
-            return Err(Oid4vciError::UnsupportedFormat(
-                "credential_payload_format 'w3c_vcdm_v2_jwt_vc' is only valid for jwt_vc_json, \
-                 not for SD-JWT credentials"
-                    .to_string(),
-            ));
-        }
-    };
-
-    if let Some(confirmation) = confirmation {
-        payload["cnf"] = confirmation.clone();
-    }
-
-    // Get the signing algorithm and key material for sd-jwt-rs
-    let (alg_str, encoding_key) = get_sd_jwt_signing_params(&jwk, issuer_key)?;
-    let encoding_key_resign = encoding_key.clone();
-
-    let mut issuer = SDJWTIssuer::new(encoding_key, Some(alg_str.clone()));
-
-    let sd_jwt = if claims.selective_disclosure_claims.is_empty() {
-        issuer.issue_sd_jwt(
-            payload,
-            ClaimsForSelectiveDisclosureStrategy::NoSDClaims,
-            None,
-            false,
-            SDJWTSerializationFormat::Compact,
-        )
-    } else {
-        // Build JSONPath-style selectors using the format-appropriate prefix.
-        // IETF flat: `$.claim_name`  |  W3C VCDM v2: `$.credentialSubject.claim_name`
-        let paths: Vec<String> = claims
-            .selective_disclosure_claims
-            .iter()
-            .map(|s| format!("{}{}", sd_path_prefix, s))
-            .collect();
-        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-
-        issuer.issue_sd_jwt(
-            payload,
-            ClaimsForSelectiveDisclosureStrategy::Custom(path_refs),
-            None,
-            false,
-            SDJWTSerializationFormat::Compact,
-        )
-    }
-    .map_err(|e| Oid4vciError::SdJwtError(format!("SD-JWT issuance failed: {:?}", e)))?;
-
-    // Re-sign the SD-JWT JWS with a proper header that includes `kid`
-    // sd-jwt-rs 0.7 doesn't support extra_header_parameters (unimplemented!)
-    let sd_jwt = inject_kid_header(
-        &sd_jwt,
-        &issuer_key.kid_url(),
-        &alg_str,
-        &encoding_key_resign,
-    )?;
-
-    Ok(SignedCredential::SdJwt {
-        compact: sd_jwt,
-        credential_id,
-    })
-}
-
 // =============================================================================
 // External-signer support: prepare / assemble / sign_with_signer
 // =============================================================================
@@ -464,6 +280,7 @@ pub struct PreparedSdJwt {
     /// The credential ID (urn:uuid:...) assigned during preparation.
     credential_id: String,
     algorithm: crate::types::SigningAlgorithm,
+    issuer_public_jwk: String,
 }
 
 #[cfg(any(test, feature = "issuer"))]
@@ -491,7 +308,12 @@ impl PreparedSdJwt {
 
     /// Check a remote signer's raw output without consuming prepared state.
     pub fn validate_signature(&self, signature: &[u8]) -> Oid4vciResult<()> {
-        validate_remote_signature(self.algorithm, signature)
+        verify_remote_signature(
+            self.algorithm,
+            &self.issuer_public_jwk,
+            self.signing_payload(),
+            signature,
+        )
     }
 }
 
@@ -514,8 +336,8 @@ pub struct SdJwtPreparationOptions {
 
 /// Sign an SD-JWT verifiable credential using any [`CredentialSigner`].
 ///
-/// This is the BYOK-aware variant. For local JWK signing, pass an `&IssuerKey`.
-/// For remote/KMS signing, pass a custom `CredentialSigner` implementation.
+/// Production callers provide a `CredentialSigner` implementation that
+/// delegates to their remote KMS/HSM.
 #[cfg(any(test, feature = "issuer"))]
 pub fn sign_sd_jwt_with_signer(
     signer: &dyn CredentialSigner,
@@ -890,6 +712,7 @@ fn assemble_sd_jwt_preparation(
         disclosures_suffix,
         credential_id,
         algorithm: signer.algorithm(),
+        issuer_public_jwk: validate_signer_public_jwk(signer)?,
     })
 }
 
@@ -944,17 +767,6 @@ fn encode_sd_jwt_disclosure(
         source_ordinal: planned.source_ordinal,
         disclosure: URL_SAFE_NO_PAD.encode(disclosure_json.as_bytes()),
     })
-}
-
-#[cfg(any(test, feature = "issuer"))]
-fn digest_sd_jwt_disclosure(encoded: EncodedSdJwtDisclosure) -> DigestedSdJwtDisclosure {
-    let digest_b64 = URL_SAFE_NO_PAD.encode(Sha256::digest(encoded.disclosure.as_bytes()));
-
-    DigestedSdJwtDisclosure {
-        source_ordinal: encoded.source_ordinal,
-        disclosure: encoded.disclosure,
-        digest_b64,
-    }
 }
 
 #[cfg(any(test, feature = "issuer"))]
@@ -1062,17 +874,90 @@ fn encode_sd_jwt_disclosures(
 }
 
 #[cfg(any(test, feature = "issuer"))]
-fn digest_sd_jwt_disclosures(encoded: EncodedSdJwtDisclosureBatch) -> DigestedSdJwtDisclosureBatch {
-    let SdJwtDisclosureStage {
-        expected_source_ordinals,
-        items,
-    } = encoded;
-    let items = items.into_iter().map(digest_sd_jwt_disclosure).collect();
+fn digest_sd_jwt_disclosures(
+    encoded: EncodedSdJwtDisclosureBatch,
+) -> Oid4vciResult<DigestedSdJwtDisclosureBatch> {
+    let mut result = digest_sd_jwt_disclosure_batches(vec![(0, encoded)], &SerialDigestExecutor)?;
+    result
+        .pop()
+        .map(|(_, stage)| stage)
+        .ok_or_else(sd_jwt_batch_digest_error)
+}
 
-    SdJwtDisclosureStage {
-        expected_source_ordinals,
-        items,
+#[cfg(any(test, feature = "issuer"))]
+fn sd_jwt_batch_digest_error() -> Oid4vciError {
+    Oid4vciError::SdJwtError(SD_JWT_BATCH_DIGEST_FAILURE.into())
+}
+
+/// Both scalar and batch preparation use the same digest and restoration path.
+#[cfg(any(test, feature = "issuer"))]
+fn digest_sd_jwt_disclosure_batches(
+    batches: Vec<(u64, EncodedSdJwtDisclosureBatch)>,
+    executor: &dyn DigestExecutor,
+) -> Oid4vciResult<Vec<(u64, DigestedSdJwtDisclosureBatch)>> {
+    let mut jobs = Vec::new();
+    for (batch_id, stage) in &batches {
+        for disclosure in &stage.items {
+            let job_id = u64::try_from(disclosure.source_ordinal)
+                .map_err(|_| sd_jwt_batch_digest_error())?;
+            jobs.push(DigestJob {
+                credential_id: *batch_id,
+                job_id,
+                ordinal: disclosure.source_ordinal,
+                algorithm: DigestAlgorithm::SHA256,
+                input: disclosure.disclosure.as_bytes().to_vec(),
+            });
+        }
     }
+    let results = executor
+        .execute(&jobs)
+        .map_err(|_| sd_jwt_batch_digest_error())?;
+    if results.len() != jobs.len() {
+        return Err(sd_jwt_batch_digest_error());
+    }
+    let mut by_identity = std::collections::BTreeMap::new();
+    for result in results {
+        if result.digest.len() != 32
+            || by_identity
+                .insert((result.credential_id, result.job_id), result)
+                .is_some()
+        {
+            return Err(sd_jwt_batch_digest_error());
+        }
+    }
+    let mut digested = Vec::with_capacity(batches.len());
+    for (batch_id, stage) in batches {
+        let items = stage
+            .items
+            .into_iter()
+            .map(|item| {
+                let job_id =
+                    u64::try_from(item.source_ordinal).map_err(|_| sd_jwt_batch_digest_error())?;
+                let result = by_identity
+                    .remove(&(batch_id, job_id))
+                    .ok_or_else(sd_jwt_batch_digest_error)?;
+                if result.ordinal != item.source_ordinal {
+                    return Err(sd_jwt_batch_digest_error());
+                }
+                Ok(DigestedSdJwtDisclosure {
+                    source_ordinal: item.source_ordinal,
+                    disclosure: item.disclosure,
+                    digest_b64: URL_SAFE_NO_PAD.encode(result.digest),
+                })
+            })
+            .collect::<Oid4vciResult<Vec<_>>>()?;
+        digested.push((
+            batch_id,
+            SdJwtDisclosureStage {
+                expected_source_ordinals: stage.expected_source_ordinals,
+                items,
+            },
+        ));
+    }
+    if !by_identity.is_empty() {
+        return Err(sd_jwt_batch_digest_error());
+    }
+    Ok(digested)
 }
 
 /// Generate SD-JWT disclosures for selectively-disclosable claims.
@@ -1088,7 +973,100 @@ fn prepare_sd_jwt_disclosures(
 ) -> Oid4vciResult<DigestedSdJwtDisclosureBatch> {
     let planned = plan_sd_jwt_disclosures(target_object, sd_claims, next_salt);
     let encoded = encode_sd_jwt_disclosures(planned)?;
-    Ok(digest_sd_jwt_disclosures(encoded))
+    digest_sd_jwt_disclosures(encoded)
+}
+
+/// A validated remote preparation with its final credential identity and time.
+#[cfg(feature = "issuer")]
+pub(crate) struct SdJwtBatchPreparationInput {
+    pub(crate) batch_id: u64,
+    pub(crate) signer: Box<dyn CredentialSigner>,
+    pub(crate) claims: CredentialClaims,
+    pub(crate) options: SdJwtPreparationOptions,
+    pub(crate) issued_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Check fields that cannot depend on generated time, identity or salts.
+#[cfg(feature = "issuer")]
+pub(crate) fn validate_sd_jwt_batch_claims(
+    claims: &CredentialClaims,
+    options: &SdJwtPreparationOptions,
+) -> Oid4vciResult<()> {
+    validate_sd_jwt_managed_claims(claims, options.include_nbf, options.confirmation.is_some())?;
+    validate_sd_jwt_structural_markers(claims, options.confirmation.as_ref())?;
+    validate_sd_jwt_confirmation_inputs(claims, options.confirmation.as_ref())?;
+    if matches!(
+        claims.credential_payload_format,
+        CredentialPayloadFormat::W3cVcdmV2JwtVc
+    ) {
+        return Err(Oid4vciError::UnsupportedFormat(
+            "credential_payload_format 'w3c_vcdm_v2_jwt_vc' is only valid for jwt_vc_json, not for SD-JWT credentials".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "issuer")]
+pub(crate) fn validate_sd_jwt_batch_time(
+    now: chrono::DateTime<chrono::Utc>,
+    expiration_seconds: Option<i64>,
+) -> Oid4vciResult<()> {
+    checked_sd_jwt_expiration_timestamp(now, expiration_seconds).map(|_| ())
+}
+
+/// Reuse the scalar planning and assembly stages, digesting every disclosure
+/// through one executor call and restoring results by routing identity.
+#[cfg(feature = "issuer")]
+pub(crate) fn prepare_sd_jwt_batch_with_digest_executor(
+    batch: Vec<SdJwtBatchPreparationInput>,
+    mut next_salt: impl FnMut() -> [u8; 16],
+    executor: &dyn DigestExecutor,
+) -> Oid4vciResult<Vec<(u64, PreparedSdJwt)>> {
+    if batch.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut plans = Vec::with_capacity(batch.len());
+    let mut encoded_batches = Vec::with_capacity(batch.len());
+    let mut batch_ids = std::collections::HashSet::with_capacity(batch.len());
+    for item in batch {
+        if !batch_ids.insert(item.batch_id) {
+            return Err(sd_jwt_batch_digest_error());
+        }
+        let mut unused_uuid = || panic!("batch credential identity must already be assigned");
+        let mut fixed_now = || item.issued_at;
+        let mut planned = plan_sd_jwt_preparation(
+            item.signer.as_ref(),
+            &item.claims,
+            item.options,
+            &mut unused_uuid,
+            &mut fixed_now,
+        )?;
+        let encoded = if item.claims.selective_disclosure_claims.is_empty() {
+            SdJwtDisclosureStage::empty()
+        } else {
+            let target =
+                sd_jwt_disclosure_target_mut(&mut planned.payload, &planned.disclosure_target)?;
+            encode_sd_jwt_disclosures(plan_sd_jwt_disclosures(
+                target,
+                &item.claims.selective_disclosure_claims,
+                &mut next_salt,
+            ))?
+        };
+        encoded_batches.push((item.batch_id, encoded));
+        plans.push((item.batch_id, item.signer, planned));
+    }
+    let digested = digest_sd_jwt_disclosure_batches(encoded_batches, executor)?;
+    let mut prepared = Vec::with_capacity(plans.len());
+    for ((batch_id, signer, plan), (digested_id, digested)) in plans.into_iter().zip(digested) {
+        if batch_id != digested_id {
+            return Err(sd_jwt_batch_digest_error());
+        }
+        prepared.push((
+            batch_id,
+            assemble_sd_jwt_preparation(signer.as_ref(), plan, digested)?,
+        ));
+    }
+    Ok(prepared)
 }
 
 // =============================================================================
@@ -1425,135 +1403,6 @@ fn validate_key_binding_jwt(
     Ok(())
 }
 
-/// Re-sign the SD-JWT's JWS part with a new header that includes `kid`.
-///
-/// `sd-jwt-rs` 0.7 does not support `extra_header_parameters` (unimplemented!).
-/// We work around this by extracting the signed payload from the generated
-/// SD-JWT, then re-signing it with `jsonwebtoken` using a header that includes
-/// the issuer DID as `kid`.
-///
-/// SD-JWT compact format: `<JWS>~[disclosure~...]`
-/// JWS: `<base64url-header>.<base64url-payload>.<signature>`
-#[cfg(any(test, feature = "local-key-operations"))]
-fn inject_kid_header(
-    sd_jwt: &str,
-    kid: &str,
-    alg_str: &str,
-    encoding_key: &jsonwebtoken::EncodingKey,
-) -> Oid4vciResult<String> {
-    // Split off the JWS (first segment before any `~`)
-    let (jws, disclosures_suffix) = match sd_jwt.split_once('~') {
-        Some((jws, rest)) => (jws, format!("~{}", rest)),
-        None => (sd_jwt, String::new()),
-    };
-
-    // Split JWS into header.payload.signature
-    let parts: Vec<&str> = jws.splitn(3, '.').collect();
-    if parts.len() != 3 {
-        return Err(Oid4vciError::SdJwtError(format!(
-            "Malformed SD-JWT JWS (expected 3 parts, got {})",
-            parts.len()
-        )));
-    }
-
-    // Decode the existing payload
-    let payload_bytes = URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|e| Oid4vciError::SdJwtError(format!("Base64 decode error: {}", e)))?;
-    let payload_json: serde_json::Value = serde_json::from_slice(&payload_bytes)
-        .map_err(|e| Oid4vciError::SdJwtError(format!("Payload JSON parse error: {}", e)))?;
-
-    // Build a new header with kid and vc+sd-jwt typ
-    let alg = match alg_str {
-        "EdDSA" => jsonwebtoken::Algorithm::EdDSA,
-        "ES256" => jsonwebtoken::Algorithm::ES256,
-        "ES384" => jsonwebtoken::Algorithm::ES384,
-        other => {
-            return Err(Oid4vciError::SdJwtError(format!(
-                "Unsupported algorithm for SD-JWT re-sign: {}",
-                other
-            )))
-        }
-    };
-    let mut header = jsonwebtoken::Header::new(alg);
-    header.kid = Some(kid.to_string());
-    // SD-JWT VC RFC 9596 §3.2.1: the JWT typ MUST be "vc+sd-jwt"
-    header.typ = Some("vc+sd-jwt".to_string());
-
-    // Re-sign the same payload with the new header
-    let new_jws = jsonwebtoken::encode(&header, &payload_json, encoding_key)
-        .map_err(|e| Oid4vciError::SdJwtError(format!("Re-sign failed: {}", e)))?;
-
-    Ok(format!("{}{}", new_jws, disclosures_suffix))
-}
-
-/// Get the signing algorithm string and the JWK-derived EncodingKey for sd-jwt-rs.
-#[cfg(any(test, feature = "local-key-operations"))]
-fn get_sd_jwt_signing_params(
-    jwk: &JWK,
-    issuer_key: &IssuerKey,
-) -> Oid4vciResult<(String, jsonwebtoken::EncodingKey)> {
-    let alg_str = issuer_key.algorithm.as_str().to_string();
-
-    let encoding_key = match &jwk.params {
-        Params::OKP(params) => {
-            use ed25519_dalek::pkcs8::EncodePrivateKey;
-
-            let d = params
-                .private_key
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing Ed25519 private key".into()))?;
-
-            // Serialize the seed with the standards-compliant PKCS#8 encoder.
-            let seed: [u8; 32] = d.0.as_slice().try_into().map_err(|_| {
-                Oid4vciError::KeyError("Ed25519 private key must be a 32-byte seed".into())
-            })?;
-            let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-            let pkcs8_der = signing_key.to_pkcs8_der().map_err(|e| {
-                Oid4vciError::KeyError(format!("Ed25519 PKCS#8 encoding failed: {}", e))
-            })?;
-            jsonwebtoken::EncodingKey::from_ed_der(pkcs8_der.as_bytes())
-        }
-        Params::EC(params) => {
-            let d = params
-                .ecc_private_key
-                .as_ref()
-                .ok_or_else(|| Oid4vciError::KeyError("Missing EC private key".into()))?;
-
-            // For EC keys, convert to PKCS#8 DER or use the raw key
-            // The jsonwebtoken crate expects PEM or DER format
-            // We'll serialize the JWK to JSON and use from_jwk
-            let _jwk_json = serde_json::to_string(jwk)
-                .map_err(|e| Oid4vciError::KeyError(format!("JWK serialize error: {}", e)))?;
-
-            // jsonwebtoken doesn't directly support JWK — build a minimal EC PEM
-            // For P-256: use the `p256` crate to convert
-            match params.curve.as_deref() {
-                Some("P-256") => {
-                    let secret = p256::SecretKey::from_slice(&d.0)
-                        .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 key: {}", e)))?;
-                    let pkcs8_der = secret.to_pkcs8_der().map_err(|e| {
-                        Oid4vciError::KeyError(format!("P-256 PKCS#8 encoding failed: {}", e))
-                    })?;
-                    Ok(jsonwebtoken::EncodingKey::from_ec_der(pkcs8_der.as_bytes()))
-                }
-                Some(curve) => Err(Oid4vciError::KeyError(format!(
-                    "SD-JWT signing not supported for curve: {}",
-                    curve
-                ))),
-                None => Err(Oid4vciError::KeyError("Missing curve in EC JWK".into())),
-            }?
-        }
-        _ => {
-            return Err(Oid4vciError::KeyError(
-                "Unsupported key type for SD-JWT signing".into(),
-            ));
-        }
-    };
-
-    Ok((alg_str, encoding_key))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1563,26 +1412,135 @@ mod tests {
 
     const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-    fn test_p256_key() -> IssuerKey {
-        let jwk = JWK::generate_p256();
-        let jwk_json = serde_json::to_string(&jwk).unwrap();
-        let encoded = B64.encode(jwk_json.as_bytes());
-        let did = format!("did:jwk:{}", encoded);
+    #[cfg(all(feature = "issuer", feature = "sd_jwt"))]
+    #[test]
+    fn batch_contract_matches_scalar_bytes_and_restores_caller_order() {
+        use isomdl::digest_executor::{DigestExecutionError, DigestResult, SerialDigestExecutor};
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
-        IssuerKey {
-            issuer_id: did,
-            jwk_json,
-            algorithm: SigningAlgorithm::ES256,
+        struct ReverseExecutor(AtomicUsize);
+        impl DigestExecutor for ReverseExecutor {
+            fn execute(
+                &self,
+                jobs: &[DigestJob],
+            ) -> Result<Vec<DigestResult>, DigestExecutionError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                let mut results = SerialDigestExecutor.execute(jobs)?;
+                results.reverse();
+                Ok(results)
+            }
+        }
+
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/contracts/sd_jwt_remote_batch_v1.json"
+        ))
+        .unwrap();
+        assert_eq!(contract["version"], 1);
+        let signer = crate::remote_credential::RemoteSignerMetadata::new(
+            contract["issuer_id"].as_str().unwrap(),
+            contract["verification_method_id"].as_str().unwrap(),
+            contract["algorithm"].as_str().unwrap(),
+            contract["issuer_public_jwk"].to_string(),
+        )
+        .unwrap();
+        let now = chrono::DateTime::from_timestamp(contract["issued_at_unix"].as_i64().unwrap(), 0)
+            .unwrap();
+        let salts = contract["salts_base64url"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| {
+                B64.decode(value.as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect::<Vec<[u8; 16]>>();
+        let mut claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            serde_json::from_value(contract["selectors"].clone()).unwrap(),
+        );
+        claims.subject_id = Some(contract["subject_id"].as_str().unwrap().into());
+        claims.credential_type = contract["credential_type"].as_str().unwrap().into();
+        claims.claims = serde_json::from_value(contract["claims"].clone()).unwrap();
+        claims.expiration_seconds = Some(contract["expiration_seconds"].as_i64().unwrap());
+        let cases = contract["items"].as_array().unwrap();
+        let mut inputs = Vec::new();
+        let mut scalar = Vec::new();
+        for case in cases {
+            let route = case["batch_id"].as_u64().unwrap();
+            let id = case["credential_id"].as_str().unwrap();
+            let options = SdJwtPreparationOptions {
+                credential_id: Some(id.into()),
+                typ: Some(contract["typ"].as_str().unwrap().into()),
+                confirmation: Some(contract["confirmation"].clone()),
+                x5c: serde_json::from_value(contract["x5c"].clone()).unwrap(),
+                include_nbf: contract["include_nbf"].as_bool().unwrap(),
+            };
+            let mut salt_index = 0;
+            let prepared = prepare_sd_jwt_with_options_and_sources(
+                &signer,
+                &claims,
+                options.clone(),
+                || panic!("explicit credential ID must be used"),
+                || now,
+                || {
+                    let salt = salts[salt_index];
+                    salt_index += 1;
+                    salt
+                },
+            )
+            .unwrap();
+            scalar.push(prepared);
+            inputs.push(SdJwtBatchPreparationInput {
+                batch_id: route,
+                signer: Box::new(signer.clone()),
+                claims: claims.clone(),
+                options,
+                issued_at: now,
+            });
+        }
+        let executor = ReverseExecutor(AtomicUsize::new(0));
+        let mut salt_index = 0;
+        let batch = prepare_sd_jwt_batch_with_digest_executor(
+            inputs,
+            || {
+                let salt = salts[salt_index % 2];
+                salt_index += 1;
+                salt
+            },
+            &executor,
+        )
+        .unwrap();
+        assert_eq!(executor.0.load(Ordering::Relaxed), 1);
+        assert_eq!(batch.len(), cases.len());
+        for (index, ((route, prepared), expected)) in batch.into_iter().zip(scalar).enumerate() {
+            let case = &cases[index];
+            assert_eq!(route, case["batch_id"].as_u64().unwrap());
+            assert_eq!(prepared.signing_input(), expected.signing_input());
+            assert_eq!(prepared.disclosures_suffix(), expected.disclosures_suffix());
+            assert_eq!(prepared.credential_id(), expected.credential_id());
+            assert_eq!(
+                prepared.signing_input(),
+                case["signing_input"].as_str().unwrap()
+            );
+            assert_eq!(
+                prepared.disclosures_suffix(),
+                case["disclosures_suffix"].as_str().unwrap()
+            );
+            assert_eq!(
+                prepared.credential_id(),
+                case["credential_id"].as_str().unwrap()
+            );
         }
     }
 
-    fn fixed_private_holder_jwk() -> JWK {
+    fn fixed_public_holder_jwk() -> JWK {
         serde_json::from_value(serde_json::json!({
             "kty": "EC",
             "crv": "P-256",
             "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
-            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
-            "d": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE"
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
         }))
         .unwrap()
     }
@@ -1611,6 +1569,10 @@ mod tests {
         fn kid_url(&self) -> String {
             "did:example:expiration-test-issuer#key-1".into()
         }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
+        }
     }
 
     #[derive(Debug)]
@@ -1631,6 +1593,10 @@ mod tests {
 
         fn kid_url(&self) -> String {
             "https://issuer.example/keys/1".into()
+        }
+
+        fn public_jwk(&self) -> Oid4vciResult<String> {
+            Ok(crate::signer::test_es256_public_jwk())
         }
     }
 
@@ -1835,7 +1801,7 @@ mod tests {
 
         let encoded = encode_sd_jwt_disclosures(planned).unwrap();
         assert_eq!(encoded.expected_source_ordinals, vec![0, 2]);
-        let digested = digest_sd_jwt_disclosures(encoded);
+        let digested = digest_sd_jwt_disclosures(encoded).unwrap();
         assert_eq!(digested.expected_source_ordinals, vec![0, 2]);
         assert_eq!(
             digested
@@ -1997,7 +1963,7 @@ mod tests {
             CredentialPayloadFormat::IetfSdJwt,
             vec!["name".into()],
         );
-        let holder_jwk = fixed_private_holder_jwk().to_public();
+        let holder_jwk = fixed_public_holder_jwk();
         assert!(holder_jwk.is_public());
         let events = RefCell::new(vec![]);
         let salts = RefCell::new(VecDeque::from([[0x22; 16]]));
@@ -2067,7 +2033,7 @@ mod tests {
         claims
             .claims
             .insert("cnf".into(), serde_json::json!({"jwk": {"kty": "EC"}}));
-        let holder_jwk = fixed_private_holder_jwk().to_public();
+        let holder_jwk = fixed_public_holder_jwk();
         let events = RefCell::new(vec![]);
 
         let error = preparation_error(prepare_sd_jwt_with_holder_public_jwk_and_sources(
@@ -2140,10 +2106,6 @@ mod tests {
             )
             .err()
             .expect("raw private or symmetric confirmation JWK must be rejected");
-            assert!(error.to_string().contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
-
-            let error = sign_sd_jwt(&test_p256_key(), &raw_claims)
-                .expect_err("local issuance must reject a raw private confirmation JWK");
             assert!(error.to_string().contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
         }
     }
@@ -2394,9 +2356,7 @@ mod tests {
 
     #[test]
     fn sd_jwt_rejects_unsafe_expiration_before_any_signer_call() {
-        let key = test_p256_key();
         let ietf_claims = claims_with_expiration(CredentialPayloadFormat::IetfSdJwt, i64::MAX);
-        assert_expiration_out_of_range(sign_sd_jwt(&key, &ietf_claims).unwrap_err());
         assert_expiration_out_of_range(
             sign_sd_jwt_with_signer(&MustNotSign, &ietf_claims).unwrap_err(),
         );
@@ -2404,7 +2364,6 @@ mod tests {
         for expiration_seconds in [i64::MIN, i64::MAX] {
             let claims =
                 claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2SdJwt, expiration_seconds);
-            assert_expiration_out_of_range(sign_sd_jwt(&key, &claims).unwrap_err());
             assert_expiration_out_of_range(
                 sign_sd_jwt_with_signer(&MustNotSign, &claims).unwrap_err(),
             );
@@ -2433,7 +2392,6 @@ mod tests {
         assert!(
             payload["exp"].as_i64().unwrap() > chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp()
         );
-        sign_sd_jwt(&test_p256_key(), &claims).unwrap();
     }
 
     #[test]
@@ -2451,15 +2409,12 @@ mod tests {
     #[test]
     fn sd_jwt_preserves_unsupported_payload_format_error_precedence() {
         let claims = claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2JwtVc, i64::MAX);
-        for error in [
-            sign_sd_jwt(&test_p256_key(), &claims).unwrap_err(),
-            sign_sd_jwt_with_signer(&MustNotSign, &claims).unwrap_err(),
-        ] {
-            let Oid4vciError::UnsupportedFormat(message) = error else {
-                panic!("unsupported payload format must precede expiration validation")
-            };
-            assert!(message.contains("w3c_vcdm_v2_jwt_vc"));
-        }
+        let Oid4vciError::UnsupportedFormat(message) =
+            sign_sd_jwt_with_signer(&MustNotSign, &claims).unwrap_err()
+        else {
+            panic!("unsupported payload format must precede expiration validation")
+        };
+        assert!(message.contains("w3c_vcdm_v2_jwt_vc"));
     }
 
     #[test]
@@ -2476,115 +2431,6 @@ mod tests {
                 .timestamp();
 
         assert_eq!(jwt_expiration, vcdm_expiration);
-    }
-
-    #[test]
-    fn test_sign_sd_jwt_no_disclosures() {
-        let key = test_p256_key();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "IdentityCredential".into(),
-            claims: [("name".into(), serde_json::json!("Alice"))].into(),
-            expiration_seconds: Some(3600),
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        let result = sign_sd_jwt(&key, &claims).unwrap();
-        match result {
-            SignedCredential::SdJwt {
-                compact,
-                credential_id,
-            } => {
-                // SD-JWT should end with ~ (compact format)
-                assert!(compact.contains('.'), "Should contain JWT dots");
-                assert!(credential_id.starts_with("urn:uuid:"));
-            }
-            _ => panic!("Expected SdJwt"),
-        }
-    }
-
-    #[test]
-    fn test_sign_sd_jwt_with_disclosures() {
-        let key = test_p256_key();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "IdentityCredential".into(),
-            claims: [
-                ("name".into(), serde_json::json!("Alice")),
-                ("age".into(), serde_json::json!(30)),
-                ("email".into(), serde_json::json!("alice@example.com")),
-            ]
-            .into(),
-            expiration_seconds: Some(3600),
-            selective_disclosure_claims: vec!["name".into(), "email".into()],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        let result = sign_sd_jwt(&key, &claims).unwrap();
-        match result {
-            SignedCredential::SdJwt { compact, .. } => {
-                // With selective disclosures, the compact form should contain ~ separators
-                let parts: Vec<&str> = compact.split('~').collect();
-                // First part is the JWT, remaining are disclosures
-                assert!(
-                    parts.len() >= 2,
-                    "SD-JWT with disclosures should have ~ separators, got: {}",
-                    compact
-                );
-            }
-            _ => panic!("Expected SdJwt"),
-        }
-    }
-
-    #[test]
-    fn test_create_sd_jwt_presentation_selects_only_requested_disclosures() {
-        let key = test_p256_key();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "IdentityCredential".into(),
-            claims: [
-                ("name".into(), serde_json::json!("Alice")),
-                ("email".into(), serde_json::json!("alice@example.com")),
-            ]
-            .into(),
-            expiration_seconds: Some(3600),
-            selective_disclosure_claims: vec!["name".into(), "email".into()],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-        let compact = match sign_sd_jwt(&key, &claims).unwrap() {
-            SignedCredential::SdJwt { compact, .. } => compact,
-            _ => panic!("Expected SdJwt"),
-        };
-
-        let presentation = create_sd_jwt_presentation(&compact, &["name".into()]).unwrap();
-        let disclosures = presentation
-            .split('~')
-            .skip(1)
-            .filter(|segment| !segment.is_empty())
-            .collect::<Vec<_>>();
-        assert_eq!(disclosures.len(), 1);
-        let disclosure: serde_json::Value =
-            serde_json::from_slice(&B64.decode(disclosures[0]).unwrap()).unwrap();
-        assert_eq!(disclosure[1], "name");
-
-        let error = create_sd_jwt_presentation(&compact, &["missing".into()]).unwrap_err();
-        assert!(error.to_string().contains("no disclosure named `missing`"));
     }
 
     #[test]
@@ -2636,59 +2482,7 @@ mod tests {
     /// OID4VCI 1.0 Final §A.3 distinguishes "dc+sd-jwt" (format ID in metadata)
     /// from "vc+sd-jwt" (the JWT `typ` in the issued credential).
     #[test]
-    fn test_sd_jwt_typ_header_is_vc_sd_jwt() {
-        use serde_json::Value;
-
-        let key = test_p256_key();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "https://example.com/credentials/TestCred".into(),
-            claims: [("name".into(), serde_json::json!("Alice"))].into(),
-            expiration_seconds: Some(3600),
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        let result = sign_sd_jwt(&key, &claims).unwrap();
-        let compact = match result {
-            SignedCredential::SdJwt { compact, .. } => compact,
-            _ => panic!("Expected SdJwt"),
-        };
-
-        // Decode the JWT header directly from the compact SD-JWT to verify typ.
-        // The first part (before '~') is the JWS; split on '.' to get header.
-        let jwt_part = compact.split('~').next().unwrap_or(&compact);
-        let header_b64 = jwt_part.split('.').next().expect("JWT must have header");
-        let header_bytes = B64
-            .decode(header_b64)
-            .expect("header must be valid base64url");
-        let header: Value = serde_json::from_slice(&header_bytes).expect("header must be JSON");
-
-        // Before inject_kid_header, sd-jwt-rs does not set typ.
-        // After inject_kid_header it should be "vc+sd-jwt".
-        // At minimum, it must NOT be "dc+sd-jwt".
-        if let Some(typ) = header.get("typ").and_then(Value::as_str) {
-            assert_ne!(
-                typ, "dc+sd-jwt",
-                "JWT typ MUST NOT be 'dc+sd-jwt'; that is the OID4VCI format ID, not the SD-JWT-VC typ"
-            );
-        }
-        // The inject_kid_header function sets "vc+sd-jwt" — verify via the constant in the source.
-        // (Full end-to-end test of inject_kid_header requires a real key pair; unit-tested via issuer.)
-    }
-
-    // =========================================================================
-    // External signer (prepare / assemble) tests
-    // =========================================================================
-
-    #[test]
-    fn test_prepare_assemble_sd_jwt_no_disclosures() {
-        let key = test_p256_key();
+    fn test_prepare_sd_jwt_no_disclosures() {
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
             credential_type: "IdentityCredential".into(),
@@ -2703,7 +2497,7 @@ mod tests {
             w3c_types: vec![],
         };
 
-        let prepared = prepare_sd_jwt(&key, &claims).unwrap();
+        let prepared = prepare_sd_jwt(&FixedPreparationSigner, &claims).unwrap();
 
         // signing_input should be header_b64.payload_b64
         assert_eq!(prepared.signing_input.matches('.').count(), 1);
@@ -2717,7 +2511,7 @@ mod tests {
         let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
         assert_eq!(header["typ"], "vc+sd-jwt");
         assert_eq!(header["alg"], "ES256");
-        assert!(header["kid"].as_str().unwrap().starts_with("did:jwk:"));
+        assert_eq!(header["kid"], "https://issuer.example/keys/1");
 
         // Decode and verify payload (default format is W3cVcdmV2SdJwt → claims in credentialSubject)
         let payload_b64 = prepared.signing_input.split('.').nth(1).unwrap();
@@ -2725,29 +2519,10 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
         assert_eq!(payload["credentialSubject"]["name"], "Alice");
         assert!(payload.get("_sd").is_none(), "no _sd without disclosures");
-
-        // Assemble with a dummy signature
-        let mut dummy_sig = vec![0u8; 64];
-        dummy_sig[31] = 1;
-        dummy_sig[63] = 1;
-        let result = assemble_sd_jwt(prepared, &dummy_sig).unwrap();
-        match result {
-            SignedCredential::SdJwt {
-                compact,
-                credential_id,
-            } => {
-                // Format: header.payload.sig~
-                assert!(compact.contains('.'));
-                assert!(compact.ends_with('~'));
-                assert!(credential_id.starts_with("urn:uuid:"));
-            }
-            _ => panic!("Expected SdJwt"),
-        }
     }
 
     #[test]
-    fn test_prepare_assemble_sd_jwt_with_disclosures() {
-        let key = test_p256_key();
+    fn test_prepare_sd_jwt_with_disclosures() {
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
             credential_type: "IdentityCredential".into(),
@@ -2767,7 +2542,7 @@ mod tests {
             w3c_types: vec![],
         };
 
-        let prepared = prepare_sd_jwt(&key, &claims).unwrap();
+        let prepared = prepare_sd_jwt(&FixedPreparationSigner, &claims).unwrap();
 
         // Decode payload — W3C format: claims are in credentialSubject
         let payload_b64 = prepared.signing_input.split('.').nth(1).unwrap();
@@ -2823,7 +2598,6 @@ mod tests {
 
     #[test]
     fn test_prepare_sd_jwt_ietf_format() {
-        let key = test_p256_key();
         let claims = CredentialClaims {
             subject_id: Some("did:example:holder".into()),
             credential_type: "IdentityCredential".into(),
@@ -2842,7 +2616,7 @@ mod tests {
             w3c_types: vec![],
         };
 
-        let prepared = prepare_sd_jwt(&key, &claims).unwrap();
+        let prepared = prepare_sd_jwt(&FixedPreparationSigner, &claims).unwrap();
         let payload_b64 = prepared.signing_input.split('.').nth(1).unwrap();
         let payload_bytes = B64.decode(payload_b64).unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
@@ -2854,105 +2628,5 @@ mod tests {
         let sd_array = payload.get("_sd").unwrap().as_array().unwrap();
         assert_eq!(sd_array.len(), 1);
         assert_eq!(payload["_sd_alg"], "sha-256");
-    }
-
-    #[test]
-    fn test_sign_sd_jwt_with_signer_roundtrip() {
-        use crate::signer::CredentialSigner;
-
-        let key = test_p256_key();
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "IdentityCredential".into(),
-            claims: [
-                ("name".into(), serde_json::json!("Alice")),
-                ("age".into(), serde_json::json!(30)),
-            ]
-            .into(),
-            expiration_seconds: Some(3600),
-            selective_disclosure_claims: vec!["name".into()],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: Default::default(),
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        // IssuerKey implements CredentialSigner — use it as the external signer
-        let signer: &dyn CredentialSigner = &key;
-        let result = sign_sd_jwt_with_signer(signer, &claims).unwrap();
-
-        let compact = match &result {
-            SignedCredential::SdJwt { compact, .. } => compact.clone(),
-            _ => panic!("Expected SdJwt"),
-        };
-
-        // Verify the signature with sd-jwt-rs SDJWTVerifier
-        // Extract public JWK (strip private key for verification)
-        let jwk: JWK = serde_json::from_str(&key.jwk_json).unwrap();
-        let pub_jwk = jwk.to_public();
-        let pub_jwk_json = serde_json::to_string(&pub_jwk).unwrap();
-
-        let verified_claims = verify_sd_jwt(&compact, &pub_jwk_json, None, None).unwrap();
-
-        // The verified payload should contain the non-disclosed claim (inside credentialSubject for W3C format)
-        assert_eq!(verified_claims["credentialSubject"]["age"], 30);
-        // "name" was selectively disclosed and included — should be reconstructed
-        assert_eq!(verified_claims["credentialSubject"]["name"], "Alice");
-    }
-
-    #[test]
-    fn proof_bound_sd_jwt_rejects_private_and_serializes_public_jwk() {
-        let issuer_key = test_p256_key();
-        let holder_jwk = JWK::generate_p256();
-        assert!(
-            !holder_jwk.is_public(),
-            "fixture must contain a private key"
-        );
-        let claims = CredentialClaims {
-            subject_id: Some("did:example:holder".into()),
-            credential_type: "IdentityCredential".into(),
-            claims: [("employee_id".into(), serde_json::json!("employee-123"))].into(),
-            expiration_seconds: Some(3600),
-            selective_disclosure_claims: vec![],
-            mdoc_namespace: None,
-            mdoc_doctype: None,
-            zk_predicate_claims: vec![],
-            credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
-            w3c_context: vec![],
-            w3c_types: vec![],
-        };
-
-        let private_error = sign_sd_jwt_with_holder_public_jwk(&issuer_key, &claims, &holder_jwk)
-            .expect_err("private holder JWK must be rejected");
-        assert!(private_error
-            .to_string()
-            .contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
-
-        let holder_jwk = holder_jwk.to_public();
-        let signed = sign_sd_jwt_with_holder_public_jwk(&issuer_key, &claims, &holder_jwk)
-            .expect("proof-bound issuance must sign");
-        let SignedCredential::SdJwt { compact, .. } = signed else {
-            panic!("proof-bound issuance must return SD-JWT")
-        };
-        let payload = compact
-            .split('~')
-            .next()
-            .unwrap()
-            .split('.')
-            .nth(1)
-            .unwrap();
-        let payload: serde_json::Value =
-            serde_json::from_slice(&B64.decode(payload).unwrap()).unwrap();
-        let expected_public_jwk = serde_json::to_value(&holder_jwk).unwrap();
-
-        assert_eq!(
-            payload["cnf"],
-            serde_json::json!({"jwk": expected_public_jwk})
-        );
-        for private_member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
-            assert!(payload["cnf"]["jwk"].get(private_member).is_none());
-        }
     }
 }

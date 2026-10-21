@@ -11,11 +11,62 @@
 
 use cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use des::TdesEde3;
+use zeroize::{Zeroize, Zeroizing};
 
+use crate::secret_buffer::SensitiveBuffer;
+#[cfg(test)]
+use crate::secret_buffer::SensitiveBufferCleanupObserver;
 use crate::{CryptoError, CryptoResult};
 
 type TdesEncryptor = cbc::Encryptor<TdesEde3>;
 type TdesDecryptor = cbc::Decryptor<TdesEde3>;
+
+struct ExpandedTdesKey {
+    bytes: [u8; 24],
+    #[cfg(test)]
+    cleanup_observer: Option<ExpandedTdesKeyCleanupObserver>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct ExpandedTdesKeyCleanupObserver(std::sync::Arc<std::sync::Mutex<Vec<[u8; 24]>>>);
+
+impl ExpandedTdesKey {
+    fn repeated(component: &[u8]) -> Self {
+        debug_assert_eq!(component.len(), 8);
+        let mut bytes = [0u8; 24];
+        for part in bytes.chunks_exact_mut(8) {
+            part.copy_from_slice(component);
+        }
+        Self {
+            bytes,
+            #[cfg(test)]
+            cleanup_observer: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_cleanup_observer(mut self, observer: ExpandedTdesKeyCleanupObserver) -> Self {
+        self.cleanup_observer = Some(observer);
+        self
+    }
+}
+
+impl AsRef<[u8]> for ExpandedTdesKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl Drop for ExpandedTdesKey {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
+        #[cfg(test)]
+        if let Some(observer) = &self.cleanup_observer {
+            observer.0.lock().unwrap().push(self.bytes);
+        }
+    }
+}
 
 // ============================================================================
 // 3DES-CBC Encryption
@@ -55,14 +106,16 @@ pub fn tdes_cbc_encrypt(key: &[u8], iv: &[u8], plaintext: &[u8]) -> CryptoResult
         .map_err(|e| CryptoError::internal(format!("3DES key/IV error: {}", e)))?;
 
     // Clone plaintext since we need to encrypt in place
-    let mut buffer = plaintext.to_vec();
+    let mut buffer = SensitiveBuffer::copied_from(plaintext, 0);
 
     // For no-padding mode, input must already be block-aligned
     let ciphertext = encryptor
-        .encrypt_padded_mut::<NoPadding>(&mut buffer, plaintext.len())
-        .map_err(|e| CryptoError::internal(format!("3DES-CBC encryption failed: {}", e)))?;
+        .encrypt_padded_mut::<NoPadding>(&mut buffer.bytes, plaintext.len())
+        .map_err(|e| CryptoError::internal(format!("3DES-CBC encryption failed: {}", e)))?
+        .len();
 
-    Ok(ciphertext.to_vec())
+    buffer.bytes.truncate(ciphertext);
+    Ok(buffer.into_vec())
 }
 
 /// Decrypt data using 3DES-CBC with no padding.
@@ -82,13 +135,15 @@ pub fn tdes_cbc_decrypt(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> CryptoResul
     let decryptor = TdesDecryptor::new_from_slices(key, iv)
         .map_err(|e| CryptoError::internal(format!("3DES key/IV error: {}", e)))?;
 
-    let mut buffer = ciphertext.to_vec();
+    let mut buffer = SensitiveBuffer::copied_from(ciphertext, 0);
 
     let plaintext = decryptor
-        .decrypt_padded_mut::<NoPadding>(&mut buffer)
-        .map_err(|e| CryptoError::internal(format!("3DES-CBC decryption failed: {}", e)))?;
+        .decrypt_padded_mut::<NoPadding>(&mut buffer.bytes)
+        .map_err(|e| CryptoError::internal(format!("3DES-CBC decryption failed: {}", e)))?
+        .len();
 
-    Ok(plaintext.to_vec())
+    buffer.bytes.truncate(plaintext);
+    Ok(buffer.into_vec())
 }
 
 // ============================================================================
@@ -124,14 +179,16 @@ pub fn tdes_cbc_encrypt_padded(key: &[u8], iv: &[u8], plaintext: &[u8]) -> Crypt
         .map_err(|e| CryptoError::internal(format!("3DES key/IV error: {}", e)))?;
 
     // Allocate buffer with space for padding (up to one block)
-    let mut buffer = vec![0u8; plaintext.len() + 8];
-    buffer[..plaintext.len()].copy_from_slice(plaintext);
+    let mut buffer = SensitiveBuffer::copied_from(plaintext, 8);
+    buffer.bytes.resize(plaintext.len() + 8, 0);
 
     let ciphertext = encryptor
-        .encrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buffer, plaintext.len())
-        .map_err(|e| CryptoError::internal(format!("3DES-CBC encryption failed: {}", e)))?;
+        .encrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buffer.bytes, plaintext.len())
+        .map_err(|e| CryptoError::internal(format!("3DES-CBC encryption failed: {}", e)))?
+        .len();
 
-    Ok(ciphertext.to_vec())
+    buffer.bytes.truncate(ciphertext);
+    Ok(buffer.into_vec())
 }
 
 /// Decrypt data using 3DES-CBC with PKCS#7 padding.
@@ -165,13 +222,15 @@ pub fn tdes_cbc_decrypt_padded(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Cryp
     let decryptor = TdesDecryptor::new_from_slices(key, iv)
         .map_err(|e| CryptoError::internal(format!("3DES key/IV error: {}", e)))?;
 
-    let mut buffer = ciphertext.to_vec();
+    let mut buffer = SensitiveBuffer::copied_from(ciphertext, 0);
 
     let plaintext = decryptor
-        .decrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buffer)
-        .map_err(|e| CryptoError::internal(format!("3DES-CBC decryption failed: {}", e)))?;
+        .decrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buffer.bytes)
+        .map_err(|e| CryptoError::internal(format!("3DES-CBC decryption failed: {}", e)))?
+        .len();
 
-    Ok(plaintext.to_vec())
+    buffer.bytes.truncate(plaintext);
+    Ok(buffer.into_vec())
 }
 
 // ============================================================================
@@ -206,31 +265,31 @@ pub fn retail_mac(key: &[u8], data: &[u8]) -> CryptoResult<Vec<u8>> {
     let k2 = &key[8..16];
 
     // Pad data to 8-byte boundary (ISO/IEC 7816-4 padding: 0x80 then zeros)
-    let mut padded = data.to_vec();
+    let mut padded = Zeroizing::new(data.to_vec());
     padded.push(0x80);
     while !padded.len().is_multiple_of(8) {
         padded.push(0x00);
     }
 
     // Process all blocks with single DES using K1
-    let mut y = vec![0u8; 8]; // IV = zero
+    let mut y = Zeroizing::new(vec![0u8; 8]); // IV = zero
     for chunk in padded.chunks(8) {
         // XOR with previous result
         for (i, &byte) in chunk.iter().enumerate() {
             y[i] ^= byte;
         }
         // Encrypt with K1 (using 3DES with K1||K1||K1)
-        let key_padded = [k1, k1, k1].concat();
-        y = tdes_cbc_encrypt(&key_padded, &[0u8; 8], &y)?;
+        let expanded_key = ExpandedTdesKey::repeated(k1);
+        y = Zeroizing::new(tdes_cbc_encrypt(expanded_key.as_ref(), &[0u8; 8], &y)?);
     }
 
     // Decrypt last block with K2
-    let k2_padded = [k2, k2, k2].concat();
-    let y = tdes_cbc_decrypt(&k2_padded, &[0u8; 8], &y)?;
+    let expanded_k2 = ExpandedTdesKey::repeated(k2);
+    let y = Zeroizing::new(tdes_cbc_decrypt(expanded_k2.as_ref(), &[0u8; 8], &y)?);
 
     // Encrypt again with K1
-    let key_padded = [k1, k1, k1].concat();
-    let mac = tdes_cbc_encrypt(&key_padded, &[0u8; 8], &y)?;
+    let expanded_k1 = ExpandedTdesKey::repeated(k1);
+    let mac = tdes_cbc_encrypt(expanded_k1.as_ref(), &[0u8; 8], &y)?;
 
     Ok(mac)
 }
@@ -278,6 +337,85 @@ fn validate_tdes_params(key: &[u8], iv: &[u8], data: &[u8]) -> CryptoResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_observed_buffer_wiped(observer: &SensitiveBufferCleanupObserver) {
+        let snapshots = observer.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert!(!snapshots[0].is_empty());
+        assert!(snapshots[0].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn tdes_cbc_matches_known_answer() {
+        let key = hex::decode("0123456789abcdeffedcba987654321089abcdef01234567").unwrap();
+        let iv = hex::decode("1234567890abcdef").unwrap();
+        assert_eq!(
+            hex::encode(tdes_cbc_encrypt(&key, &iv, b"Now is t").unwrap()),
+            "204011f986e35647"
+        );
+    }
+
+    #[test]
+    fn tdes_buffers_wipe_on_invalid_padding_and_unwind() {
+        let key = [0x13u8; 24];
+        let iv = [0x21u8; 8];
+        let mut ciphertext = tdes_cbc_encrypt_padded(&key, &iv, b"recognizable text").unwrap();
+        *ciphertext.last_mut().unwrap() ^= 0xff;
+
+        let failure_observer = SensitiveBufferCleanupObserver::default();
+        {
+            let decryptor = TdesDecryptor::new_from_slices(&key, &iv).unwrap();
+            let mut buffer = SensitiveBuffer::copied_from_with_observer(
+                &ciphertext,
+                0,
+                failure_observer.clone(),
+            );
+            assert!(decryptor
+                .decrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buffer.bytes)
+                .is_err());
+        }
+        assert_observed_buffer_wiped(&failure_observer);
+
+        let unwind_observer = SensitiveBufferCleanupObserver::default();
+        let unwind = std::panic::catch_unwind({
+            let observer = unwind_observer.clone();
+            move || {
+                let mut buffer = SensitiveBuffer::copied_from_with_observer(
+                    b"sensitive 3DES scratch",
+                    8,
+                    observer,
+                );
+                buffer.bytes[0] ^= 0xff;
+                panic!("injected 3DES scratch unwind")
+            }
+        });
+        assert!(unwind.is_err());
+        assert_observed_buffer_wiped(&unwind_observer);
+    }
+
+    #[test]
+    fn retail_mac_expanded_key_copies_wipe_on_drop_and_unwind() {
+        let drop_observer = ExpandedTdesKeyCleanupObserver::default();
+        let expanded =
+            ExpandedTdesKey::repeated(b"12345678").with_cleanup_observer(drop_observer.clone());
+        assert_eq!(expanded.as_ref(), b"123456781234567812345678");
+        drop(expanded);
+        let snapshots = drop_observer.0.lock().unwrap().clone();
+        assert_eq!(snapshots, vec![[0; 24]]);
+
+        let unwind_observer = ExpandedTdesKeyCleanupObserver::default();
+        let unwind = std::panic::catch_unwind({
+            let observer = unwind_observer.clone();
+            move || {
+                let _expanded =
+                    ExpandedTdesKey::repeated(b"ABCDEFGH").with_cleanup_observer(observer);
+                panic!("injected expanded-3DES-key unwind")
+            }
+        });
+        assert!(unwind.is_err());
+        let snapshots = unwind_observer.0.lock().unwrap().clone();
+        assert_eq!(snapshots, vec![[0; 24]]);
+    }
 
     #[test]
     fn test_tdes_cbc_roundtrip() {

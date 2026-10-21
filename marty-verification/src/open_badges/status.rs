@@ -637,16 +637,19 @@ mod tests {
     use chrono::Duration;
     use flate2::write::GzEncoder;
     use flate2::Compression;
+    use marty_crypto_test_support::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
     use serde_json::json;
     use ssi_dids::DIDJWK;
     use ssi_jwk::JWK;
 
     use super::*;
-    use crate::open_badges::ob3::{
-        issue_ob3_json_async, verify_ob3_json_async, verify_ob3_json_with_status_lists_async,
-    };
+    use crate::open_badges::ob3::{verify_ob3_json_async, verify_ob3_json_with_status_lists_async};
     use crate::open_badges::types::{
         ArtifactProvenance, AuthenticatedStatusList, DocumentStore, StatusAuthorityProvenance,
+    };
+    use crate::vcdm::{
+        complete_vcdm_data_integrity_credential_json_async,
+        prepare_vcdm_data_integrity_credential_json_async,
     };
 
     const LIST_URL: &str = "https://status.example/lists/1";
@@ -662,10 +665,14 @@ mod tests {
 
     impl Fixture {
         async fn new(purpose: &str, status_size: u8, status_value: u16) -> Self {
-            let credential_jwk = JWK::generate_ed25519().expect("generate credential issuer key");
+            let credential_signer = DisposableOpenBao::from_marked_env().create_ed25519();
+            let credential_jwk: JWK = serde_json::from_str(credential_signer.public_jwk())
+                .expect("parse remote credential issuer public key");
             let credential_issuer = DIDJWK::generate(&credential_jwk).to_string();
             let credential_method = DIDJWK::generate_url(&credential_jwk).to_string();
-            let status_jwk = JWK::generate_ed25519().expect("generate status issuer key");
+            let status_signer = DisposableOpenBao::from_marked_env().create_ed25519();
+            let status_jwk: JWK = serde_json::from_str(status_signer.public_jwk())
+                .expect("parse remote status issuer public key");
             let status_issuer = DIDJWK::generate(&status_jwk).to_string();
             let status_method = DIDJWK::generate_url(&status_jwk).to_string();
             let now = Utc::now();
@@ -693,7 +700,13 @@ mod tests {
                 },
                 "credentialStatus": status_entry
             });
-            let credential = sign_credential(credential, &credential_jwk, &credential_method).await;
+            let credential = sign_credential(
+                credential,
+                &credential_signer,
+                &credential_jwk,
+                &credential_method,
+            )
+            .await;
 
             let encoded_list = encode_status_list(status_size, STATUS_INDEX, status_value);
             let status_list = json!({
@@ -710,7 +723,8 @@ mod tests {
                     "encodedList": encoded_list
                 }
             });
-            let status_list = sign_credential(status_list, &status_jwk, &status_method).await;
+            let status_list =
+                sign_credential(status_list, &status_signer, &status_jwk, &status_method).await;
 
             let mut store = BTreeMap::new();
             store.insert(
@@ -783,28 +797,55 @@ mod tests {
         }
     }
 
-    async fn sign_credential(credential: Value, jwk: &JWK, method: &str) -> Value {
+    async fn sign_credential(
+        credential: Value,
+        signer: &ScopedTransitSigner,
+        jwk: &JWK,
+        method: &str,
+    ) -> Value {
+        let issuer = credential["issuer"]
+            .as_str()
+            .expect("fixture issuer")
+            .to_string();
         let request = json!({
             "credential": credential,
-            "signing": {
-                "jwk": serde_json::to_value(jwk).expect("serialize signing key"),
-                "verification_method": method,
-                "proof_purpose": "assertionMethod"
-            }
+            "issuer_did": issuer,
+            "verification_method_id": method,
+            "public_jwk": serde_json::to_value(jwk).expect("serialize public key")
         });
-        let result = issue_ob3_json_async(&request.to_string())
+        let prepared_json = prepare_vcdm_data_integrity_credential_json_async(&request.to_string())
             .await
-            .expect("sign test credential");
-        serde_json::from_str::<Value>(&result).expect("parse issue result")["credential"].clone()
+            .expect("prepare remote status fixture signature");
+        let prepared: Value =
+            serde_json::from_str(&prepared_json).expect("parse prepared credential");
+        let message = general_purpose::URL_SAFE_NO_PAD
+            .decode(
+                prepared["signing_input_b64"]
+                    .as_str()
+                    .expect("signing input"),
+            )
+            .expect("decode signing input");
+        let signature = signer
+            .sign_ed25519(&message)
+            .expect("remote status fixture signature");
+        let result = complete_vcdm_data_integrity_credential_json_async(
+            &json!({
+                "prepared": prepared,
+                "signature_b64": general_purpose::URL_SAFE_NO_PAD.encode(signature)
+            })
+            .to_string(),
+        )
+        .await
+        .expect("complete remote status fixture signature");
+        serde_json::from_str(&result).expect("parse signed credential")
     }
 
     fn verification_method(jwk: &JWK, method: &str, controller: &str) -> Value {
-        json!({
-            "id": method,
-            "type": "JsonWebKey2020",
-            "controller": controller,
-            "publicKeyJwk": serde_json::to_value(jwk.to_public()).expect("serialize public key")
-        })
+        serde_json::to_value(
+            crate::vcdm::ed25519_multikey(jwk, controller, method)
+                .expect("remote fixture multikey"),
+        )
+        .expect("serialize remote fixture multikey")
     }
 
     fn status_entry(purpose: &str, status_size: u8) -> Value {
@@ -869,6 +910,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
     fn authenticated_delegated_status_issuer_can_prove_clear_status() {
         futures::executor::block_on(async {
             let fixture = Fixture::new("revocation", 1, 0).await;
@@ -893,6 +935,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
     fn revocation_suspension_and_multibit_statuses_are_enforced() {
         futures::executor::block_on(async {
             let revoked = Fixture::new("revocation", 1, 1).await;
@@ -936,6 +979,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
     fn unsigned_bad_proof_wrong_key_and_untrusted_issuer_cannot_prove_status() {
         futures::executor::block_on(async {
             let fixture = Fixture::new("revocation", 1, 0).await;
@@ -978,11 +1022,16 @@ mod tests {
             assert!(has_code(&result, error_codes::OPEN_BADGES_PROOF_INVALID));
             assert!(result.get("status_checks").is_none());
 
-            let wrong_jwk = JWK::generate_ed25519().expect("generate wrong status key");
+            let wrong_jwk: JWK = serde_json::from_value(json!({
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "x": marty_crypto_test_support::ED25519_PUBLIC_JWK_X
+            }))
+            .expect("parse wrong public status key");
             let mut wrong_authority_documents = fixture.status_documents.clone();
             for document in wrong_authority_documents.values_mut() {
-                document["publicKeyJwk"] = serde_json::to_value(wrong_jwk.to_public())
-                    .expect("serialize wrong public key");
+                let method = document["id"].as_str().expect("method id").to_string();
+                *document = verification_method(&wrong_jwk, &method, &fixture.status_issuer);
             }
             let wrong_key = fixture.authenticated_with_documents(
                 fixture.status_list.clone(),
@@ -1025,6 +1074,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
     fn wrong_binding_future_and_stale_status_lists_cannot_pass() {
         futures::executor::block_on(async {
             let fixture = Fixture::new("revocation", 1, 0).await;
@@ -1111,6 +1161,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
     fn untyped_document_store_status_list_cannot_prove_clear_status() {
         futures::executor::block_on(async {
             let fixture = Fixture::new("revocation", 1, 0).await;

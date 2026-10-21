@@ -46,6 +46,8 @@ Repository = "https://github.com/ElevenID/marty-core.git"
 Issues = "https://github.com/ElevenID/marty-core/issues"
 
 [tool.maturin]
+# Local interpreter caches and repository rules are not package data.
+exclude = ["**/__pycache__/**", "**/*.pyc", "**/.gitignore"]
 # Build the Python module from Cargo.toml
 python-source = "python"
 module-name = "marty_biometrics._marty_biometrics"

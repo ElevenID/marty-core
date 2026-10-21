@@ -192,10 +192,13 @@ fn p256_public_key_from_certificate(
 mod tests {
     use super::*;
     use elliptic_curve::sec1::ToEncodedPoint;
-    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+    use marty_crypto_test_support::remote_certificate::{
+        RemoteCertificateAlgorithm, RemoteCertificateKey,
+    };
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, PublicKeyData};
 
-    fn public_jwk(key: &KeyPair) -> Jwk {
-        let public = PublicKey::from_sec1_bytes(key.public_key_raw()).unwrap();
+    fn public_jwk(key: &RemoteCertificateKey) -> Jwk {
+        let public = PublicKey::from_sec1_bytes(key.der_bytes()).unwrap();
         let point = public.to_encoded_point(false);
         Jwk {
             kty: "EC".to_owned(),
@@ -212,14 +215,14 @@ mod tests {
             .distinguished_name
             .push(DnType::CommonName, "OID4VP Root");
         root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let root_key = KeyPair::generate().unwrap();
+        let root_key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
         let root = root_params.self_signed(&root_key).unwrap();
 
         let mut leaf_params = CertificateParams::default();
         leaf_params
             .distinguished_name
             .push(DnType::CommonName, "OID4VP Verifier");
-        let leaf_key = KeyPair::generate().unwrap();
+        let leaf_key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
         let issuer = rcgen::Issuer::from_params(&root_params, &root_key);
         let leaf = leaf_params.signed_by(&leaf_key, &issuer).unwrap();
         (
@@ -230,6 +233,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn builds_hash_and_omits_self_signed_root_from_x5c() {
         let (bundle, jwk, leaf_der) = certificate_bundle();
         let result = x509_hash_client_identity(&bundle, &jwk).unwrap();
@@ -244,9 +248,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signers"]
     fn rejects_mismatched_or_private_profile_keys() {
         let (bundle, _, _) = certificate_bundle();
-        let other_key = KeyPair::generate().unwrap();
+        let other_key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
         assert_eq!(
             x509_hash_client_identity(&bundle, &public_jwk(&other_key)).unwrap_err(),
             Oid4vpIdentityError::PublicKeyMismatch

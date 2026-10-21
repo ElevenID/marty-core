@@ -14,6 +14,14 @@ ROOT_INVALIDATORS = {
     "rust-toolchain.toml",
 }
 
+# Cargo metadata cannot express test-source imports across workspace packages.
+# Crypto's JWK integration test embeds this Verification-owned contract directly.
+# This is a test-only edge, not a library change: its Cargo consumers need not
+# be added to the reverse dependency closure solely because the vector changes.
+CROSS_PACKAGE_TEST_INPUT_OWNERS = {
+    "marty-verification/tests/fixtures/public_key_jwk_vectors.json": {"marty-crypto"},
+}
+
 
 def affected_packages(
     changed_paths: list[str], metadata: dict[str, object]
@@ -33,9 +41,10 @@ def affected_packages(
     }
 
     directly_changed: set[str] = set()
+    extra_test_packages: set[str] = set()
     for path in normalized:
-        if path.suffix != ".rs" and path.name != "Cargo.toml":
-            continue
+        # Fixtures, native sources, and embedded documentation are build/test
+        # inputs too. Package ownership, not the extension, defines relevance.
         matches = [
             (len(root.parts), name)
             for name, root in roots.items()
@@ -43,6 +52,16 @@ def affected_packages(
         ]
         if matches:
             directly_changed.add(max(matches)[1])
+            extra_owners = CROSS_PACKAGE_TEST_INPUT_OWNERS.get(str(path), set())
+            if not extra_owners <= set(roots):
+                # A mapped package disappearing is not evidence that its test
+                # obligation vanished. Keep the workspace fallback.
+                return True, []
+            extra_test_packages.update(extra_owners)
+        else:
+            # Shared scripts/configuration and removed packages have no proven
+            # owner in current metadata. Never turn uncertainty into no tests.
+            return True, []
 
     reverse_dependencies: dict[str, set[str]] = defaultdict(set)
     workspace_names = set(roots)
@@ -60,17 +79,21 @@ def affected_packages(
             if consumer not in affected:
                 affected.add(consumer)
                 queue.append(consumer)
+    affected.update(extra_test_packages)
     return False, sorted(affected)
 
 
 def git_changed_paths(base: str, head: str) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACMRT", base, head],
+        # Disable rename folding so both the old and new package are selected.
+        # NUL delimiters preserve spaces/unicode and avoid Git's quoted paths.
+        ["git", "diff", "--name-only", "-z", "--no-renames", base, head, "--"],
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
-    return [line for line in result.stdout.splitlines() if line]
+    return [path for path in result.stdout.split("\0") if path]
 
 
 def cargo_metadata() -> dict[str, object]:

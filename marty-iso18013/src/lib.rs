@@ -21,10 +21,10 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! # #[cfg(feature = "session-protocol")]
+//! # #[cfg(all(feature = "session-protocol", feature = "qr-render"))]
 //! use marty_iso18013::{DeviceEngagement, Session, SessionConfig};
 //!
-//! # #[cfg(feature = "session-protocol")]
+//! # #[cfg(all(feature = "session-protocol", feature = "qr-render"))]
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create device engagement
 //! let engagement = DeviceEngagement::new_qr()?;
@@ -96,9 +96,17 @@ pub use selective::SelectiveDisclosure;
 #[cfg(feature = "session-protocol")]
 pub use transport::Transport;
 
+// Keep the imported session compliance source unchanged while compiling it
+// inside the crate, where test-only compatibility helpers are available.
+#[cfg(all(test, feature = "session-protocol"))]
+extern crate self as marty_iso18013;
+#[cfg(all(test, feature = "session-protocol"))]
+#[path = "../tests/session_conformance.rs"]
+mod session_conformance;
+
 #[cfg(feature = "python")]
-#[pymodule]
-fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pymodule(name = "marty_iso18013")]
+fn marty_iso18013_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     // Core types
@@ -124,4 +132,30 @@ fn marty_iso18013(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&transport_module)?;
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "python"))]
+mod python_feature_tests {
+    use super::*;
+
+    #[test]
+    fn python_module_name_coexists_with_session_conformance_alias() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = pyo3::wrap_pymodule!(marty_iso18013_module)(py);
+            let module_name: String = module
+                .getattr(py, "__name__")
+                .expect("Python module exposes __name__")
+                .extract(py)
+                .expect("Python module name is a string");
+            assert_eq!(module_name, "marty_iso18013");
+
+            let version: String = module
+                .getattr(py, "__version__")
+                .expect("Python module exposes __version__")
+                .extract(py)
+                .expect("Python module version is a string");
+            assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        });
+    }
 }

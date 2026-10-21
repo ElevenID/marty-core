@@ -1,0 +1,42 @@
+{
+  "credential": {
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://purl.imsglobal.org/spec/ob/v3p0/context.json"
+    ],
+    "credentialSubject": {
+      "achievement": {
+        "criteria": {
+          "narrative": "Must pass all OB3 conformance scenarios."
+        },
+        "description": "Awarded for passing the conformance test suite.",
+        "id": "urn:uuid:achievement-expired-vector",
+        "name": "Conformance Test Badge",
+        "type": "Achievement"
+      },
+      "id": "did:example:recipient",
+      "type": "AchievementSubject"
+    },
+    "id": "urn:uuid:ob3-conformance-credential-1",
+    "issuer": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0",
+    "proof": {
+      "@context": "https://w3id.org/security/suites/jws-2020/v1",
+      "created": "2026-10-07T18:54:46.629Z",
+      "jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsiYjY0Il0sImI2NCI6ZmFsc2V9..Ce_XEjkIH2MzdZ6X0KG62-YcYSyDFW1Oddzwwtf-mjfnK9DIlQIbwtlwoIwxd0k4RskLb9ZxF9EKHXrwHq8LBw",
+      "proofPurpose": "assertionMethod",
+      "type": "JsonWebSignature2020",
+      "verificationMethod": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0"
+    },
+    "type": [
+      "VerifiableCredential",
+      "OpenBadgeCredential"
+    ],
+    "validUntil": "2000-01-01T00:00:00Z"
+  },
+  "did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0",
+  "public_jwk": {
+    "crv": "Ed25519",
+    "kty": "OKP",
+    "x": "B7M5x6qZpJuOBhplKERpaAY2FsI1muhSJw5yAWTJc9A"
+  }
+}

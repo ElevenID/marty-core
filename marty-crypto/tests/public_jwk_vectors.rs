@@ -99,13 +99,13 @@ fn public_jwk_rejects_every_registered_private_member() {
     for member in ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
         let json = format!(r#"{{"kty":"EC","{member}":"secret"}}"#);
         assert!(
-            serde_json::from_str::<PublicJwk>(&json).is_err(),
+            PublicJwk::from_json(&json).is_err(),
             "PublicJwk accepted private member {member}"
         );
     }
 
-    let public: PublicJwk =
-        serde_json::from_str(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y","custom":true}"#)
+    let public =
+        PublicJwk::from_json(r#"{"kty":"EC","crv":"P-256","x":"x","y":"y","custom":true}"#)
             .unwrap();
     assert_eq!(public.extensions().get("custom"), Some(&Value::Bool(true)));
     let serialized = serde_json::to_string(&public).unwrap();
@@ -128,4 +128,18 @@ fn public_jwk_extensions_have_a_safe_external_construction_path() {
         let extensions = HashMap::from([(reserved.to_owned(), Value::String("value".into()))]);
         assert!(PublicJwk::default().with_extensions(extensions).is_err());
     }
+
+    let too_many = (0..=32)
+        .map(|index| (format!("extension-{index}"), Value::Bool(true)))
+        .collect();
+    assert!(PublicJwk::default().with_extensions(too_many).is_err());
+
+    let oversized_array =
+        HashMap::from([("custom".to_owned(), Value::Array(vec![Value::Null; 129]))]);
+    assert!(PublicJwk::default()
+        .with_extensions(oversized_array)
+        .is_err());
+
+    assert!(serde_json::from_str::<PublicJwk>(r#"{"kty":"EC","kty":"RSA"}"#).is_err());
+    assert!(serde_json::from_str::<PublicJwk>(r#"{"kty":"EC","custom":1,"custom":2}"#).is_err());
 }

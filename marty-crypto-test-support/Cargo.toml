@@ -1,0 +1,23 @@
+[package]
+name = "marty-crypto-test-support"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Non-publishable remote signing and public-key fixtures for Marty tests"
+
+[dependencies]
+base64 = { workspace = true }
+marty-crypto = { path = "../marty-crypto", default-features = false, features = ["ecdsa-verification", "jwk", "public-key-codec", "rsa-verification"] }
+der = { workspace = true }
+p256 = { workspace = true, features = ["arithmetic", "sha256", "std"] }
+ecdsa-core = { workspace = true, features = ["verifying"] }
+rcgen = { workspace = true, features = ["aws_lc_rs"] }
+reqwest = { workspace = true, features = ["blocking"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+spki = { workspace = true }
+uuid = { workspace = true }

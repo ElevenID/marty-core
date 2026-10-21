@@ -51,7 +51,7 @@ pub fn build_internal_authenticate_apdu(challenge: &[u8]) -> VerificationResult<
             "Active Authentication challenge exceeds short APDU capacity",
         ));
     }
-    Ok(ApduCommand {
+    ApduCommand {
         cla: 0x00,
         ins: 0x88,
         p1: 0x00,
@@ -59,7 +59,7 @@ pub fn build_internal_authenticate_apdu(challenge: &[u8]) -> VerificationResult<
         data: challenge.to_vec(),
         le: Some(0),
     }
-    .to_bytes())
+    .to_bytes()
 }
 
 /// Parse a successful INTERNAL AUTHENTICATE response and return its signature.
@@ -118,9 +118,6 @@ pub fn verify_challenge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marty_crypto::iso9796::iso9796_scheme1_sign;
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
-    use rsa::RsaPrivateKey;
 
     #[test]
     fn builds_and_parses_internal_authenticate_apdus() {
@@ -139,31 +136,28 @@ mod tests {
 
     #[test]
     fn verifies_only_the_exact_challenge() {
-        let private_key = RsaPrivateKey::new(&mut rand::rngs::OsRng, 1024).unwrap();
-        let private_der = private_key.to_pkcs8_der().unwrap();
-        let public_der = private_key.to_public_key().to_public_key_der().unwrap();
-        let challenge = b"0123456789abcdef";
-        let signature = iso9796_scheme1_sign(private_der.as_bytes(), challenge).unwrap();
-
+        let vector: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/active_authentication_public.json"
+        ))
+        .unwrap();
+        let public_der = hex::decode(vector["public_key_der_hex"].as_str().unwrap()).unwrap();
+        let challenge = vector["challenge_utf8"].as_str().unwrap().as_bytes();
+        let signature = hex::decode(vector["matching_signature_hex"].as_str().unwrap()).unwrap();
         let valid = verify_challenge(
-            public_der.as_bytes(),
+            &public_der,
             challenge,
             &signature,
             Iso9796HashAlgorithm::Sha256,
         )
         .unwrap();
         assert!(valid.is_valid);
-        assert_eq!(
-            valid.recovered_message.as_deref(),
-            Some(challenge.as_slice())
-        );
+        assert_eq!(valid.recovered_message.as_deref(), Some(challenge));
 
-        let contained_but_not_exact = b"xx0123456789abcdefyy";
         let signature =
-            iso9796_scheme1_sign(private_der.as_bytes(), contained_but_not_exact).unwrap();
+            hex::decode(vector["other_message_signature_hex"].as_str().unwrap()).unwrap();
         assert!(
             !verify_challenge(
-                public_der.as_bytes(),
+                &public_der,
                 challenge,
                 &signature,
                 Iso9796HashAlgorithm::Sha256,

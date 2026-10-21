@@ -1,5 +1,19 @@
 # mdoc issuance preparation benchmark
 
+## SD-JWT remote preparation benchmark
+
+`sd_jwt_issuance` compares sequential remote preparation with a single
+caller-ordered batch for 1, 8, 32, and 256 credentials. Each fixture has
+eight 256-byte selective claims. Before timing, the benchmark checks the
+signing header, payload, holder binding, disclosure order, and SHA-256
+commitments for every credential. Timed work includes validation, salt
+generation, disclosure encoding and hashing, and signing-input preparation;
+remote signing and Python transport are excluded.
+
+Run `cargo test --locked -p marty-oid4vci --bench sd_jwt_issuance` for a
+smoke check or `cargo bench --locked -p marty-oid4vci --bench sd_jwt_issuance`
+for measurements.
+
 `mdoc_issuance` measures Marty's public remote-signing preparation route with
 1, 8, 32, 128, and 512 issued elements. Each element has a deterministic
 256-byte value. A preflight assembles and decodes every fixture, then checks

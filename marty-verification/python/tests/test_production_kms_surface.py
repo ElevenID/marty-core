@@ -55,6 +55,10 @@ def test_production_module_excludes_local_secret_key_operations():
         "aes_gcm_decrypt",
         "tdes_cbc_encrypt",
         "tdes_cbc_decrypt",
+        "hkdf_sha256",
+        "hkdf_sha384",
+        "pbkdf2_sha256",
+        "generate_random_bytes",
         "NativeBacSession",
         "NativePaceSession",
         "NativeEacChipAuthentication",
@@ -65,7 +69,6 @@ def test_production_module_excludes_local_secret_key_operations():
     assert forbidden.isdisjoint(dir(marty_verification_py))
     for safe_name in (
         "verify_signature",
-        "generate_random_bytes",
         "dtc_prepare_signing",
         "dtc_assemble_signature",
         "dtc_verify",

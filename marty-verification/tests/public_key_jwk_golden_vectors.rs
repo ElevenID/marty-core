@@ -117,12 +117,5 @@ fn typed_conversion_preserves_public_metadata_and_extensions() {
     let expected = serde_json::to_value(&source).unwrap();
     let converted = marty_verification::jwk::Jwk::from(source);
     assert_eq!(serde_json::to_value(&converted).unwrap(), expected);
-    assert!(converted.d.is_none());
-    assert!(converted.rsa_d.is_none());
-    assert!(converted.p.is_none());
-    assert!(converted.q.is_none());
-    assert!(converted.dp.is_none());
-    assert!(converted.dq.is_none());
-    assert!(converted.qi.is_none());
-    assert!(converted.k.is_none());
+    assert!(!converted.is_private());
 }

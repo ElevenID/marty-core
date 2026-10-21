@@ -17,7 +17,7 @@ pub use jws::*;
 pub use key::*;
 pub use public_key::*;
 
-#[cfg(not(feature = "local-key-operations"))]
+#[cfg(not(test))]
 /// Marker documenting the verification-only JWK boundary.
 ///
 /// JWK generation and local JWS signing do not exist in this build:
@@ -42,12 +42,20 @@ pub use public_key::*;
 /// jwk.extra.insert("d".into(), "secret".into());
 /// ```
 ///
-/// Generic private-JWK decryption also requires the explicit local-key
-/// capability; HAIP production code uses the session-scoped helper instead:
+/// Generic private-JWK decryption is absent; HAIP production code uses an
+/// opaque, one-use response-decryption session instead:
 ///
 /// ```compile_fail
 /// # use marty_verification::jwk::Jwk;
 /// let _ = marty_verification::jwk::jwe_decrypt("compact", &Jwk::default());
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_verification::jwk::generate_haip_response_encryption_jwk_pair();
+/// ```
+///
+/// ```compile_fail
+/// let _ = marty_verification::jwk::decrypt_haip_response("compact", "private-jwk");
 /// ```
 pub struct VerificationOnly;
 

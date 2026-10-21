@@ -44,6 +44,6 @@ mod tests {
     #[tokio::test]
     async fn holder_engagement_session_uses_advertised_device_key() {
         let (engagement, session) = Holder::new().begin_qr_engagement().await.unwrap();
-        assert_eq!(session.public_key().await, engagement.device_key);
+        assert_eq!(session.public_key().await.unwrap(), engagement.device_key);
     }
 }

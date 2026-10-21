@@ -49,9 +49,9 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 
 # Encoding
-hex = "0.4"
+hex.workspace = true
 # Internal crates
-marty-types = { version = "0.1.5", path = "../marty-types" }
+marty-types = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

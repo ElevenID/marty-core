@@ -32,23 +32,6 @@ impl PyNativeBacSession {
         }
     }
 
-    #[cfg(feature = "local-key-operations")]
-    fn derive_bac_keys<'py>(
-        &self,
-        py: Python<'py>,
-        passport_number: &str,
-        date_of_birth: &str,
-        date_of_expiry: &str,
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
-        let keys = crate::chip_io::derive_bac_base_keys(&mrz).map_err(to_pyerr)?;
-        let result = PyDict::new(py);
-        result.set_item("k_enc", PyBytes::new(py, &keys.k_enc))?;
-        result.set_item("k_mac", PyBytes::new(py, &keys.k_mac))?;
-        result.set_item("k_seed", PyBytes::new(py, &keys.k_seed))?;
-        Ok(result)
-    }
-
     fn start_bac<'py>(
         &mut self,
         py: Python<'py>,
@@ -60,65 +43,6 @@ impl PyNativeBacSession {
         let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
         let handshake =
             crate::chip_io::BacHandshake::begin(&mrz, chip_challenge).map_err(to_pyerr)?;
-        let command = handshake.command_data().map_err(to_pyerr)?;
-        self.handshake = Some(handshake);
-        self.session = None;
-        Ok(PyBytes::new(py, &command))
-    }
-
-    #[cfg(feature = "local-key-operations")]
-    fn start_bac_with_keys<'py>(
-        &mut self,
-        py: Python<'py>,
-        k_enc: &[u8],
-        k_mac: &[u8],
-        k_seed: &[u8],
-        chip_challenge: &[u8],
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let k_enc: [u8; 16] = k_enc.try_into().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err("BAC encryption key must be 16 bytes")
-        })?;
-        let k_mac: [u8; 16] = k_mac
-            .try_into()
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC MAC key must be 16 bytes"))?;
-        let k_seed: [u8; 16] = k_seed
-            .try_into()
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC seed must be 16 bytes"))?;
-        let keys = crate::chip_io::BacKeys::from_parts(k_enc, k_mac, k_seed);
-        let handshake = crate::chip_io::BacHandshake::begin_with_keys(keys, chip_challenge)
-            .map_err(to_pyerr)?;
-        let command = handshake.command_data().map_err(to_pyerr)?;
-        self.handshake = Some(handshake);
-        self.session = None;
-        Ok(PyBytes::new(py, &command))
-    }
-
-    #[cfg(feature = "local-key-operations")]
-    #[allow(clippy::too_many_arguments)]
-    fn start_bac_with_random<'py>(
-        &mut self,
-        py: Python<'py>,
-        passport_number: &str,
-        date_of_birth: &str,
-        date_of_expiry: &str,
-        chip_challenge: &[u8],
-        reader_challenge: &[u8],
-        reader_key: &[u8],
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let mrz = bac_mrz(passport_number, date_of_birth, date_of_expiry)?;
-        let reader_challenge: [u8; 8] = reader_challenge.try_into().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err("BAC reader challenge must be 8 bytes")
-        })?;
-        let reader_key: [u8; 16] = reader_key.try_into().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err("BAC reader key must be 16 bytes")
-        })?;
-        let handshake = crate::chip_io::BacHandshake::begin_with_random(
-            &mrz,
-            chip_challenge,
-            reader_challenge,
-            reader_key,
-        )
-        .map_err(to_pyerr)?;
         let command = handshake.command_data().map_err(to_pyerr)?;
         self.handshake = Some(handshake);
         self.session = None;
@@ -139,38 +63,6 @@ impl PyNativeBacSession {
         Ok(result)
     }
 
-    #[cfg(feature = "local-key-operations")]
-    fn derive_session_keys<'py>(
-        &mut self,
-        py: Python<'py>,
-        k_ifd: &[u8],
-        k_ic: &[u8],
-        rnd_ic: &[u8],
-        rnd_ifd: &[u8],
-    ) -> PyResult<Bound<'py, PyDict>> {
-        let session = crate::chip_io::derive_bac_session_keys(k_ifd, k_ic, rnd_ic, rnd_ifd)
-            .map_err(to_pyerr)?;
-        let result = bac_session_dict(py, &session)?;
-        self.session = Some(session);
-        Ok(result)
-    }
-
-    #[cfg(feature = "local-key-operations")]
-    fn set_session_keys(&mut self, k_enc: &[u8], k_mac: &[u8], ssc: u64) -> PyResult<()> {
-        let k_enc: [u8; 16] = k_enc.try_into().map_err(|_| {
-            pyo3::exceptions::PyValueError::new_err("BAC encryption key must be 16 bytes")
-        })?;
-        let k_mac: [u8; 16] = k_mac
-            .try_into()
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("BAC MAC key must be 16 bytes"))?;
-        self.session = Some(crate::chip_io::BacSession::from_session_keys(
-            k_enc,
-            k_mac,
-            ssc.to_be_bytes(),
-        ));
-        Ok(())
-    }
-
     fn protect_command<'py>(
         &mut self,
         py: Python<'py>,
@@ -181,7 +73,8 @@ impl PyNativeBacSession {
             pyo3::exceptions::PyValueError::new_err("Session keys not established")
         })?;
         let protected = session.protect_command(&command).map_err(to_pyerr)?;
-        Ok(PyBytes::new(py, &protected.to_bytes()))
+        let encoded = protected.to_bytes().map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &encoded))
     }
 
     fn unprotect_response<'py>(
@@ -203,14 +96,6 @@ impl PyNativeBacSession {
     fn session_established(&self) -> bool {
         self.session.is_some()
     }
-
-    #[cfg(feature = "local-key-operations")]
-    fn session_keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let session = self.session.as_ref().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("Session keys not established")
-        })?;
-        bac_session_dict(py, session)
-    }
 }
 
 #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
@@ -231,17 +116,6 @@ impl PyNativePaceSession {
         }
     }
 
-    #[cfg(feature = "local-key-operations")]
-    fn derive_password_key<'py>(
-        &self,
-        py: Python<'py>,
-        password: &str,
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let key =
-            crate::chip_io::derive_compatibility_pace_password_key(password).map_err(to_pyerr)?;
-        Ok(PyBytes::new(py, &key))
-    }
-
     #[pyo3(signature = (password, encrypted_nonce, curve="p256"))]
     fn start_pace<'py>(
         &mut self,
@@ -258,26 +132,6 @@ impl PyNativePaceSession {
         let handshake =
             crate::chip_io::PaceCompatibilityHandshake::begin(password, encrypted_nonce)
                 .map_err(to_pyerr)?;
-        let public_key = handshake.public_key().to_vec();
-        self.handshake = Some(handshake);
-        self.session = None;
-        Ok(PyBytes::new(py, &public_key))
-    }
-
-    #[cfg(feature = "local-key-operations")]
-    fn start_pace_with_private_key<'py>(
-        &mut self,
-        py: Python<'py>,
-        password: &str,
-        encrypted_nonce: &[u8],
-        private_key: &[u8],
-    ) -> PyResult<Bound<'py, PyBytes>> {
-        let handshake = crate::chip_io::PaceCompatibilityHandshake::begin_with_private_key(
-            password,
-            encrypted_nonce,
-            private_key,
-        )
-        .map_err(to_pyerr)?;
         let public_key = handshake.public_key().to_vec();
         self.handshake = Some(handshake);
         self.session = None;
@@ -310,7 +164,8 @@ impl PyNativePaceSession {
             pyo3::exceptions::PyValueError::new_err("PACE session keys not established")
         })?;
         let protected = session.protect_command(&command).map_err(to_pyerr)?;
-        Ok(PyBytes::new(py, &protected.to_bytes()))
+        let encoded = protected.to_bytes().map_err(to_pyerr)?;
+        Ok(PyBytes::new(py, &encoded))
     }
 
     fn unprotect_response<'py>(
@@ -420,7 +275,12 @@ pub(super) fn apdu_build_read_binary_commands<'py>(
     crate::chip_io::build_read_binary_commands(length, offset)
         .map_err(to_pyerr)?
         .iter()
-        .map(|command| Ok(PyBytes::new(py, &command.to_bytes())))
+        .map(|command| {
+            command
+                .to_bytes()
+                .map(|encoded| PyBytes::new(py, &encoded))
+                .map_err(to_pyerr)
+        })
         .collect()
 }
 
@@ -454,11 +314,8 @@ pub(super) fn bac_mrz(
             "BAC dates must be six ASCII digits (YYMMDD)",
         ));
     }
-    Ok(crate::chip_io::MrzKeyInfo::from_mrz_fields(
-        &document,
-        date_of_birth,
-        date_of_expiry,
-    ))
+    crate::chip_io::MrzKeyInfo::try_from_mrz_fields(&document, date_of_birth, date_of_expiry)
+        .map_err(to_pyerr)
 }
 
 #[cfg(all(feature = "csca", feature = "ephemeral-session-keys"))]
@@ -467,12 +324,6 @@ pub(super) fn bac_session_dict<'py>(
     _session: &crate::chip_io::BacSession,
 ) -> PyResult<Bound<'py, PyDict>> {
     let result = PyDict::new(py);
-    #[cfg(feature = "local-key-operations")]
-    {
-        result.set_item("k_s_enc", PyBytes::new(py, _session.encryption_key()))?;
-        result.set_item("k_s_mac", PyBytes::new(py, _session.mac_key()))?;
-        result.set_item("ssc", u64::from_be_bytes(*_session.send_sequence_counter()))?;
-    }
     result.set_item("session_established", true)?;
     Ok(result)
 }

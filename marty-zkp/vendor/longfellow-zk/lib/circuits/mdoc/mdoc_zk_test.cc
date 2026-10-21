@@ -351,7 +351,9 @@ TEST_F(MdocZKTest, bad_arguments) {
                             (uint8_t**)&zkproof, &proof_len, nullptr),
             MDOC_PROVER_NULL_INPUT);
 
-  for (const char* invalid_now : {"x", "2023-11-02T09:00:000Z"}) {
+  for (const char* invalid_now :
+       {"x", "2023-11-02T09:00:000Z", "2023-02-29T09:00:00Z",
+        "2024-04-31T09:00:00Z", "2024-11-02T24:00:00Z"}) {
     EXPECT_EQ(run_mdoc_prover(circuit, sizeof(circuit), mdoc, sizeof(mdoc), pk,
                               pk, tr, sizeof(tr), attrs, num_attrs, invalid_now,
                               (uint8_t**)&zkproof, &proof_len, &zk_spec_1),
@@ -588,13 +590,16 @@ TEST(CborValidate, ValidInputs) {
 
   // Fulldate: Tag 1004 (D9 03 EC) + String (6A) + 10 bytes -> 14 bytes
   std::vector<uint8_t> fulldate = {0xD9, 0x03, 0xEC, 0x6A};
-  fulldate.insert(fulldate.end(), 10, '0');
+  const char full_date_text[] = "2024-02-29";
+  fulldate.insert(fulldate.end(), full_date_text,
+                  full_date_text + sizeof(full_date_text) - 1);
   EXPECT_EQ(fulldate.size(), 14);
   EXPECT_TRUE(proofs::cbor_validate(fulldate.data(), fulldate.size()));
 
   // Tdate: Tag 0 (C0) + String (74, len 20) + 20 bytes -> 22 bytes
   std::vector<uint8_t> tdate = {0xC0, 0x74};
-  tdate.insert(tdate.end(), 20, '0');
+  const char tdate_text[] = "2024-02-29T23:59:59Z";
+  tdate.insert(tdate.end(), tdate_text, tdate_text + sizeof(tdate_text) - 1);
   EXPECT_EQ(tdate.size(), 22);
   EXPECT_TRUE(proofs::cbor_validate(tdate.data(), tdate.size()));
 }
@@ -602,6 +607,7 @@ TEST(CborValidate, ValidInputs) {
 TEST(CborValidate, InvalidInputs) {
   // Null/Empty
   EXPECT_FALSE(proofs::cbor_validate(nullptr, 0));
+  EXPECT_FALSE(proofs::cbor_validate(nullptr, 1));
 
   // Array (not allowed)
   EXPECT_FALSE(proofs::cbor_validate((const uint8_t[]){0x80}, 1));
@@ -610,6 +616,9 @@ TEST(CborValidate, InvalidInputs) {
 
   // Malformed length (String len 1 but missing data)
   EXPECT_FALSE(proofs::cbor_validate((const uint8_t[]){0x61}, 1));
+  // Text with an overlong UTF-8 encoding.
+  EXPECT_FALSE(
+      proofs::cbor_validate((const uint8_t[]){0x62, 0xC0, 0x80}, 3));
 
   // Boolean, wrong length
   EXPECT_FALSE(proofs::cbor_validate((const uint8_t[]){0xF5, 0xF5}, 2));
@@ -648,6 +657,23 @@ TEST(CborValidate, InvalidInputs) {
 
   // Tdate inner type mismatch (Tag 0 + Integer)
   EXPECT_FALSE(proofs::cbor_validate((const uint8_t[]){0xC0, 0x00}, 2));
+
+  for (const char* invalid_date :
+       {"2023-02-29", "2024-04-31", "2024-00-01", "2024-01-00",
+        "202A-01-01"}) {
+    std::vector<uint8_t> encoded = {0xD9, 0x03, 0xEC, 0x6A};
+    encoded.insert(encoded.end(), invalid_date, invalid_date + 10);
+    EXPECT_FALSE(proofs::cbor_validate(encoded.data(), encoded.size()));
+  }
+
+  for (const char* invalid_time :
+       {"2023-02-29T09:00:00Z", "2024-04-31T09:00:00Z",
+        "2024-01-01T24:00:00Z", "2024-01-01T23:60:00Z",
+        "2024-01-01T23:59:60Z"}) {
+    std::vector<uint8_t> encoded = {0xC0, 0x74};
+    encoded.insert(encoded.end(), invalid_time, invalid_time + 20);
+    EXPECT_FALSE(proofs::cbor_validate(encoded.data(), encoded.size()));
+  }
 }
 
 // ============================ Benchmarks ====================================

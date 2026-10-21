@@ -73,6 +73,10 @@ cargo test --workspace --features test-fixtures
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+Dev and test builds use line-table debug information for faster iteration.
+When inspecting local variables in a debugger, use `cargo build --profile debugging`
+or `cargo test --profile debugging` for full debug information.
+
 ### Docker Development
 
 The project includes a multi-stage Docker development environment:

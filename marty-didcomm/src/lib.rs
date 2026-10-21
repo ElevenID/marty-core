@@ -5,11 +5,12 @@
 //! This crate provides DID resolution (did:key, did:web, did:peer, did:jwk)
 //! and deliberately narrow one-recipient-DID credential-delivery profiles:
 //! every authorized X25519 key-agreement method, `ECDH-ES+A256KW` anonymous encryption,
-//! `ECDH-1PU+A256KW` sender-authenticated encryption, and the required
-//! `A256CBC-HS512` content encryption algorithm. Key material must be
+//! the required `A256CBC-HS512` content encryption algorithm. Native services
+//! provide `ECDH-1PU+A256KW` sender-authenticated encryption through remote
+//! non-exportable KMS custody. Public key material must be
 //! explicitly authorized by each DID document's `keyAgreement` relationship.
-//! The encrypted-envelope implementation is checked against unmodified
-//! Appendix C data.
+//! This crate's envelope tests cover public-recipient anoncrypt structure;
+//! native remote-KMS integration tests own authcrypt interoperability.
 //!
 //! This is not a claim that Marty is a complete general-purpose DIDComm agent.
 //! The public Marty API does not yet expose signed envelopes, mediator
@@ -32,10 +33,6 @@
 //! out of scope. For those methods, use the DIF Universal Resolver as an HTTP
 //! proxy and configure its HTTP(S) base URL explicitly.
 
-#[cfg(all(feature = "kms-only", feature = "local-key-operations"))]
-compile_error!("kms-only DIDComm builds cannot accept caller-supplied private keys");
-
-#[cfg(not(feature = "local-key-operations"))]
 /// Marker for public-recipient encryption builds that cannot accept local
 /// sender or recipient private keys.
 ///
@@ -102,11 +99,6 @@ pub use did_identifier::{derive_p256_did_identifier, derive_p256_did_jwk, derive
 pub use did_resolver::{DidResolutionResult, DidResolver};
 #[cfg(feature = "encrypted-envelope")]
 pub use encrypted_envelope::encrypt_for_recipient;
-#[cfg(feature = "local-key-operations")]
-pub use encrypted_envelope::{
-    decrypt_authenticated_jwe, decrypt_jwe, encrypt_for_recipient_authenticated,
-    AuthenticatedDecryption,
-};
 pub use envelope::{pack_credential_for_holder, unpack_didcomm_message};
 pub use error::{DidcommError, DidcommResult};
 pub use types::{DidDocument, DidcommMessage, ServiceEndpoint, VerificationMethod};

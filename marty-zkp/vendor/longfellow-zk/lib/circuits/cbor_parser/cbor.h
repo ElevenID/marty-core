@@ -52,9 +52,10 @@ class Cbor {
   explicit Cbor(const Logic& l) : l_(l), ctr_(l), bd_(l), bp_(l) {}
 
   struct global_witness {
-    EltW invprod_decode;  // inverse of a certain product, see assert_decode()
-    CEltW cc0_counter;    // initial value of counter[0]
-    EltW invprod_parse;   // inverse of a certain product, see assert_parse()
+    EltW invprod_decode;    // inverse of a certain product, see assert_decode()
+    CEltW cc0_counter;      // initial value of counter[0]
+    CEltW neg_cc0_counter;  // such that cc0 + neg_cc0 == 0
+    EltW invprod_parse;     // inverse of a certain product, see assert_parse()
   };
 
   struct position_witness {
@@ -272,6 +273,12 @@ class Cbor {
       ctr_.assert0(ps[n - 1].c[l]);
     }
 
+    // Assert that cc0_counter + neg_cc0_counter = 0.  This is useless
+    // in prime fields, but in binary fields it asserts that all
+    // counters are well-formed, i.e., not F.zero(), which is not an
+    // element of the multiplicative group.
+    ctr_.assert0(ctr_.add(gw.cc0_counter, gw.neg_cc0_counter));
+
     // SEL[0][0] is set.  We implicitly define COUNTER[-1][L] to make
     // this the correct choice.
     L.assert1(ps[0].sel[0]);
@@ -354,8 +361,7 @@ class Cbor {
   }
 
   //------------------------------------------------------------
-  // "J is a header containing negative U."  (U >= 0, and
-  // CBOR distinguishes 0 from -0 apparently)
+  // "J is a header containing negative(U)."
   //------------------------------------------------------------
   void assert_negative_at(size_t n, const vindex& j, uint64_t u,
                           const decode ds[/*n*/]) const {

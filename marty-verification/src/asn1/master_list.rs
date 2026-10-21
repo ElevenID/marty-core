@@ -295,19 +295,55 @@ pub fn verify_master_list_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marty_crypto_test_support::remote_certificate::{
+        RemoteCertificateAlgorithm, RemoteCertificateKey,
+    };
+
+    struct RemoteCmsSigner(RemoteCertificateKey);
+
+    impl signature::Keypair for RemoteCmsSigner {
+        type VerifyingKey = p256::ecdsa::VerifyingKey;
+
+        fn verifying_key(&self) -> Self::VerifyingKey {
+            use p256::pkcs8::DecodePublicKey;
+
+            Self::VerifyingKey::from_public_key_der(self.0.public_key_spki_der())
+                .expect("remote P-256 public key must be valid")
+        }
+    }
+
+    impl spki::DynSignatureAlgorithmIdentifier for RemoteCmsSigner {
+        fn signature_algorithm_identifier(&self) -> spki::Result<spki::AlgorithmIdentifierOwned> {
+            Ok(spki::AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5912::ECDSA_WITH_SHA_256,
+                parameters: None,
+            })
+        }
+    }
+
+    impl signature::Signer<p256::ecdsa::DerSignature> for RemoteCmsSigner {
+        fn try_sign(&self, message: &[u8]) -> Result<p256::ecdsa::DerSignature, signature::Error> {
+            let der =
+                rcgen::SigningKey::sign(&self.0, message).map_err(|_| signature::Error::new())?;
+            p256::ecdsa::DerSignature::from_bytes(&der).map_err(|_| signature::Error::new())
+        }
+    }
 
     fn build_test_master_list() -> (Vec<u8>, Vec<u8>) {
         use cms::builder::{SignedDataBuilder, SignerInfoBuilder};
         use cms::cert::{CertificateChoices, IssuerAndSerialNumber};
         use cms::signed_data::{EncapsulatedContentInfo, SignerIdentifier};
         use der::{Any, Tag};
-        use marty_crypto::cert_builder::create_ca_certificate;
-        use marty_crypto::keygen::KeyType;
-        use p256::pkcs8::DecodePrivateKey;
+        use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa};
 
-        let (signer_der, signer_key_pem) =
-            create_ca_certificate("ICAO Master List Signer", None, 365, KeyType::EcdsaP256)
-                .unwrap();
+        let signer_key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
+        let mut signer_params = CertificateParams::default();
+        signer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ICAO Master List Signer");
+        signer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let signer = signer_params.self_signed(&signer_key).unwrap();
+        let signer_der = signer.der().to_vec();
         let signer_cert = Certificate::from_der(&signer_der).unwrap();
         let mut cert_list = der::asn1::SetOfVec::new();
         cert_list.insert(signer_cert.clone()).unwrap();
@@ -329,7 +365,7 @@ mod tests {
             oid: const_oid::db::rfc5912::ID_SHA_256,
             parameters: None,
         };
-        let signing_key = p256::ecdsa::SigningKey::from_pkcs8_pem(&signer_key_pem).unwrap();
+        let signing_key = RemoteCmsSigner(signer_key);
         let signer_info =
             SignerInfoBuilder::new(&signing_key, sid, digest_algorithm.clone(), &eci, None)
                 .unwrap();
@@ -339,7 +375,7 @@ mod tests {
             .unwrap()
             .add_certificate(CertificateChoices::Certificate(signer_cert))
             .unwrap()
-            .add_signer_info::<p256::ecdsa::SigningKey, p256::ecdsa::DerSignature>(signer_info)
+            .add_signer_info::<RemoteCmsSigner, p256::ecdsa::DerSignature>(signer_info)
             .unwrap();
         (builder.build().unwrap().to_der().unwrap(), signer_der)
     }
@@ -370,6 +406,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped CMS signer"]
     fn strict_master_list_round_trip_and_signature_binding() {
         let (cms_der, signer_der) = build_test_master_list();
         let parsed = parse_master_list(&cms_der).unwrap();

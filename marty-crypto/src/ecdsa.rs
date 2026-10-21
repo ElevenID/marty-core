@@ -1,24 +1,12 @@
-//! ECDSA signature signing and verification for P-256, P-384, and P-521 curves.
+//! ECDSA signature verification for P-256, P-384, and P-521 curves.
 
-#[cfg(feature = "ecdsa-local-signing")]
-use p256::ecdsa::signature::Signer;
 use p256::ecdsa::Signature as P256Signature;
-#[cfg(feature = "ecdsa-local-signing")]
-use p256::ecdsa::SigningKey as P256SigningKey;
 use p384::ecdsa::Signature as P384Signature;
-#[cfg(feature = "ecdsa-local-signing")]
-use p384::ecdsa::SigningKey as P384SigningKey;
 use p521::ecdsa::Signature as P521Signature;
-#[cfg(feature = "ecdsa-local-signing")]
-use p521::ecdsa::SigningKey as P521SigningKey;
-#[cfg(feature = "ecdsa-local-signing")]
-use p521::ecdsa::VerifyingKey as P521VerifyingKey;
-#[cfg(feature = "ecdsa-local-signing")]
-use rand::rngs::OsRng;
 
 use crate::{CryptoError, CryptoResult};
 
-#[cfg(not(feature = "ecdsa-local-signing"))]
+#[cfg(not(test))]
 /// Marker documenting the verifier-only ECDSA API boundary.
 ///
 /// Local signing and key generation do not exist in this build:
@@ -27,148 +15,6 @@ use crate::{CryptoError, CryptoResult};
 /// let _ = marty_crypto::ecdsa::generate_p256_keypair();
 /// ```
 pub struct VerificationOnly;
-
-// ============================================================================
-// ECDSA Key Generation
-// ============================================================================
-
-/// Generate a new ECDSA P-256 key pair.
-///
-/// # Returns
-///
-/// Tuple of (private_key_bytes, public_key_bytes).
-/// Private key is 32 bytes, public key is 65 bytes (uncompressed).
-#[cfg(feature = "ecdsa-local-signing")]
-pub fn generate_p256_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
-    let signing_key = P256SigningKey::random(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-
-    let private_bytes = signing_key.to_bytes().to_vec();
-    let public_bytes = verifying_key.to_encoded_point(false).as_bytes().to_vec();
-
-    Ok((private_bytes, public_bytes))
-}
-
-/// Generate a new ECDSA P-384 key pair.
-///
-/// # Returns
-///
-/// Tuple of (private_key_bytes, public_key_bytes).
-/// Private key is 48 bytes, public key is 97 bytes (uncompressed).
-#[cfg(feature = "ecdsa-local-signing")]
-pub fn generate_p384_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
-    let signing_key = P384SigningKey::random(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
-
-    let private_bytes = signing_key.to_bytes().to_vec();
-    let public_bytes = verifying_key.to_encoded_point(false).as_bytes().to_vec();
-
-    Ok((private_bytes, public_bytes))
-}
-
-/// Generate a new ECDSA P-521 key pair.
-///
-/// # Returns
-///
-/// Tuple of (private_key_bytes, public_key_bytes).
-/// Private key is 66 bytes, public key is 133 bytes (uncompressed).
-#[cfg(feature = "ecdsa-local-signing")]
-pub fn generate_p521_keypair() -> CryptoResult<(Vec<u8>, Vec<u8>)> {
-    let signing_key = P521SigningKey::random(&mut OsRng);
-    // Get verifying key via the inner signing key's public key method
-    let verifying_key = P521VerifyingKey::from(&signing_key);
-
-    let private_bytes = signing_key.to_bytes().to_vec();
-    let public_bytes = verifying_key.to_encoded_point(false).as_bytes().to_vec();
-
-    Ok((private_bytes, public_bytes))
-}
-
-// ============================================================================
-// ECDSA Signing
-// ============================================================================
-
-/// Sign a message with ECDSA P-256 (ES256).
-///
-/// # Arguments
-///
-/// * `private_key` - 32-byte private key scalar
-/// * `message` - Message to sign
-///
-/// # Returns
-///
-/// DER-encoded signature.
-#[cfg(feature = "ecdsa-local-signing")]
-pub fn sign_p256_sha256(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
-    if private_key.len() != 32 {
-        return Err(CryptoError::internal(
-            "P-256 private key must be 32 bytes".to_string(),
-        ));
-    }
-
-    let signing_key = P256SigningKey::from_slice(private_key)
-        .map_err(|e| CryptoError::internal(format!("Invalid P-256 private key: {}", e)))?;
-
-    let signature: P256Signature = signing_key.sign(message);
-
-    Ok(signature.to_der().as_bytes().to_vec())
-}
-
-/// Sign a message with ECDSA P-384 (ES384).
-///
-/// # Arguments
-///
-/// * `private_key` - 48-byte private key scalar
-/// * `message` - Message to sign
-///
-/// # Returns
-///
-/// DER-encoded signature.
-#[cfg(feature = "ecdsa-local-signing")]
-pub fn sign_p384_sha384(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
-    if private_key.len() != 48 {
-        return Err(CryptoError::internal(
-            "P-384 private key must be 48 bytes".to_string(),
-        ));
-    }
-
-    let signing_key = P384SigningKey::from_slice(private_key)
-        .map_err(|e| CryptoError::internal(format!("Invalid P-384 private key: {}", e)))?;
-
-    let signature: P384Signature = signing_key.sign(message);
-
-    Ok(signature.to_der().as_bytes().to_vec())
-}
-
-/// Sign a message with ECDSA P-521 (ES512).
-///
-/// # Arguments
-///
-/// * `private_key` - 66-byte private key scalar
-/// * `message` - Message to sign
-///
-/// # Returns
-///
-/// DER-encoded signature.
-#[cfg(feature = "ecdsa-local-signing")]
-pub fn sign_p521_sha512(private_key: &[u8], message: &[u8]) -> CryptoResult<Vec<u8>> {
-    if private_key.len() != 66 {
-        return Err(CryptoError::internal(
-            "P-521 private key must be 66 bytes".to_string(),
-        ));
-    }
-
-    let signing_key = P521SigningKey::from_slice(private_key)
-        .map_err(|e| CryptoError::internal(format!("Invalid P-521 private key: {}", e)))?;
-
-    let signature: P521Signature = signing_key.sign(message);
-
-    Ok(signature.to_der().as_bytes().to_vec())
-}
-
-// ============================================================================
-// ECDSA Verification
-// ============================================================================
 
 // ============================================================================
 // ECDSA Verification
@@ -190,19 +36,19 @@ pub fn verify_p256_sha256(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    // Try to parse as SubjectPublicKeyInfo
-    let public_key = p256::PublicKey::from_sec1_bytes(public_key_der)
-        .or_else(|_| {
-            // Try parsing as full SPKI
-            use elliptic_curve::pkcs8::DecodePublicKey;
-            p256::PublicKey::from_public_key_der(public_key_der)
-        })
-        .map_err(|e| {
-            CryptoError::invalid_signature_with_context(
-                "ECDSA P-256",
-                format!("Invalid public key: {}", e),
-            )
-        })?;
+    let public_key = match p256::PublicKey::from_sec1_bytes(public_key_der) {
+        Ok(public_key) => public_key,
+        Err(_) => {
+            let point =
+                extract_named_curve_point(public_key_der, const_oid::db::rfc5912::SECP_256_R_1)?;
+            p256::PublicKey::from_sec1_bytes(&point).map_err(|e| {
+                CryptoError::invalid_signature_with_context(
+                    "ECDSA P-256",
+                    format!("Invalid public key: {e}"),
+                )
+            })?
+        }
+    };
 
     // Try DER-encoded signature first, then raw format
     let sig = P256Signature::from_der(signature)
@@ -241,19 +87,19 @@ pub fn verify_p384_sha384(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    // Try to parse as SEC1 bytes first
-    let public_key = p384::PublicKey::from_sec1_bytes(public_key_der)
-        .or_else(|_| {
-            // Try parsing as full SPKI
-            use elliptic_curve::pkcs8::DecodePublicKey;
-            p384::PublicKey::from_public_key_der(public_key_der)
-        })
-        .map_err(|e| {
-            CryptoError::invalid_signature_with_context(
-                "ECDSA P-384",
-                format!("Invalid public key: {}", e),
-            )
-        })?;
+    let public_key = match p384::PublicKey::from_sec1_bytes(public_key_der) {
+        Ok(public_key) => public_key,
+        Err(_) => {
+            let point =
+                extract_named_curve_point(public_key_der, const_oid::db::rfc5912::SECP_384_R_1)?;
+            p384::PublicKey::from_sec1_bytes(&point).map_err(|e| {
+                CryptoError::invalid_signature_with_context(
+                    "ECDSA P-384",
+                    format!("Invalid public key: {e}"),
+                )
+            })?
+        }
+    };
 
     // Try DER-encoded signature first, then raw format
     let sig = P384Signature::from_der(signature)
@@ -292,24 +138,19 @@ pub fn verify_p521_sha512(
     message: &[u8],
     signature: &[u8],
 ) -> CryptoResult<bool> {
-    // Try to parse as SEC1 bytes first
-    let public_key = p521::PublicKey::from_sec1_bytes(public_key_der)
-        .or_else(|_| {
-            // Try parsing as full SPKI - extract the raw public key bytes
-            use der::Decode;
-            use x509_cert::spki::SubjectPublicKeyInfoOwned;
-
-            let spki = SubjectPublicKeyInfoOwned::from_der(public_key_der)
-                .map_err(|_| elliptic_curve::Error)?;
-            let raw_bytes = spki.subject_public_key.raw_bytes();
-            p521::PublicKey::from_sec1_bytes(raw_bytes)
-        })
-        .map_err(|e| {
-            CryptoError::invalid_signature_with_context(
-                "ECDSA P-521",
-                format!("Invalid public key: {}", e),
-            )
-        })?;
+    let public_key = match p521::PublicKey::from_sec1_bytes(public_key_der) {
+        Ok(public_key) => public_key,
+        Err(_) => {
+            let point =
+                extract_named_curve_point(public_key_der, const_oid::db::rfc5912::SECP_521_R_1)?;
+            p521::PublicKey::from_sec1_bytes(&point).map_err(|e| {
+                CryptoError::invalid_signature_with_context(
+                    "ECDSA P-521",
+                    format!("Invalid public key: {e}"),
+                )
+            })?
+        }
+    };
 
     // Try DER-encoded signature first, then raw format
     let sig = P521Signature::from_der(signature)
@@ -332,39 +173,103 @@ pub fn verify_p521_sha512(
     }
 }
 
-/// Extract the raw public key bytes from a SubjectPublicKeyInfo structure.
+/// Extract a named-curve EC public point from SubjectPublicKeyInfo.
 ///
-/// This is useful when you need just the EC point for other operations.
+/// The algorithm identifier and named-curve parameters are validated before
+/// the public BIT STRING is returned. The caller remains responsible for
+/// interpreting the point using the declared curve.
 pub fn extract_ec_point_from_spki(spki_der: &[u8]) -> CryptoResult<Vec<u8>> {
     use der::Decode;
     use x509_cert::spki::SubjectPublicKeyInfoOwned;
 
     let spki = SubjectPublicKeyInfoOwned::from_der(spki_der)
         .map_err(|e| CryptoError::der_error(format!("Failed to parse SPKI: {}", e)))?;
+    if spki.algorithm.oid != const_oid::db::rfc5912::ID_EC_PUBLIC_KEY {
+        return Err(CryptoError::invalid_signature(
+            "SPKI algorithm is not id-ecPublicKey",
+        ));
+    }
+    spki.algorithm
+        .parameters
+        .as_ref()
+        .ok_or_else(|| CryptoError::invalid_signature("EC named-curve parameters are missing"))?
+        .decode_as::<const_oid::ObjectIdentifier>()
+        .map_err(|_| CryptoError::invalid_signature("EC named-curve parameters are invalid"))?;
+    if spki.subject_public_key.unused_bits() != 0 {
+        return Err(CryptoError::invalid_signature(
+            "EC public key BIT STRING has unused bits",
+        ));
+    }
 
+    Ok(spki.subject_public_key.raw_bytes().to_vec())
+}
+
+fn extract_named_curve_point(
+    spki_der: &[u8],
+    expected_curve: const_oid::ObjectIdentifier,
+) -> CryptoResult<Vec<u8>> {
+    use der::Decode;
+    use x509_cert::spki::SubjectPublicKeyInfoOwned;
+
+    let spki = SubjectPublicKeyInfoOwned::from_der(spki_der)
+        .map_err(|e| CryptoError::der_error(format!("Failed to parse SPKI: {e}")))?;
+    if spki.algorithm.oid != const_oid::db::rfc5912::ID_EC_PUBLIC_KEY {
+        return Err(CryptoError::invalid_signature(
+            "ECDSA public key algorithm is not id-ecPublicKey",
+        ));
+    }
+    let curve = spki
+        .algorithm
+        .parameters
+        .as_ref()
+        .ok_or_else(|| CryptoError::invalid_signature("ECDSA named-curve parameters are missing"))?
+        .decode_as::<const_oid::ObjectIdentifier>()
+        .map_err(|_| CryptoError::invalid_signature("ECDSA named-curve parameters are invalid"))?;
+    if curve != expected_curve {
+        return Err(CryptoError::invalid_signature(
+            "ECDSA public key uses an unexpected named curve",
+        ));
+    }
+    if spki.subject_public_key.unused_bits() != 0 {
+        return Err(CryptoError::invalid_signature(
+            "ECDSA public key BIT STRING has unused bits",
+        ));
+    }
     Ok(spki.subject_public_key.raw_bytes().to_vec())
 }
 
 /// Normalize an ES256, ES384, or ES512 signature to fixed-width IEEE P1363/JOSE form.
 ///
 /// Provider APIs commonly return ASN.1 DER while JWS and COSE use `r || s`.
-/// Already-normalized signatures are accepted only at the exact curve width;
-/// malformed DER and unsupported algorithms fail closed.
+/// Already-normalized signatures require the exact curve width and valid
+/// scalars; malformed DER and unsupported algorithms fail closed.
 pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Vec<u8>> {
     match algorithm {
-        "ES256" if signature.len() == 64 => Ok(signature.to_vec()),
+        "ES256" if signature.len() == 64 => P256Signature::from_slice(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES256 signature encoding: {error}"))
+            }),
         "ES256" => p256::ecdsa::Signature::from_der(signature)
             .map(|value| value.to_bytes().to_vec())
             .map_err(|error| {
                 CryptoError::invalid_signature(format!("Invalid ES256 signature encoding: {error}"))
             }),
-        "ES384" if signature.len() == 96 => Ok(signature.to_vec()),
+        "ES384" if signature.len() == 96 => P384Signature::from_slice(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES384 signature encoding: {error}"))
+            }),
         "ES384" => p384::ecdsa::Signature::from_der(signature)
             .map(|value| value.to_bytes().to_vec())
             .map_err(|error| {
                 CryptoError::invalid_signature(format!("Invalid ES384 signature encoding: {error}"))
             }),
-        "ES512" if signature.len() == 132 => Ok(signature.to_vec()),
+        "ES512" if signature.len() == 132 => P521Signature::from_slice(signature)
+            .map(|value| value.to_bytes().to_vec())
+            .map_err(|error| {
+                CryptoError::invalid_signature(format!("Invalid ES512 signature encoding: {error}"))
+            }),
         "ES512" => p521::ecdsa::Signature::from_der(signature)
             .map(|value| value.to_bytes().to_vec())
             .map_err(|error| {
@@ -376,176 +281,46 @@ pub fn normalize_signature(signature: &[u8], algorithm: &str) -> CryptoResult<Ve
     }
 }
 
-#[cfg(all(test, feature = "ecdsa-local-signing"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_p256_sign_verify_roundtrip() {
-        let (private_key, public_key) = generate_p256_keypair().unwrap();
-
-        let message = b"Hello, ECDSA!";
-        let signature = sign_p256_sha256(&private_key, message).unwrap();
-
-        let valid = verify_p256_sha256(&public_key, message, &signature).unwrap();
-        assert!(valid, "Signature should be valid");
-
-        // Test with wrong message
-        let wrong_message = b"Wrong message";
-        let invalid = verify_p256_sha256(&public_key, wrong_message, &signature).unwrap();
-        assert!(!invalid, "Signature should be invalid for wrong message");
+/// Convert a fixed-width IEEE P1363/JOSE ECDSA signature into ASN.1 DER.
+///
+/// Certificate signing consumes DER, while some remote signers return `r || s`.
+/// Reject an incorrect width or invalid scalar rather than passing through
+/// unverified provider bytes.
+pub fn raw_signature_to_der(signature: &[u8], algorithm: &str) -> CryptoResult<Vec<u8>> {
+    let invalid =
+        |error| CryptoError::invalid_signature(format!("Invalid {algorithm} signature: {error}"));
+    match algorithm {
+        "ES256" if signature.len() == 64 => P256Signature::from_slice(signature)
+            .map(|value| value.to_der().as_bytes().to_vec())
+            .map_err(invalid),
+        "ES384" if signature.len() == 96 => P384Signature::from_slice(signature)
+            .map(|value| value.to_der().as_bytes().to_vec())
+            .map_err(invalid),
+        "ES512" if signature.len() == 132 => P521Signature::from_slice(signature)
+            .map(|value| value.to_der().as_bytes().to_vec())
+            .map_err(invalid),
+        _ => Err(CryptoError::invalid_signature(format!(
+            "Invalid {algorithm} raw ECDSA signature width"
+        ))),
     }
+}
+
+#[cfg(test)]
+mod signature_format_tests {
+    use super::{normalize_signature, raw_signature_to_der};
 
     #[test]
-    fn test_p384_sign_verify_roundtrip() {
-        let (private_key, public_key) = generate_p384_keypair().unwrap();
-
-        let message = b"Hello, ECDSA P-384!";
-        let signature = sign_p384_sha384(&private_key, message).unwrap();
-
-        let valid = verify_p384_sha384(&public_key, message, &signature).unwrap();
-        assert!(valid, "Signature should be valid");
-
-        // Test with wrong message
-        let wrong_message = b"Wrong message";
-        let invalid = verify_p384_sha384(&public_key, wrong_message, &signature).unwrap();
-        assert!(!invalid, "Signature should be invalid for wrong message");
-    }
-
-    #[test]
-    fn test_p256_invalid_private_key_length() {
-        let short_key = vec![0u8; 16]; // Too short
-        let result = sign_p256_sha256(&short_key, b"message");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_p384_invalid_private_key_length() {
-        let short_key = vec![0u8; 32]; // Too short for P-384
-        let result = sign_p384_sha384(&short_key, b"message");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_p521_sign_verify_roundtrip() {
-        let (private_key, public_key) = generate_p521_keypair().unwrap();
-
-        let message = b"Hello, ECDSA P-521!";
-        let signature = sign_p521_sha512(&private_key, message).unwrap();
-
-        let valid = verify_p521_sha512(&public_key, message, &signature).unwrap();
-        assert!(valid, "Signature should be valid");
-
-        // Test with wrong message
-        let wrong_message = b"Wrong message";
-        let invalid = verify_p521_sha512(&public_key, wrong_message, &signature).unwrap();
-        assert!(!invalid, "Signature should be invalid for wrong message");
-    }
-
-    #[test]
-    fn test_p521_invalid_private_key_length() {
-        let short_key = vec![0u8; 48]; // Too short for P-521 (needs 66 bytes)
-        let result = sign_p521_sha512(&short_key, b"message");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_p521_key_sizes() {
-        let (private_key, public_key) = generate_p521_keypair().unwrap();
-
-        // P-521 private key should be 66 bytes
-        assert_eq!(
-            private_key.len(),
-            66,
-            "P-521 private key should be 66 bytes"
-        );
-        // P-521 public key (uncompressed) should be 133 bytes (1 + 66 + 66)
-        assert_eq!(
-            public_key.len(),
-            133,
-            "P-521 public key should be 133 bytes"
-        );
-    }
-
-    #[test]
-    fn test_p521_signature_format() {
-        let (private_key, _public_key) = generate_p521_keypair().unwrap();
-
-        let message = b"Test message for signature format";
-        let signature = sign_p521_sha512(&private_key, message).unwrap();
-
-        // DER-encoded signature should start with 0x30 (SEQUENCE tag)
-        assert_eq!(
-            signature[0], 0x30,
-            "DER signature should start with SEQUENCE tag"
-        );
-    }
-
-    #[test]
-    fn test_p521_cross_key_verification_fails() {
-        let (private_key_1, _public_key_1) = generate_p521_keypair().unwrap();
-        let (_private_key_2, public_key_2) = generate_p521_keypair().unwrap();
-
-        let message = b"Message signed with key 1";
-        let signature = sign_p521_sha512(&private_key_1, message).unwrap();
-
-        // Verification with different public key should fail
-        let invalid = verify_p521_sha512(&public_key_2, message, &signature).unwrap();
-        assert!(
-            !invalid,
-            "Signature should be invalid with wrong public key"
-        );
-    }
-
-    #[test]
-    fn test_extract_ec_point_placeholder() {
-        // Placeholder test - full tests need actual SPKI data
-        let empty_spki: &[u8] = &[];
-        assert!(extract_ec_point_from_spki(empty_spki).is_err());
-    }
-
-    #[test]
-    fn normalizes_raw_and_der_signatures_and_rejects_invalid_input() {
-        use p256::ecdsa::signature::Signer;
-
-        let p256_key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
-        let p256_signature: p256::ecdsa::Signature = p256_key.sign(b"normalization vector");
-        let p256_raw = p256_signature.to_bytes();
-
-        assert_eq!(
-            normalize_signature(&p256_raw, "ES256").unwrap(),
-            p256_raw.as_slice()
-        );
-        assert_eq!(
-            normalize_signature(p256_signature.to_der().as_bytes(), "ES256").unwrap(),
-            p256_raw.as_slice()
-        );
-
-        let p384_key = p384::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
-        let p384_signature: p384::ecdsa::Signature = p384_key.sign(b"normalization vector");
-        let p384_raw = p384_signature.to_bytes();
-        assert_eq!(
-            normalize_signature(&p384_raw, "ES384").unwrap(),
-            p384_raw.as_slice()
-        );
-        assert_eq!(
-            normalize_signature(p384_signature.to_der().as_bytes(), "ES384").unwrap(),
-            p384_raw.as_slice()
-        );
-
-        let p521_key = p521::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
-        let p521_signature: p521::ecdsa::Signature = p521_key.sign(b"normalization vector");
-        let p521_raw = p521_signature.to_bytes();
-        assert_eq!(
-            normalize_signature(&p521_raw, "ES512").unwrap(),
-            p521_raw.as_slice()
-        );
-        assert_eq!(
-            normalize_signature(p521_signature.to_der().as_bytes(), "ES512").unwrap(),
-            p521_raw.as_slice()
-        );
-
-        assert!(normalize_signature(&[0, 1, 2], "ES256").is_err());
-        assert!(normalize_signature(&p256_raw, "RS256").is_err());
+    fn raw_signatures_round_trip_through_der_for_supported_curves() {
+        for (algorithm, width) in [("ES256", 32), ("ES384", 48), ("ES512", 66)] {
+            let mut raw = vec![0; width * 2];
+            raw[width - 1] = 1;
+            raw[width * 2 - 1] = 2;
+            let der = raw_signature_to_der(&raw, algorithm).expect("valid raw signature");
+            assert_eq!(normalize_signature(&der, algorithm).unwrap(), raw);
+            assert!(raw_signature_to_der(&raw[..raw.len() - 1], algorithm).is_err());
+            assert!(raw_signature_to_der(&vec![0; width * 2], algorithm).is_err());
+            assert!(normalize_signature(&vec![0; width * 2], algorithm).is_err());
+        }
+        assert!(raw_signature_to_der(&[0; 64], "ES256K").is_err());
     }
 }

@@ -25,36 +25,15 @@
 //! //   --features signature-verification
 //! ```
 
-#[cfg(all(
-    feature = "kms-only",
-    any(
-        feature = "bbs",
-        feature = "cert-builder",
-        feature = "crl-builder",
-        feature = "ecdsa-local-signing",
-        feature = "eddsa-local-signing",
-        feature = "keygen",
-        feature = "pkcs12",
-        feature = "private-key-codec",
-        feature = "rsa-local-signing",
-        feature = "sod-builder"
-    )
-))]
-compile_error!(
-    "kms-only builds cannot include local signing, key generation, private-key codecs, or authority builders"
-);
-
 #[cfg(feature = "signature-verification")]
 pub mod algorithm_identifier;
-#[cfg(feature = "bbs")]
+#[cfg(feature = "bbs-verification")]
 pub mod bbs;
-#[cfg(feature = "cert-builder")]
-pub mod cert_builder;
 #[cfg(feature = "x509-parsing")]
 pub mod certificate;
 #[cfg(feature = "crl")]
 pub mod crl;
-#[cfg(feature = "symmetric")]
+#[cfg(feature = "emrtd-compat")]
 pub mod des;
 #[cfg(feature = "ecdh")]
 pub mod ecdh;
@@ -62,33 +41,49 @@ pub mod ecdh;
 pub mod ecdsa;
 #[cfg(feature = "eddsa-verification")]
 pub mod ed25519;
-#[cfg(feature = "eddsa-verification")]
+#[cfg(feature = "ed448-verification")]
 pub mod ed448;
 pub mod error;
 #[cfg(feature = "hashing")]
 pub mod hashing;
-#[cfg(feature = "rsa-verification")]
+#[cfg(feature = "emrtd-compat")]
 pub mod iso9796;
 #[cfg(feature = "jwk")]
 pub mod jwk;
 #[cfg(feature = "kdf")]
 pub mod kdf;
-#[cfg(feature = "keygen")]
-pub mod keygen;
 #[cfg(feature = "ocsp")]
 pub mod ocsp;
-#[cfg(feature = "pkcs12")]
-pub mod pkcs12;
 #[cfg(feature = "rsa-verification")]
 pub mod rsa;
+#[cfg(any(
+    feature = "symmetric",
+    feature = "emrtd-compat",
+    all(test, feature = "kdf")
+))]
+mod secret_buffer;
+#[cfg(all(
+    any(feature = "kdf", feature = "symmetric"),
+    any(target_family = "wasm", test)
+))]
+mod secret_hash;
 #[cfg(feature = "public-key-codec")]
 pub mod serialization;
-#[cfg(feature = "sod-builder")]
-pub mod sod_builder;
 #[cfg(feature = "symmetric")]
 pub mod symmetric;
 
 pub use error::{CryptoError, CryptoResult};
+
+// Keep session agreement and public signature verification tests crate-internal.
+// `cfg(test)` cannot be selected by dependants.
+#[cfg(all(test, any(feature = "signature-verification", feature = "ecdh")))]
+extern crate self as marty_crypto;
+#[cfg(all(test, feature = "signature-verification"))]
+#[path = "../tests/rsa_public_verification.rs"]
+mod rsa_public_verification;
+#[cfg(all(test, feature = "ecdh", feature = "kdf"))]
+#[path = "../tests/session_ecdh.rs"]
+mod session_ecdh;
 
 use serde::{Deserialize, Serialize};
 
@@ -313,11 +308,26 @@ pub fn verify_signature(
         SignatureAlgorithm::Ed25519 => {
             ed25519::verify_ed25519_spki(public_key_der, message, signature)
         }
-        SignatureAlgorithm::Ed448 => ed448::verify_ed448_spki(public_key_der, message, signature),
-        SignatureAlgorithm::RsaPkcs1Sha1 =>
-        {
-            #[allow(deprecated)]
-            rsa::verify_pkcs1_sha1(public_key_der, message, signature)
+        SignatureAlgorithm::Ed448 => {
+            #[cfg(feature = "ed448-verification")]
+            {
+                ed448::verify_ed448_spki(public_key_der, message, signature)
+            }
+            #[cfg(not(feature = "ed448-verification"))]
+            Err(CryptoError::unsupported_algorithm(
+                "Ed448 requires the ed448-verification feature".to_string(),
+            ))
+        }
+        SignatureAlgorithm::RsaPkcs1Sha1 => {
+            #[cfg(feature = "emrtd-compat")]
+            {
+                #[allow(deprecated)]
+                return rsa::verify_pkcs1_sha1(public_key_der, message, signature);
+            }
+            #[cfg(not(feature = "emrtd-compat"))]
+            Err(CryptoError::unsupported_algorithm(
+                "RSA with SHA-1 requires the emrtd-compat feature".to_string(),
+            ))
         }
         SignatureAlgorithm::RsaPkcs1Sha256 => {
             rsa::verify_pkcs1_sha256(public_key_der, message, signature)
@@ -342,5 +352,22 @@ pub fn verify_signature(
                 "BBS+ signatures use multi-message API; use bbs module directly".to_string(),
             ))
         }
+    }
+}
+
+#[cfg(all(
+    test,
+    feature = "signature-verification",
+    not(feature = "ed448-verification")
+))]
+mod feature_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn ed448_requires_explicit_verification_capability() {
+        let error = verify_signature(SignatureAlgorithm::Ed448, &[], &[], &[])
+            .expect_err("ordinary signature verification must not compile in Ed448 support");
+        assert!(matches!(error, CryptoError::UnsupportedAlgorithm(message)
+            if message == "Ed448 requires the ed448-verification feature"));
     }
 }

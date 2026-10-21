@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-11
+
+### Added
+
+- Add caller-ordered remote SD-JWT batch preparation to Rust and Python. The
+  batch validates all requests before allocating source values, uses the shared
+  disclosure pipeline with one digest call, and returns existing opaque signing
+  handles. Add a sequential versus batch issuance benchmark.
+- Add the isolated offline X.509 verification kernel and headless verifier
+  while preserving the public verification facade.
+
+### Security
+
+- Require KMS-only issuer signing and DIDComm sender agreement through scoped,
+  versioned remote references. Remove remaining production private-key import,
+  export, generation, and signing entry points and reject private-key material
+  at verification and discovery inputs.
+- Replace issuer and certificate test signing with public signed vectors or
+  disposable remote signers. Keep passport and wallet session agreement
+  ephemeral and explicitly scoped.
+
+## [0.2.0] - 2026-09-21
+
 ### Added
 
 - Add caller-ordered, all-or-nothing remote mdoc batch preparation that
@@ -18,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Prepare the synchronized Marty 0.2 release: credential issuer operations now
+  expose only remote KMS prepare/assemble flows, secret-returning crypto APIs
+  use zeroizing wrappers, and verification/session capabilities require their
+  explicit Cargo features. Applications that previously generated, imported,
+  serialized, or used credential private keys in Marty must move those
+  operations to their remote key manager.
+- Compile JOSE verification APIs only when `jose-verification` or a consuming
+  issuer/verifier/wallet/LTI role selects the maintained verification provider;
+  no-role protocol/type builds no longer expose a backend they do not contain.
+- Require the explicit Ed448/eMRTD capability before compiling the Ed448
+  backend; ordinary EdDSA and KMS issuer builds now contain Ed25519 verification
+  only, while CSCA/eMRTD builds retain Ed448 verification.
 - Advance the exact ElevenID `sd-jwt-rs` pin through its reviewed serial
   issuance and verification refactors and consumer-compatible WASM dependency
   resolution while keeping `parallel` and benchmark features disabled. Wallet
@@ -35,6 +70,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Reject weak-key Ed25519 forgeries and non-canonical EC/Ed25519 SubjectPublicKeyInfo
+  metadata at every public verification entry point.
+- Reject small-order Ed25519 issuer keys in remote credential completion and
+  verify returned EdDSA signatures with strict Ed25519 semantics.
+- Keep Ed448 eMRTD verification while compiling only the backend's public
+  curve/scalar operations; CI rejects its combined signing, PKCS#8, serde,
+  standard-library, and default features in the production KMS+CSCA graph.
+- Remove local credential-private-key APIs from production Rust and Python
+  artifacts, enforce KMS-only dependency graphs, zeroize mdoc/ZK/session secret
+  state on success and failure, and bind every opaque remote signature to the
+  exact prepared payload and public key.
 - Remove the unsound `im` and `sized-chunks` path from linked-data traversal
   through an exact, behavior-locked ElevenID revision.
 - Reject mdoc holder P-256 and P-384 JWK coordinates that are not valid points

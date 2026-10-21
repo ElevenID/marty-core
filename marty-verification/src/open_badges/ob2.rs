@@ -2,30 +2,18 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::{codes as error_codes, VerificationError, VerificationResult};
-#[cfg(any(test, feature = "local-key-operations"))]
-use crate::jwk::{jws_sign, JwsHeader};
 use crate::jwk::{jws_verify, public_key_pem_to_jwk, Jwk};
 
 use super::contexts::ob2_context_uri;
-#[cfg(any(test, feature = "local-key-operations"))]
-use super::types::OpenBadgesIssueResult;
 use super::types::{DocumentStore, OpenBadgesVerificationResult};
 
 const DEFAULT_HASH_ALG: &str = "sha256";
 
 #[derive(Debug, Deserialize)]
-#[cfg(any(test, feature = "local-key-operations"))]
-struct IssueOb2Request {
-    assertion: Value,
-    #[serde(default)]
-    recipient: Option<Ob2RecipientInput>,
-    #[serde(default)]
-    signing: Option<Ob2SigningOptions>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct VerifyOb2Request {
     pub assertion: Value,
+    /// Resolution and key material supplied by the caller. A valid result is
+    /// relative to this store; callers must authenticate its issuer/key records.
     #[serde(default)]
     pub document_store: Option<DocumentStore>,
     #[serde(default)]
@@ -33,7 +21,7 @@ pub struct VerifyOb2Request {
 }
 
 #[derive(Debug, Deserialize)]
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 struct Ob2RecipientInput {
     identity: String,
     #[serde(rename = "type")]
@@ -44,55 +32,6 @@ struct Ob2RecipientInput {
     salt: Option<String>,
     #[serde(default)]
     hash_alg: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg(any(test, feature = "local-key-operations"))]
-struct Ob2SigningOptions {
-    jwk: Value,
-    #[serde(default)]
-    alg: Option<String>,
-    #[serde(default)]
-    kid: Option<String>,
-    #[serde(default)]
-    creator: Option<String>,
-    #[serde(default)]
-    verification_type: Option<String>,
-}
-
-#[cfg(any(test, feature = "local-key-operations"))]
-pub fn issue_ob2_json(request_json: &str) -> VerificationResult<String> {
-    let req: IssueOb2Request = serde_json::from_str(request_json)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid OB2 issue request: {}", e)))?;
-
-    let mut assertion = req.assertion;
-    let mut warnings = Vec::new();
-
-    if let Some(recipient) = req.recipient {
-        let recipient_value = build_recipient(recipient, &mut warnings)?;
-        set_value(&mut assertion, "recipient", recipient_value);
-    }
-
-    if let Some(signing) = req.signing {
-        let signature = sign_assertion(&assertion, &signing, &mut warnings)?;
-        set_value(&mut assertion, "signature", Value::String(signature));
-
-        let verification = build_verification(&signing, &mut warnings);
-        if !verification.is_null() {
-            set_value(&mut assertion, "verification", verification);
-        }
-    }
-
-    let result = OpenBadgesIssueResult {
-        issued: true,
-        version: "2.0".to_string(),
-        credential: assertion,
-        warnings,
-    };
-
-    serde_json::to_string(&result).map_err(|e| {
-        VerificationError::open_badges(format!("Failed to serialize OB2 issue result: {}", e))
-    })
 }
 
 pub fn verify_ob2_json(request_json: &str) -> VerificationResult<String> {
@@ -161,16 +100,9 @@ pub fn verify_ob2(req: VerifyOb2Request) -> VerificationResult<OpenBadgesVerific
     // Verify signature if the verification type indicates signed assertion,
     // or if a signature field is present (even without explicit signed verification type)
     if should_verify_signature(&assertion) || assertion.get("signature").is_some() {
-        match verify_signature(&assertion, &store) {
-            Ok(warn) => {
-                if let Some(w) = warn {
-                    warnings.push(w);
-                }
-            }
-            Err(err) => {
-                errors.push(err.to_string());
-                error_codes_out.push(err.code().to_string());
-            }
+        if let Err(err) = verify_signature(&assertion, &store, issuer.as_ref()) {
+            errors.push(err.to_string());
+            error_codes_out.push(err.code().to_string());
         }
     } else {
         warnings.push("Hosted assertion not cryptographically verified".to_string());
@@ -191,7 +123,7 @@ pub fn verify_ob2(req: VerifyOb2Request) -> VerificationResult<OpenBadgesVerific
     Ok(result)
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
+#[cfg(test)]
 fn build_recipient(
     input: Ob2RecipientInput,
     warnings: &mut Vec<String>,
@@ -225,69 +157,11 @@ fn build_recipient(
     Ok(Value::Object(recipient))
 }
 
-#[cfg(any(test, feature = "local-key-operations"))]
-fn sign_assertion(
-    assertion: &Value,
-    signing: &Ob2SigningOptions,
-    warnings: &mut Vec<String>,
-) -> VerificationResult<String> {
-    let jwk_json = serde_json::to_string(&signing.jwk)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid signing JWK: {}", e)))?;
-    let jwk = Jwk::from_json(&jwk_json)
-        .map_err(|e| VerificationError::open_badges(format!("Invalid signing JWK: {}", e)))?;
-
-    let alg = signing
-        .alg
-        .clone()
-        .or_else(|| jwk.alg.clone())
-        .unwrap_or_else(|| default_alg_for_jwk(&jwk));
-
-    let mut header = JwsHeader::new(&alg);
-    if let Some(kid) = signing.kid.clone().or_else(|| jwk.kid.clone()) {
-        header.kid = Some(kid);
-    }
-
-    let mut payload = assertion.clone();
-    if let Value::Object(ref mut obj) = payload {
-        obj.remove("signature");
-    }
-
-    let payload_bytes = serde_json::to_vec(&payload).map_err(|e| {
-        VerificationError::open_badges(format!("Failed to serialize assertion for signing: {}", e))
-    })?;
-
-    let signature = jws_sign(&header, &payload_bytes, &jwk)
-        .map_err(|e| VerificationError::open_badges(format!("OB2 signing failed: {}", e)))?;
-
-    if signing.creator.is_none() {
-        warnings.push("Signed assertion missing verification.creator".to_string());
-    }
-
-    Ok(signature)
-}
-
-#[cfg(any(test, feature = "local-key-operations"))]
-fn build_verification(signing: &Ob2SigningOptions, warnings: &mut Vec<String>) -> Value {
-    let mut verification = serde_json::Map::new();
-    let verification_type = signing
-        .verification_type
-        .clone()
-        .unwrap_or_else(|| "signed".to_string());
-    verification.insert("type".to_string(), Value::String(verification_type));
-
-    if let Some(creator) = signing.creator.clone().or_else(|| signing.kid.clone()) {
-        verification.insert("creator".to_string(), Value::String(creator));
-    } else {
-        warnings.push("verification.creator missing for signed assertion".to_string());
-    }
-
-    Value::Object(verification)
-}
-
 fn verify_signature(
     assertion: &Value,
     store: &DocumentStore,
-) -> VerificationResult<Option<String>> {
+    issuer: Option<&Value>,
+) -> VerificationResult<()> {
     let signature = assertion
         .get("signature")
         .and_then(|v| v.as_str())
@@ -314,6 +188,8 @@ fn verify_signature(
         ))
     })?;
 
+    verify_issuer_key_binding(issuer, creator, key_value)?;
+
     let jwk = extract_public_jwk(key_value)?;
 
     let (_, payload_bytes) = jws_verify(signature, &jwk).map_err(|e| {
@@ -327,14 +203,107 @@ fn verify_signature(
     let mut expected = assertion.clone();
     if let Value::Object(ref mut obj) = expected {
         obj.remove("signature");
+        // Legacy OB2 fixtures attach verification instructions after signing.
+        // Only tolerate that omission; all assertion claims must be signed.
+        if payload.get("verification").is_none() {
+            let legacy_verification = assertion
+                .get("verification")
+                .and_then(Value::as_object)
+                .filter(|value| {
+                    value.len() == 2
+                        && value.get("creator").and_then(Value::as_str) == Some(creator)
+                        && value
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| {
+                                kind.eq_ignore_ascii_case("signed")
+                                    || kind.eq_ignore_ascii_case("signedbadge")
+                            })
+                });
+            if legacy_verification.is_none() {
+                return Err(VerificationError::open_badges_signature_invalid(
+                    "Unsigned verification instructions are not supported".to_string(),
+                ));
+            }
+            obj.remove("verification");
+        }
     }
 
     if payload != expected {
-        Ok(Some(
+        Err(VerificationError::open_badges_signature_invalid(
             "Signed payload does not match assertion body".to_string(),
         ))
     } else {
-        Ok(None)
+        Ok(())
+    }
+}
+
+fn verify_issuer_key_binding(
+    issuer: Option<&Value>,
+    creator: &str,
+    key: &Value,
+) -> VerificationResult<()> {
+    let issuer_id = issuer
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            VerificationError::open_badges_signature_invalid(
+                "Signed assertion issuer id is missing".to_string(),
+            )
+        })?;
+
+    let key_id_matches = key.get("id").and_then(Value::as_str) == Some(creator);
+    let owner = key.get("owner").and_then(Value::as_str);
+    let controller = key.get("controller").and_then(Value::as_str);
+    let issuer_controls_key = (owner.is_some() || controller.is_some())
+        && (key.get("owner").is_none() || owner.is_some())
+        && (key.get("controller").is_none() || controller.is_some())
+        && owner.is_none_or(|value| value == issuer_id)
+        && controller.is_none_or(|value| value == issuer_id);
+    if !key_id_matches || !issuer_controls_key {
+        return Err(VerificationError::open_badges_signature_invalid(
+            "Signing key is not controlled by the badge issuer".to_string(),
+        ));
+    }
+
+    // Governed key records use controller without an issuer Profile publicKey.
+    // When a Profile does declare publicKey, it must agree with the key used.
+    if let Some(public_key) = issuer.and_then(|value| value.get("publicKey")) {
+        let listed = match public_key {
+            Value::Array(keys) => {
+                let mut listed = false;
+                for value in keys {
+                    listed |= key_reference_matches(value, creator)?;
+                }
+                listed
+            }
+            value => key_reference_matches(value, creator)?,
+        };
+        if !listed {
+            return Err(VerificationError::open_badges_signature_invalid(
+                "Signing key is not listed by the badge issuer".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn key_reference_matches(value: &Value, creator: &str) -> VerificationResult<bool> {
+    match value {
+        Value::String(id) => Ok(id == creator),
+        Value::Object(object) if object.is_empty() => Ok(false),
+        Value::Object(object) if object.len() == 1 && object.contains_key("id") => {
+            Ok(object.get("id").and_then(Value::as_str) == Some(creator))
+        }
+        // OB2's supported Profile form is a key-id reference. Accepting an
+        // embedded key here without comparing its material to the selected
+        // document_store key would permit contradictory issuer key claims.
+        Value::Object(_) => Err(VerificationError::open_badges_unsupported(
+            "Embedded issuer publicKey objects are not supported; use a key id reference"
+                .to_string(),
+        )),
+        _ => Ok(false),
     }
 }
 
@@ -468,7 +437,16 @@ fn resolve_reference(
 ) -> Option<Value> {
     match value {
         Some(Value::String(id)) => match store.get(id) {
-            Some(doc) => Some(doc.clone()),
+            Some(doc) if doc.get("id").and_then(Value::as_str) == Some(id) => Some(doc.clone()),
+            Some(_) => {
+                push_error(
+                    errors,
+                    error_codes_out,
+                    error_codes::OPEN_BADGES_INVALID,
+                    format!("{} document id does not match reference: {}", field, id),
+                );
+                None
+            }
             None => {
                 push_error(
                     errors,
@@ -521,25 +499,6 @@ fn normalize_ob2(assertion: &Value, badge: Option<&Value>, issuer: Option<&Value
         "issuer_id": issuer.and_then(|i| i.get("id")).cloned().unwrap_or(Value::Null),
         "recipient": assertion.get("recipient").cloned().unwrap_or(Value::Null),
     })
-}
-
-#[cfg(any(test, feature = "local-key-operations"))]
-fn set_value(target: &mut Value, key: &str, value: Value) {
-    if let Value::Object(ref mut map) = target {
-        map.insert(key.to_string(), value);
-    }
-}
-
-#[cfg(any(test, feature = "local-key-operations"))]
-fn default_alg_for_jwk(jwk: &Jwk) -> String {
-    match jwk.key_type() {
-        crate::jwk::KeyType::EcP256 => "ES256".to_string(),
-        crate::jwk::KeyType::EcP384 => "ES384".to_string(),
-        crate::jwk::KeyType::EcP521 => "ES512".to_string(),
-        crate::jwk::KeyType::Ed25519 => "EdDSA".to_string(),
-        crate::jwk::KeyType::Rsa => "RS256".to_string(),
-        _ => "ES256".to_string(),
-    }
 }
 
 #[cfg(test)]

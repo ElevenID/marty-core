@@ -21,12 +21,6 @@ pub(super) fn dtc_assemble_signature(signature_envelope_json: &str) -> PyResult<
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
-#[cfg(feature = "local-key-operations")]
-#[pyfunction]
-pub(super) fn dtc_sign(dtc_json: &str) -> PyResult<String> {
-    dtc::sign_dtc_json(dtc_json).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-}
-
 #[pyfunction]
 pub(super) fn dtc_verify(dtc_json: &str) -> PyResult<String> {
     dtc::verify_dtc_json(dtc_json)

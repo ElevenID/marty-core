@@ -1,4 +1,8 @@
 mod es256_signing_matrix;
+#[path = "support/openbao_signer.rs"]
+mod openbao_signer;
+#[path = "support/signed_preparation.rs"]
+mod signed_preparation;
 
 use std::{
     collections::HashMap,
@@ -29,7 +33,7 @@ use marty_oid4vci::{
     types::{CredentialClaims, CredentialPayloadFormat, SignedCredential, SigningAlgorithm},
     Oid4vciResult,
 };
-use p256::ecdsa::signature::{Signer as _, Verifier as _};
+use p256::ecdsa::signature::Verifier as _;
 use sha2::{Digest as _, Sha256};
 use ssi_jwk::JWK;
 
@@ -37,6 +41,7 @@ use es256_signing_matrix::{
     expected_claim_names, expected_payload_value, matrix_claims, matrix_enabled, MatrixFormat,
     MatrixSelection, PayloadClass,
 };
+use signed_preparation::{PreparedAssembly, SignedPreparation};
 
 const BATCH_SIZES: [usize; 4] = [1, 8, 32, 256];
 const WORKER_LIMIT: usize = 8;
@@ -93,16 +98,18 @@ impl BenchmarkComposition {
 }
 
 struct BenchmarkSigner {
-    signing_key: p256::ecdsa::SigningKey,
     max_workers: NonZeroUsize,
 }
 
 impl BenchmarkSigner {
     fn new(max_workers: usize) -> Self {
         Self {
-            signing_key: p256::ecdsa::SigningKey::from_slice(&[0x31; 32]).unwrap(),
             max_workers: NonZeroUsize::new(max_workers).unwrap(),
         }
+    }
+
+    fn verifying_key(&self) -> &'static p256::ecdsa::VerifyingKey {
+        openbao_signer::verifying_key()
     }
 }
 
@@ -114,8 +121,7 @@ impl fmt::Debug for BenchmarkSigner {
 
 impl CredentialSigner for BenchmarkSigner {
     fn sign(&self, message: &[u8]) -> Oid4vciResult<Vec<u8>> {
-        let signature: p256::ecdsa::Signature = self.signing_key.sign(message);
-        Ok(signature.to_bytes().to_vec())
+        Ok(openbao_signer::sign(message))
     }
 
     fn algorithm(&self) -> SigningAlgorithm {
@@ -128,6 +134,10 @@ impl CredentialSigner for BenchmarkSigner {
 
     fn kid_url(&self) -> String {
         "did:example:benchmark-issuer#key-1".into()
+    }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        Ok(openbao_signer::public_jwk().to_owned())
     }
 }
 
@@ -300,6 +310,18 @@ impl BenchmarkPrepared {
             Self::SdJwt(prepared) => assemble_sd_jwt(prepared, signature).unwrap(),
             Self::Mdoc(prepared) => assemble_mdoc(*prepared, signature).unwrap(),
         }
+    }
+}
+
+impl PreparedAssembly for BenchmarkPrepared {
+    type Output = SignedCredential;
+
+    fn signing_payload(&self) -> &[u8] {
+        BenchmarkPrepared::signing_payload(self)
+    }
+
+    fn assemble(self, signature: &[u8]) -> Self::Output {
+        BenchmarkPrepared::assemble(self, signature)
     }
 }
 
@@ -765,7 +787,7 @@ fn preflight_payload_matrix(selection: &MatrixSelection) {
                     item_count,
                     0,
                     &serial[0],
-                    serial_signer.signing_key.verifying_key(),
+                    serial_signer.verifying_key(),
                 );
 
                 let mut concurrent_signer = BenchmarkSigner::new(worker_limit);
@@ -780,7 +802,7 @@ fn preflight_payload_matrix(selection: &MatrixSelection) {
                     item_count,
                     0,
                     &concurrent[0],
-                    concurrent_signer.signing_key.verifying_key(),
+                    concurrent_signer.verifying_key(),
                 );
             }
         }
@@ -808,7 +830,7 @@ fn preflight() {
                     composition.format_at(ordinal),
                     ordinal,
                     credential,
-                    serial_signer.signing_key.verifying_key(),
+                    serial_signer.verifying_key(),
                 );
             }
 
@@ -823,7 +845,7 @@ fn preflight() {
                     composition.format_at(ordinal),
                     ordinal,
                     credential,
-                    concurrent_signer.signing_key.verifying_key(),
+                    concurrent_signer.verifying_key(),
                 );
             }
         }
@@ -889,12 +911,20 @@ fn benchmark_stages(c: &mut Criterion, group_name: &str, composition: BenchmarkC
                                 composition,
                                 claims_batch(composition, batch_size),
                             )
+                            .into_iter()
+                            .map(|prepared| {
+                                SignedPreparation::try_sign(prepared, |payload| {
+                                    signer.sign(payload)
+                                })
+                                .unwrap()
+                            })
+                            .collect::<Vec<_>>()
                         },
-                        |prepared| {
+                        |prepared_and_signatures| {
                             black_box(
-                                prepared
+                                prepared_and_signatures
                                     .into_iter()
-                                    .map(|prepared| prepared.assemble(&[0x5a; 64]))
+                                    .map(SignedPreparation::assemble)
                                     .collect::<Vec<_>>(),
                             )
                         },

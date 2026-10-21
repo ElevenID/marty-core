@@ -150,6 +150,7 @@ TEST(CBOR, VerifyParseSize) {
     }
     gwC.invprod_decode = LC.eltw_input();
     gwC.cc0_counter = CTRC.input();
+    gwC.neg_cc0_counter = CTRC.input();
     gwC.invprod_parse = LC.eltw_input();
 
     std::vector<CborC::decode> dsC(n);

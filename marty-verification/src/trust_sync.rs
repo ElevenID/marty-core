@@ -1153,7 +1153,10 @@ pub fn revalidate_state_json(state_json: &str, now_rfc3339: &str) -> TrustSyncRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair, KeyUsagePurpose};
+    use marty_crypto_test_support::remote_certificate::{
+        RemoteCertificateAlgorithm, RemoteCertificateKey,
+    };
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyUsagePurpose};
 
     const NOW: &str = "2026-08-07T12:00:00Z";
     const ENTRY_ID: &str = "c6d7e8f9-a0b1-4234-9678-901234abcdef";
@@ -1176,7 +1179,7 @@ mod tests {
         } else {
             vec![KeyUsagePurpose::DigitalSignature]
         };
-        let key = KeyPair::generate().unwrap();
+        let key = RemoteCertificateKey::new(RemoteCertificateAlgorithm::Es256);
         params.self_signed(&key).unwrap().pem()
     }
 
@@ -1230,6 +1233,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped trust-anchor signer"]
     fn initial_sync_validates_certificate_profile() {
         let result =
             evaluate_pages(&RegistryImportState::default(), &[add_feed(true)], now()).unwrap();
@@ -1247,6 +1251,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped trust-anchor signer"]
     fn delta_removal_and_rollback_are_atomic() {
         let initial = evaluate_pages(&RegistryImportState::default(), &[add_feed(true)], now())
             .unwrap()

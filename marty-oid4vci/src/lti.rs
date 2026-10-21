@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use jsonwebtoken::{decode, decode_header, jwk::Jwk, DecodingKey, Validation};
 use reqwest::{redirect::Policy, Client};
@@ -11,6 +11,62 @@ use crate::error::{Oid4vciError, Oid4vciResult};
 const CANVAS_OPENID_CONFIGURATION_PATH: &str = "/.well-known/openid-configuration";
 const MAX_OPENID_CONFIGURATION_BYTES: u64 = 1024 * 1024;
 const MAX_JWKS_BYTES: u64 = 1024 * 1024;
+
+fn contains_private_material(value: &Value, depth: usize) -> bool {
+    if depth > 16 {
+        return true;
+    }
+    match value {
+        Value::Object(fields) => {
+            let private_jwk = fields.contains_key("kty")
+                && ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"]
+                    .iter()
+                    .any(|name| fields.get(*name).is_some_and(|value| !value.is_null()));
+            private_jwk
+                || fields.iter().any(|(name, value)| {
+                    let normalized = name
+                        .chars()
+                        .filter(|character| character.is_ascii_alphanumeric())
+                        .flat_map(char::to_lowercase)
+                        .collect::<String>();
+                    (!value.is_null()
+                        && (normalized.contains("privatekey")
+                            || normalized.contains("privatejwk")
+                            || normalized.contains("privatepem")
+                            || normalized.contains("secretkey")
+                            || normalized.contains("pkcs8")))
+                        || contains_private_material(value, depth + 1)
+                })
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(|value| contains_private_material(value, depth + 1)),
+        Value::String(text) => {
+            if text.contains("-----BEGIN") && text.contains("PRIVATE KEY-----") {
+                return true;
+            }
+            let trimmed = text.trim_start();
+            (trimmed.starts_with('{') || trimmed.starts_with('['))
+                && serde_json::from_str::<Value>(trimmed)
+                    .is_ok_and(|value| contains_private_material(&value, depth + 1))
+        }
+        _ => false,
+    }
+}
+
+/// Reject secret-bearing Canvas discovery data before returning or verifying it.
+/// Errors intentionally contain no remote input values.
+pub fn ensure_canvas_metadata_public_only(
+    jwks: &Value,
+    configuration: &Value,
+) -> Oid4vciResult<()> {
+    if contains_private_material(jwks, 0) || contains_private_material(configuration, 0) {
+        return Err(invalid_request(
+            "Canvas metadata contains private key material",
+        ));
+    }
+    Ok(())
+}
 
 pub const CANVAS_LTI_TRUST_HOSTED_GLOBAL: &str = "hosted_global";
 pub const CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN: &str = "self_managed_same_origin";
@@ -130,38 +186,7 @@ fn decode_audience(aud: &Value) -> Oid4vciResult<Vec<String>> {
     }
 }
 
-fn is_private_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [first, second, third, _] = v4.octets();
-            v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_documentation()
-                || v4.is_multicast()
-                || v4.is_unspecified()
-                || first == 0
-                || first >= 240
-                || (first == 100 && (64..=127).contains(&second))
-                || (first == 192 && second == 0 && third == 0)
-                || (first == 198 && (18..=19).contains(&second))
-        }
-        IpAddr::V6(v6) => {
-            let segments = v6.segments();
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (segments[0] & 0xfe00) == 0xfc00
-                || (segments[0] & 0xffc0) == 0xfe80
-                || (segments[0] & 0xffc0) == 0xfec0
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                || v6
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| is_private_ip(IpAddr::V4(mapped)))
-        }
-    }
-}
+use crate::network::is_private_ip;
 
 fn is_loopback_hostname(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
@@ -271,52 +296,69 @@ fn normalize_url(
     Ok(normalized)
 }
 
-async fn validate_resolved_host(
+fn validate_canvas_addresses(
     url: &Url,
+    addresses: &[SocketAddr],
     allow_private_networks: bool,
     allow_http_localhost: bool,
 ) -> Oid4vciResult<()> {
-    if allow_private_networks {
-        return Ok(());
+    if addresses.is_empty() {
+        return Err(invalid_request(
+            "Canvas host did not resolve to any addresses",
+        ));
     }
-
-    let host = url
-        .host_str()
-        .ok_or_else(|| invalid_request("Canvas URL must include a host"))?;
-
-    if host.parse::<IpAddr>().is_ok() {
-        return Ok(());
-    }
-
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| invalid_request("Canvas URL must include a resolvable port"))?;
-    let addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|e| invalid_request(format!("Failed to resolve Canvas host {host}: {e}")))?;
-
-    let mut resolved_any = false;
+    let host = url.host_str().unwrap_or_default();
     for address in addresses {
-        resolved_any = true;
         let ip = address.ip();
         let allowed_localhost = allow_http_localhost
             && url.scheme() == "http"
             && ip.is_loopback()
-            && is_loopback_hostname(host);
-        if is_private_ip(ip) && !allowed_localhost {
+            && (is_loopback_hostname(host)
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback()));
+        if !allow_private_networks && is_private_ip(ip) && !allowed_localhost {
             return Err(invalid_request(
                 "Canvas host resolves to a private or loopback IP that is blocked in hardened mode",
             ));
         }
     }
-
-    if !resolved_any {
-        return Err(invalid_request(format!(
-            "Canvas host {host} did not resolve to any addresses"
-        )));
-    }
-
     Ok(())
+}
+
+async fn resolve_canvas_addresses(
+    url: &Url,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+    timeout_seconds: u64,
+) -> Oid4vciResult<Vec<SocketAddr>> {
+    validate_url(url, allow_private_networks, allow_http_localhost, false)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| invalid_request("Canvas URL must include a resolvable port"))?;
+    let addresses = match url
+        .host()
+        .ok_or_else(|| invalid_request("Canvas URL must include a host"))?
+    {
+        url::Host::Ipv4(ip) => vec![SocketAddr::new(IpAddr::V4(ip), port)],
+        url::Host::Ipv6(ip) => vec![SocketAddr::new(IpAddr::V6(ip), port)],
+        url::Host::Domain(host) => tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_seconds.clamp(1, 5)),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        .map_err(|_| invalid_request("Canvas DNS resolution timed out"))?
+        .map_err(|_| invalid_request("Canvas DNS resolution failed closed"))?
+        .collect(),
+    };
+    validate_canvas_addresses(
+        url,
+        &addresses,
+        allow_private_networks,
+        allow_http_localhost,
+    )?;
+    Ok(addresses)
 }
 
 pub fn normalize_canvas_base_url(
@@ -539,6 +581,116 @@ async fn fetch_limited_json(
         .map_err(|e| invalid_request(format!("Failed to decode Canvas {label}: {e}")))
 }
 
+/// Probe a manually registered stock Canvas installation using server-owned
+/// endpoint policy, rather than requiring Canvas dynamic-registration discovery.
+/// Stock Canvas protects its discovery document with a registration token; manual
+/// Developer Key registration does not supply that token. Only the public JWKS
+/// is observed here. Issuer and service endpoints remain operator-pinned and a
+/// subsequent signed LTI launch must still prove its issuer/client/deployment.
+pub async fn probe_canvas_lti_registration(
+    base_url: &str,
+    trust_profile: &str,
+    self_managed_origin_allowlist: &[String],
+    timeout_seconds: u64,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> Oid4vciResult<CanvasLtiPlatformProbe> {
+    let normalized_base_url =
+        normalize_canvas_base_url(base_url, allow_private_networks, allow_http_localhost)?;
+    let profile = canvas_lti_trust_profile(
+        &normalized_base_url,
+        trust_profile,
+        self_managed_origin_allowlist,
+    )?;
+    let jwks_json = fetch_canvas_lti_jwks(
+        timeout_seconds,
+        &profile.jwks_uri,
+        allow_private_networks,
+        allow_http_localhost,
+    )
+    .await?;
+    // Preserve explicit provenance in the legacy metadata field. These are
+    // configuration inputs, never a claimed remote discovery response.
+    let configuration = serde_json::json!({
+        "elevenid_metadata_source": "operator_trust_profile",
+        "discovery_document_observed": false,
+        "issuer": profile.issuer,
+        "authorization_endpoint": profile.authorization_endpoint,
+        "token_endpoint": profile.token_endpoint,
+        "jwks_uri": profile.jwks_uri,
+    });
+    Ok(CanvasLtiPlatformProbe {
+        canvas_base_url: normalized_base_url,
+        issuer: profile.issuer,
+        authorization_endpoint: Some(profile.authorization_endpoint),
+        token_endpoint: Some(profile.token_endpoint),
+        jwks_uri: profile.jwks_uri,
+        registration_endpoint: None,
+        raw_openid_configuration: configuration,
+        jwks_json,
+    })
+}
+
+fn build_pinned_canvas_client(
+    builder: reqwest::ClientBuilder,
+    url: &Url,
+    addresses: &[SocketAddr],
+    timeout_seconds: u64,
+) -> Oid4vciResult<Client> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| invalid_request("Canvas URL must include a host"))?;
+    builder
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(timeout_seconds.max(1)))
+        .redirect(Policy::none())
+        .resolve_to_addrs(host.trim_matches(['[', ']']), addresses)
+        .build()
+        .map_err(|e| Oid4vciError::ConfigError(e.to_string()))
+}
+
+async fn canvas_probe_http_client(
+    url: &Url,
+    timeout_seconds: u64,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> Oid4vciResult<Client> {
+    let addresses = resolve_canvas_addresses(
+        url,
+        allow_private_networks,
+        allow_http_localhost,
+        timeout_seconds,
+    )
+    .await?;
+    build_pinned_canvas_client(Client::builder(), url, &addresses, timeout_seconds)
+}
+
+async fn fetch_canvas_lti_jwks(
+    timeout_seconds: u64,
+    jwks_uri: &str,
+    allow_private_networks: bool,
+    allow_http_localhost: bool,
+) -> Oid4vciResult<Value> {
+    let parsed = Url::parse(jwks_uri)?;
+    let client = canvas_probe_http_client(
+        &parsed,
+        timeout_seconds,
+        allow_private_networks,
+        allow_http_localhost,
+    )
+    .await?;
+    let jwks: Value = fetch_limited_json(&client, jwks_uri, "JWKS", MAX_JWKS_BYTES).await?;
+    if jwks
+        .get("keys")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        return Err(invalid_request("Canvas JWKS does not include any keys"));
+    }
+    ensure_canvas_metadata_public_only(&jwks, &Value::Null)?;
+    Ok(jwks)
+}
+
 pub async fn probe_canvas_lti_platform(
     base_url: &str,
     timeout_seconds: u64,
@@ -549,18 +701,13 @@ pub async fn probe_canvas_lti_platform(
         normalize_canvas_base_url(base_url, allow_private_networks, allow_http_localhost)?;
     let configuration_url = format!("{normalized_base_url}{CANVAS_OPENID_CONFIGURATION_PATH}");
     let parsed_configuration_url = Url::parse(&configuration_url)?;
-    validate_resolved_host(
+    let client = canvas_probe_http_client(
         &parsed_configuration_url,
+        timeout_seconds,
         allow_private_networks,
         allow_http_localhost,
     )
     .await?;
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_seconds.max(1)))
-        .redirect(Policy::none())
-        .build()
-        .map_err(|e| Oid4vciError::ConfigError(e.to_string()))?;
 
     let openid_configuration: Value = fetch_limited_json(
         &client,
@@ -589,24 +736,14 @@ pub async fn probe_canvas_lti_platform(
         allow_http_localhost,
         false,
     )?;
-    let parsed_jwks_uri = Url::parse(&normalized_jwks_uri)?;
-    validate_resolved_host(
-        &parsed_jwks_uri,
+    let jwks_json = fetch_canvas_lti_jwks(
+        timeout_seconds,
+        &normalized_jwks_uri,
         allow_private_networks,
         allow_http_localhost,
     )
     .await?;
-
-    let jwks_json: Value =
-        fetch_limited_json(&client, &normalized_jwks_uri, "JWKS", MAX_JWKS_BYTES).await?;
-
-    if jwks_json
-        .get("keys")
-        .and_then(Value::as_array)
-        .is_none_or(|keys| keys.is_empty())
-    {
-        return Err(invalid_request("Canvas JWKS does not include any keys"));
-    }
+    ensure_canvas_metadata_public_only(&jwks_json, &openid_configuration)?;
 
     Ok(CanvasLtiPlatformProbe {
         canvas_base_url: normalized_base_url,
@@ -629,6 +766,9 @@ pub fn verify_lti_launch_jwt(
     expected_nonce: Option<&str>,
     leeway_seconds: u64,
 ) -> Oid4vciResult<VerifiedLtiLaunch> {
+    sd_jwt_rs::install_crypto_provider().map_err(|error| {
+        Oid4vciError::JwtError(format!("JWT verification backend unavailable: {error}"))
+    })?;
     let header = decode_header(id_token)
         .map_err(|e| Oid4vciError::JwtError(format!("Failed to decode LTI JWT header: {e}")))?;
     let kid = header
@@ -641,6 +781,7 @@ pub fn verify_lti_launch_jwt(
             "Invalid JWKS JSON supplied for LTI verification: {e}"
         ))
     })?;
+    ensure_canvas_metadata_public_only(&jwks_value, &Value::Null)?;
     let keys = jwks_value
         .get("keys")
         .and_then(Value::as_array)
@@ -735,9 +876,99 @@ pub fn verify_lti_launch_jwt(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canvas_probe_rejects_empty_and_mixed_private_dns_answers() {
+        let public: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        let url = Url::parse("https://canvas.example/api/lti/security/jwks").unwrap();
+        assert!(validate_canvas_addresses(&url, &[], false, false).is_err());
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "169.254.169.254",
+            "::1",
+            "::ffff:127.0.0.1",
+        ] {
+            let private = SocketAddr::new(ip.parse().unwrap(), 443);
+            assert!(validate_canvas_addresses(&url, &[public, private], false, false).is_err());
+        }
+        assert!(validate_canvas_addresses(&url, &[public], false, false).is_ok());
+    }
+
+    #[tokio::test]
+    async fn canvas_probe_pins_addresses_without_second_dns_or_proxy() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        struct RejectDns(Arc<AtomicUsize>);
+        impl reqwest::dns::Resolve for RejectDns {
+            fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {
+                    Err(std::io::Error::other("second DNS lookup is forbidden").into())
+                })
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let url = Url::parse(&format!("http://localhost:{}/jwks", address.port())).unwrap();
+        validate_canvas_addresses(&url, &[address], false, true).unwrap();
+        let dns_calls = Arc::new(AtomicUsize::new(0));
+        let builder = Client::builder()
+            .dns_resolver(Arc::new(RejectDns(dns_calls.clone())))
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:1").unwrap());
+        let client = build_pinned_canvas_client(builder, &url, &[address], 2).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(3), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            let mut request = vec![0; 4096];
+            let size = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..size]).to_lowercase();
+            assert!(request.contains(&format!("host: localhost:{}", address.port())));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .unwrap();
+        });
+        let response = fetch_limited_json(&client, url.as_str(), "JWKS", 1024).await;
+        server.await.unwrap();
+        assert_eq!(response.unwrap(), json!({}));
+        assert_eq!(dns_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn manual_registration_refuses_unapproved_origin_and_unknown_profile_before_network() {
+        for (profile, allowlist) in [
+            (CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN, vec![]),
+            (
+                CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
+                vec!["https://other.example".to_owned()],
+            ),
+            ("unknown", vec!["https://canvas.example".to_owned()]),
+        ] {
+            let error = probe_canvas_lti_registration(
+                "https://canvas.example",
+                profile,
+                &allowlist,
+                1,
+                false,
+                false,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("trust"));
+        }
+    }
+
     use super::*;
+    #[cfg(not(target_family = "wasm"))]
+    use crate::openbao_transit::{DisposableOpenBao, ScopedTransitSigner};
+    #[cfg(not(target_family = "wasm"))]
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use serde_json::json;
 
     const LTI_DEPLOYMENT_ID_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/deployment_id";
@@ -748,25 +979,69 @@ mod tests {
     const LTI_MESSAGE_TYPE_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/message_type";
     const LTI_VERSION_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/version";
 
-    fn make_test_jwk(kid: &str, verifying_key: &VerifyingKey) -> Value {
-        json!({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "kid": kid,
-            "alg": "EdDSA",
-            "use": "sig",
-            "x": URL_SAFE_NO_PAD.encode(verifying_key.as_bytes()),
-        })
+    #[cfg(not(target_family = "wasm"))]
+    fn make_test_jwk(kid: &str, signer: &ScopedTransitSigner) -> Value {
+        let mut jwk: Value = serde_json::from_str(signer.public_jwk()).unwrap();
+        jwk["kid"] = json!(kid);
+        jwk["alg"] = json!("EdDSA");
+        jwk["use"] = json!("sig");
+        jwk
     }
 
-    fn encode_jwt(signing_key: &SigningKey, kid: &str, claims: &Value) -> String {
+    #[cfg(not(target_family = "wasm"))]
+    fn encode_jwt(signer: &ScopedTransitSigner, kid: &str, claims: &Value) -> String {
         let header = json!({"alg": "EdDSA", "typ": "JWT", "kid": kid});
         let header_b64 = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
         let claims_b64 = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
         let signing_input = format!("{header_b64}.{claims_b64}");
-        let signature = signing_key.sign(signing_input.as_bytes());
-        let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
+        let signature = signer.sign_ed25519(signing_input.as_bytes()).unwrap();
+        let signature_b64 = URL_SAFE_NO_PAD.encode(signature);
         format!("{signing_input}.{signature_b64}")
+    }
+
+    #[test]
+    fn canvas_metadata_rejects_private_material_without_echoing_values() {
+        let public = json!({"keys": [{"kty": "OKP", "crv": "Ed25519", "x": "public"}]});
+        assert!(ensure_canvas_metadata_public_only(&public, &json!({"issuer": "public"})).is_ok());
+        for (jwks, configuration) in [
+            (
+                json!({"keys": [{"kty": "EC", "d": "forbidden"}]}),
+                Value::Null,
+            ),
+            (
+                public.clone(),
+                json!({"nested": [{"private_key": "forbidden"}]}),
+            ),
+            (
+                public.clone(),
+                json!({"nested": "{\"kty\":\"oct\",\"k\":\"forbidden\"}"}),
+            ),
+        ] {
+            let error = ensure_canvas_metadata_public_only(&jwks, &configuration).unwrap_err();
+            assert!(error.to_string().contains("private key material"));
+            assert!(!error.to_string().contains("forbidden"));
+        }
+    }
+
+    #[test]
+    fn lti_verification_rejects_private_jwks_before_key_selection() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"EdDSA","kid":"public-1"}"#);
+        let token = format!("{header}.e30.signature");
+        let jwks =
+            json!({"keys": [{"kty": "OKP", "crv": "Ed25519", "x": "public", "d": "forbidden"}]});
+        let error = verify_lti_launch_jwt(
+            &token,
+            "https://canvas.example.edu",
+            "client-id",
+            "deployment-id",
+            &jwks.to_string(),
+            None,
+            0,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("private key material"));
+        assert!(!error.to_string().contains("forbidden"));
     }
 
     #[test]
@@ -930,12 +1205,13 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn verify_lti_launch_jwt_accepts_valid_ed25519_token() {
         let kid = "canvas-lti-test";
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let verifying_key = signing_key.verifying_key();
-        let jwks = json!({"keys": [make_test_jwk(kid, &verifying_key)]});
+        let signer = DisposableOpenBao::from_marked_env().create_ed25519();
+        let jwks = json!({"keys": [make_test_jwk(kid, &signer)]});
         let claims = json!({
             "iss": "https://canvas.example.edu",
             "sub": "student-123",
@@ -951,7 +1227,7 @@ mod tests {
             LTI_VERSION_CLAIM: "1.3.0"
         });
 
-        let token = encode_jwt(&signing_key, kid, &claims);
+        let token = encode_jwt(&signer, kid, &claims);
         let verified = verify_lti_launch_jwt(
             &token,
             "https://canvas.example.edu",
@@ -972,12 +1248,13 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
     #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
     fn verify_lti_launch_jwt_rejects_wrong_deployment() {
         let kid = "canvas-lti-test";
-        let signing_key = SigningKey::from_bytes(&[9u8; 32]);
-        let verifying_key = signing_key.verifying_key();
-        let jwks = json!({"keys": [make_test_jwk(kid, &verifying_key)]});
+        let signer = DisposableOpenBao::from_marked_env().create_ed25519();
+        let jwks = json!({"keys": [make_test_jwk(kid, &signer)]});
         let claims = json!({
             "iss": "https://canvas.example.edu",
             "sub": "student-123",
@@ -986,7 +1263,7 @@ mod tests {
             LTI_DEPLOYMENT_ID_CLAIM: "other-deployment"
         });
 
-        let token = encode_jwt(&signing_key, kid, &claims);
+        let token = encode_jwt(&signer, kid, &claims);
         let err = verify_lti_launch_jwt(
             &token,
             "https://canvas.example.edu",

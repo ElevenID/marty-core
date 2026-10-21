@@ -20,6 +20,7 @@ typedef enum {
   MDOC_PROVER_SUCCESS = 0,
   MDOC_PROVER_NULL_INPUT = 1,
   MDOC_PROVER_INVALID_INPUT = 2,
+  MDOC_PROVER_ATTRIBUTE_NOT_FOUND = 31,
 } MdocProverErrorCode;
 
 typedef enum {
@@ -76,6 +77,15 @@ const ZkSpecStruct* find_zk_spec(const char* system_name, const char* circuit_ha
   return NULL;
 }
 
+static bool contains_bytes(const uint8_t* haystack, size_t haystack_len,
+                           const uint8_t* needle, size_t needle_len) {
+  if (needle_len == 0 || needle_len > haystack_len) return false;
+  for (size_t offset = 0; offset <= haystack_len - needle_len; ++offset) {
+    if (memcmp(haystack + offset, needle, needle_len) == 0) return true;
+  }
+  return false;
+}
+
 CircuitGenerationErrorCode generate_circuit(const ZkSpecStruct* zk_spec,
                                              uint8_t** cb, size_t* clen) {
   if (!zk_spec || !cb || !clen) return CIRCUIT_GENERATION_NULL_INPUT;
@@ -100,6 +110,13 @@ MdocProverErrorCode run_mdoc_prover(
     return MDOC_PROVER_NULL_INPUT;
   if (bcsz == 0 || mdoc_len == 0 || tr_len == 0 || attrs_len == 0)
     return MDOC_PROVER_INVALID_INPUT;
+  for (size_t i = 0; i < attrs_len; ++i) {
+    if (attrs[i].cbor_value_len > sizeof(attrs[i].cbor_value) ||
+        !contains_bytes(mdoc, mdoc_len, attrs[i].cbor_value,
+                        attrs[i].cbor_value_len)) {
+      return MDOC_PROVER_ATTRIBUTE_NOT_FOUND;
+    }
+  }
 
   // Mock proof: transcript bytes + fixed tag (tag enables tamper detection).
   static const uint8_t tag[16] = {

@@ -87,7 +87,7 @@ getrandom = { version = "0.4", optional = true }
 # Native-only dependencies (not WASM compatible)
 tokio = { workspace = true, features = ["sync"], optional = true }
 tracing = { workspace = true, optional = true }
-image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png"] }
+image = { workspace = true, optional = true, features = ["jpeg", "png"] }
 
 # Liveness (chrono for timestamp handling, hmac+sha2 for challenge signing)
 chrono = { workspace = true, optional = true }

@@ -1,0 +1,24 @@
+[package]
+name = "marty-emrtd-issuance"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Keyless ICAO eMRTD SOD preparation and remote-signature assembly"
+
+[dependencies]
+cms = { workspace = true }
+const-oid = { workspace = true }
+der = { workspace = true }
+marty-crypto = { workspace = true, default-features = false, features = ["kms-only", "signature-verification"] }
+sha2 = { workspace = true }
+spki = { workspace = true }
+thiserror = { workspace = true }
+x509-cert = { workspace = true }
+
+[dev-dependencies]
+marty-crypto-test-support = { workspace = true }
+marty-verification = { workspace = true, default-features = false, features = ["csca"] }
+rcgen = { workspace = true }

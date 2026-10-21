@@ -3,10 +3,13 @@
 //! The preparation retains all format state in Rust while an external KMS
 //! signs only the exact bytes returned by the canonical format kernel.
 
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use isomdl::digest_executor::{DigestExecutor, SerialDigestExecutor};
-use rand::Rng;
+use rand::{Rng, RngCore};
 use serde_json::Value;
 
 use crate::{
@@ -21,7 +24,11 @@ use crate::{
             validate_mdoc_preparation, MdocBatchPlanError, PreparedMdoc,
             ValidatedMdocBatchPlanItem,
         },
-        sd_jwt::{prepare_sd_jwt_with_options, PreparedSdJwt, SdJwtPreparationOptions},
+        sd_jwt::{
+            prepare_sd_jwt_batch_with_digest_executor, prepare_sd_jwt_with_options,
+            validate_sd_jwt_batch_claims, validate_sd_jwt_batch_time, PreparedSdJwt,
+            SdJwtBatchPreparationInput, SdJwtPreparationOptions,
+        },
     },
     signer::CredentialSigner,
     types::{CredentialClaims, CredentialPayloadFormat, SigningAlgorithm},
@@ -30,6 +37,12 @@ use crate::{
 
 const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 const DUPLICATE_MDOC_BATCH_ID: &str = "mDoc preparation batch contains duplicate batch identity";
+const DUPLICATE_SD_JWT_BATCH_ID: &str =
+    "SD-JWT preparation batch contains duplicate batch identity";
+const DUPLICATE_SD_JWT_CREDENTIAL_ID: &str =
+    "SD-JWT preparation batch contains duplicate credential ID";
+const INVALID_SD_JWT_CREDENTIAL_ID: &str =
+    "SD-JWT batch credential_id must be a urn:uuid identifier";
 const DUPLICATE_MDOC_CREDENTIAL_ID: &str =
     "mDoc preparation batch contains duplicate credential ID";
 
@@ -38,6 +51,7 @@ pub struct RemoteSignerMetadata {
     issuer_id: String,
     verification_method_id: String,
     algorithm: SigningAlgorithm,
+    public_jwk: String,
 }
 
 impl RemoteSignerMetadata {
@@ -45,6 +59,7 @@ impl RemoteSignerMetadata {
         issuer_id: &str,
         verification_method_id: &str,
         algorithm: &str,
+        public_jwk: String,
     ) -> Oid4vciResult<Self> {
         if !issuer_id.starts_with("did:") {
             return Err(protocol_error("issuer_id must be a DID"));
@@ -58,6 +73,7 @@ impl RemoteSignerMetadata {
             issuer_id: issuer_id.to_owned(),
             verification_method_id: verification_method_id.to_owned(),
             algorithm: parse_algorithm(algorithm)?,
+            public_jwk,
         })
     }
 }
@@ -80,6 +96,10 @@ impl CredentialSigner for RemoteSignerMetadata {
     fn kid_url(&self) -> String {
         self.verification_method_id.clone()
     }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        Ok(self.public_jwk.clone())
+    }
 }
 
 #[derive(Clone)]
@@ -87,6 +107,7 @@ pub struct RemoteSdJwtRequest {
     pub issuer_id: String,
     pub verification_method_id: String,
     pub algorithm: String,
+    pub issuer_public_jwk: String,
     pub subject_id: Option<String>,
     pub credential_type: String,
     pub claims: HashMap<String, Value>,
@@ -111,6 +132,7 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
         &request.issuer_id,
         &request.verification_method_id,
         &request.algorithm,
+        request.issuer_public_jwk,
     )?;
     let claims = credential_claims(
         request.subject_id.clone(),
@@ -146,11 +168,201 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
     )
 }
 
+/// A remote SD-JWT request with caller-assigned routing identity.
+#[derive(Clone)]
+pub struct RemoteSdJwtBatchItem {
+    batch_id: u64,
+    request: RemoteSdJwtRequest,
+}
+
+impl RemoteSdJwtBatchItem {
+    pub fn new(batch_id: u64, request: RemoteSdJwtRequest) -> Self {
+        Self { batch_id, request }
+    }
+
+    pub fn batch_id(&self) -> u64 {
+        self.batch_id
+    }
+}
+
+impl fmt::Debug for RemoteSdJwtBatchItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RemoteSdJwtBatchItem([redacted])")
+    }
+}
+
+/// An opaque preparation restored to its caller-assigned routing identity.
+pub struct PreparedRemoteSdJwtBatchItem {
+    batch_id: u64,
+    prepared_sd_jwt: PreparedSdJwt,
+}
+
+impl PreparedRemoteSdJwtBatchItem {
+    pub fn batch_id(&self) -> u64 {
+        self.batch_id
+    }
+    pub fn prepared_sd_jwt(&self) -> &PreparedSdJwt {
+        &self.prepared_sd_jwt
+    }
+    pub fn into_prepared_sd_jwt(self) -> PreparedSdJwt {
+        self.prepared_sd_jwt
+    }
+}
+
+impl fmt::Debug for PreparedRemoteSdJwtBatchItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PreparedRemoteSdJwtBatchItem([redacted])")
+    }
+}
+
+struct ValidatedSdJwtBatchItem {
+    batch_id: u64,
+    signer: RemoteSignerMetadata,
+    claims: CredentialClaims,
+    options: SdJwtPreparationOptions,
+    explicit_uuid: Option<uuid::Uuid>,
+}
+
+/// Prepare caller-ordered remote SD-JWTs with one disclosure digest call.
+/// All request fields and time-dependent validity are checked before UUID or
+/// salt allocation. Failures discard the entire batch.
+pub fn prepare_remote_sd_jwt_batch(
+    batch: Vec<RemoteSdJwtBatchItem>,
+) -> Oid4vciResult<Vec<PreparedRemoteSdJwtBatchItem>> {
+    let mut rng = rand::rngs::OsRng;
+    prepare_remote_sd_jwt_batch_with_sources(
+        batch,
+        uuid::Uuid::new_v4,
+        chrono::Utc::now,
+        || {
+            let mut salt = [0u8; 16];
+            rng.fill_bytes(&mut salt);
+            salt
+        },
+        &SerialDigestExecutor,
+    )
+}
+
+fn prepare_remote_sd_jwt_batch_with_sources(
+    batch: Vec<RemoteSdJwtBatchItem>,
+    mut next_uuid: impl FnMut() -> uuid::Uuid,
+    mut next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
+    next_salt: impl FnMut() -> [u8; 16],
+    executor: &dyn DigestExecutor,
+) -> Oid4vciResult<Vec<PreparedRemoteSdJwtBatchItem>> {
+    let mut batch_ids = HashSet::with_capacity(batch.len());
+    let mut explicit_ids = HashSet::with_capacity(batch.len());
+    let mut validated = Vec::with_capacity(batch.len());
+    for item in batch {
+        if !batch_ids.insert(item.batch_id) {
+            return Err(protocol_error(DUPLICATE_SD_JWT_BATCH_ID));
+        }
+        let request = item.request;
+        let explicit_uuid = request
+            .credential_id
+            .as_deref()
+            .map(|id| {
+                uuid::Uuid::parse_str(
+                    id.strip_prefix("urn:uuid:")
+                        .ok_or_else(|| protocol_error(INVALID_SD_JWT_CREDENTIAL_ID))?,
+                )
+                .map_err(|_| protocol_error(INVALID_SD_JWT_CREDENTIAL_ID))
+            })
+            .transpose()?;
+        if explicit_uuid.is_some_and(|id| !explicit_ids.insert(id)) {
+            return Err(protocol_error(DUPLICATE_SD_JWT_CREDENTIAL_ID));
+        }
+        validate_certificate_chain(&request.issuer_certificate_chain)?;
+        let signer = RemoteSignerMetadata::new(
+            &request.issuer_id,
+            &request.verification_method_id,
+            &request.algorithm,
+            request.issuer_public_jwk,
+        )?;
+        let claims = credential_claims(
+            request.subject_id.clone(),
+            request.credential_type,
+            request.claims,
+            request.expiration_seconds,
+            request.selective_disclosure_claims,
+            CredentialPayloadFormat::IetfSdJwt,
+        );
+        let raw_confirmation = request
+            .holder_jwk
+            .as_ref()
+            .map(|holder| serde_json::json!({"jwk": holder}));
+        crate::formats::sd_jwt::validate_sd_jwt_structural_markers(
+            &claims,
+            raw_confirmation.as_ref(),
+        )?;
+        let confirmation = holder_confirmation(request.subject_id.as_deref(), request.holder_jwk)?;
+        let options = SdJwtPreparationOptions {
+            credential_id: request.credential_id,
+            typ: Some(
+                if request.credential_format.as_deref() == Some("dc+sd-jwt") {
+                    "dc+sd-jwt".to_owned()
+                } else {
+                    "vc+sd-jwt".to_owned()
+                },
+            ),
+            confirmation,
+            x5c: request.issuer_certificate_chain,
+            include_nbf: true,
+        };
+        validate_sd_jwt_batch_claims(&claims, &options)?;
+        validated.push(ValidatedSdJwtBatchItem {
+            batch_id: item.batch_id,
+            signer,
+            claims,
+            options,
+            explicit_uuid,
+        });
+    }
+    if validated.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut timed = Vec::with_capacity(validated.len());
+    for item in validated {
+        let now = next_now();
+        validate_sd_jwt_batch_time(now, item.claims.expiration_seconds)?;
+        timed.push((item, now));
+    }
+    let mut all_ids = explicit_ids;
+    let mut inputs = Vec::with_capacity(timed.len());
+    for (mut item, issued_at) in timed {
+        if item.explicit_uuid.is_none() {
+            let uuid = next_uuid();
+            if !all_ids.insert(uuid) {
+                return Err(protocol_error(DUPLICATE_SD_JWT_CREDENTIAL_ID));
+            }
+            item.options.credential_id = Some(format!("urn:uuid:{uuid}"));
+        }
+        inputs.push(SdJwtBatchPreparationInput {
+            batch_id: item.batch_id,
+            signer: Box::new(item.signer),
+            claims: item.claims,
+            options: item.options,
+            issued_at,
+        });
+    }
+    prepare_sd_jwt_batch_with_digest_executor(inputs, next_salt, executor).map(|prepared| {
+        prepared
+            .into_iter()
+            .map(|(batch_id, prepared_sd_jwt)| PreparedRemoteSdJwtBatchItem {
+                batch_id,
+                prepared_sd_jwt,
+            })
+            .collect()
+    })
+}
+
 #[derive(Clone)]
 pub struct RemoteJwtVcRequest {
     pub issuer_id: String,
     pub verification_method_id: String,
     pub algorithm: String,
+    pub issuer_public_jwk: String,
     pub subject_id: Option<String>,
     pub credential_type: String,
     pub claims: HashMap<String, Value>,
@@ -173,6 +385,7 @@ pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<Prepa
         &request.issuer_id,
         &request.verification_method_id,
         &request.algorithm,
+        request.issuer_public_jwk,
     )?;
     let mut raw_claims = request.claims;
     let credential_status = raw_claims.remove("credentialStatus");
@@ -231,7 +444,9 @@ pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<Prepa
 #[derive(Clone)]
 pub struct RemoteMdocRequest {
     pub issuer_id: String,
+    pub verification_method_id: String,
     pub algorithm: String,
+    pub issuer_public_jwk: String,
     pub credential_type: String,
     pub namespace: String,
     pub claims: HashMap<String, Value>,
@@ -314,10 +529,12 @@ pub fn prepare_remote_mdoc(request: RemoteMdocRequest) -> Oid4vciResult<Prepared
     validate_credential_id(request.credential_id.as_deref())?;
     let algorithm = parse_mdoc_algorithm(&request.algorithm)?;
     let holder_jwk = request.holder_jwk.map(public_jwk).transpose()?;
-    let signer = MdocSignerMetadata {
-        issuer_id: request.issuer_id,
+    let signer = MdocSignerMetadata::new(
+        &request.issuer_id,
+        &request.verification_method_id,
         algorithm,
-    };
+        request.issuer_public_jwk,
+    )?;
     prepare_mdoc_with_credential_id_and_device_key(
         &signer,
         &mdoc_credential_claims(
@@ -406,7 +623,18 @@ fn validate_remote_mdoc_batch_item(
         request.claims,
         request.expiration_seconds,
     );
-    let preparation = validate_mdoc_preparation(algorithm, &claims, holder_jwk.as_ref())?;
+    let signer = MdocSignerMetadata::new(
+        &request.issuer_id,
+        &request.verification_method_id,
+        algorithm,
+        request.issuer_public_jwk,
+    )?;
+    let preparation = validate_mdoc_preparation(
+        algorithm,
+        crate::signer::validate_signer_public_jwk(&signer)?,
+        &claims,
+        holder_jwk.as_ref(),
+    )?;
 
     Ok(match credential_id {
         Some((credential_id, credential_uuid)) => {
@@ -468,7 +696,9 @@ fn mdoc_credential_claims(
 #[derive(Debug)]
 struct MdocSignerMetadata {
     issuer_id: String,
+    verification_method_id: String,
     algorithm: SigningAlgorithm,
+    public_jwk: String,
 }
 
 impl CredentialSigner for MdocSignerMetadata {
@@ -487,7 +717,35 @@ impl CredentialSigner for MdocSignerMetadata {
     }
 
     fn kid_url(&self) -> String {
-        self.issuer_id.clone()
+        self.verification_method_id.clone()
+    }
+
+    fn public_jwk(&self) -> Oid4vciResult<String> {
+        Ok(self.public_jwk.clone())
+    }
+}
+
+impl MdocSignerMetadata {
+    fn new(
+        issuer_id: &str,
+        verification_method_id: &str,
+        algorithm: SigningAlgorithm,
+        public_jwk: String,
+    ) -> Oid4vciResult<Self> {
+        if !issuer_id.starts_with("did:") {
+            return Err(protocol_error("issuer_id must be a DID"));
+        }
+        if !verification_method_id.starts_with(&format!("{issuer_id}#")) {
+            return Err(protocol_error(
+                "verification_method_id must identify a key controlled by the issuer DID",
+            ));
+        }
+        Ok(Self {
+            issuer_id: issuer_id.to_owned(),
+            verification_method_id: verification_method_id.to_owned(),
+            algorithm,
+            public_jwk,
+        })
     }
 }
 
@@ -628,9 +886,36 @@ mod tests {
 
     use super::{
         prepare_remote_jwt_vc, prepare_remote_mdoc, prepare_remote_mdoc_batch,
-        prepare_remote_mdoc_batch_with_sources, prepare_remote_sd_jwt, RemoteJwtVcRequest,
-        RemoteMdocBatchItem, RemoteMdocRequest, RemoteSdJwtRequest, PRIVATE_JWK_MEMBERS,
+        prepare_remote_mdoc_batch_with_sources, prepare_remote_sd_jwt,
+        prepare_remote_sd_jwt_batch_with_sources, RemoteJwtVcRequest, RemoteMdocBatchItem,
+        RemoteMdocRequest, RemoteSdJwtBatchItem, RemoteSdJwtRequest, PRIVATE_JWK_MEMBERS,
     };
+
+    fn issuer_public_jwk() -> String {
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+        })
+        .to_string()
+    }
+
+    fn issuer_public_jwk_for_algorithm(algorithm: &str) -> String {
+        if algorithm != "ES384" {
+            return issuer_public_jwk();
+        }
+        use p384::elliptic_curve::sec1::ToEncodedPoint as _;
+
+        let point = p384::AffinePoint::GENERATOR.to_encoded_point(false);
+        serde_json::json!({
+            "kty": "EC",
+            "crv": "P-384",
+            "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+            "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+        })
+        .to_string()
+    }
 
     #[derive(Default)]
     struct CountingDigestExecutor {
@@ -666,7 +951,9 @@ mod tests {
     ) -> RemoteMdocRequest {
         RemoteMdocRequest {
             issuer_id: "did:web:issuer.example".into(),
+            verification_method_id: "did:web:issuer.example#key-1".into(),
             algorithm: algorithm.into(),
+            issuer_public_jwk: issuer_public_jwk_for_algorithm(algorithm),
             credential_type: "org.iso.18013.5.1.mDL".into(),
             namespace: "org.iso.18013.5.1".into(),
             claims,
@@ -682,12 +969,279 @@ mod tests {
             .with_timezone(&chrono::Utc)
     }
 
+    fn sd_jwt_batch_request(id: Option<&str>) -> RemoteSdJwtRequest {
+        RemoteSdJwtRequest {
+            issuer_id: "did:web:issuer.example".into(),
+            verification_method_id: "did:web:issuer.example#key-1".into(),
+            algorithm: "ES256".into(),
+            issuer_public_jwk: issuer_public_jwk(),
+            subject_id: Some("did:example:holder".into()),
+            credential_type: "AccessBadge".into(),
+            claims: HashMap::from([("name".into(), serde_json::json!("Alice"))]),
+            expiration_seconds: Some(3600),
+            selective_disclosure_claims: vec!["name".into()],
+            credential_format: Some("dc+sd-jwt".into()),
+            credential_id: id.map(str::to_owned),
+            holder_jwk: None,
+            issuer_certificate_chain: vec![],
+        }
+    }
+
+    #[test]
+    fn public_sd_jwt_batch_consumes_exact_byte_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/contracts/sd_jwt_remote_batch_v1.json"
+        ))
+        .unwrap();
+        let fixture_batch = || {
+            contract["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|case| {
+                    RemoteSdJwtBatchItem::new(
+                        case["batch_id"].as_u64().unwrap(),
+                        RemoteSdJwtRequest {
+                            issuer_id: contract["issuer_id"].as_str().unwrap().into(),
+                            verification_method_id: contract["verification_method_id"]
+                                .as_str()
+                                .unwrap()
+                                .into(),
+                            algorithm: contract["algorithm"].as_str().unwrap().into(),
+                            issuer_public_jwk: contract["issuer_public_jwk"].to_string(),
+                            subject_id: Some(contract["subject_id"].as_str().unwrap().into()),
+                            credential_type: contract["credential_type"].as_str().unwrap().into(),
+                            claims: serde_json::from_value(contract["claims"].clone()).unwrap(),
+                            expiration_seconds: Some(
+                                contract["expiration_seconds"].as_i64().unwrap(),
+                            ),
+                            selective_disclosure_claims: serde_json::from_value(
+                                contract["selectors"].clone(),
+                            )
+                            .unwrap(),
+                            credential_format: Some(contract["typ"].as_str().unwrap().into()),
+                            credential_id: Some(case["credential_id"].as_str().unwrap().into()),
+                            holder_jwk: Some(contract["confirmation"]["jwk"].clone()),
+                            issuer_certificate_chain: serde_json::from_value(
+                                contract["x5c"].clone(),
+                            )
+                            .unwrap(),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let salts = contract["salts_base64url"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|salt| {
+                URL_SAFE_NO_PAD
+                    .decode(salt.as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect::<Vec<[u8; 16]>>();
+        let now = chrono::DateTime::from_timestamp(contract["issued_at_unix"].as_i64().unwrap(), 0)
+            .unwrap();
+        let mut salt_index = 0;
+        let deterministic = prepare_remote_sd_jwt_batch_with_sources(
+            fixture_batch(),
+            || panic!("explicit IDs require no UUID source"),
+            || now,
+            || {
+                let salt = salts[salt_index % salts.len()];
+                salt_index += 1;
+                salt
+            },
+            &SerialDigestExecutor,
+        )
+        .unwrap();
+        for (case, item) in contract["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(deterministic)
+        {
+            assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
+            assert_eq!(
+                item.prepared_sd_jwt().credential_id(),
+                case["credential_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                item.prepared_sd_jwt().signing_input(),
+                case["signing_input"].as_str().unwrap()
+            );
+            assert_eq!(
+                item.prepared_sd_jwt().disclosures_suffix(),
+                case["disclosures_suffix"].as_str().unwrap()
+            );
+        }
+        let public = super::prepare_remote_sd_jwt_batch(fixture_batch()).unwrap();
+        for (case, item) in contract["items"].as_array().unwrap().iter().zip(public) {
+            assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
+            assert_eq!(
+                item.prepared_sd_jwt().credential_id(),
+                case["credential_id"].as_str().unwrap()
+            );
+            let header = segment(item.prepared_sd_jwt().signing_input(), 0);
+            let payload = segment(item.prepared_sd_jwt().signing_input(), 1);
+            assert_eq!(header["kid"], contract["verification_method_id"]);
+            assert_eq!(payload["iss"], contract["issuer_id"]);
+        }
+    }
+
+    #[test]
+    fn sd_jwt_batch_validates_every_item_before_any_source() {
+        let mut invalid = sd_jwt_batch_request(None);
+        invalid.algorithm = "invalid".into();
+        let error = prepare_remote_sd_jwt_batch_with_sources(
+            vec![
+                RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                RemoteSdJwtBatchItem::new(7, invalid),
+            ],
+            || panic!("uuid source"),
+            || panic!("time source"),
+            || panic!("salt source"),
+            &MustNotExecute,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Unknown algorithm"));
+    }
+
+    #[test]
+    fn sd_jwt_batch_rejects_duplicate_ids_and_empty_batch_without_sources() {
+        let id = "urn:uuid:00000000-0000-4000-8000-000000000091";
+        for batch in [
+            vec![
+                RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(Some(id))),
+                RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+            ],
+            vec![
+                RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(Some(id))),
+                RemoteSdJwtBatchItem::new(7, sd_jwt_batch_request(Some(id))),
+            ],
+        ] {
+            let error = prepare_remote_sd_jwt_batch_with_sources(
+                batch,
+                || panic!("uuid source"),
+                || panic!("time source"),
+                || panic!("salt source"),
+                &MustNotExecute,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("duplicate"));
+        }
+        let empty = prepare_remote_sd_jwt_batch_with_sources(
+            vec![],
+            || panic!("uuid source"),
+            || panic!("time source"),
+            || panic!("salt source"),
+            &MustNotExecute,
+        )
+        .unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn sd_jwt_batch_checks_time_before_uuid_salt_or_digest() {
+        let mut invalid = sd_jwt_batch_request(None);
+        invalid.expiration_seconds = Some(i64::MAX);
+        let error = prepare_remote_sd_jwt_batch_with_sources(
+            vec![
+                RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                RemoteSdJwtBatchItem::new(7, invalid),
+            ],
+            || panic!("uuid source"),
+            || fixed_time(1),
+            || panic!("salt source"),
+            &MustNotExecute,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("expiration is out of range"));
+    }
+
+    #[test]
+    fn sd_jwt_batch_reserves_later_explicit_id_before_generation() {
+        let reserved = "urn:uuid:00000000-0000-4000-8000-000000000007";
+        let error = prepare_remote_sd_jwt_batch_with_sources(
+            vec![
+                RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                RemoteSdJwtBatchItem::new(7, sd_jwt_batch_request(Some(reserved))),
+            ],
+            || uuid::Uuid::parse_str("00000000-0000-4000-8000-000000000007").unwrap(),
+            || fixed_time(1),
+            || panic!("salt source"),
+            &MustNotExecute,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("duplicate credential ID"));
+    }
+
+    #[test]
+    fn sd_jwt_batch_errors_match_language_neutral_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/contracts/sd_jwt_remote_batch_v1.json"
+        ))
+        .unwrap();
+        let explicit = "urn:uuid:00000000-0000-4000-8000-000000000091";
+        for case in contract["error_cases"].as_array().unwrap() {
+            let (first, second) = match case["kind"].as_str().unwrap() {
+                "duplicate_batch_id" => (
+                    RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                    RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                ),
+                "duplicate_credential_id" => (
+                    RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(Some(explicit))),
+                    RemoteSdJwtBatchItem::new(7, sd_jwt_batch_request(Some(explicit))),
+                ),
+                "invalid_credential_id" => (
+                    RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                    RemoteSdJwtBatchItem::new(7, sd_jwt_batch_request(Some("invalid"))),
+                ),
+                "invalid_algorithm" => {
+                    let mut request = sd_jwt_batch_request(None);
+                    request.algorithm = "invalid".into();
+                    (
+                        RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                        RemoteSdJwtBatchItem::new(7, request),
+                    )
+                }
+                "expiration_overflow" => {
+                    let mut request = sd_jwt_batch_request(None);
+                    request.expiration_seconds = Some(i64::MAX);
+                    (
+                        RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                        RemoteSdJwtBatchItem::new(7, request),
+                    )
+                }
+                unknown => panic!("unknown contract case: {unknown}"),
+            };
+            let error = prepare_remote_sd_jwt_batch_with_sources(
+                vec![first, second],
+                || panic!("uuid source"),
+                || fixed_time(1),
+                || panic!("salt source"),
+                &MustNotExecute,
+            )
+            .unwrap_err();
+            let message = match error {
+                crate::Oid4vciError::InvalidRequest(message)
+                | crate::Oid4vciError::SigningError(message) => message,
+                other => panic!("unexpected error variant: {other}"),
+            };
+            assert_eq!(message, case["expected_error"].as_str().unwrap());
+        }
+    }
+
     #[test]
     fn remote_request_debug_output_is_stably_redacted() {
         let sd_jwt = RemoteSdJwtRequest {
             issuer_id: "did:web:sd-jwt-issuer-canary.example".into(),
             verification_method_id: "did:web:sd-jwt-issuer-canary.example#key-canary".into(),
             algorithm: "ES256-canary".into(),
+            issuer_public_jwk: "issuer-public-jwk-canary".into(),
             subject_id: Some("did:example:sd-jwt-holder-canary".into()),
             credential_type: "SdJwtCredentialCanary".into(),
             claims: HashMap::from([(
@@ -708,6 +1262,7 @@ mod tests {
             issuer_id: "did:web:jwt-vc-issuer-canary.example".into(),
             verification_method_id: "did:web:jwt-vc-issuer-canary.example#key-canary".into(),
             algorithm: "ES256-canary".into(),
+            issuer_public_jwk: "issuer-public-jwk-canary".into(),
             subject_id: Some("did:example:jwt-vc-holder-canary".into()),
             credential_type: "JwtVcCredentialCanary".into(),
             claims: HashMap::from([(
@@ -722,7 +1277,9 @@ mod tests {
         };
         let mdoc = RemoteMdocRequest {
             issuer_id: "did:web:mdoc-issuer-canary.example".into(),
+            verification_method_id: "did:web:mdoc-issuer-canary.example#key-canary".into(),
             algorithm: "ES256-canary".into(),
+            issuer_public_jwk: "issuer-public-jwk-canary".into(),
             credential_type: "MdocCredentialCanary".into(),
             namespace: "mdoc.namespace.canary".into(),
             claims: HashMap::from([(
@@ -776,6 +1333,7 @@ mod tests {
                 issuer_id: "did:web:issuer.example".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
                 algorithm: "ES256".to_owned(),
+                issuer_public_jwk: issuer_public_jwk(),
                 subject_id: Some("did:key:holder".to_owned()),
                 credential_type: "AccessBadge".to_owned(),
                 claims: HashMap::from([("name".to_owned(), serde_json::json!("Alice"))]),
@@ -812,6 +1370,7 @@ mod tests {
                 issuer_id: "did:web:issuer.example".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
                 algorithm: "ES256".to_owned(),
+                issuer_public_jwk: issuer_public_jwk(),
                 subject_id: None,
                 credential_type: "AccessBadge".to_owned(),
                 claims: HashMap::from([
@@ -839,6 +1398,7 @@ mod tests {
             issuer_id: "did:web:issuer.example".to_owned(),
             verification_method_id: "did:web:issuer.example#key-1".to_owned(),
             algorithm: "ES256".to_owned(),
+            issuer_public_jwk: issuer_public_jwk(),
             subject_id: Some("did:key:holder".to_owned()),
             credential_type: "AccessBadge".to_owned(),
             claims: HashMap::from([("name".to_owned(), serde_json::json!("Alice"))]),
@@ -864,6 +1424,7 @@ mod tests {
             issuer_id: "did:web:issuer.example".to_owned(),
             verification_method_id: "did:web:issuer.example#key-1".to_owned(),
             algorithm: "ES256".to_owned(),
+            issuer_public_jwk: issuer_public_jwk(),
             subject_id: Some("did:key:holder".to_owned()),
             credential_type: "AccessBadge".to_owned(),
             claims: HashMap::from([(
@@ -889,7 +1450,9 @@ mod tests {
     fn mdoc_preserves_reserved_identity_and_device_binding() {
         let prepared = prepare_remote_mdoc(RemoteMdocRequest {
             issuer_id: "did:web:issuer.example".to_owned(),
+            verification_method_id: "did:web:issuer.example#key-1".to_owned(),
             algorithm: "ES256".to_owned(),
+            issuer_public_jwk: issuer_public_jwk(),
             credential_type: "org.iso.18013.5.1.mDL".to_owned(),
             namespace: "org.iso.18013.5.1".to_owned(),
             claims: HashMap::from([("family_name".to_owned(), serde_json::json!("Smith"))]),

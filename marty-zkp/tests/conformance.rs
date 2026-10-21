@@ -725,10 +725,7 @@ fn prove_rejects_attribute_count_mismatch() {
 /// Verifier must reject a proof generated with a deliberately wrong value for
 /// `birth_date` (the CBOR encoding of "2000-01-01" instead of "1971-09-01").
 ///
-/// The ZK mock does not validate attribute values, so this test is only
-/// meaningful with the real Longfellow library.
 #[test]
-#[cfg_attr(zk_mock, ignore)]
 fn prove_rejects_wrong_birth_date_witness() {
     // CBOR tag(1004) tstr "2000-01-01" — wrong value, not in the mDoc
     const WRONG_DATE: &[u8] = &[
