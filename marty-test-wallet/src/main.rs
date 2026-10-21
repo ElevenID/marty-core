@@ -650,16 +650,20 @@ fn presentation_response(
         // Retain the real rejection. A submitted negative presentation is not
         // a successful verification, nor a network failure. The demo must also
         // corroborate its expected denial against the fresh verifier session.
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "ok": false,
-            "error": response.error_description.as_deref().or(response.error.as_deref())
-                .unwrap_or("Verifier rejected the presentation"),
-            "submission": {
-                "submitted": true,
-                "verifier_http_status": response.http_status,
-                "verifier_error": response.error,
-            }
-        }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": response.error_description.as_deref().or(response.error.as_deref())
+                    .unwrap_or("Verifier rejected the presentation"),
+                "submission": {
+                    "submitted": true,
+                    "verifier_http_status": response.http_status,
+                    "verifier_error": response.error,
+                }
+            })),
+        )
+            .into_response();
     }
     Json(PresentResponse {
         ok: true,
