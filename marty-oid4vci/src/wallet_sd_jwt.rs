@@ -268,11 +268,9 @@ pub(crate) fn prepare_verified_presentation(
         ));
     }
 
-    let (mut holder, _) = verified_holder(credential, holder_public_jwk_json, issuer_key_resolver)?;
-    let disclosures = claims_to_disclose
-        .iter()
-        .map(|claim| (claim.clone(), serde_json::Value::Bool(true)))
-        .collect();
+    let (mut holder, context) =
+        verified_holder(credential, holder_public_jwk_json, issuer_key_resolver)?;
+    let disclosures = presentation_disclosures(&context.payload, claims_to_disclose)?;
     let inner = holder
         .prepare_key_binding_presentation(
             disclosures,
@@ -284,6 +282,54 @@ pub(crate) fn prepare_verified_presentation(
             Oid4vciError::SigningError("Verified SD-JWT presentation preparation failed".into())
         })?;
     Ok(PreparedSdJwtPresentation { inner })
+}
+
+fn presentation_disclosures(
+    issuer_payload: &serde_json::Value,
+    claim_names: &[String],
+) -> Oid4vciResult<serde_json::Map<String, serde_json::Value>> {
+    let claims = claim_names
+        .iter()
+        .map(|name| (name.clone(), serde_json::Value::Bool(true)))
+        .collect();
+    if let Some(subject) = issuer_payload.get("credentialSubject") {
+        if !subject.is_object() {
+            return Err(Oid4vciError::InvalidRequest(
+                "SD-JWT credentialSubject must be an object".into(),
+            ));
+        }
+        return Ok(serde_json::Map::from_iter([(
+            "credentialSubject".into(),
+            serde_json::Value::Object(claims),
+        )]));
+    }
+    Ok(claims)
+}
+
+#[cfg(test)]
+mod presentation_disclosure_tests {
+    use super::presentation_disclosures;
+    use serde_json::json;
+
+    #[test]
+    fn selects_requested_claims_at_the_signed_payload_location() {
+        let names = ["email".to_owned(), "achievement_id".to_owned()];
+        assert_eq!(
+            json!(presentation_disclosures(&json!({"vct": "Badge"}), &names).unwrap()),
+            json!({"email": true, "achievement_id": true})
+        );
+        assert_eq!(
+            json!(presentation_disclosures(
+                &json!({"vct": "Badge", "credentialSubject": {"_sd": []}}),
+                &names
+            ).unwrap()),
+            json!({"credentialSubject": {"email": true, "achievement_id": true}})
+        );
+        assert!(presentation_disclosures(
+            &json!({"credentialSubject": []}),
+            &names
+        ).is_err());
+    }
 }
 
 fn verified_holder(
