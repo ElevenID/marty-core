@@ -51,6 +51,13 @@ def check_repository(root: Path = ROOT) -> None:
     test_support = load_toml(root / "marty-crypto-test-support" / "Cargo.toml")
     verification_python = load_toml(root / "marty-verification" / "pyproject.toml")
 
+    shared_patches = workspace["patch"]["crates-io"]
+    require(
+        shared_patches["ecdsa"] == shared_patches["ssi-crypto"]
+        and shared_patches["ecdsa"].get("git") == "https://github.com/ElevenID/ssi-elevenid"
+        and len(shared_patches["ecdsa"].get("rev", "")) == 40,
+        "ECDSA and SSI must share one immutable low-level verification backend source",
+    )
     workspace_dependencies = workspace["workspace"]["dependencies"]
     require(
         set(canonical_digest["dependencies"]) == {"serde_json", "sha2"}

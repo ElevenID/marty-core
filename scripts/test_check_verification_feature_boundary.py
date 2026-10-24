@@ -8,6 +8,19 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
     def test_repository_feature_boundary(self) -> None:
         check_repository()
 
+    def test_ecdsa_cannot_diverge_from_the_shared_ssi_backend(self) -> None:
+        for replacement in ({"path": "third_party/ecdsa"}, {"git": "https://github.com/ElevenID/ssi-elevenid", "rev": "0" * 40}):
+            with self.subTest(replacement=replacement):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "Cargo.toml":
+                        manifest["patch"]["crates-io"]["ecdsa"] = replacement
+                    return manifest
+
+                with patch("check_verification_feature_boundary.load_toml", side_effect=mutated_manifest):
+                    with self.assertRaisesRegex(ValueError, "one immutable low-level"):
+                        check_repository()
+
     def test_canonical_digest_boundary_rejects_verifier_or_crypto_dependencies(self) -> None:
         for dependency in ("marty-verification", "marty-crypto", "marty-oid4vci"):
             with self.subTest(dependency=dependency):
