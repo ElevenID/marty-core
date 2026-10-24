@@ -11,6 +11,7 @@ repository = "https://github.com/ElevenID/marty-core"
 rust-version = "1.95"
 
 [workspace.dependencies]
+isomdl = { version = "0.3", default-features = false }
 marty-canonical-digest = { version = "0.2.2", path = "marty-canonical-digest" }
 # Crypto and certificates
 x509-cert = { version = "0.2", default-features = false, features = ["pem", "std"] }
@@ -43,6 +44,7 @@ x509-ocsp = "0.2"
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc", "zeroize"] }
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "legacy-des"] }
 aes = { version = "0.8", features = ["zeroize"] }
+aes-kw = { version = "0.2.1", default-features = false, features = ["alloc"] }
 ghash = { version = "0.5", features = ["zeroize"] }
 polyval = { version = "0.6", features = ["zeroize"] }
 cbc = { version = "0.1", features = ["alloc"] }
@@ -212,4 +214,4 @@ ssi = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30
 # linked-data is maintained on the fork's dedicated dependency ref.
 linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
 # ElevenID-maintained security/interoperability fork, synchronized from upstream by reviewed monthly PRs.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "784a52943469622873c7ae3200dbc11e89d6bd8e" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f" }

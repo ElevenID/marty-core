@@ -60,6 +60,14 @@ def check_repository(root: Path = ROOT) -> None:
     )
     workspace_dependencies = workspace["workspace"]["dependencies"]
     require(
+        workspace_dependencies["isomdl"] == {"version": "0.3", "default-features": False}
+        and all(manifest["dependencies"]["isomdl"].get("workspace") is True
+                for manifest in (verification, oid4vci, iso18013))
+        and oid4vci["dev-dependencies"]["isomdl"].get("workspace") is True,
+        "isomdl roles must share one capability-neutral workspace dependency",
+    )
+
+    require(
         set(canonical_digest["dependencies"]) == {"serde_json", "sha2"}
         and not canonical_digest.get("build-dependencies")
         and all(
@@ -145,6 +153,7 @@ def check_repository(root: Path = ROOT) -> None:
         for curve in ("p256", "p384", "p521")
         for capability in ("std", "getrandom")
     }
+    entropy_features |= {"dep:getrandom-modern", "dep:getrandom-legacy"}
     require(
         not entropy_features & set(crypto_features["ecdsa-verification"]),
         "public ECDSA verification must not implicitly select platform entropy",
@@ -328,15 +337,12 @@ def check_repository(root: Path = ROOT) -> None:
     )
     require(
         didcomm["features"]["kms-only"] == []
-        and didcomm["features"]["encrypted-envelope"]
-        == ["dep:affinidi-messaging-didcomm"]
+        and set(didcomm["features"]["encrypted-envelope"])
+        == {"dep:marty-crypto", "marty-crypto/ecdh", "dep:aes-kw", "dep:rand", "dep:zeroize"}
         and "local-key-operations" not in didcomm["features"]
-        and didcomm["dependencies"]["affinidi-messaging-didcomm"].get("optional")
-        is True
-        and didcomm["dependencies"]["affinidi-messaging-didcomm"].get(
-            "default-features"
-        )
-        is False
+        and "affinidi-messaging-didcomm" not in didcomm["dependencies"]
+        and didcomm["dependencies"]["marty-crypto"]
+        == {"workspace": True, "optional": True, "default-features": False}
         and "local-key-operations" not in didcomm["features"]["default"]
         and "encrypted-envelope" not in didcomm["features"]["default"],
         "DIDComm software envelopes must be explicit and absent from the KMS marker",

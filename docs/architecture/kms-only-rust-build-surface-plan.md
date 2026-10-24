@@ -57,15 +57,16 @@ verification likewise uses public points and prehashed verification without its
 curve signing features. Static boundary tests and Cargo-tree negative checks
 enforce this split.
 
-Final Linux CI also exposed that `affinidi-messaging-didcomm` unconditionally
-compiles Ed25519, P-256, and secp256k1 signing/private-key machinery even for
-Marty's public DID resolver and anoncrypt-only use. Marty now makes that
-dependency and the Rust/Python encrypted-envelope API an explicit
-`encrypted-envelope` / `didcomm-encrypted-envelope` capability. Historical
-default builds retain the API, while KMS-only base and resolver-only builds omit
-the dependency and API entirely. SD-JWT's WebAssembly-only `getrandom` adapter
-is now unconditional on that target because `jsonwebtoken` reaches entropy even
-without issuer planning; native dependency graphs are unchanged.
+The explicit `encrypted-envelope` / `didcomm-encrypted-envelope` capability now
+uses Marty's existing opaque generated agreement state, Concat KDF, AES-CBC,
+and keyed-hash implementations plus RustCrypto AES Key Wrap. It preserves the
+DIDComm v2.1 X25519 / ECDH-ES+A256KW / A256CBC-HS512 wire profile and rejects
+non-contributory peer keys before emitting any envelope. The full software
+DIDComm dependency and its unrelated signing backends are absent. Credential
+sender authentication stays in the native remote-KMS path. Base and resolver
+artifacts still omit anonymous transport encryption entirely; browser entropy
+adapters are selected only by explicit session agreement. SD-JWT's target-only
+entropy adapter retains its existing provider/planner separation.
 
 Longfellow's full release workspace then exposed stale Rust v8 circuit registry
 identifiers: the registered values did not equal the deterministic combined IDs

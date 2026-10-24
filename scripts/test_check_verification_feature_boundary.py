@@ -21,6 +21,28 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "one immutable low-level"):
                         check_repository()
 
+    def test_session_entropy_cannot_enter_public_ecdsa_verification(self) -> None:
+        for feature in ("dep:getrandom-modern", "dep:getrandom-legacy"):
+            with self.subTest(feature=feature):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "marty-crypto" / "Cargo.toml":
+                        manifest["features"]["ecdsa-verification"].append(feature)
+                    return manifest
+                with patch("check_verification_feature_boundary.load_toml", side_effect=mutated_manifest):
+                    with self.assertRaisesRegex(ValueError, "entropy"):
+                        check_repository()
+
+    def test_isomdl_consumers_cannot_diverge_from_workspace_selection(self) -> None:
+        def mutated_manifest(path):
+            manifest = load_toml(path)
+            if path == ROOT / "marty-iso18013" / "Cargo.toml":
+                manifest["dependencies"]["isomdl"] = {"version": "0.3"}
+            return manifest
+        with patch("check_verification_feature_boundary.load_toml", side_effect=mutated_manifest):
+            with self.assertRaisesRegex(ValueError, "one capability-neutral"):
+                check_repository()
+
     def test_canonical_digest_boundary_rejects_verifier_or_crypto_dependencies(self) -> None:
         for dependency in ("marty-verification", "marty-crypto", "marty-oid4vci"):
             with self.subTest(dependency=dependency):

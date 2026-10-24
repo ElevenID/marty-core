@@ -89,6 +89,15 @@ impl X25519KeyPair {
         self.agree_inner(peer_public)
     }
 
+    /// Consume generated agreement state once for a bounded caller-owned peer batch.
+    /// Every shared secret is erased on drop; any invalid peer returns no prefix.
+    pub fn agree_many(self, peer_publics: &[&[u8]]) -> CryptoResult<Vec<Zeroizing<[u8; 32]>>> {
+        peer_publics
+            .iter()
+            .map(|peer| self.agree_inner(peer).map(Zeroizing::new))
+            .collect()
+    }
+
     fn agree_inner(&self, peer_public: &[u8]) -> CryptoResult<[u8; 32]> {
         if peer_public.len() != 32 {
             return Err(CryptoError::internal(
@@ -472,5 +481,21 @@ mod tests {
 
         // Too long
         assert!(keypair.agree(&[0u8; 64]).is_err());
+    }
+    #[test]
+    fn x25519_generated_batch_agreement_is_bound_to_every_peer() {
+        let alice = X25519KeyPair::generate();
+        let alice_public = alice.public_key_bytes();
+        let bob = X25519KeyPair::generate();
+        let carol = X25519KeyPair::generate();
+        let bob_public = bob.public_key_bytes();
+        let carol_public = carol.public_key_bytes();
+        let secrets = alice.agree_many(&[&bob_public, &carol_public]).unwrap();
+        assert_eq!(secrets[0].as_ref(), bob.agree(&alice_public).unwrap());
+        assert_eq!(secrets[1].as_ref(), carol.agree(&alice_public).unwrap());
+        assert_ne!(secrets[0].as_ref(), secrets[1].as_ref());
+        assert!(X25519KeyPair::generate()
+            .agree_many(&[&bob_public, &[0u8; 32]])
+            .is_err());
     }
 }

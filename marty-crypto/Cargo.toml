@@ -71,6 +71,8 @@ jwk = [
     "p521/arithmetic",
 ] # Public SPKI/certificate to RFC 7517 conversion
 ecdh = [
+    "dep:getrandom-modern",
+    "dep:getrandom-legacy",
     "dep:elliptic-curve",
     "dep:p256",
     "dep:p384",
@@ -112,6 +114,11 @@ ocsp-client = []     # OCSP client functionality (needs reqwest externally)
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("reqwest"))'] }
+
+[package.metadata.cargo-machete]
+# Target-only dependencies select browser entropy for curve/RNG backends.
+# GHASH/POLYVAL select zeroization for the existing AES-GCM backend.
+ignored = ["getrandom-modern", "getrandom-legacy", "ghash", "polyval"]
 
 [dependencies]
 # Crypto and certificates
@@ -215,3 +222,7 @@ required-features = ["kdf"]
 [[test]]
 name = "wasm_key_derivation"
 required-features = ["kdf", "symmetric"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom-modern = { package = "getrandom", version = "0.4", features = ["wasm_js"], optional = true }
+getrandom-legacy = { package = "getrandom", version = "0.2", features = ["js"], optional = true }

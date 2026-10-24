@@ -76,28 +76,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "affinidi-messaging-didcomm"
-version = "0.14.0"
+name = "aes-kw"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08f942b5c39668555d7dbb27a03842e96cb2f116791010f493d25f0d17ed2625"
+checksum = "69fa2b352dcefb5f7f3a5fb840e02665d311d878955380515e4fd50095dd3d8c"
 dependencies = [
  "aes",
- "base64ct",
- "cbc",
- "ed25519-dalek",
- "hmac 0.12.1",
- "k256 0.13.4",
- "p256 0.13.2",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.20",
- "url",
- "uuid",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
@@ -1820,7 +1804,7 @@ dependencies = [
  "bs58 0.4.0",
  "iref",
  "multibase 0.9.3",
- "p256 0.14.0",
+ "p256",
  "serde_json",
  "simple_asn1 0.5.4",
  "ssi-dids-core",
@@ -1964,21 +1948,6 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "ecdsa"
-version = "0.16.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee27f32b5c5292967d2d4a9d7f1e0b0aed2c15daded5a60300e4abb9d8020bca"
-dependencies = [
- "der 0.7.10",
- "digest 0.10.7",
- "elliptic-curve 0.13.8",
- "rfc6979 0.4.0",
- "serdect 0.2.0",
- "signature 2.2.0",
- "spki 0.7.3",
-]
-
-[[package]]
-name = "ecdsa"
 version = "0.17.0"
 source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
@@ -1986,8 +1955,8 @@ dependencies = [
  "der 0.8.2",
  "digest 0.11.3",
  "elliptic-curve 0.14.1",
- "rfc6979 0.6.0",
- "serdect 0.4.3",
+ "rfc6979",
+ "serdect",
  "signature 3.0.0",
  "spki 0.8.1",
  "zeroize",
@@ -2011,7 +1980,6 @@ checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
- "rand_core 0.6.4",
  "serde",
  "sha2 0.10.9",
  "subtle",
@@ -2085,19 +2053,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
 dependencies = [
  "base16ct 0.2.0",
- "base64ct",
  "crypto-bigint 0.5.5",
  "digest 0.10.7",
  "ff 0.13.1",
  "generic-array",
  "group 0.13.0",
- "hkdf 0.12.4",
- "pem-rfc7468 0.7.0",
- "pkcs8 0.10.2",
  "rand_core 0.6.4",
- "sec1 0.7.3",
- "serde_json",
- "serdect 0.2.0",
  "subtle",
  "zeroize",
 ]
@@ -2119,8 +2080,8 @@ dependencies = [
  "pem-rfc7468 1.0.0",
  "pkcs8 0.11.0",
  "rand_core 0.10.1",
- "sec1 0.8.1",
- "serdect 0.4.3",
+ "sec1",
+ "serdect",
  "subtle",
  "zeroize",
 ]
@@ -3094,44 +3055,6 @@ name = "isomdl"
 version = "0.3.0"
 source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f#1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
 dependencies = [
- "anyhow",
- "base64 0.13.1",
- "ciborium",
- "const-oid 0.9.6",
- "coset",
- "der 0.7.10",
- "digest 0.10.7",
- "ecdsa 0.17.0",
- "elliptic-curve 0.14.1",
- "getrandom 0.2.17",
- "hex",
- "isomdl-macros 0.1.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f)",
- "p256 0.14.0",
- "p384 0.14.0",
- "p521",
- "pem-rfc7468 0.7.0",
- "rand 0.8.7",
- "sec1 0.8.1",
- "serde",
- "serde_bytes",
- "serde_json",
- "sha1",
- "sha2 0.10.9",
- "signature 3.0.0",
- "strum 0.24.1",
- "strum_macros 0.24.3",
- "thiserror 1.0.69",
- "time",
- "tracing",
- "uuid",
- "x509-cert",
-]
-
-[[package]]
-name = "isomdl"
-version = "0.3.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e#784a52943469622873c7ae3200dbc11e89d6bd8e"
-dependencies = [
  "aes",
  "aes-gcm",
  "anyhow",
@@ -3143,26 +3066,28 @@ dependencies = [
  "coset",
  "der 0.7.10",
  "digest 0.10.7",
- "ecdsa 0.16.9",
- "elliptic-curve 0.13.8",
+ "ecdsa",
+ "elliptic-curve 0.14.1",
  "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "ghash",
  "hex",
  "hkdf 0.12.4",
  "hmac 0.12.1",
- "isomdl-macros 0.1.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e)",
- "p256 0.13.2",
- "p384 0.13.1",
+ "isomdl-macros",
+ "p256",
+ "p384",
+ "p521",
  "pem-rfc7468 0.7.0",
  "polyval",
  "rand 0.8.7",
- "sec1 0.7.3",
+ "sec1",
  "serde",
  "serde_bytes",
  "serde_json",
  "sha1",
  "sha2 0.10.9",
- "signature 2.2.0",
+ "signature 3.0.0",
  "strum 0.24.1",
  "strum_macros 0.24.3",
  "subtle",
@@ -3178,16 +3103,6 @@ dependencies = [
 name = "isomdl-macros"
 version = "0.1.0"
 source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f#1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "isomdl-macros"
-version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e#784a52943469622873c7ae3200dbc11e89d6bd8e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3596,28 +3511,14 @@ dependencies = [
 
 [[package]]
 name = "k256"
-version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
-dependencies = [
- "cfg-if",
- "ecdsa 0.16.9",
- "elliptic-curve 0.13.8",
- "once_cell",
- "sha2 0.10.9",
- "signature 2.2.0",
-]
-
-[[package]]
-name = "k256"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93f50113171a713f4a4231ef82eb26703607139b35dcb56241f0ceab2ae1f7d8"
 dependencies = [
  "cpubits",
- "ecdsa 0.17.0",
+ "ecdsa",
  "elliptic-curve 0.14.1",
- "primeorder 0.14.0",
+ "primeorder",
  "sha2 0.11.1",
  "wnaf",
 ]
@@ -4078,16 +3979,18 @@ dependencies = [
  "const-oid 0.9.6",
  "der 0.7.10",
  "des",
- "ecdsa 0.17.0",
+ "ecdsa",
  "ed25519-dalek",
  "ed448-goldilocks-plus",
  "elliptic-curve 0.14.1",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "ghash",
  "hex",
  "hmac 0.12.1",
- "k256 0.14.0",
- "p256 0.14.0",
- "p384 0.14.0",
+ "k256",
+ "p256",
+ "p384",
  "p521",
  "pem-rfc7468 0.7.0",
  "pkcs8 0.10.2",
@@ -4115,9 +4018,9 @@ version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
  "der 0.7.10",
- "ecdsa 0.17.0",
+ "ecdsa",
  "marty-crypto",
- "p256 0.14.0",
+ "p256",
  "rcgen",
  "reqwest",
  "serde_json",
@@ -4130,12 +4033,14 @@ dependencies = [
 name = "marty-didcomm"
 version = "0.2.2"
 dependencies = [
- "affinidi-messaging-didcomm",
+ "aes-kw",
  "base64 0.22.1",
  "bs58 0.5.1",
  "chrono",
  "ed25519-dalek",
- "p256 0.14.0",
+ "marty-crypto",
+ "p256",
+ "rand 0.8.7",
  "reqwest",
  "serde",
  "serde_json",
@@ -4146,6 +4051,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -4198,7 +4104,7 @@ dependencies = [
  "criterion",
  "hex",
  "image",
- "isomdl 0.3.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e)",
+ "isomdl",
  "marty-crypto",
  "marty-types",
  "marty-verification",
@@ -4230,15 +4136,15 @@ dependencies = [
  "criterion",
  "curve25519-dalek",
  "ed25519-dalek",
- "isomdl 0.3.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f)",
+ "isomdl",
  "jsonwebtoken",
- "k256 0.14.0",
+ "k256",
  "marty-crypto",
  "marty-crypto-test-support",
  "marty-iso18013",
  "marty-zkp",
- "p256 0.14.0",
- "p384 0.14.0",
+ "p256",
+ "p384",
  "rand 0.8.7",
  "regex",
  "reqwest",
@@ -4362,7 +4268,7 @@ dependencies = [
  "coset",
  "criterion",
  "der 0.7.10",
- "ecdsa 0.17.0",
+ "ecdsa",
  "ed25519-dalek",
  "elliptic-curve 0.14.1",
  "flate2",
@@ -4370,7 +4276,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "iref",
- "isomdl 0.3.0 (git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f)",
+ "isomdl",
  "ldap3",
  "marty-canonical-digest",
  "marty-crypto",
@@ -4379,8 +4285,8 @@ dependencies = [
  "marty-x509-verification",
  "moka",
  "openssl",
- "p256 0.14.0",
- "p384 0.14.0",
+ "p256",
+ "p384",
  "p521",
  "pem-rfc7468 0.7.0",
  "pkcs8 0.10.2",
@@ -4999,42 +4905,16 @@ dependencies = [
 
 [[package]]
 name = "p256"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
-dependencies = [
- "ecdsa 0.16.9",
- "elliptic-curve 0.13.8",
- "primeorder 0.13.6",
- "serdect 0.2.0",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "p256"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2c9239b2dbc807adbbe147e8cf72ea7450c3a0aabe62cb8e75ff4ec22e1f72a"
 dependencies = [
- "ecdsa 0.17.0",
+ "ecdsa",
  "elliptic-curve 0.14.1",
  "primefield",
- "primeorder 0.14.0",
- "serdect 0.4.3",
+ "primeorder",
+ "serdect",
  "sha2 0.11.1",
-]
-
-[[package]]
-name = "p384"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe42f1670a52a47d448f14b6a5c61dd78fce51856e68edaa38f7ae3a46b8d6b6"
-dependencies = [
- "ecdsa 0.16.9",
- "elliptic-curve 0.13.8",
- "primeorder 0.13.6",
- "serdect 0.2.0",
- "sha2 0.10.9",
 ]
 
 [[package]]
@@ -5043,12 +4923,12 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d17b851e6b3e378ab4ecb07fa2ed23f4d15f075735f8fec9fa1e7bdce5f8301f"
 dependencies = [
- "ecdsa 0.17.0",
+ "ecdsa",
  "elliptic-curve 0.14.1",
  "fiat-crypto 0.3.0",
  "primefield",
- "primeorder 0.14.0",
- "serdect 0.4.3",
+ "primeorder",
+ "serdect",
  "sha2 0.11.1",
 ]
 
@@ -5059,10 +4939,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ad64cc32c2dc466317c12ee5853e61f159f9eab1fe7efade0395dc2e7b43449"
 dependencies = [
  "base16ct 1.0.0",
- "ecdsa 0.17.0",
+ "ecdsa",
  "elliptic-curve 0.14.1",
  "primefield",
- "primeorder 0.14.0",
+ "primeorder",
  "sha2 0.11.1",
 ]
 
@@ -5441,16 +5321,6 @@ dependencies = [
 
 [[package]]
 name = "primeorder"
-version = "0.13.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "353e1ca18966c16d9deb1c69278edbc5f194139612772bd9537af60ac231e1e6"
-dependencies = [
- "elliptic-curve 0.13.8",
- "serdect 0.2.0",
-]
-
-[[package]]
-name = "primeorder"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c9f42978c78a00e3d68f69fc03e57a234debae69da4020a4fb588fcdcd07b06"
@@ -5458,7 +5328,7 @@ dependencies = [
  "elliptic-curve 0.14.1",
  "once_cell",
  "primefield",
- "serdect 0.4.3",
+ "serdect",
  "wnaf",
 ]
 
@@ -6010,16 +5880,6 @@ dependencies = [
 
 [[package]]
 name = "rfc6979"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
-dependencies = [
- "hmac 0.12.1",
- "subtle",
-]
-
-[[package]]
-name = "rfc6979"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4a459cddafb3fe76b31fd8f1108007566c40301feb64dc7b54656eb7388172b"
@@ -6295,38 +6155,23 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.8.0"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=82143d688355315f22297b40ca18050a94cd2525#82143d688355315f22297b40ca18050a94cd2525"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d#26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",
  "curve25519-dalek",
- "ecdsa 0.16.9",
+ "ecdsa",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "jsonwebtoken",
- "p256 0.13.2",
- "p384 0.13.1",
+ "p256",
+ "p384",
  "rand 0.8.7",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "strum 0.25.0",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "sec1"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3e97a565f76233a6003f9f5c54be1d9c5bdfa3eccfb189469f11ec4901c47dc"
-dependencies = [
- "base16ct 0.2.0",
- "der 0.7.10",
- "generic-array",
- "pkcs8 0.10.2",
- "serdect 0.2.0",
- "subtle",
- "zeroize",
 ]
 
 [[package]]
@@ -6339,7 +6184,7 @@ dependencies = [
  "ctutils",
  "der 0.8.2",
  "hybrid-array",
- "serdect 0.4.3",
+ "serdect",
  "subtle",
  "zeroize",
 ]
@@ -6563,16 +6408,6 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
-]
-
-[[package]]
-name = "serdect"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
-dependencies = [
- "base16ct 0.2.0",
- "serde",
 ]
 
 [[package]]
@@ -6960,14 +6795,14 @@ dependencies = [
  "async-trait",
  "bs58 0.4.0",
  "digest 0.9.0",
- "ecdsa 0.17.0",
+ "ecdsa",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "hex",
  "iref",
- "k256 0.14.0",
+ "k256",
  "keccak-hash",
- "p256 0.14.0",
+ "p256",
  "pin-project",
  "serde",
  "sha2 0.10.9",
@@ -7054,12 +6889,12 @@ dependencies = [
  "hex",
  "iref",
  "json-syntax",
- "k256 0.14.0",
+ "k256",
  "lazy_static",
  "linked-data",
  "locspan",
  "multibase 0.9.3",
- "p256 0.14.0",
+ "p256",
  "pin-project",
  "rand 0.8.7",
  "rdf-types",
@@ -7196,15 +7031,15 @@ dependencies = [
  "bs58 0.4.0",
  "ed25519-dalek",
  "json-syntax",
- "k256 0.14.0",
+ "k256",
  "lazy_static",
  "linked-data",
  "multibase 0.9.3",
  "num-bigint",
  "num-derive",
  "num-traits",
- "p256 0.14.0",
- "p384 0.14.0",
+ "p256",
+ "p384",
  "serde",
  "serde_jcs",
  "serde_json",
@@ -7228,7 +7063,7 @@ dependencies = [
  "hex",
  "iref",
  "linked-data",
- "p256 0.14.0",
+ "p256",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -7268,9 +7103,9 @@ source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf4
 dependencies = [
  "csv",
  "ed25519-dalek",
- "k256 0.14.0",
- "p256 0.14.0",
- "p384 0.14.0",
+ "k256",
+ "p256",
+ "p384",
  "thiserror 2.0.20",
  "unsigned-varint",
 ]
@@ -7386,7 +7221,7 @@ dependencies = [
  "json-syntax",
  "linked-data",
  "multibase 0.9.3",
- "p256 0.14.0",
+ "p256",
  "pin-project",
  "rdf-types",
  "serde",
@@ -8209,7 +8044,6 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
- "serde_derive",
 ]
 
 [[package]]
@@ -8245,7 +8079,6 @@ dependencies = [
  "atomic",
  "getrandom 0.4.3",
  "js-sys",
- "rand 0.10.2",
  "serde_core",
  "wasm-bindgen",
 ]

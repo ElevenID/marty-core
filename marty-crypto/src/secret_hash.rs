@@ -466,19 +466,33 @@ where
 }
 
 #[cfg(target_family = "wasm")]
-pub(crate) fn hmac_sha256(key: &[u8], message_parts: &[&[u8]]) -> Zeroizing<[u8; 32]> {
-    let mut output = Zeroizing::new([0u8; 32]);
+fn hmac_sha2<const N: usize>(
+    algorithm: SecureHashAlgorithm,
+    key: &[u8],
+    message_parts: &[&[u8]],
+) -> Zeroizing<[u8; N]> {
+    let mut output = Zeroizing::new([0u8; N]);
     let mut scratch = HmacScratch::default();
     hmac_with_scratch(
-        SecureHashAlgorithm::Sha256,
+        algorithm,
         key,
         message_parts,
         &mut *output,
         &mut scratch,
         || Ok(()),
     )
-    .expect("fixed SHA-256 output length");
+    .expect("fixed SHA-2 output length");
     output
+}
+
+#[cfg(target_family = "wasm")]
+pub(crate) fn hmac_sha256(key: &[u8], message_parts: &[&[u8]]) -> Zeroizing<[u8; 32]> {
+    hmac_sha2(SecureHashAlgorithm::Sha256, key, message_parts)
+}
+
+#[cfg(target_family = "wasm")]
+pub(crate) fn hmac_sha512(key: &[u8], message_parts: &[&[u8]]) -> Zeroizing<[u8; 64]> {
+    hmac_sha2(SecureHashAlgorithm::Sha512, key, message_parts)
 }
 
 #[cfg(target_family = "wasm")]
@@ -621,6 +635,23 @@ mod tests {
     use sha2::{Digest, Sha256, Sha384, Sha512};
 
     #[test]
+    fn sha512_hmac_matches_rfc4231_and_wipes_scratch() {
+        let mut output = [0u8; 64];
+        let mut scratch = HmacScratch::default();
+        hmac_with_scratch(
+            SecureHashAlgorithm::Sha512,
+            &[0x0b; 20],
+            &[b"Hi There"],
+            &mut output,
+            &mut scratch,
+            || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(hex::encode(output), "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854");
+        assert!(scratch.is_zero());
+    }
+
+    #[test]
     fn secure_hashes_match_reference_at_padding_boundaries() {
         for len in [0, 1, 55, 56, 63, 64, 65, 111, 112, 127, 128, 129, 65_537] {
             let input: Vec<u8> = (0..len)
@@ -698,6 +729,11 @@ mod tests {
             assert_eq!(
                 hmac_sha256(b"key", &[b"The quick brown fox jumps over the lazy dog"]).as_slice(),
                 expected_hmac
+            );
+
+            assert_eq!(
+                hmac_sha512(&[0x0b; 20], &[b"Hi There"]).as_slice(),
+                hex::decode("87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854").unwrap()
             );
 
             let mut hkdf_output = [0u8; 42];
