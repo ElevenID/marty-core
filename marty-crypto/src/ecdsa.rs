@@ -15,14 +15,16 @@ use crate::{CryptoError, CryptoResult};
 /// let _ = marty_crypto::ecdsa::generate_p256_keypair();
 /// ```
 ///
-/// The selected upstream backend also omits signing APIs:
+/// Marty exposes no backend signing API, including when test-only downstream
+/// dependencies unify an upstream signing feature. The isolated production
+/// backend feature graph is checked separately by CI:
 ///
 /// ```compile_fail
-/// let _: Option<ecdsa_core::SigningKey<p256::NistP256>> = None;
+/// let _: Option<marty_crypto::ecdsa::SigningKey> = None;
 /// ```
 ///
 /// ```compile_fail
-/// let _ = ecdsa_core::hazmat::sign_prehashed::<p256::NistP256>;
+/// let _ = marty_crypto::ecdsa::sign_prehashed;
 /// ```
 pub struct VerificationOnly;
 

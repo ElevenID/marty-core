@@ -1,9 +1,10 @@
 //! Public-only ES256K verification for JOSE and COSE.
 //!
-//! Backend signing is unavailable in the verification role:
+//! Marty exposes no signing API. CI separately checks that the isolated
+//! production dependency graph does not enable backend signing:
 //!
 //! ```compile_fail
-//! let _: Option<ecdsa_core::SigningKey<k256::Secp256k1>> = None;
+//! let _: Option<marty_crypto::secp256k1::SigningKey> = None;
 //! ```
 
 use crate::{CryptoError, CryptoResult};
