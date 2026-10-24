@@ -338,7 +338,7 @@ def check_repository(root: Path = ROOT) -> None:
     require(
         didcomm["features"]["kms-only"] == []
         and set(didcomm["features"]["encrypted-envelope"])
-        == {"dep:marty-crypto", "marty-crypto/ecdh", "dep:aes-kw", "dep:rand", "dep:zeroize"}
+        == {"dep:marty-crypto", "marty-crypto/ecdh", "dep:aes-kw", "dep:getrandom", "dep:zeroize"}
         and "local-key-operations" not in didcomm["features"]
         and "affinidi-messaging-didcomm" not in didcomm["dependencies"]
         and didcomm["dependencies"]["marty-crypto"]

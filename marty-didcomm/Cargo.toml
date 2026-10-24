@@ -19,7 +19,7 @@ default = ["did_key", "did_web", "did_peer", "did_jwk"]
 kms-only = []
 # Anonymous transport encryption uses generated opaque session keys only.
 # Credential sender authentication remains in the remote KMS boundary.
-encrypted-envelope = ["dep:marty-crypto", "marty-crypto/ecdh", "dep:aes-kw", "dep:rand", "dep:zeroize"]
+encrypted-envelope = ["dep:marty-crypto", "marty-crypto/ecdh", "dep:aes-kw", "dep:getrandom", "dep:zeroize"]
 did_key = []
 did_web = ["dep:reqwest", "dep:tokio"]
 did_peer = []
@@ -36,7 +36,7 @@ p256 = { workspace = true, features = ["arithmetic"] }
 base64 = { workspace = true }
 marty-crypto = { workspace = true, optional = true, default-features = false }
 aes-kw = { workspace = true, optional = true }
-rand = { workspace = true, optional = true }
+getrandom = { version = "0.4", default-features = false, optional = true }
 zeroize = { workspace = true, optional = true }
 
 # DID document parsing + resolution
@@ -58,3 +58,4 @@ tokio = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { workspace = true, features = ["js"] }
+getrandom = { version = "0.4", default-features = false, features = ["wasm_js"], optional = true }

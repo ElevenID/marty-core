@@ -5,8 +5,8 @@
 //! key. Anonymous encryption creates only an ephemeral sender agreement key.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use core::mem::MaybeUninit;
 use marty_crypto::{ecdh::X25519KeyPair, kdf::concat_kdf_sha256, symmetric};
-use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -62,19 +62,19 @@ pub fn encrypt_for_recipient(
     );
 
     let mut cek = Zeroizing::new([0u8; 64]);
-    let mut iv = [0u8; 16];
-    OsRng
-        .try_fill_bytes(&mut *cek)
+    getrandom::fill(&mut *cek)
         .map_err(|_| DidcommError::Crypto("DIDComm entropy unavailable".into()))?;
-    OsRng
-        .try_fill_bytes(&mut iv)
+    // The safe entropy API returns initialized IV bytes only on success.
+    // A failed fill cannot leave a fallback IV available to encryption.
+    let mut iv_storage = [MaybeUninit::<u8>::uninit(); 16];
+    let iv = getrandom::fill_uninit(&mut iv_storage)
         .map_err(|_| DidcommError::Crypto("DIDComm entropy unavailable".into()))?;
-    let ciphertext = symmetric::aes_256_cbc_encrypt(&cek[32..], &iv, plaintext.as_bytes())
+    let ciphertext = symmetric::aes_256_cbc_encrypt(&cek[32..], iv, plaintext.as_bytes())
         .map_err(crypto_error)?;
     let aad_bits = (protected.len() as u64) * 8;
     let mac_input = [
         protected.as_bytes(),
-        &iv,
+        iv,
         &ciphertext,
         &aad_bits.to_be_bytes(),
     ]
@@ -176,6 +176,19 @@ mod tests {
         }
         let jwe: serde_json::Value = serde_json::from_str(&envelope).unwrap();
         assert_eq!(jwe["recipients"].as_array().unwrap().len(), 2);
+        let repeated: serde_json::Value = serde_json::from_str(
+            &encrypt_for_recipient(r#"{"id":"message-1","type":"test"}"#, &document).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode(jwe["iv"].as_str().unwrap())
+                .unwrap()
+                .len(),
+            16
+        );
+        assert_ne!(jwe["iv"], repeated["iv"]);
+        assert_ne!(jwe["protected"], repeated["protected"]);
         let protected = URL_SAFE_NO_PAD
             .decode(jwe["protected"].as_str().unwrap())
             .unwrap();
