@@ -22,8 +22,12 @@ without network access. Those remain explicit qualification work.
 
 The native verifier wheel step additionally installs that locally built wheel
 into a fresh virtual environment with package indexes disabled and dependency
-resolution enabled. From that environment it repeats the native-extension
-import check and runs a bounded, headless **in-process** consumer probe against
+resolution enabled. It stages only the probe scripts and exact OB2/OB3 JSON
+vectors in a temporary consumer directory outside the source checkout, runs
+them there with Python's isolated mode, and requires the package and native
+extension to resolve inside the fresh environment. From that environment it
+repeats the native-extension import check and runs a bounded, headless
+**in-process** consumer probe against
 signed Open Badges 2/3 fixtures, an OB2 changed-assertion-ID
 case, an OB3 changed-achievement-name case, and a mismatched but well-formed
 Ed25519 issuer key for each format. The wrong-key negative tests signature
