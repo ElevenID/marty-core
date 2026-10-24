@@ -133,6 +133,15 @@ def check_repository(root: Path = ROOT) -> None:
         ),
         "ECDSA verification must use verification-only primitives",
     )
+    entropy_features = {
+        f"{curve}/{capability}"
+        for curve in ("p256", "p384", "p521")
+        for capability in ("std", "getrandom")
+    }
+    require(
+        not entropy_features & set(crypto_features["ecdsa-verification"]),
+        "public ECDSA verification must not implicitly select platform entropy",
+    )
     require(
         not (REMOVED_CRYPTO_FEATURES - {"default"}) & set(crypto_features),
         "marty-crypto must not expose production-selectable private-key features",
