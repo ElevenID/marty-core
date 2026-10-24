@@ -801,7 +801,7 @@ mod tests {
 
         let bao = DisposableOpenBao::from_marked_env();
         let signer = bao.create_es256();
-        let point = signer.verifying_key().to_encoded_point(false);
+        let point = signer.verifying_key().to_sec1_point(false);
         let device_key = isomdl::definitions::device_key::CoseKey::EC2 {
             crv: isomdl::definitions::device_key::EC2Curve::P256,
             x: point.x().unwrap().to_vec(),

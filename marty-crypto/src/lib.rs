@@ -56,6 +56,8 @@ pub mod kdf;
 pub mod ocsp;
 #[cfg(feature = "rsa-verification")]
 pub mod rsa;
+#[cfg(feature = "secp256k1-verification")]
+pub mod secp256k1;
 #[cfg(any(
     feature = "symmetric",
     feature = "emrtd-compat",

@@ -22,6 +22,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "addchain"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5665045de74fda906c0abfaec40cf2551f88c34dccea869f3fe950dde7209764"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -33,7 +44,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
 dependencies = [
- "crypto-common",
+ "crypto-common 0.1.7",
  "generic-array",
 ]
 
@@ -65,28 +76,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "affinidi-messaging-didcomm"
-version = "0.14.0"
+name = "aes-kw"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08f942b5c39668555d7dbb27a03842e96cb2f116791010f493d25f0d17ed2625"
+checksum = "69fa2b352dcefb5f7f3a5fb840e02665d311d878955380515e4fd50095dd3d8c"
 dependencies = [
  "aes",
- "base64ct",
- "cbc",
- "ed25519-dalek",
- "hmac",
- "k256",
- "p256",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.20",
- "url",
- "uuid",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]
@@ -529,6 +524,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
+name = "base16ct"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
+
+[[package]]
 name = "base256emoji"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -706,6 +707,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-buffer"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
 name = "block-padding"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -739,13 +749,11 @@ dependencies = [
 [[package]]
 name = "bls12_381_plus"
 version = "0.8.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa37cf2a8c96054d2dc3d708efe35cc0347014af0d30b86c736b4388ff8491c"
 dependencies = [
  "arrayref",
- "elliptic-curve",
- "ff",
- "group",
+ "elliptic-curve 0.13.8",
+ "ff 0.13.1",
+ "group 0.13.0",
  "hex",
  "pairing",
  "rand_core 0.6.4",
@@ -1079,7 +1087,7 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
- "crypto-common",
+ "crypto-common 0.1.7",
  "inout",
  "zeroize",
 ]
@@ -1150,6 +1158,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
 name = "cms"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1158,14 +1172,14 @@ dependencies = [
  "aes",
  "cbc",
  "cipher",
- "const-oid",
+ "const-oid 0.9.6",
  "der 0.7.10",
  "rsa",
  "sha1",
  "sha2 0.10.9",
- "sha3",
- "signature",
- "spki",
+ "sha3 0.10.9",
+ "signature 2.2.0",
+ "spki 0.7.3",
  "x509-cert",
  "zeroize",
 ]
@@ -1210,6 +1224,12 @@ name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
+
+[[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "const-str"
@@ -1260,6 +1280,12 @@ dependencies = [
  "ciborium",
  "ciborium-io",
 ]
+
+[[package]]
+name = "cpubits"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
 
 [[package]]
 name = "cpufeatures"
@@ -1365,12 +1391,16 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-bigint"
-version = "0.5.5"
+version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dc92fb57ca44df6db8059111ab3af99a63d5d0f8375d9972e319a379c6bab76"
+checksum = "6bb08299a6046833a879ace115697f12fd2bd6c8d3e93c909ffc9e0738e7cae0"
 dependencies = [
- "generic-array",
- "rand_core 0.6.4",
+ "cpubits",
+ "ctutils",
+ "getrandom 0.4.3",
+ "hybrid-array",
+ "num-traits",
+ "rand_core 0.10.1",
  "subtle",
  "zeroize",
 ]
@@ -1384,6 +1414,17 @@ dependencies = [
  "generic-array",
  "rand_core 0.6.4",
  "typenum",
+]
+
+[[package]]
+name = "crypto-common"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+dependencies = [
+ "getrandom 0.4.3",
+ "hybrid-array",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -1417,6 +1458,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctutils"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38d28fb6aa7dd680b3ffd1a3e64e115c177bdba63c0ae7f9cd48129ff05c4fa0"
+dependencies = [
+ "cmov",
+ "subtle",
+]
+
+[[package]]
 name = "curve25519-dalek"
 version = "4.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1426,7 +1477,7 @@ dependencies = [
  "cpufeatures 0.2.17",
  "curve25519-dalek-derive",
  "digest 0.10.7",
- "fiat-crypto",
+ "fiat-crypto 0.2.9",
  "rustc_version",
  "subtle",
  "zeroize",
@@ -1527,7 +1578,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1606,7 +1657,7 @@ version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
- "const-oid",
+ "const-oid 0.9.6",
  "der_derive",
  "flagset",
  "pem-rfc7468 0.7.0",
@@ -1615,10 +1666,11 @@ dependencies = [
 
 [[package]]
 name = "der"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a69dedd701da44b0536442edf09c81a64b0ab97a7a4a5e3d1971f00027cbc63d"
+checksum = "a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a"
 dependencies = [
+ "const-oid 0.10.2",
  "pem-rfc7468 1.0.0",
  "zeroize",
 ]
@@ -1680,7 +1732,7 @@ dependencies = [
 [[package]]
 name = "did-ethr"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "hex",
  "iref",
@@ -1695,7 +1747,7 @@ dependencies = [
 [[package]]
 name = "did-ion"
 version = "0.6.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "base64 0.22.1",
  "iref",
@@ -1715,7 +1767,7 @@ dependencies = [
 [[package]]
 name = "did-jwk"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "iref",
@@ -1733,7 +1785,7 @@ dependencies = [
 [[package]]
 name = "did-method-key"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "bs58 0.4.0",
  "iref",
@@ -1752,7 +1804,7 @@ dependencies = [
 [[package]]
 name = "did-pkh"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "bech32",
@@ -1772,7 +1824,7 @@ dependencies = [
 [[package]]
 name = "did-tz"
 version = "0.5.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "bs58 0.4.0",
@@ -1794,7 +1846,7 @@ dependencies = [
 [[package]]
 name = "did-web"
 version = "0.5.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "http",
  "iref",
@@ -1819,9 +1871,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer 0.10.4",
- "const-oid",
- "crypto-common",
+ "const-oid 0.9.6",
+ "crypto-common 0.1.7",
  "subtle",
+]
+
+[[package]]
+name = "digest"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+dependencies = [
+ "block-buffer 0.12.1",
+ "const-oid 0.10.2",
+ "crypto-common 0.2.2",
+ "ctutils",
 ]
 
 [[package]]
@@ -1870,17 +1934,18 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "ecdsa"
-version = "0.16.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee27f32b5c5292967d2d4a9d7f1e0b0aed2c15daded5a60300e4abb9d8020bca"
+version = "0.17.0"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
- "der 0.7.10",
- "digest 0.10.7",
- "elliptic-curve",
+ "crypto-bigint",
+ "der 0.8.2",
+ "digest 0.11.3",
+ "elliptic-curve 0.14.1",
  "rfc6979",
  "serdect",
- "signature",
- "spki",
+ "signature 3.0.0",
+ "spki 0.8.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -1889,8 +1954,8 @@ version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
 dependencies = [
- "pkcs8",
- "signature",
+ "pkcs8 0.10.2",
+ "signature 2.2.0",
 ]
 
 [[package]]
@@ -1901,7 +1966,6 @@ checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
- "rand_core 0.6.4",
  "serde",
  "sha2 0.10.9",
  "subtle",
@@ -1910,15 +1974,20 @@ dependencies = [
 
 [[package]]
 name = "ed448-goldilocks-plus"
-version = "0.16.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3689f7a47d1a75cd7483b8df8c4a0d5bea3bfc2ec41ef6e02e75123ef980bdf6"
+checksum = "ade2f948c0176fd311668a767449034786d2d0db2c247ca4c99c6471f53370dd"
 dependencies = [
  "crypto-bigint",
- "elliptic-curve",
- "rand_core 0.6.4",
- "sha3",
+ "elliptic-curve 0.14.1",
+ "ff 0.14.0",
+ "group 0.14.0",
+ "hash2curve",
+ "rand_core 0.10.1",
+ "sha3 0.12.0",
+ "shake",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1966,25 +2035,39 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 [[package]]
 name = "elliptic-curve"
 version = "0.13.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
 dependencies = [
- "base16ct",
- "base64ct",
+ "base16ct 0.2.0",
  "crypto-bigint",
  "digest 0.10.7",
- "ff",
+ "ff 0.13.1",
  "generic-array",
- "group",
- "hkdf",
- "pem-rfc7468 0.7.0",
- "pkcs8",
+ "group 0.13.0",
+ "rand_core 0.10.1",
  "rand_core 0.6.4",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "elliptic-curve"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d65aa39b3a5c1c9c1b745c9a019234bb7a21b77abcb4f4d266d706e2d577d65"
+dependencies = [
+ "base16ct 1.0.0",
+ "crypto-bigint",
+ "crypto-common 0.2.2",
+ "digest 0.11.3",
+ "ff 0.14.0",
+ "group 0.14.0",
+ "hkdf 0.13.0",
+ "hybrid-array",
+ "pem-rfc7468 1.0.0",
+ "pkcs8 0.11.0",
+ "rand_core 0.10.1",
  "sec1",
- "serde_json",
  "serdect",
  "subtle",
- "tap",
  "zeroize",
 ]
 
@@ -2132,10 +2215,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "ff"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1f686ab92a9fb0eaf188f6c6c87b89490baa6fdb0db4544ba4dc47f7942489f"
+dependencies = [
+ "bitvec 1.1.1",
+ "ff_derive",
+ "rand_core 0.10.1",
+ "subtle",
+]
+
+[[package]]
+name = "ff_derive"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "241afe8c15ffa21933eaefe8a563af36fd9fc98a3e8a044e8f7db52eb1fae3d8"
+dependencies = [
+ "addchain",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "fiat-crypto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "find-msvc-tools"
@@ -2402,8 +2518,19 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0f9ef7462f7c099f518d754361858f86d8a07af53ba9af0fe635bbccb151a63"
 dependencies = [
- "ff",
+ "ff 0.13.1",
  "rand_core 0.6.4",
+ "subtle",
+]
+
+[[package]]
+name = "group"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fd1a1c7a5206c5b7a3f5a0d7ccd3ff85d0c8f5133d62a02680255b0004af5f4"
+dependencies = [
+ "ff 0.14.0",
+ "rand_core 0.10.1",
  "subtle",
 ]
 
@@ -2422,6 +2549,16 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "zerocopy",
+]
+
+[[package]]
+name = "hash2curve"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1eaf40612d7d854743e7189228a6d528f0f6e8502cf6a0cb831d28a218b7f3f6"
+dependencies = [
+ "digest 0.11.3",
+ "elliptic-curve 0.14.1",
 ]
 
 [[package]]
@@ -2512,7 +2649,16 @@ version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
 dependencies = [
- "hmac",
+ "hmac 0.12.1",
+]
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac 0.13.0",
 ]
 
 [[package]]
@@ -2522,6 +2668,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "hmac"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+dependencies = [
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -2574,6 +2729,17 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
+dependencies = [
+ "subtle",
+ "typenum",
+ "zeroize",
+]
 
 [[package]]
 name = "hyper"
@@ -2872,7 +3038,7 @@ dependencies = [
 [[package]]
 name = "isomdl"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e#784a52943469622873c7ae3200dbc11e89d6bd8e"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f#1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2881,17 +3047,18 @@ dependencies = [
  "aws-lc-rs",
  "base64 0.13.1",
  "ciborium",
- "const-oid",
+ "const-oid 0.9.6",
  "coset",
  "der 0.7.10",
  "digest 0.10.7",
  "ecdsa",
- "elliptic-curve",
+ "elliptic-curve 0.14.1",
  "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "ghash",
  "hex",
- "hkdf",
- "hmac",
+ "hkdf 0.12.4",
+ "hmac 0.12.1",
  "isomdl-macros",
  "p256",
  "p384",
@@ -2905,7 +3072,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2 0.10.9",
- "signature",
+ "signature 3.0.0",
  "strum 0.24.1",
  "strum_macros 0.24.3",
  "subtle",
@@ -2920,7 +3087,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=784a52943469622873c7ae3200dbc11e89d6bd8e#784a52943469622873c7ae3200dbc11e89d6bd8e"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f#1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3322,23 +3489,23 @@ dependencies = [
  "pem",
  "serde",
  "serde_json",
- "signature",
+ "signature 2.2.0",
  "simple_asn1 0.6.4",
  "zeroize",
 ]
 
 [[package]]
 name = "k256"
-version = "0.13.4"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
+checksum = "93f50113171a713f4a4231ef82eb26703607139b35dcb56241f0ceab2ae1f7d8"
 dependencies = [
- "cfg-if",
+ "cpubits",
  "ecdsa",
- "elliptic-curve",
- "once_cell",
- "sha2 0.10.9",
- "signature",
+ "elliptic-curve 0.14.1",
+ "primeorder",
+ "sha2 0.11.1",
+ "wnaf",
 ]
 
 [[package]]
@@ -3348,6 +3515,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb26cec98cce3a3d96cbb7bced3c4b16e3d13f27ec56dbd62cbc8f39cfb9d653"
 dependencies = [
  "cpufeatures 0.2.17",
+]
+
+[[package]]
+name = "keccak"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
 ]
 
 [[package]]
@@ -3384,7 +3561,7 @@ dependencies = [
  "pico-args",
  "regex",
  "regex-syntax",
- "sha3",
+ "sha3 0.10.9",
  "string_cache",
  "term",
  "unicode-xid",
@@ -3747,7 +3924,7 @@ dependencies = [
  "chrono",
  "console_error_panic_hook",
  "getrandom 0.4.3",
- "hmac",
+ "hmac 0.12.1",
  "image",
  "js-sys",
  "ndarray",
@@ -3780,25 +3957,30 @@ dependencies = [
  "aes-gcm",
  "aws-lc-rs",
  "base64 0.22.1",
+ "bls12_381_plus",
  "cbc",
  "chrono",
  "cipher",
  "cmac",
- "const-oid",
+ "const-oid 0.9.6",
  "der 0.7.10",
  "des",
  "ecdsa",
  "ed25519-dalek",
  "ed448-goldilocks-plus",
- "elliptic-curve",
+ "elliptic-curve 0.13.8",
+ "elliptic-curve 0.14.1",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "ghash",
  "hex",
- "hmac",
+ "hmac 0.12.1",
+ "k256",
  "p256",
  "p384",
  "p521",
  "pem-rfc7468 0.7.0",
- "pkcs8",
+ "pkcs8 0.10.2",
  "polyval",
  "rand 0.8.7",
  "rsa",
@@ -3806,7 +3988,8 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2 0.10.9",
- "spki",
+ "shake",
+ "spki 0.7.3",
  "thiserror 2.0.20",
  "wasm-bindgen-test",
  "x25519-dalek",
@@ -3829,7 +4012,7 @@ dependencies = [
  "reqwest",
  "serde_json",
  "sha2 0.10.9",
- "spki",
+ "spki 0.7.3",
  "uuid",
 ]
 
@@ -3837,11 +4020,13 @@ dependencies = [
 name = "marty-didcomm"
 version = "0.2.2"
 dependencies = [
- "affinidi-messaging-didcomm",
+ "aes-kw",
  "base64 0.22.1",
  "bs58 0.5.1",
  "chrono",
  "ed25519-dalek",
+ "getrandom 0.4.3",
+ "marty-crypto",
  "p256",
  "reqwest",
  "serde",
@@ -3853,6 +4038,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -3870,14 +4056,14 @@ name = "marty-emrtd-issuance"
 version = "0.2.2"
 dependencies = [
  "cms",
- "const-oid",
+ "const-oid 0.9.6",
  "der 0.7.10",
  "marty-crypto",
  "marty-crypto-test-support",
  "marty-verification",
  "rcgen",
  "sha2 0.10.9",
- "spki",
+ "spki 0.7.3",
  "thiserror 2.0.20",
  "x509-cert",
 ]
@@ -3936,7 +4122,6 @@ dependencies = [
  "coset",
  "criterion",
  "curve25519-dalek",
- "ecdsa",
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
@@ -4066,17 +4251,17 @@ dependencies = [
  "chrono",
  "ciborium",
  "cms",
- "const-oid",
+ "const-oid 0.9.6",
  "coset",
  "criterion",
  "der 0.7.10",
  "ecdsa",
  "ed25519-dalek",
- "elliptic-curve",
+ "elliptic-curve 0.14.1",
  "flate2",
  "futures",
  "hex",
- "hmac",
+ "hmac 0.12.1",
  "iref",
  "isomdl",
  "ldap3",
@@ -4091,7 +4276,7 @@ dependencies = [
  "p384",
  "p521",
  "pem-rfc7468 0.7.0",
- "pkcs8",
+ "pkcs8 0.10.2",
  "proptest",
  "pyo3",
  "quick-xml",
@@ -4104,8 +4289,8 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2 0.10.9",
- "signature",
- "spki",
+ "signature 2.2.0",
+ "spki 0.7.3",
  "ssi-claims",
  "ssi-crypto",
  "ssi-dids",
@@ -4132,7 +4317,7 @@ name = "marty-x509-verification"
 version = "0.2.2"
 dependencies = [
  "chrono",
- "const-oid",
+ "const-oid 0.9.6",
  "der 0.7.10",
  "marty-crypto",
  "marty-crypto-test-support",
@@ -4140,7 +4325,7 @@ dependencies = [
  "rcgen",
  "serde",
  "sha2 0.10.9",
- "spki",
+ "spki 0.7.3",
  "time",
  "x509-cert",
  "x509-ocsp",
@@ -4707,41 +4892,45 @@ dependencies = [
 
 [[package]]
 name = "p256"
-version = "0.13.2"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9863ad85fa8f4460f9c48cb909d38a0d689dba1f6f6988a5e3e0d31071bcd4b"
+checksum = "d2c9239b2dbc807adbbe147e8cf72ea7450c3a0aabe62cb8e75ff4ec22e1f72a"
 dependencies = [
  "ecdsa",
- "elliptic-curve",
+ "elliptic-curve 0.14.1",
+ "primefield",
  "primeorder",
  "serdect",
- "sha2 0.10.9",
+ "sha2 0.11.1",
 ]
 
 [[package]]
 name = "p384"
-version = "0.13.1"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe42f1670a52a47d448f14b6a5c61dd78fce51856e68edaa38f7ae3a46b8d6b6"
+checksum = "d17b851e6b3e378ab4ecb07fa2ed23f4d15f075735f8fec9fa1e7bdce5f8301f"
 dependencies = [
  "ecdsa",
- "elliptic-curve",
+ "elliptic-curve 0.14.1",
+ "fiat-crypto 0.3.0",
+ "primefield",
  "primeorder",
  "serdect",
- "sha2 0.10.9",
+ "sha2 0.11.1",
 ]
 
 [[package]]
 name = "p521"
-version = "0.13.3"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fc9e2161f1f215afdfce23677034ae137bbd45016a880c2eb3ba8eb95f085b2"
+checksum = "4ad64cc32c2dc466317c12ee5853e61f159f9eab1fe7efade0395dc2e7b43449"
 dependencies = [
- "base16ct",
+ "base16ct 1.0.0",
  "ecdsa",
- "elliptic-curve",
+ "elliptic-curve 0.14.1",
+ "primefield",
  "primeorder",
- "sha2 0.10.9",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -4760,7 +4949,7 @@ version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81fec4625e73cf41ef4bb6846cafa6d44736525f442ba45e407c4a000a13996f"
 dependencies = [
- "group",
+ "group 0.13.0",
 ]
 
 [[package]]
@@ -4930,8 +5119,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8ffb9f10fa047879315e6625af03c164b16962a5368d724ed16323b68ace47f"
 dependencies = [
  "der 0.7.10",
- "pkcs8",
- "spki",
+ "pkcs8 0.10.2",
+ "spki 0.7.3",
 ]
 
 [[package]]
@@ -4941,7 +5130,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der 0.7.10",
- "spki",
+ "spki 0.7.3",
+]
+
+[[package]]
+name = "pkcs8"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
+dependencies = [
+ "der 0.8.2",
+ "spki 0.8.1",
 ]
 
 [[package]]
@@ -5094,13 +5293,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "primeorder"
-version = "0.13.6"
+name = "primefield"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "353e1ca18966c16d9deb1c69278edbc5f194139612772bd9537af60ac231e1e6"
+checksum = "c555a6e4eb7d4e158fcb028c835c3b8642206ddc279b5c6b202ef9a8bdb592f4"
 dependencies = [
- "elliptic-curve",
+ "crypto-bigint",
+ "crypto-common 0.2.2",
+ "ff 0.14.0",
+ "rand_core 0.10.1",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "primeorder"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c9f42978c78a00e3d68f69fc03e57a234debae69da4020a4fb588fcdcd07b06"
+dependencies = [
+ "elliptic-curve 0.14.1",
+ "once_cell",
+ "primefield",
  "serdect",
+ "wnaf",
 ]
 
 [[package]]
@@ -5651,12 +5867,12 @@ dependencies = [
 
 [[package]]
 name = "rfc6979"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
+checksum = "b4a459cddafb3fe76b31fd8f1108007566c40301feb64dc7b54656eb7388172b"
 dependencies = [
- "hmac",
- "subtle",
+ "crypto-bigint",
+ "hmac 0.13.0",
 ]
 
 [[package]]
@@ -5679,17 +5895,17 @@ version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d"
 dependencies = [
- "const-oid",
+ "const-oid 0.9.6",
  "digest 0.10.7",
  "num-bigint-dig",
  "num-integer",
  "num-traits",
  "pkcs1",
- "pkcs8",
+ "pkcs8 0.10.2",
  "rand_core 0.6.4",
  "sha2 0.10.9",
- "signature",
- "spki",
+ "signature 2.2.0",
+ "spki 0.7.3",
  "subtle",
  "zeroize",
 ]
@@ -5926,7 +6142,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.8.0"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=82143d688355315f22297b40ca18050a94cd2525#82143d688355315f22297b40ca18050a94cd2525"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d#26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d"
 dependencies = [
  "aws-lc-rs",
  "base64 0.21.7",
@@ -5947,14 +6163,14 @@ dependencies = [
 
 [[package]]
 name = "sec1"
-version = "0.7.3"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3e97a565f76233a6003f9f5c54be1d9c5bdfa3eccfb189469f11ec4901c47dc"
+checksum = "d56d437c2f19203ce5f7122e507831de96f3d2d4d3be5af44a0b0a09d8a80e4d"
 dependencies = [
- "base16ct",
- "der 0.7.10",
- "generic-array",
- "pkcs8",
+ "base16ct 1.0.0",
+ "ctutils",
+ "der 0.8.2",
+ "hybrid-array",
  "serdect",
  "subtle",
  "zeroize",
@@ -5971,7 +6187,7 @@ dependencies = [
  "futures-util",
  "generic-array",
  "getrandom 0.2.17",
- "hkdf",
+ "hkdf 0.12.4",
  "num",
  "once_cell",
  "serde",
@@ -6183,11 +6399,11 @@ dependencies = [
 
 [[package]]
 name = "serdect"
-version = "0.2.0"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
+checksum = "66cf8fedced2fcf12406bcb34223dffb92eaf34908ede12fed414c82b7f00b3e"
 dependencies = [
- "base16ct",
+ "base16ct 1.0.0",
  "serde",
 ]
 
@@ -6227,13 +6443,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sha3"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
 dependencies = [
  "digest 0.10.7",
- "keccak",
+ "keccak 0.1.6",
+]
+
+[[package]]
+name = "sha3"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
+dependencies = [
+ "digest 0.11.3",
+ "keccak 0.2.2",
+ "sponge-cursor",
+]
+
+[[package]]
+name = "shake"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09057cb2149ad4cbd2da1e26b351f9a4c354219421229c69c3063e6f61947c4a"
+dependencies = [
+ "digest 0.11.3",
+ "keccak 0.2.2",
+ "sponge-cursor",
 ]
 
 [[package]]
@@ -6275,6 +6524,16 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "signature"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
+dependencies = [
+ "digest 0.11.3",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -6399,6 +6658,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "spki"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ef958a98b9d5da290cfc78946e9f3e61e1e62a18db0d92cac0b83cc161491a9"
+dependencies = [
+ "base64ct",
+ "der 0.8.2",
+]
+
+[[package]]
+name = "sponge-cursor"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
+
+[[package]]
 name = "sqlite-wasm-rs"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6413,7 +6688,7 @@ dependencies = [
 [[package]]
 name = "ssi-caips"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "bs58 0.4.0",
  "linked-data",
@@ -6426,7 +6701,7 @@ dependencies = [
 [[package]]
 name = "ssi-claims"
 version = "0.7.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "educe 0.4.23",
  "iref",
@@ -6458,7 +6733,7 @@ dependencies = [
 [[package]]
 name = "ssi-claims-core"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "chrono",
  "educe 0.4.23",
@@ -6473,12 +6748,12 @@ dependencies = [
 [[package]]
 name = "ssi-contexts"
 version = "0.1.10"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[package]]
 name = "ssi-core"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "pin-project",
@@ -6489,7 +6764,7 @@ dependencies = [
 [[package]]
 name = "ssi-cose"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "ciborium",
  "coset",
@@ -6502,11 +6777,12 @@ dependencies = [
 [[package]]
 name = "ssi-crypto"
 version = "0.2.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "bs58 0.4.0",
  "digest 0.9.0",
+ "ecdsa",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "hex",
@@ -6524,7 +6800,7 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "chrono",
  "iref",
@@ -6552,7 +6828,7 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity-core"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "chrono",
  "contextual",
@@ -6587,7 +6863,7 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity-suites"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6612,6 +6888,7 @@ dependencies = [
  "self_cell",
  "serde",
  "serde_cbor",
+ "sha2 0.10.9",
  "ssi-caips",
  "ssi-claims-core",
  "ssi-contexts",
@@ -6635,13 +6912,13 @@ dependencies = [
 [[package]]
 name = "ssi-di-sd-primitives"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "base64 0.22.1",
  "digest 0.10.7",
  "getrandom 0.2.17",
  "hex",
- "hmac",
+ "hmac 0.12.1",
  "iref",
  "linked-data",
  "rdf-types",
@@ -6657,7 +6934,7 @@ dependencies = [
 [[package]]
 name = "ssi-dids"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "did-ethr",
  "did-ion",
@@ -6674,7 +6951,7 @@ dependencies = [
 [[package]]
 name = "ssi-dids-core"
 version = "0.3.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "iref",
@@ -6698,7 +6975,7 @@ dependencies = [
 [[package]]
 name = "ssi-eip712"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "hex",
  "indexmap 2.14.0",
@@ -6716,7 +6993,7 @@ dependencies = [
 [[package]]
 name = "ssi-json-ld"
 version = "0.3.3"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "combination",
  "iref",
@@ -6734,7 +7011,7 @@ dependencies = [
 [[package]]
 name = "ssi-jwk"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "base64 0.22.1",
  "blake2b_simd",
@@ -6764,7 +7041,7 @@ dependencies = [
 [[package]]
 name = "ssi-jws"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "base64 0.22.1",
  "blake2",
@@ -6787,7 +7064,7 @@ dependencies = [
 [[package]]
 name = "ssi-jwt"
 version = "0.6.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6809,7 +7086,7 @@ dependencies = [
 [[package]]
 name = "ssi-multicodec"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "csv",
  "ed25519-dalek",
@@ -6823,7 +7100,7 @@ dependencies = [
 [[package]]
 name = "ssi-rdf"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "combination",
  "indexmap 2.14.0",
@@ -6837,7 +7114,7 @@ dependencies = [
 [[package]]
 name = "ssi-sd-jwt"
 version = "0.6.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "base64 0.22.1",
  "indexmap 2.14.0",
@@ -6856,7 +7133,7 @@ dependencies = [
 [[package]]
 name = "ssi-security"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "iref",
  "linked-data",
@@ -6869,7 +7146,7 @@ dependencies = [
 [[package]]
 name = "ssi-vc"
 version = "0.9.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "base64 0.22.1",
  "bitvec 0.20.4",
@@ -6899,7 +7176,7 @@ dependencies = [
 [[package]]
 name = "ssi-vc-jose-cose"
 version = "0.7.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -6919,7 +7196,7 @@ dependencies = [
 [[package]]
 name = "ssi-verification-methods"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "async-trait",
  "derivative",
@@ -6952,7 +7229,7 @@ dependencies = [
 [[package]]
 name = "ssi-verification-methods-core"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "bs58 0.4.0",
  "educe 0.4.23",
@@ -7184,7 +7461,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -7345,9 +7622,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
 dependencies = [
  "bytes",
  "libc",
@@ -7686,7 +7963,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
- "crypto-common",
+ "crypto-common 0.1.7",
  "subtle",
 ]
 
@@ -7721,7 +7998,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
 dependencies = [
  "base64 0.22.1",
- "der 0.8.1",
+ "der 0.8.2",
  "log",
  "native-tls",
  "percent-encoding",
@@ -7754,7 +8031,6 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
- "serde_derive",
 ]
 
 [[package]]
@@ -7790,7 +8066,6 @@ dependencies = [
  "atomic",
  "getrandom 0.4.3",
  "js-sys",
- "rand 0.10.2",
  "serde_core",
  "wasm-bindgen",
 ]
@@ -8251,6 +8526,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
+name = "wnaf"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "795ca18b3fdb5e62bf982199278341ddcf7ebf7d32e25e212ad05d496e95f6fa"
+dependencies = [
+ "ff 0.14.0",
+ "group 0.14.0",
+ "hybrid-array",
+ "primefield",
+]
+
+[[package]]
 name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8289,11 +8576,11 @@ version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94"
 dependencies = [
- "const-oid",
+ "const-oid 0.9.6",
  "der 0.7.10",
  "sha1",
- "signature",
- "spki",
+ "signature 2.2.0",
+ "spki 0.7.3",
  "tls_codec",
 ]
 
@@ -8303,9 +8590,9 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e54e695a31f0fecb826cf59ae2093c941d7ef932a1f8508185dd23b29ce2e2e"
 dependencies = [
- "const-oid",
+ "const-oid 0.9.6",
  "der 0.7.10",
- "spki",
+ "spki 0.7.3",
  "x509-cert",
 ]
 
@@ -8572,15 +8859,15 @@ checksum = "28c16be498c95443e699ca442d212eaf738d36432e5eaf0055525d9fd1de9640"
 dependencies = [
  "bls12_381_plus",
  "digest 0.10.7",
- "elliptic-curve",
- "ff",
- "group",
+ "elliptic-curve 0.13.8",
+ "ff 0.13.1",
+ "group 0.13.0",
  "hex",
  "rand 0.8.7",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sha3",
+ "sha3 0.10.9",
  "thiserror 2.0.20",
 ]
 
@@ -8649,39 +8936,39 @@ dependencies = [
 [[patch.unused]]
 name = "ssi"
 version = "0.16.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[patch.unused]]
 name = "ssi-bbs"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[patch.unused]]
 name = "ssi-did-test"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[patch.unused]]
 name = "ssi-ssh"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[patch.unused]]
 name = "ssi-status"
 version = "0.8.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[patch.unused]]
 name = "ssi-tzkey"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[patch.unused]]
 name = "ssi-ucan"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 
 [[patch.unused]]
 name = "ssi-zcap-ld"
 version = "0.8.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=584a0d1e2f6a80f92a8483151f6cc6b78b021ad1#584a0d1e2f6a80f92a8483151f6cc6b78b021ad1"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"

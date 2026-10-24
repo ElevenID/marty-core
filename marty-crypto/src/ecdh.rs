@@ -13,7 +13,7 @@
 //! - TLS key exchange
 //! - Secure messaging in mDL and Verifiable Credentials
 
-use elliptic_curve::sec1::ToEncodedPoint;
+use elliptic_curve::{sec1::ToSec1Point, Generate};
 use p256::{
     ecdh::diffie_hellman as p256_dh, PublicKey as P256PublicKey, SecretKey as P256SecretKey,
 };
@@ -89,6 +89,15 @@ impl X25519KeyPair {
         self.agree_inner(peer_public)
     }
 
+    /// Consume generated agreement state once for a bounded caller-owned peer batch.
+    /// Every shared secret is erased on drop; any invalid peer returns no prefix.
+    pub fn agree_many(self, peer_publics: &[&[u8]]) -> CryptoResult<Vec<Zeroizing<[u8; 32]>>> {
+        peer_publics
+            .iter()
+            .map(|peer| self.agree_inner(peer).map(Zeroizing::new))
+            .collect()
+    }
+
     fn agree_inner(&self, peer_public: &[u8]) -> CryptoResult<[u8; 32]> {
         if peer_public.len() != 32 {
             return Err(CryptoError::internal(
@@ -157,20 +166,20 @@ pub struct P256KeyPair {
 impl P256KeyPair {
     /// Generate a new random P-256 key pair.
     pub fn generate() -> Self {
-        let secret = P256SecretKey::random(&mut OsRng);
+        let secret = P256SecretKey::generate();
         Self { secret }
     }
 
     /// Get the public key in uncompressed SEC1 format (65 bytes: 04 || x || y).
     pub fn public_key_uncompressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(false).as_bytes().to_vec()
+        public.to_sec1_point(false).as_bytes().to_vec()
     }
 
     /// Get the public key in compressed SEC1 format (33 bytes: 02/03 || x).
     pub fn public_key_compressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(true).as_bytes().to_vec()
+        public.to_sec1_point(true).as_bytes().to_vec()
     }
 
     /// Perform ECDH key agreement.
@@ -221,20 +230,20 @@ pub struct P384KeyPair {
 impl P384KeyPair {
     /// Generate a new random P-384 key pair.
     pub fn generate() -> Self {
-        let secret = P384SecretKey::random(&mut OsRng);
+        let secret = P384SecretKey::generate();
         Self { secret }
     }
 
     /// Get the public key in uncompressed SEC1 format (97 bytes).
     pub fn public_key_uncompressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(false).as_bytes().to_vec()
+        public.to_sec1_point(false).as_bytes().to_vec()
     }
 
     /// Get the public key in compressed SEC1 format (49 bytes).
     pub fn public_key_compressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(true).as_bytes().to_vec()
+        public.to_sec1_point(true).as_bytes().to_vec()
     }
 
     /// Perform ECDH key agreement.
@@ -472,5 +481,21 @@ mod tests {
 
         // Too long
         assert!(keypair.agree(&[0u8; 64]).is_err());
+    }
+    #[test]
+    fn x25519_generated_batch_agreement_is_bound_to_every_peer() {
+        let alice = X25519KeyPair::generate();
+        let alice_public = alice.public_key_bytes();
+        let bob = X25519KeyPair::generate();
+        let carol = X25519KeyPair::generate();
+        let bob_public = bob.public_key_bytes();
+        let carol_public = carol.public_key_bytes();
+        let secrets = alice.agree_many(&[&bob_public, &carol_public]).unwrap();
+        assert_eq!(secrets[0].as_ref(), bob.agree(&alice_public).unwrap());
+        assert_eq!(secrets[1].as_ref(), carol.agree(&alice_public).unwrap());
+        assert_ne!(secrets[0].as_ref(), secrets[1].as_ref());
+        assert!(X25519KeyPair::generate()
+            .agree_many(&[&bob_public, &[0u8; 32]])
+            .is_err());
     }
 }

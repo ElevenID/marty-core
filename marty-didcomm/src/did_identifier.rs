@@ -2,7 +2,7 @@
 
 use crate::error::{DidcommError, DidcommResult};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -90,7 +90,7 @@ pub fn derive_p256_did_key(jwk_json: &str) -> DidcommResult<String> {
     let public_key = p256::PublicKey::from_sec1_bytes(&uncompressed)
         .map_err(|error| invalid_jwk(format!("point is not on P-256: {error}")))?;
 
-    let compressed = public_key.to_encoded_point(true);
+    let compressed = public_key.to_sec1_point(true);
     let mut multicodec = Vec::with_capacity(2 + compressed.as_bytes().len());
     multicodec.extend_from_slice(&[0x80, 0x24]);
     multicodec.extend_from_slice(compressed.as_bytes());

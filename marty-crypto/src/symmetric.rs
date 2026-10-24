@@ -438,6 +438,19 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> CryptoResult<Vec<u8>> {
     }
 }
 
+/// Compute HMAC-SHA512 for the JOSE A256CBC-HS512 authentication tag.
+pub fn hmac_sha512(key: &[u8], data: &[u8]) -> CryptoResult<Vec<u8>> {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA512, key);
+        Ok(aws_lc_rs::hmac::sign(&key, data).as_ref().to_vec())
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        Ok(crate::secret_hash::hmac_sha512(key, &[data]).to_vec())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +597,9 @@ mod tests {
             hex::encode(hmac_sha256(&[0x0b; 20], b"Hi There").unwrap()),
             "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
         );
+    }
+    #[test]
+    fn hmac_sha512_matches_rfc4231() {
+        assert_eq!(hex::encode(hmac_sha512(&[0x0b; 20], b"Hi There").unwrap()), "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854");
     }
 }

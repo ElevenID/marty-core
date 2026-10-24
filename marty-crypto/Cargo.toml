@@ -27,6 +27,7 @@ kms-only = []
 ecdsa-verification = [
     "dep:ecdsa-core",
     "ecdsa-core/verifying",
+    "ecdsa-core/der",
     "dep:elliptic-curve",
     "dep:p256",
     "dep:p384",
@@ -35,20 +36,27 @@ ecdsa-verification = [
     "p256/ecdsa-core",
     "p256/arithmetic",
     "p256/sha256",
-    "p256/std",
     "p384/ecdsa-core",
     "p384/arithmetic",
     "p384/sha384",
-    "p384/std",
     "p521/ecdsa-core",
     "p521/arithmetic",
     "p521/sha512",
-    "p521/std",
+]
+secp256k1-verification = [
+    "dep:ecdsa-core",
+    "ecdsa-core/verifying",
+    "ecdsa-core/der",
+    "dep:k256",
+    "k256/arithmetic",
+    "k256/ecdsa-core",
+    "k256/sha256",
+    "dep:sha2",
 ]
 eddsa-verification = ["dep:ed25519-dalek"]
 # Ed448 is an eMRTD algorithm. Marty uses only the backend's public
 # curve/scalar types and does not enable its combined signing module.
-ed448-verification = ["dep:ed448-goldilocks-plus"]
+ed448-verification = ["dep:ed448-goldilocks-plus", "dep:shake"]
 rsa-verification = ["dep:rsa", "dep:sha2"]
 # Legacy ICAO algorithms stay first-class for eMRTD artifacts, but are absent
 # from unrelated verifier/session builds unless this capability is selected.
@@ -63,6 +71,8 @@ jwk = [
     "p521/arithmetic",
 ] # Public SPKI/certificate to RFC 7517 conversion
 ecdh = [
+    "dep:getrandom-modern",
+    "dep:getrandom-legacy",
     "dep:elliptic-curve",
     "dep:p256",
     "dep:p384",
@@ -70,13 +80,15 @@ ecdh = [
     "dep:x25519-dalek",
     "dep:zeroize",
     "p256/ecdh",
+    "p256/getrandom",
     "p384/ecdh",
+    "p384/getrandom",
     "kdf",
     "symmetric",
 ]
 hashing = ["dep:sha1", "dep:sha2"]
 signature-verification = ["ecdsa-verification", "eddsa-verification", "rsa-verification"]
-bbs-verification = ["dep:zkryptium"]
+bbs-verification = ["dep:zkryptium", "dep:getrandom-legacy"]
 x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
 crl = ["x509", "dep:pem-rfc7468"]
@@ -89,8 +101,12 @@ public-key-codec = [
     "dep:p256",
     "dep:p384",
     "dep:pkcs8",
+    "p256/arithmetic",
     "p256/pkcs8",
+    "p256/alloc",
+    "p384/arithmetic",
     "p384/pkcs8",
+    "p384/alloc",
 ]
 # These features are defined for cfg guards but require external crates when used
 aamva-client = []    # AAMVA OCSP client (needs reqwest externally)
@@ -98,6 +114,11 @@ ocsp-client = []     # OCSP client functionality (needs reqwest externally)
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("reqwest"))'] }
+
+[package.metadata.cargo-machete]
+# Target-only dependencies select browser entropy for curve/RNG backends.
+# GHASH/POLYVAL select zeroization for the existing AES-GCM backend.
+ignored = ["getrandom-modern", "getrandom-legacy", "ghash", "polyval"]
 
 [dependencies]
 # Crypto and certificates
@@ -109,6 +130,7 @@ sha2 = { workspace = true, features = ["compress"], optional = true }
 p256 = { workspace = true, optional = true }
 p384 = { workspace = true, optional = true }
 p521 = { workspace = true, optional = true }
+k256 = { workspace = true, optional = true }
 ecdsa-core = { workspace = true, optional = true }
 elliptic-curve = { workspace = true, optional = true }
 pem-rfc7468 = { workspace = true, optional = true }
@@ -141,6 +163,7 @@ x25519-dalek = { workspace = true, optional = true }
 
 # Ed448
 ed448-goldilocks-plus = { workspace = true, optional = true }
+shake = { workspace = true, optional = true }
 
 # Time
 chrono = { workspace = true }
@@ -171,6 +194,8 @@ hmac = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.76"
+# Test-only seeded scalar controls require the legacy RNG on browser targets.
+getrandom-legacy = { package = "getrandom", version = "0.2", features = ["js"] }
 
 [[test]]
 name = "cavp_aes_gcm"
@@ -199,3 +224,16 @@ required-features = ["kdf"]
 [[test]]
 name = "wasm_key_derivation"
 required-features = ["kdf", "symmetric"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom-modern = { package = "getrandom", version = "0.4", features = ["wasm_js"], optional = true }
+getrandom-legacy = { package = "getrandom", version = "0.2", features = ["js"], optional = true }
+
+[dev-dependencies]
+bls12_381_plus = { version = "0.8.18", default-features = false, features = ["alloc", "groups"] }
+elliptic-curve-legacy = { package = "elliptic-curve", version = "0.13.8", default-features = false, features = ["hash2curve", "hazmat"] }
+rand = { workspace = true }
+
+[[test]]
+name = "legacy_bigint_compatibility"
+required-features = ["bbs-verification"]

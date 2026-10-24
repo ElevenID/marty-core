@@ -688,7 +688,7 @@ where
     C: elliptic_curve::CurveArithmetic,
     elliptic_curve::FieldBytesSize<C>: elliptic_curve::sec1::ModulusSize,
 {
-    let point = elliptic_curve::sec1::EncodedPoint::<C>::from_bytes(raw)
+    let point = elliptic_curve::sec1::Sec1Point::<C>::from_bytes(raw)
         .map_err(|error| CryptoError::key_error(format!("Invalid {curve} key: {error}")))?;
     let x = point
         .x()

@@ -517,7 +517,7 @@ fn validate_sd_jwt_holder_binding(
     issuer_payload: &serde_json::Value,
     holder_public_jwk_json: &str,
 ) -> Oid4vciResult<()> {
-    use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+    use p256::elliptic_curve::sec1::ToSec1Point as _;
 
     let cnf_jwk = issuer_payload
         .get("cnf")
@@ -562,7 +562,7 @@ fn validate_sd_jwt_holder_binding(
     };
     let bound_public_key = public_key(cnf_jwk, "`cnf.jwk`")?;
     let supplied_public_key = public_key(holder_jwk, "holder public JWK")?;
-    if bound_public_key.to_encoded_point(false) != supplied_public_key.to_encoded_point(false) {
+    if bound_public_key.to_sec1_point(false) != supplied_public_key.to_sec1_point(false) {
         return Err(Oid4vciError::KeyError(
             "Holder public key does not match the verified SD-JWT `cnf.jwk`".into(),
         ));
