@@ -905,9 +905,9 @@ mod tests {
         if algorithm != "ES384" {
             return issuer_public_jwk();
         }
-        use p384::elliptic_curve::sec1::ToEncodedPoint as _;
+        use p384::elliptic_curve::sec1::ToSec1Point as _;
 
-        let point = p384::AffinePoint::GENERATOR.to_encoded_point(false);
+        let point = p384::AffinePoint::GENERATOR.to_sec1_point(false);
         serde_json::json!({
             "kty": "EC",
             "crv": "P-384",

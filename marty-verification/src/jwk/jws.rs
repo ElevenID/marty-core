@@ -234,8 +234,7 @@ fn verify_message(
     key: &Jwk,
 ) -> VerificationResult<()> {
     match alg {
-        "ES256" => verify_es256(message, signature, key),
-        "ES384" => verify_es384(message, signature, key),
+        "ES256" | "ES384" => verify_ec(alg, message, signature, key),
         "EdDSA" => verify_eddsa(message, signature, key),
         "HS256" => verify_hs256(message, signature, key),
         "HS384" => verify_hs384(message, signature, key),
@@ -255,73 +254,61 @@ fn verify_message(
 // ECDSA Signatures
 // ============================================================================
 
-fn verify_es256(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
-    use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
-    use p256::EncodedPoint;
-
+fn verify_ec(
+    algorithm: &str,
+    message: &[u8],
+    signature: &[u8],
+    key: &Jwk,
+) -> VerificationResult<()> {
+    let (curve, coordinate_len) = match algorithm {
+        "ES256" => ("P-256", 32),
+        "ES384" => ("P-384", 48),
+        _ => return Err(VerificationError::internal("Unsupported EC algorithm")),
+    };
+    if key.kty != "EC" || key.crv.as_deref() != Some(curve) {
+        return Err(VerificationError::internal(format!(
+            "{algorithm} requires an EC {curve} public key"
+        )));
+    }
+    // JOSE requires fixed-width r || s, not a DER signature. Check the
+    // untrusted slice before entering any fixed-size backend representation.
+    if signature.len() != 2 * coordinate_len {
+        return Err(VerificationError::internal(format!(
+            "{algorithm} signature must contain {} bytes",
+            2 * coordinate_len
+        )));
+    }
     let x = key
         .x
         .as_ref()
-        .ok_or_else(|| VerificationError::internal("ES256 requires x coordinate".to_string()))?;
+        .ok_or_else(|| VerificationError::internal(format!("{algorithm} requires x coordinate")))?;
     let y = key
         .y
         .as_ref()
-        .ok_or_else(|| VerificationError::internal("ES256 requires y coordinate".to_string()))?;
-
+        .ok_or_else(|| VerificationError::internal(format!("{algorithm} requires y coordinate")))?;
     let x_bytes = base64url_decode(x)?;
     let y_bytes = base64url_decode(y)?;
-
-    // Build uncompressed point
-    let mut point_bytes = vec![0x04];
-    point_bytes.extend_from_slice(&x_bytes);
-    point_bytes.extend_from_slice(&y_bytes);
-
-    let point = EncodedPoint::from_bytes(&point_bytes)
-        .map_err(|e| VerificationError::internal(format!("Invalid ES256 point: {}", e)))?;
-
-    let verifying_key = VerifyingKey::from_encoded_point(&point)
-        .map_err(|e| VerificationError::internal(format!("Invalid ES256 key: {}", e)))?;
-
-    let sig = Signature::from_bytes(signature.into())
-        .map_err(|e| VerificationError::internal(format!("Invalid ES256 signature: {}", e)))?;
-
-    verifying_key
-        .verify(message, &sig)
-        .map_err(|e| VerificationError::internal(format!("ES256 verification failed: {}", e)))
-}
-
-fn verify_es384(message: &[u8], signature: &[u8], key: &Jwk) -> VerificationResult<()> {
-    use p384::ecdsa::{signature::Verifier, Signature, VerifyingKey};
-    use p384::EncodedPoint;
-
-    let x = key
-        .x
-        .as_ref()
-        .ok_or_else(|| VerificationError::internal("ES384 requires x coordinate".to_string()))?;
-    let y = key
-        .y
-        .as_ref()
-        .ok_or_else(|| VerificationError::internal("ES384 requires y coordinate".to_string()))?;
-
-    let x_bytes = base64url_decode(x)?;
-    let y_bytes = base64url_decode(y)?;
-
-    let mut point_bytes = vec![0x04];
-    point_bytes.extend_from_slice(&x_bytes);
-    point_bytes.extend_from_slice(&y_bytes);
-
-    let point = EncodedPoint::from_bytes(&point_bytes)
-        .map_err(|e| VerificationError::internal(format!("Invalid ES384 point: {}", e)))?;
-
-    let verifying_key = VerifyingKey::from_encoded_point(&point)
-        .map_err(|e| VerificationError::internal(format!("Invalid ES384 key: {}", e)))?;
-
-    let sig = Signature::from_bytes(signature.into())
-        .map_err(|e| VerificationError::internal(format!("Invalid ES384 signature: {}", e)))?;
-
-    verifying_key
-        .verify(message, &sig)
-        .map_err(|e| VerificationError::internal(format!("ES384 verification failed: {}", e)))
+    if x_bytes.len() != coordinate_len || y_bytes.len() != coordinate_len {
+        return Err(VerificationError::internal(format!(
+            "{algorithm} public key coordinates must each contain {coordinate_len} bytes"
+        )));
+    }
+    let mut point = Vec::with_capacity(1 + 2 * coordinate_len);
+    point.push(0x04);
+    point.extend_from_slice(&x_bytes);
+    point.extend_from_slice(&y_bytes);
+    let verified = match algorithm {
+        "ES256" => marty_crypto::ecdsa::verify_p256_sha256(&point, message, signature),
+        "ES384" => marty_crypto::ecdsa::verify_p384_sha384(&point, message, signature),
+        _ => unreachable!("algorithm was validated above"),
+    }?;
+    if verified {
+        Ok(())
+    } else {
+        Err(VerificationError::internal(format!(
+            "{algorithm} verification failed"
+        )))
+    }
 }
 
 // ============================================================================
@@ -513,6 +500,78 @@ mod tests {
             base64url_encode(&header.to_json().unwrap()),
             base64url_encode(payload)
         )
+    }
+
+    fn public_ecdsa_vector(algorithm: &str) -> (Jwk, Vec<u8>, Vec<u8>) {
+        // Fixed public verification vectors; no signing or local private key.
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/jws_ecdsa_public.json"))
+                .unwrap();
+        let vector = &vectors[algorithm];
+        let point = hex::decode(vector["sec1"].as_str().unwrap()).unwrap();
+        let coordinate_len = (point.len() - 1) / 2;
+        let key = Jwk {
+            kty: "EC".into(),
+            crv: Some(
+                if algorithm == "ES256" {
+                    "P-256"
+                } else {
+                    "P-384"
+                }
+                .into(),
+            ),
+            x: Some(base64url_encode(&point[1..1 + coordinate_len])),
+            y: Some(base64url_encode(&point[1 + coordinate_len..])),
+            ..Default::default()
+        };
+        (
+            key,
+            hex::decode(vector["signature_raw"].as_str().unwrap()).unwrap(),
+            hex::decode(vector["signature_der"].as_str().unwrap()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn public_ecdsa_vectors_bind_message_key_type_and_curve() {
+        let message = b"public-only SPKI verification";
+        for algorithm in ["ES256", "ES384"] {
+            let (key, signature, _) = public_ecdsa_vector(algorithm);
+            verify_message(algorithm, message, &signature, &key).unwrap();
+            assert!(verify_message(algorithm, b"changed", &signature, &key).is_err());
+            for (key_type, curve) in [("RSA", key.crv.as_deref().unwrap()), ("EC", "secp256k1")] {
+                let mut wrong = key.clone();
+                wrong.kty = key_type.into();
+                wrong.crv = Some(curve.into());
+                assert!(verify_message(algorithm, message, &signature, &wrong).is_err());
+            }
+            let mut shifted = key;
+            let mut x = base64url_decode(shifted.x.as_ref().unwrap()).unwrap();
+            let mut y = base64url_decode(shifted.y.as_ref().unwrap()).unwrap();
+            y.insert(0, x.pop().unwrap());
+            shifted.x = Some(base64url_encode(&x));
+            shifted.y = Some(base64url_encode(&y));
+            assert!(verify_message(algorithm, message, &signature, &shifted).is_err());
+        }
+    }
+
+    #[test]
+    fn malformed_ecdsa_jws_signature_lengths_return_errors_without_panicking() {
+        for algorithm in ["ES256", "ES384"] {
+            let (key, signature, der_signature) = public_ecdsa_vector(algorithm);
+            let header = base64url_encode(&JwsHeader::new(algorithm).to_json().unwrap());
+            let payload = base64url_encode(b"untrusted compact JWS");
+            for length in [1, signature.len() - 1, signature.len() + 1, 1024] {
+                let compact = format!("{header}.{payload}.{}", base64url_encode(&vec![1; length]));
+                assert!(jws_verify(&compact, &key).is_err());
+            }
+            assert!(verify_message(
+                algorithm,
+                b"public-only SPKI verification",
+                &der_signature,
+                &key
+            )
+            .is_err());
+        }
     }
 
     #[test]

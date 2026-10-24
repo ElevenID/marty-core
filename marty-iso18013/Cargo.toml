@@ -21,7 +21,7 @@ marty-crypto = { workspace = true, default-features = false, optional = true }
 ciborium = { workspace = true }
 # Keep the published 0.3.0 floor for downstream consumers.
 coset = { version = "0.3", optional = true }
-isomdl = { version = "0.3", default-features = false, features = ["session-key-agreement"], optional = true }
+isomdl = { workspace = true, features = ["session-key-agreement"], optional = true }
 
 # Async runtime
 tokio = { workspace = true, optional = true }

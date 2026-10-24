@@ -41,3 +41,14 @@ fn ed25519_public_key_round_trips_through_spki_and_pem() {
     assert_eq!(decoded, raw);
     assert_eq!(key_type, "Ed25519");
 }
+
+#[test]
+fn p384_public_codec_matches_the_fixed_spki_encoding() {
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/verification_only_public.json")).unwrap();
+    let vector = &vectors["spki_p384"];
+    let raw = hex(vector["sec1"].as_str().unwrap());
+    let encoded = serialization::raw_public_key_to_spki(&raw, "EC_P384").unwrap();
+    assert_eq!(encoded, hex(vector["spki"].as_str().unwrap()));
+    assert_eq!(serialization::get_key_size(&encoded).unwrap(), 384);
+}

@@ -295,7 +295,8 @@ mod tests {
             .unwrap();
     }
 
-    #[test]
+    #[cfg_attr(not(target_family = "wasm"), test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     fn test_known_signature_vector_sha256() {
         assert_known_signature_vector(
             BbsCiphersuite::Bls12381Sha256,
@@ -304,7 +305,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(not(target_family = "wasm"), test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     fn test_known_signature_vector_shake256() {
         assert_known_signature_vector(
             BbsCiphersuite::Bls12381Shake256,
@@ -332,7 +334,8 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
+    #[cfg_attr(not(target_family = "wasm"), test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     fn test_known_proof_vector_sha256() {
         assert_known_proof_vector(
             BbsCiphersuite::Bls12381Sha256,
@@ -341,7 +344,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(not(target_family = "wasm"), test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     fn test_known_proof_vector_shake256() {
         assert_known_proof_vector(
             BbsCiphersuite::Bls12381Shake256,
@@ -405,7 +409,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(not(target_family = "wasm"), test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     fn public_multi_message_signatures_verify_and_reject_tampering() {
         for ciphersuite in [
             BbsCiphersuite::Bls12381Sha256,
@@ -430,7 +435,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(not(target_family = "wasm"), test)]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen_test::wasm_bindgen_test)]
     fn public_multi_message_signatures_create_selective_disclosure_proofs() {
         for ciphersuite in [
             BbsCiphersuite::Bls12381Sha256,

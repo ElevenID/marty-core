@@ -8,6 +8,41 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
     def test_repository_feature_boundary(self) -> None:
         check_repository()
 
+    def test_ecdsa_cannot_diverge_from_the_shared_ssi_backend(self) -> None:
+        for replacement in ({"path": "third_party/ecdsa"}, {"git": "https://github.com/ElevenID/ssi-elevenid", "rev": "0" * 40}):
+            with self.subTest(replacement=replacement):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "Cargo.toml":
+                        manifest["patch"]["crates-io"]["ecdsa"] = replacement
+                    return manifest
+
+                with patch("check_verification_feature_boundary.load_toml", side_effect=mutated_manifest):
+                    with self.assertRaisesRegex(ValueError, "one immutable low-level"):
+                        check_repository()
+
+    def test_session_entropy_cannot_enter_public_ecdsa_verification(self) -> None:
+        for feature in ("dep:getrandom-modern", "dep:getrandom-legacy"):
+            with self.subTest(feature=feature):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "marty-crypto" / "Cargo.toml":
+                        manifest["features"]["ecdsa-verification"].append(feature)
+                    return manifest
+                with patch("check_verification_feature_boundary.load_toml", side_effect=mutated_manifest):
+                    with self.assertRaisesRegex(ValueError, "entropy"):
+                        check_repository()
+
+    def test_isomdl_consumers_cannot_diverge_from_workspace_selection(self) -> None:
+        def mutated_manifest(path):
+            manifest = load_toml(path)
+            if path == ROOT / "marty-iso18013" / "Cargo.toml":
+                manifest["dependencies"]["isomdl"] = {"version": "0.3"}
+            return manifest
+        with patch("check_verification_feature_boundary.load_toml", side_effect=mutated_manifest):
+            with self.assertRaisesRegex(ValueError, "one capability-neutral"):
+                check_repository()
+
     def test_canonical_digest_boundary_rejects_verifier_or_crypto_dependencies(self) -> None:
         for dependency in ("marty-verification", "marty-crypto", "marty-oid4vci"):
             with self.subTest(dependency=dependency):
@@ -76,11 +111,35 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         check_repository()
 
+    def test_ed448_upgrade_cannot_restore_backend_private_key_modules(self) -> None:
+        for feature in ("default", "signing", "kex", "pkcs8", "std"):
+            with self.subTest(feature=feature):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "Cargo.toml":
+                        backend = manifest["workspace"]["dependencies"][
+                            "ed448-goldilocks-plus"
+                        ]
+                        if feature == "default":
+                            backend["default-features"] = True
+                        else:
+                            backend["features"].append(feature)
+                    return manifest
+
+                with patch(
+                    "check_verification_feature_boundary.load_toml",
+                    side_effect=mutated_manifest,
+                ):
+                    with self.assertRaisesRegex(ValueError, "Ed448 verification"):
+                        check_repository()
+
     def test_oid4vci_ecdsa_primitive_cannot_restore_signing(self) -> None:
         def mutated_manifest(path):
             manifest = load_toml(path)
             if path == ROOT / "marty-oid4vci" / "Cargo.toml":
-                manifest["dependencies"]["ecdsa-core"]["features"].append("signing")
+                manifest["dependencies"]["ecdsa-core"] = {
+                    "workspace": True, "features": ["signing"]
+                }
             return manifest
 
         with patch(

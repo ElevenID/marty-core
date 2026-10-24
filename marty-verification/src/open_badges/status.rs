@@ -973,7 +973,7 @@ mod tests {
                 let result = result_value(
                     verify_ob3_json_with_status_lists_at_async(
                         &fixture.request,
-                        &[authenticated.clone()],
+                        std::slice::from_ref(&authenticated),
                         time,
                     )
                     .await
@@ -1018,7 +1018,7 @@ mod tests {
                 let result = result_value(
                     verify_ob3_json_with_status_lists_at_async(
                         &fixture.request,
-                        &[authenticated.clone()],
+                        std::slice::from_ref(&authenticated),
                         time,
                     )
                     .await
@@ -1052,10 +1052,13 @@ mod tests {
             )
             .await;
             // Freshness may not outlive signed validity: preserve that fail-closed rule.
+            // Retrieval cannot precede validFrom either. The lower negative boundary
+            // therefore fails freshness first; future positive cases exercise the
+            // signed status credential's caller-time cryptographic verification.
             let authenticated = fixture.authenticated_with(
                 fixture.status_list.clone(),
                 fixture.status_issuer.clone(),
-                from - Duration::hours(1),
+                from,
                 until,
             );
             for (time, valid) in [
@@ -1067,7 +1070,7 @@ mod tests {
                 let result = result_value(
                     verify_ob3_json_with_status_lists_at_async(
                         &fixture.request,
-                        &[authenticated.clone()],
+                        std::slice::from_ref(&authenticated),
                         time,
                     )
                     .await
@@ -1081,6 +1084,36 @@ mod tests {
                     ));
                 }
             }
+            // A cache acquired before signed validity must still be rejected even
+            // when evaluated inside both the freshness and signed validity windows.
+            let before_validity = fixture.authenticated_with(
+                fixture.status_list.clone(),
+                fixture.status_issuer.clone(),
+                from - Duration::hours(1),
+                until,
+            );
+            let invalid_cache = result_value(
+                verify_ob3_json_with_status_lists_at_async(
+                    &fixture.request,
+                    std::slice::from_ref(&before_validity),
+                    from,
+                )
+                .await
+                .expect("verify cache acquired before signed validity"),
+            );
+            assert!(has_code(
+                &invalid_cache,
+                error_codes::OPEN_BADGES_STATUS_CHECK_FAILED
+            ));
+            assert!(invalid_cache["errors"].as_array().is_some_and(|errors| {
+                errors.iter().any(|error| {
+                    error.as_str()
+                        == Some(
+                            "Status-list credential was cached before its signed validity period",
+                        )
+                })
+            }));
+
             // No-status JSON and typed wrappers must retain status authority checks.
             let json_result = result_value(
                 verify_ob3_json_at_async(&fixture.request, from)

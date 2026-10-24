@@ -301,8 +301,18 @@ mod tests {
 
     struct RemoteCmsSigner(RemoteCertificateKey);
 
+    // CMS 0.2 uses SPKI 0.7; the modern ECDSA codec uses SPKI 0.8.
+    // Bridge the unchanged DER bytes without restoring a legacy signing backend.
+    struct RemoteCmsSignature(p256::ecdsa::DerSignature);
+
+    impl spki::SignatureBitStringEncoding for RemoteCmsSignature {
+        fn to_bitstring(&self) -> der::Result<der::asn1::BitString> {
+            der::asn1::BitString::from_bytes(self.0.as_bytes())
+        }
+    }
+
     impl signature::Keypair for RemoteCmsSigner {
-        type VerifyingKey = p256::ecdsa::VerifyingKey;
+        type VerifyingKey = ecdsa::VerifyingKey<p256::NistP256>;
 
         fn verifying_key(&self) -> Self::VerifyingKey {
             use p256::pkcs8::DecodePublicKey;
@@ -321,11 +331,13 @@ mod tests {
         }
     }
 
-    impl signature::Signer<p256::ecdsa::DerSignature> for RemoteCmsSigner {
-        fn try_sign(&self, message: &[u8]) -> Result<p256::ecdsa::DerSignature, signature::Error> {
+    impl signature::Signer<RemoteCmsSignature> for RemoteCmsSigner {
+        fn try_sign(&self, message: &[u8]) -> Result<RemoteCmsSignature, signature::Error> {
             let der =
                 rcgen::SigningKey::sign(&self.0, message).map_err(|_| signature::Error::new())?;
-            p256::ecdsa::DerSignature::from_bytes(&der).map_err(|_| signature::Error::new())
+            p256::ecdsa::DerSignature::from_bytes(&der)
+                .map(RemoteCmsSignature)
+                .map_err(|_| signature::Error::new())
         }
     }
 
@@ -375,7 +387,7 @@ mod tests {
             .unwrap()
             .add_certificate(CertificateChoices::Certificate(signer_cert))
             .unwrap()
-            .add_signer_info::<RemoteCmsSigner, p256::ecdsa::DerSignature>(signer_info)
+            .add_signer_info::<RemoteCmsSigner, RemoteCmsSignature>(signer_info)
             .unwrap();
         (builder.build().unwrap().to_der().unwrap(), signer_der)
     }

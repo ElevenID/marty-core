@@ -51,7 +51,22 @@ def check_repository(root: Path = ROOT) -> None:
     test_support = load_toml(root / "marty-crypto-test-support" / "Cargo.toml")
     verification_python = load_toml(root / "marty-verification" / "pyproject.toml")
 
+    shared_patches = workspace["patch"]["crates-io"]
+    require(
+        shared_patches["ecdsa"] == shared_patches["ssi-crypto"]
+        and shared_patches["ecdsa"].get("git") == "https://github.com/ElevenID/ssi-elevenid"
+        and len(shared_patches["ecdsa"].get("rev", "")) == 40,
+        "ECDSA and SSI must share one immutable low-level verification backend source",
+    )
     workspace_dependencies = workspace["workspace"]["dependencies"]
+    require(
+        workspace_dependencies["isomdl"] == {"version": "0.3", "default-features": False}
+        and all(manifest["dependencies"]["isomdl"].get("workspace") is True
+                for manifest in (verification, oid4vci, iso18013))
+        and oid4vci["dev-dependencies"]["isomdl"].get("workspace") is True,
+        "isomdl roles must share one capability-neutral workspace dependency",
+    )
+
     require(
         set(canonical_digest["dependencies"]) == {"serde_json", "sha2"}
         and not canonical_digest.get("build-dependencies")
@@ -99,6 +114,17 @@ def check_repository(root: Path = ROOT) -> None:
         "workspace Ed25519 dependencies must not globally enable key codecs or generation",
     )
 
+    ed448 = workspace_dependencies["ed448-goldilocks-plus"]
+    require(
+        ed448.get("default-features") is False
+        and ed448.get("features") == ["zeroize"]
+        and crypto["dependencies"]["ed448-goldilocks-plus"]
+        == {"workspace": True, "optional": True}
+        and set(crypto["features"]["ed448-verification"])
+        == {"dep:ed448-goldilocks-plus", "dep:shake"},
+        "Ed448 verification must enable only public arithmetic and zeroization, without signing or key exchange",
+    )
+
     crypto_features = crypto["features"]
     require(
         crypto_features["default"] == [],
@@ -122,6 +148,16 @@ def check_repository(root: Path = ROOT) -> None:
         ),
         "ECDSA verification must use verification-only primitives",
     )
+    entropy_features = {
+        f"{curve}/{capability}"
+        for curve in ("p256", "p384", "p521")
+        for capability in ("std", "getrandom")
+    }
+    entropy_features |= {"dep:getrandom-modern", "dep:getrandom-legacy"}
+    require(
+        not entropy_features & set(crypto_features["ecdsa-verification"]),
+        "public ECDSA verification must not implicitly select platform entropy",
+    )
     require(
         not (REMOVED_CRYPTO_FEATURES - {"default"}) & set(crypto_features),
         "marty-crypto must not expose production-selectable private-key features",
@@ -140,6 +176,16 @@ def check_repository(root: Path = ROOT) -> None:
         and crypto["dependencies"]["ecdsa-core"].get("default-features") is not True
         and not crypto["dependencies"]["ecdsa-core"].get("features", []),
         "the direct ECDSA primitive dependency must inherit an optional, default-free workspace declaration",
+    )
+
+    require(
+        crypto["dependencies"]["k256"] == {"workspace": True, "optional": True}
+        and set(crypto_features["secp256k1-verification"])
+        == {
+            "dep:ecdsa-core", "ecdsa-core/verifying", "ecdsa-core/der", "dep:k256",
+            "k256/arithmetic", "k256/ecdsa-core", "k256/sha256", "dep:sha2",
+        },
+        "shared secp256k1 verification must not restore combined signing support",
     )
 
     verification_features = verification["features"]
@@ -185,7 +231,7 @@ def check_repository(root: Path = ROOT) -> None:
     require(
         oid4vci_crypto.get("default-features") is False
         and set(oid4vci_crypto["features"])
-        == {"ecdsa-verification", "eddsa-verification"},
+        == {"ecdsa-verification", "eddsa-verification", "secp256k1-verification"},
         "marty-oid4vci must not transitively restore marty-crypto defaults",
     )
     require(
@@ -203,10 +249,9 @@ def check_repository(root: Path = ROOT) -> None:
         "remote-signature issuer assembly must select signature codecs without signing",
     )
     require(
-        oid4vci["dependencies"]["ecdsa-core"].get("workspace") is True
-        and oid4vci["dependencies"]["ecdsa-core"].get("default-features") is not True
-        and oid4vci["dependencies"]["ecdsa-core"].get("features") == ["verifying"],
-        "OID4VCI ECDSA primitives must remain verification-only",
+        "ecdsa-core" not in oid4vci["dependencies"]
+        and "secp256k1-verification" in oid4vci["dependencies"]["marty-crypto"]["features"],
+        "OID4VCI must delegate ECDSA arithmetic to shared verification-only primitives",
     )
     require(
         workspace_dependencies["k256"].get("default-features") is False
@@ -292,15 +337,12 @@ def check_repository(root: Path = ROOT) -> None:
     )
     require(
         didcomm["features"]["kms-only"] == []
-        and didcomm["features"]["encrypted-envelope"]
-        == ["dep:affinidi-messaging-didcomm"]
+        and set(didcomm["features"]["encrypted-envelope"])
+        == {"dep:marty-crypto", "marty-crypto/ecdh", "dep:aes-kw", "dep:getrandom", "dep:zeroize"}
         and "local-key-operations" not in didcomm["features"]
-        and didcomm["dependencies"]["affinidi-messaging-didcomm"].get("optional")
-        is True
-        and didcomm["dependencies"]["affinidi-messaging-didcomm"].get(
-            "default-features"
-        )
-        is False
+        and "affinidi-messaging-didcomm" not in didcomm["dependencies"]
+        and didcomm["dependencies"]["marty-crypto"]
+        == {"workspace": True, "optional": True, "default-features": False}
         and "local-key-operations" not in didcomm["features"]["default"]
         and "encrypted-envelope" not in didcomm["features"]["default"],
         "DIDComm software envelopes must be explicit and absent from the KMS marker",
