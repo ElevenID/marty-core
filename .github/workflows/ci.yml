@@ -65,8 +65,12 @@ jobs:
           version: v0.16.0
       - name: Enforce Rust advisory and yank policy
         run: cargo deny --locked --all-features check advisories --deny yanked
+      - name: Enforce independent chain example advisory and yank policy
+        run: cargo deny --manifest-path examples/offline-chain-headless/Cargo.toml --locked check advisories --deny yanked
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Check independent chain example formatting
+        run: cargo fmt --manifest-path examples/offline-chain-headless/Cargo.toml -- --check
 
   kms-role-graphs:
     name: KMS Role and Public-Key Graphs
@@ -192,6 +196,14 @@ jobs:
           cp marty-headless-verifier/samples/*.json "$bundle/samples/"
           cp marty-headless-verifier/scripts/acceptance.sh "$bundle/"
           bash "$bundle/acceptance.sh" "$bundle"
+
+      - name: Qualify the independent offline-chain headless example
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: target/offline-chain-headless
+        run: |
+          cargo test --locked --manifest-path examples/offline-chain-headless/Cargo.toml
+          cargo clippy --locked --manifest-path examples/offline-chain-headless/Cargo.toml --all-targets -- -D warnings
 
   affected-tests:
     name: Affected Rust Tests

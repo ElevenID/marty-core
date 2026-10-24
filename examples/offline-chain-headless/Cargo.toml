@@ -1,0 +1,25 @@
+[package]
+name = "marty-offline-chain-headless"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# An independent downstream executable, not a Core workspace member.
+[workspace]
+resolver = "2"
+
+# Dependency-root patches are not transitive to this independent workspace.
+# Select the same reviewed verification-only ECDSA backend as accepted Core.
+[patch.crates-io]
+ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
+
+[dependencies]
+base64 = "0.22"
+chrono = "0.4"
+marty-x509-verification = { path = "../../marty-x509-verification", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+rcgen = { version = "0.14", features = ["aws_lc_rs"] }
+time = "0.3"
