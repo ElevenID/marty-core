@@ -20,6 +20,11 @@ Run from this directory with `cargo +1.97.1 test --locked`. CI explicitly tests
 this independent example; the root workspace commands do not include it.
 These tests do not qualify network-isolated execution of this port.
 
+As an independent workspace, this example does not inherit Core's root Cargo
+patches. Its manifest explicitly selects the same reviewed verification-only
+ECDSA fork as accepted Core; its separate lockfile and advisory gate must be
+qualified whenever that dependency graph changes.
+
 The sample does not check revocation, credential signatures, replay, protocol
 policy, or the caller's authority to designate a trust anchor. Its success
 must not be presented as a verified credential.

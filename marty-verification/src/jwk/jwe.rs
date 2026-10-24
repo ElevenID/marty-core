@@ -188,11 +188,11 @@ pub struct HaipResponseDecryptionSession {
 #[cfg(any(test, feature = "ephemeral-session-keys"))]
 impl HaipResponseDecryptionSession {
     pub fn generate() -> VerificationResult<Self> {
-        use elliptic_curve::sec1::ToEncodedPoint;
-        use rand::rngs::OsRng;
+        use elliptic_curve::sec1::ToSec1Point;
+        use elliptic_curve::Generate;
 
-        let private_key = p256::SecretKey::random(&mut OsRng);
-        let point = private_key.public_key().to_encoded_point(false);
+        let private_key = p256::SecretKey::generate();
+        let point = private_key.public_key().to_sec1_point(false);
         let mut public_jwk = Jwk {
             kty: "EC".to_string(),
             crv: Some("P-256".to_string()),
@@ -317,9 +317,9 @@ pub fn jwe_encrypt_direct(
                 (epk_jwk, shared.to_vec())
             }
             ("EC", Some("P-256")) => {
-                use elliptic_curve::sec1::ToEncodedPoint;
+                use elliptic_curve::sec1::ToSec1Point;
+                use elliptic_curve::Generate;
                 use p256::{ecdh::diffie_hellman, PublicKey, SecretKey};
-                use rand::rngs::OsRng;
 
                 // Parse recipient public key
                 let x_bytes = base64url_decode(
@@ -349,9 +349,9 @@ pub fn jwe_encrypt_direct(
                 })?;
 
                 // Generate ephemeral key
-                let ephem_secret = SecretKey::random(&mut OsRng);
+                let ephem_secret = SecretKey::generate();
                 let ephem_public = ephem_secret.public_key();
-                let ephem_point = ephem_public.to_encoded_point(false);
+                let ephem_point = ephem_public.to_sec1_point(false);
 
                 // Perform ECDH
                 let shared =
@@ -616,7 +616,7 @@ fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationR
                     secret.diffie_hellman(&public).as_bytes().to_vec()
                 }
                 ("EC", Some("P-256")) => {
-                    use elliptic_curve::sec1::ToEncodedPoint;
+                    use elliptic_curve::sec1::ToSec1Point;
                     use p256::{ecdh::diffie_hellman, PublicKey, SecretKey};
 
                     if epk.kty != "EC" || epk.crv.as_deref() != Some("P-256") {
@@ -660,7 +660,7 @@ fn jwe_decrypt_with_session_key(jwe: &str, recipient_key: &Jwk) -> VerificationR
                     })?;
                     match (&recipient_key.x, &recipient_key.y) {
                         (Some(x), Some(y)) => {
-                            let expected = secret.public_key().to_encoded_point(false);
+                            let expected = secret.public_key().to_sec1_point(false);
                             let supplied_x = base64url_decode(x)?;
                             let supplied_y = base64url_decode(y)?;
                             if supplied_x.as_slice() != expected.x().unwrap().as_slice()

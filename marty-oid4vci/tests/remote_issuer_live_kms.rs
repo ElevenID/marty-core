@@ -33,6 +33,7 @@ use marty_oid4vci::{
     wallet::WalletEngine,
     Oid4vciError, Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
 };
+use p256::elliptic_curve::scalar::IsHigh;
 use reqwest::{blocking::Client, Url};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -293,14 +294,14 @@ impl CredentialSigner for HighSRemoteSigner<'_> {
         let remote = self.inner.lock().unwrap().sign(message)?;
         let signature = p256::ecdsa::Signature::from_slice(&remote)
             .map_err(|_| Oid4vciError::SigningError("remote signature is invalid".into()))?;
-        let high_s = if signature.normalize_s().is_some() {
+        let high_s = if bool::from(signature.s().is_high()) {
             signature
         } else {
             let (r, s) = signature.split_scalars();
             p256::ecdsa::Signature::from_scalars(r.to_bytes(), (-s).to_bytes())
                 .map_err(|_| Oid4vciError::SigningError("remote signature is invalid".into()))?
         };
-        assert!(high_s.normalize_s().is_some());
+        assert!(bool::from(high_s.s().is_high()));
         let raw = high_s.to_bytes().to_vec();
         self.calls
             .lock()
@@ -561,10 +562,12 @@ fn valid_remote_high_s_signatures_survive_serial_and_concurrent_batches() {
         .zip(serial_calls.iter())
     {
         assert_eq!(emitted, returned);
-        assert!(p256::ecdsa::Signature::from_slice(emitted)
-            .unwrap()
-            .normalize_s()
-            .is_some());
+        assert!(bool::from(
+            p256::ecdsa::Signature::from_slice(emitted)
+                .unwrap()
+                .s()
+                .is_high()
+        ));
     }
     drop(serial_calls);
 
@@ -582,10 +585,12 @@ fn valid_remote_high_s_signatures_survive_serial_and_concurrent_batches() {
         assert!(concurrent_calls
             .iter()
             .any(|(_, returned)| returned == &emitted));
-        assert!(p256::ecdsa::Signature::from_slice(&emitted)
-            .unwrap()
-            .normalize_s()
-            .is_some());
+        assert!(bool::from(
+            p256::ecdsa::Signature::from_slice(&emitted)
+                .unwrap()
+                .s()
+                .is_high()
+        ));
     }
     assert!(holder.payloads.lock().unwrap().is_empty());
 }

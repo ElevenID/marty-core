@@ -191,7 +191,7 @@ fn p256_public_key_from_certificate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use elliptic_curve::sec1::ToEncodedPoint;
+    use elliptic_curve::sec1::ToSec1Point;
     use marty_crypto_test_support::remote_certificate::{
         RemoteCertificateAlgorithm, RemoteCertificateKey,
     };
@@ -199,7 +199,7 @@ mod tests {
 
     fn public_jwk(key: &RemoteCertificateKey) -> Jwk {
         let public = PublicKey::from_sec1_bytes(key.der_bytes()).unwrap();
-        let point = public.to_encoded_point(false);
+        let point = public.to_sec1_point(false);
         Jwk {
             kty: "EC".to_owned(),
             crv: Some("P-256".to_owned()),

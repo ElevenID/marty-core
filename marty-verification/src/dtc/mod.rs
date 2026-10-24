@@ -14,13 +14,8 @@ use chrono::{DateTime, Utc};
 use const_oid::{db::rfc5280::ID_CE_EXT_KEY_USAGE, ObjectIdentifier};
 use der::Decode;
 use iref::IriBuf;
-use p256::ecdsa::{
-    signature::Verifier, Signature as P256Signature, VerifyingKey as P256VerifyingKey,
-};
-use p256::pkcs8::DecodePublicKey as _;
-use p256::PublicKey as P256PublicKey;
-use p384::ecdsa::{Signature as P384Signature, VerifyingKey as P384VerifyingKey};
-use p384::PublicKey as P384PublicKey;
+use p256::ecdsa::Signature as P256Signature;
+use p384::ecdsa::Signature as P384Signature;
 use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -565,44 +560,33 @@ fn detect_curve_from_public_key_pem(pem: &str) -> VerificationResult<EcCurve> {
     }
 }
 
-fn parse_p256_verifying_key(pem: &str) -> VerificationResult<P256VerifyingKey> {
-    if let Ok(key) = P256VerifyingKey::from_public_key_pem(pem) {
-        return Ok(key);
-    }
-    let der = decode_pem_body(pem)?;
-    let public_key = P256PublicKey::from_sec1_bytes(&der)
-        .map_err(|e| VerificationError::dtc_invalid(e.to_string()))?;
-    Ok(P256VerifyingKey::from(public_key))
-}
-
-fn parse_p384_verifying_key(pem: &str) -> VerificationResult<P384VerifyingKey> {
-    if let Ok(key) = P384VerifyingKey::from_public_key_pem(pem) {
-        return Ok(key);
-    }
-    let der = decode_pem_body(pem)?;
-    let public_key = P384PublicKey::from_sec1_bytes(&der)
-        .map_err(|e| VerificationError::dtc_invalid(e.to_string()))?;
-    Ok(P384VerifyingKey::from(public_key))
-}
-
 fn verify_ecdsa(payload: &[u8], sig_b64: &str, public_key_pem: &str) -> VerificationResult<bool> {
     let sig_bytes = b64_decode(sig_b64)
         .ok_or_else(|| VerificationError::dtc_invalid("Invalid signature base64".to_string()))?;
 
+    let public_key_der = decode_pem_body(public_key_pem)?;
     match detect_curve_from_public_key_pem(public_key_pem)? {
         EcCurve::P256 => {
-            let vk = parse_p256_verifying_key(public_key_pem)?;
             let sig = P256Signature::from_der(&sig_bytes).map_err(|e| {
                 VerificationError::dtc_signature_invalid(format!("Invalid P-256 signature: {}", e))
             })?;
-            Ok(vk.verify(payload, &sig).is_ok())
+            marty_crypto::ecdsa::verify_p256_sha256(
+                &public_key_der,
+                payload,
+                sig.to_bytes().as_ref(),
+            )
+            .map_err(|error| VerificationError::dtc_invalid(error.to_string()))
         }
         EcCurve::P384 => {
-            let vk = parse_p384_verifying_key(public_key_pem)?;
             let sig = P384Signature::from_der(&sig_bytes).map_err(|e| {
                 VerificationError::dtc_signature_invalid(format!("Invalid P-384 signature: {}", e))
             })?;
-            Ok(vk.verify(payload, &sig).is_ok())
+            marty_crypto::ecdsa::verify_p384_sha384(
+                &public_key_der,
+                payload,
+                sig.to_bytes().as_ref(),
+            )
+            .map_err(|error| VerificationError::dtc_invalid(error.to_string()))
         }
     }
 }
@@ -1511,5 +1495,45 @@ fn validate_current_status<'a>(
     match evidence.status() {
         DtcCurrentStatus::Good => CurrentStatusValidation::Good(evidence),
         DtcCurrentStatus::Revoked => CurrentStatusValidation::Revoked(evidence),
+    }
+}
+
+#[cfg(test)]
+mod public_signature_vectors {
+    use super::*;
+    use der::Encode;
+
+    #[test]
+    fn dtc_ecdsa_uses_shared_public_verifier_for_raw_and_spki_keys() {
+        let vectors: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/jws_ecdsa_public.json"))
+                .unwrap();
+        let pem = |bytes: &[u8]| {
+            format!(
+                "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+                general_purpose::STANDARD.encode(bytes)
+            )
+        };
+        for (algorithm, codec) in [("ES256", "EC_P256"), ("ES384", "EC_P384")] {
+            let point = hex::decode(vectors[algorithm]["sec1"].as_str().unwrap()).unwrap();
+            let signature =
+                hex::decode(vectors[algorithm]["signature_der"].as_str().unwrap()).unwrap();
+            let signature = general_purpose::STANDARD.encode(signature);
+            let spki = marty_crypto::serialization::raw_public_key_to_spki(&point, codec).unwrap();
+            for key in [&point, &spki] {
+                assert!(
+                    verify_ecdsa(b"public-only SPKI verification", &signature, &pem(key)).unwrap()
+                );
+                assert!(!verify_ecdsa(b"changed payload", &signature, &pem(key)).unwrap());
+            }
+            let mut wrong = spki::SubjectPublicKeyInfoOwned::from_der(&spki).unwrap();
+            wrong.algorithm.oid = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
+            assert!(verify_ecdsa(
+                b"public-only SPKI verification",
+                &signature,
+                &pem(&wrong.to_der().unwrap())
+            )
+            .is_err());
+        }
     }
 }

@@ -8,15 +8,25 @@
 //! in newer ePassports with higher security requirements.
 //!
 //! Verification accepts only public-key bytes, a message, and a signature.
+//!
+//! The backend signing and key-exchange modules remain unavailable:
+//!
+//! ```compile_fail
+//! let _: Option<ed448_goldilocks_plus::SigningKey> = None;
+//! ```
+//!
+//! ```compile_fail
+//! use ed448_goldilocks_plus::x448;
+//! ```
 
 use der::Decode;
 use ed448_goldilocks_plus::elliptic_curve::Group;
-use ed448_goldilocks_plus::sha3::{
-    digest::{ExtendableOutput, Update, XofReader},
-    Shake256,
-};
 use ed448_goldilocks_plus::{
     CompressedEdwardsY, EdwardsPoint, Scalar, ScalarBytes, WideScalarBytes,
+};
+use shake::{
+    digest::{ExtendableOutput, Update, XofReader},
+    Shake256,
 };
 
 use crate::{CryptoError, CryptoResult};
@@ -131,9 +141,8 @@ fn verify_ed448_inner(
     if s_bytes[56] != 0 {
         return Ok(false);
     }
-    let Some(s) = Option::<Scalar>::from(Scalar::from_canonical_bytes(ScalarBytes::from_slice(
-        &s_bytes,
-    ))) else {
+    let Some(s) = Option::<Scalar>::from(Scalar::from_canonical_bytes(&ScalarBytes::from(s_bytes)))
+    else {
         return Ok(false);
     };
     if bool::from(s.is_zero()) {

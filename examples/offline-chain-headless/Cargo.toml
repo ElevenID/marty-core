@@ -8,6 +8,11 @@ publish = false
 [workspace]
 resolver = "2"
 
+# Dependency-root patches are not transitive to this independent workspace.
+# Select the same reviewed verification-only ECDSA backend as accepted Core.
+[patch.crates-io]
+ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
+
 [dependencies]
 base64 = "0.22"
 chrono = "0.4"

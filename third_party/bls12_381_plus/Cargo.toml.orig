@@ -1,0 +1,128 @@
+[package]
+authors = [
+    "Sean Bowe <ewillbefull@gmail.com>",
+    "Jack Grigg <thestr4d@gmail.com>",
+    "Mike Lodder <redmike7@gmail.com>",
+]
+description = """
+Implementation of the BLS12-381 pairing-friendly elliptic curve construction.
+This is a fork from zkcrypto/bls12_381 but adds hash to curve and multiexponentiation methods
+as well as enables multi-pairing without the allocator requirement.
+"""
+documentation = "https://docs.rs/bls12_381_plus/"
+homepage = "https://github.com/mikelodder7/bls12_381_plus"
+license = "MIT/Apache-2.0"
+name = "bls12_381_plus"
+repository = "https://github.com/mikelodder7/bls12_381_plus"
+version = "0.8.18"
+edition = "2021"
+
+[package.metadata.docs.rs]
+rustdoc-args = [ "--html-in-header", "katex-header.html" ]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dev-dependencies]
+ark-poly = "0.4.2"
+hex = "0.4"
+rand_xorshift = "0.3"
+serde_bare = "0.5"
+serde_json = "1.0"
+sha2 = "0.10"
+sha3 = "0.10"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = "0.5"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[[bench]]
+name = "groups"
+harness = false
+required-features = ["groups"]
+
+[dependencies.elliptic-curve]
+version = "0.13"
+features = ["hash2curve", "hazmat"]
+default-features = false
+
+[dependencies.ff]
+version = "0.13"
+default-features = false
+
+[dependencies.group]
+version = "0.13"
+default-features = false
+optional = true
+
+[dependencies.pairing]
+version = "0.23"
+optional = true
+
+[dependencies.rand_core]
+version = "0.6"
+default-features = false
+
+[dependencies.subtle]
+version = "2.5"
+default-features = false
+
+[dependencies.zeroize]
+version = "1.8"
+default-features = false
+
+[dependencies.serde]
+version = "1.0"
+default-features = false
+features = ["serde_derive"]
+
+[dependencies.hex]
+version = "0.4"
+default-features = false
+
+[dependencies.arrayref]
+version = "0.3"
+
+[dependencies.sha2]
+version = "0.10"
+default-features = false
+
+[dependencies.ark-bls12-381]
+version = "0.4"
+optional = true
+
+[dependencies.ark-ec]
+version = "0.4"
+optional = true
+
+[dependencies.ark-ff]
+version = "0.4"
+optional = true
+
+[dependencies.ark-serialize]
+version = "0.4"
+optional = true
+
+[dependencies.rand]
+version = "0.8"
+optional = true
+
+[dependencies.num-bigint]
+version = "0.4"
+optional = true
+
+[dependencies.num-traits]
+version = "0.2"
+optional = true
+
+[features]
+default = ["groups", "pairings", "alloc", "bits"]
+bits = ["ff/bits"]
+expose-fields = ["groups"]
+groups = ["group"]
+pairings = ["groups", "pairing"]
+alloc = ["group/alloc"]
+ark = ["ark-bls12-381", "ark-ec", "ark-ff", "ark-serialize", "num-bigint", "num-traits", "rand", "std"]
+std = []

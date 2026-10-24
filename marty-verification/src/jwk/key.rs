@@ -1047,13 +1047,13 @@ impl Default for JwkSet {
 /// Generate a new EC P-256 JWK.
 #[cfg(test)]
 pub fn generate_ec_p256() -> VerificationResult<Jwk> {
-    use elliptic_curve::sec1::ToEncodedPoint;
+    use elliptic_curve::sec1::ToSec1Point;
+    use elliptic_curve::Generate;
     use p256::SecretKey;
-    use rand::rngs::OsRng;
 
-    let secret = SecretKey::random(&mut OsRng);
+    let secret = SecretKey::generate();
     let public = secret.public_key();
-    let point = public.to_encoded_point(false);
+    let point = public.to_sec1_point(false);
 
     let x = point
         .x()

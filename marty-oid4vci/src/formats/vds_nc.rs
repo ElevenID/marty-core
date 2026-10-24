@@ -351,9 +351,9 @@ mod tests {
 
     #[test]
     fn prepared_vds_diagnostics_redact_signing_payload() {
-        use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+        use p256::elliptic_curve::sec1::ToSec1Point as _;
 
-        let public_point = p256::AffinePoint::GENERATOR.to_encoded_point(false);
+        let public_point = p256::AffinePoint::GENERATOR.to_sec1_point(false);
         let public_jwk = serde_json::json!({
             "kty": "EC",
             "crv": "P-256",
