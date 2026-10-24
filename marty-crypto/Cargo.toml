@@ -194,6 +194,8 @@ hmac = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.76"
+# Test-only seeded scalar controls require the legacy RNG on browser targets.
+getrandom-legacy = { package = "getrandom", version = "0.2", features = ["js"] }
 
 [[test]]
 name = "cavp_aes_gcm"
