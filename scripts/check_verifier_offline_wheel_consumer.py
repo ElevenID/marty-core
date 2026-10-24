@@ -21,6 +21,7 @@ FIXTURES = (
 )
 OTHER_ED25519_PUBLIC_KEY = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
 ISSUER_KEY_ID = "did:example:issuer#key-1"
+OB3_EVALUATION_TIME = "2026-01-01T00:00:00Z"
 
 
 def deny_network(event: str, _args: tuple[object, ...]) -> None:
@@ -68,6 +69,25 @@ def verify_fixture(
         )
 
 
+def verify_ob3_at_caller_time(
+    verify_at: Callable[[str, str], str], fixtures_dir: Path = FIXTURES
+) -> None:
+    """Smoke-test the installed API; Rust owns signed time-boundary coverage."""
+    request = json.loads(
+        (fixtures_dir / "ob3_verify_request.json").read_text(encoding="utf-8")
+    )
+    result = json.loads(verify_at(json.dumps(request), OB3_EVALUATION_TIME))
+    if result.get("valid") is not True:
+        raise RuntimeError(f"OB3 caller-time fixture was rejected: {result}")
+    try:
+        verify_at(json.dumps(request), "2026-01-01T00:00:00")
+    except ValueError as error:
+        if "evaluation_time must be RFC 3339 with an explicit offset" not in str(error):
+            raise RuntimeError("OB3 caller-time API gave an unexpected error") from error
+    else:
+        raise RuntimeError("OB3 caller-time API accepted a timezone-free timestamp")
+
+
 def require_installed_native(
     public_path: Path, native_path: Path, environment: Path
 ) -> None:
@@ -109,8 +129,9 @@ def main() -> int:
     verify_fixture(
         verifier.open_badge_ob3_verify, "ob3_verify_request.json", args.fixtures_dir
     )
+    verify_ob3_at_caller_time(verifier.open_badge_ob3_verify_at, args.fixtures_dir)
     print(
-        "verifier-offline-wheel-consumer: OB2/OB3 positive, tamper, and wrong-key fixtures passed"
+        "verifier-offline-wheel-consumer: OB2/OB3 positive, tamper, wrong-key, and OB3 caller-time fixtures passed"
     )
     return 0
 

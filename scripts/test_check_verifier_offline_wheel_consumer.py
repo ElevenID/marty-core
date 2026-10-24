@@ -108,5 +108,41 @@ class OfflineWheelConsumerTests(unittest.TestCase):
             probe.verify_fixture(accepts_wrong_key, fixture)
 
 
+    def test_ob3_caller_time_uses_signed_fixture_and_rejects_naive_time(self) -> None:
+        seen: list[tuple[dict, str]] = []
+
+        def fake_verify(raw: str, when: str) -> str:
+            seen.append((json.loads(raw), when))
+            if when == probe.OB3_EVALUATION_TIME:
+                return '{"valid": true}'
+            raise ValueError("evaluation_time must be RFC 3339 with an explicit offset")
+
+        probe.verify_ob3_at_caller_time(fake_verify)
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[0][0], seen[1][0])
+        self.assertEqual(seen[0][1], "2026-01-01T00:00:00Z")
+        self.assertEqual(seen[1][1], "2026-01-01T00:00:00")
+        self.assertIn("proof", seen[0][0]["credential"])
+
+    def test_ob3_caller_time_fails_closed(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "caller-time fixture was rejected"):
+            probe.verify_ob3_at_caller_time(lambda _raw, _when: '{"valid": false}')
+        with self.assertRaisesRegex(RuntimeError, "timezone-free timestamp"):
+            probe.verify_ob3_at_caller_time(lambda _raw, _when: '{"valid": true}')
+
+        def unexpected_error(_raw: str, when: str) -> str:
+            if when == probe.OB3_EVALUATION_TIME:
+                return '{"valid": true}'
+            raise ValueError("unrelated failure")
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected error"):
+            probe.verify_ob3_at_caller_time(unexpected_error)
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(FileNotFoundError):
+                probe.verify_ob3_at_caller_time(
+                    lambda _raw, _when: '{"valid": true}', Path(directory)
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
