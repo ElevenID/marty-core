@@ -46,10 +46,18 @@ Issuance must use a service-level prepare/KMS/assemble flow rather than passing
 private JWK material to this verifier.
 
 ```python
-from marty_verification_py import open_badge_ob3_verify
+import json
+from marty_verification_py import open_badge_ob3_verify_at
 
-result = open_badge_ob3_verify(signed_credential, trusted_issuer_document)
+request = {"credential": signed_credential, "document_store": issuer_documents}
+result = json.loads(open_badge_ob3_verify_at(json.dumps(request), "2026-01-01T00:00:00Z"))
 ```
+
+The explicit-time entry point evaluates OB3 credential validity at the supplied
+RFC 3339 instant. The caller must obtain a trustworthy clock and authenticate
+issuer documents; supplying either value does not make it trusted. The existing
+`open_badge_ob3_verify(request_json)` retains its system-clock behavior. OB2
+expiry semantics are not part of this entry point.
 
 ### MRZ Parsing
 

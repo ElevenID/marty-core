@@ -7,7 +7,11 @@ and certificate operations through Rust FFI.
 
 from importlib.metadata import PackageNotFoundError, version
 
-from ._marty_verification import open_badge_ob2_verify, open_badge_ob3_verify
+from ._marty_verification import (
+    open_badge_ob2_verify,
+    open_badge_ob3_verify,
+    open_badge_ob3_verify_at,
+)
 
 # Try to import ZK verification if available
 try:
@@ -26,6 +30,7 @@ except PackageNotFoundError:
 __all__ = [
     "open_badge_ob2_verify",
     "open_badge_ob3_verify",
+    "open_badge_ob3_verify_at",
 ]
 
 if _has_zkp:

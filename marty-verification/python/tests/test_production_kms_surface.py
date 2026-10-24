@@ -1,5 +1,6 @@
 import marty_verification
 import marty_verification_py
+import pytest
 
 
 def test_production_module_excludes_local_secret_key_operations():
@@ -74,5 +75,19 @@ def test_production_module_excludes_local_secret_key_operations():
         "dtc_verify",
         "open_badge_ob2_verify",
         "open_badge_ob3_verify",
+        "open_badge_ob3_verify_at",
     ):
         assert hasattr(marty_verification, safe_name), safe_name
+
+
+@pytest.mark.parametrize("evaluation_time", ["2030-01-01", "2030-01-01T00:00:00", "not-a-time"])
+def test_explicit_time_requires_rfc3339_with_offset(evaluation_time):
+    with pytest.raises(ValueError, match="evaluation_time must be RFC 3339"):
+        marty_verification_py.open_badge_ob3_verify_at("{}", evaluation_time)
+
+
+@pytest.mark.parametrize("evaluation_time", ["2030-01-01T00:00:00Z", "2030-01-01T01:00:00+01:00"])
+def test_explicit_offset_is_parsed_before_verifying_request(evaluation_time):
+    # A valid clock reaches request parsing; it must not fail the timestamp gate.
+    with pytest.raises(ValueError, match="Invalid OB3 verify request"):
+        marty_verification_py.open_badge_ob3_verify_at("{}", evaluation_time)

@@ -286,6 +286,7 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Open Badges
     m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
+    m.add_function(wrap_pyfunction!(open_badge_ob3_verify_at, m)?)?;
     m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
 
     // DTC helpers (JSON in/out)
