@@ -1241,7 +1241,7 @@ impl PaceCompatibilityHandshake {
             .agree(chip_public_key)?;
         let mut input = zeroize::Zeroizing::new(shared_secret.to_vec());
         input.extend_from_slice(&self.nonce);
-        let digest = zeroize::Zeroizing::new(Sha256::digest(&input));
+        let digest = zeroize::Zeroizing::new(<[u8; 32]>::from(Sha256::digest(&input)));
         let seed = &digest[..16];
         let k_enc = bac_kdf_16(seed, 1)?;
         let k_mac = bac_kdf_16(seed, 2)?;
@@ -1650,7 +1650,7 @@ fn derive_bac_base_keys_inner(mrz: &MrzKeyInfo) -> VerificationResult<BacKeys> {
         )));
     }
 
-    let hash = zeroize::Zeroizing::new(Sha1::digest(mrz_info.as_bytes()));
+    let hash = zeroize::Zeroizing::new(<[u8; 20]>::from(Sha1::digest(mrz_info.as_bytes())));
     let kseed = &hash[..16];
 
     let k_enc = bac_kdf_16(kseed, 1)?;
@@ -1720,7 +1720,7 @@ fn bac_kdf_16(seed: &[u8], counter: u8) -> VerificationResult<[u8; 16]> {
     use sha1::{Digest, Sha1};
     let mut input = zeroize::Zeroizing::new(seed.to_vec());
     input.extend_from_slice(&[0x00, 0x00, 0x00, counter]);
-    let hash = zeroize::Zeroizing::new(Sha1::digest(&input));
+    let hash = zeroize::Zeroizing::new(<[u8; 20]>::from(Sha1::digest(&input)));
     let mut key = [0u8; 16];
     key.copy_from_slice(&hash[..16]);
     adjust_des_parity(&mut key);

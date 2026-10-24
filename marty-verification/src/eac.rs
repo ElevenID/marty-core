@@ -98,18 +98,18 @@ fn generate_ephemeral_keypair_inner(
     algorithm: EacAlgorithm,
 ) -> VerificationResult<(Vec<u8>, Vec<u8>)> {
     use elliptic_curve::sec1::ToSec1Point;
-    use rand::rngs::OsRng;
+    use elliptic_curve::Generate;
 
     match algorithm {
         EacAlgorithm::EcdhP256Sha256 => {
-            let key = p256::SecretKey::random(&mut OsRng);
+            let key = p256::SecretKey::generate();
             Ok((
                 key.to_bytes().to_vec(),
                 key.public_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
         EacAlgorithm::EcdhP384Sha384 => {
-            let key = p384::SecretKey::random(&mut OsRng);
+            let key = p384::SecretKey::generate();
             Ok((
                 key.to_bytes().to_vec(),
                 key.public_key().to_sec1_point(false).as_bytes().to_vec(),

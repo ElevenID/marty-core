@@ -88,7 +88,7 @@ ecdh = [
 ]
 hashing = ["dep:sha1", "dep:sha2"]
 signature-verification = ["ecdsa-verification", "eddsa-verification", "rsa-verification"]
-bbs-verification = ["dep:zkryptium"]
+bbs-verification = ["dep:zkryptium", "dep:getrandom-legacy"]
 x509-parsing = ["hashing"]
 x509 = ["x509-parsing", "signature-verification"]
 crl = ["x509", "dep:pem-rfc7468"]
@@ -226,3 +226,12 @@ required-features = ["kdf", "symmetric"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom-modern = { package = "getrandom", version = "0.4", features = ["wasm_js"], optional = true }
 getrandom-legacy = { package = "getrandom", version = "0.2", features = ["js"], optional = true }
+
+[dev-dependencies]
+bls12_381_plus = { version = "0.8.18", default-features = false, features = ["alloc", "groups"] }
+elliptic-curve-legacy = { package = "elliptic-curve", version = "0.13.8", default-features = false, features = ["hash2curve", "hazmat"] }
+rand = { workspace = true }
+
+[[test]]
+name = "legacy_bigint_compatibility"
+required-features = ["bbs-verification"]
