@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use chrono::{DateTime, Utc};
-use marty_verification::open_badges::{verify_ob3_json, DocumentStore};
+use marty_verification::open_badges::{verify_ob3_json_at, DocumentStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -94,7 +94,7 @@ fn verify(
         "credential": credential,
         "document_store": profile.document_store,
     });
-    let raw = verify_ob3_json(&request.to_string())
+    let raw = verify_ob3_json_at(&request.to_string(), now)
         .map_err(|error| format!("verification could not run: {error}"))?;
     let verification: Value = serde_json::from_str(&raw)
         .map_err(|error| format!("invalid verification result: {error}"))?;
@@ -211,6 +211,30 @@ mod tests {
             Utc.with_ymd_and_hms(2026, 10, 11, 0, 0, 0).unwrap(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn policy_time_boundaries_are_inclusive_from_and_exclusive_until() {
+        let from = Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap();
+        let until = from + chrono::Duration::hours(1);
+        let credential = json!({
+            "validFrom": from.to_rfc3339(),
+            "validUntil": until.to_rfc3339(),
+        });
+        assert!(check_time(
+            &credential,
+            "validFrom",
+            from - chrono::Duration::seconds(1)
+        )
+        .is_err());
+        assert!(check_time(&credential, "validFrom", from).is_ok());
+        assert!(check_time(
+            &credential,
+            "validUntil",
+            until - chrono::Duration::seconds(1)
+        )
+        .is_ok());
+        assert!(check_time(&credential, "validUntil", until).is_err());
     }
 
     #[test]

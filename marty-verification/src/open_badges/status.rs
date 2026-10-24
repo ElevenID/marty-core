@@ -31,6 +31,7 @@ const MAX_STATUS_MESSAGE_CHARS: usize = 1024;
 pub(super) async fn check_credential_status(
     credential: &Value,
     authenticated_status_lists: &[AuthenticatedStatusList],
+    evaluation_time: Option<DateTime<Utc>>,
     errors: &mut Vec<String>,
     error_codes_out: &mut Vec<String>,
     warnings: &mut Vec<String>,
@@ -67,6 +68,7 @@ pub(super) async fn check_credential_status(
                 if let Some(status_check) = check_bitstring_status_entry(
                     status_entry,
                     &status_lists,
+                    evaluation_time,
                     errors,
                     error_codes_out,
                     warnings,
@@ -126,6 +128,7 @@ fn authenticated_list_map<'a>(
 async fn check_bitstring_status_entry(
     status_entry: &Value,
     status_lists: &HashMap<&str, &AuthenticatedStatusList>,
+    evaluation_time: Option<DateTime<Utc>>,
     errors: &mut Vec<String>,
     error_codes_out: &mut Vec<String>,
     warnings: &mut Vec<String>,
@@ -153,7 +156,7 @@ async fn check_bitstring_status_entry(
         return None;
     };
 
-    let now = Utc::now();
+    let now = evaluation_time.unwrap_or_else(Utc::now);
     if authenticated.retrieved_at() > now || authenticated.fresh_until() <= now {
         push_error(
             errors,
@@ -226,8 +229,11 @@ async fn check_bitstring_status_entry(
             return None;
         }
     };
-    let parameters =
+    let mut parameters =
         VerificationParameters::from_resolver(collected.resolver).with_json_ld_loader(loader);
+    if let Some(evaluation_time) = evaluation_time {
+        parameters = parameters.with_date_time(evaluation_time);
+    }
     match secured_status_list.verify(parameters).await {
         Ok(Ok(())) => {}
         Ok(Err(_)) => {
@@ -643,7 +649,11 @@ mod tests {
     use ssi_jwk::JWK;
 
     use super::*;
-    use crate::open_badges::ob3::{verify_ob3_json_async, verify_ob3_json_with_status_lists_async};
+    use crate::open_badges::ob3::{
+        verify_ob3_at_async, verify_ob3_json_async, verify_ob3_json_at_async,
+        verify_ob3_json_with_status_lists_async, verify_ob3_json_with_status_lists_at_async,
+        VerifyOb3Request,
+    };
     use crate::open_badges::types::{
         ArtifactProvenance, AuthenticatedStatusList, DocumentStore, StatusAuthorityProvenance,
     };
@@ -665,6 +675,28 @@ mod tests {
 
     impl Fixture {
         async fn new(purpose: &str, status_size: u8, status_value: u16) -> Self {
+            let now = Utc::now();
+            Self::new_with_windows(
+                purpose,
+                status_size,
+                status_value,
+                now - Duration::minutes(10),
+                now + Duration::hours(1),
+                now - Duration::minutes(10),
+                now + Duration::hours(1),
+            )
+            .await
+        }
+
+        async fn new_with_windows(
+            purpose: &str,
+            status_size: u8,
+            status_value: u16,
+            credential_valid_from: DateTime<Utc>,
+            credential_valid_until: DateTime<Utc>,
+            status_valid_from: DateTime<Utc>,
+            status_valid_until: DateTime<Utc>,
+        ) -> Self {
             let credential_signer = DisposableOpenBao::from_marked_env().create_ed25519();
             let credential_jwk: JWK = serde_json::from_str(credential_signer.public_jwk())
                 .expect("parse remote credential issuer public key");
@@ -675,7 +707,6 @@ mod tests {
                 .expect("parse remote status issuer public key");
             let status_issuer = DIDJWK::generate(&status_jwk).to_string();
             let status_method = DIDJWK::generate_url(&status_jwk).to_string();
-            let now = Utc::now();
 
             let status_entry = status_entry(purpose, status_size);
             let credential = json!({
@@ -686,8 +717,8 @@ mod tests {
                 "id": "https://issuer.example/credentials/1",
                 "type": ["VerifiableCredential", "OpenBadgeCredential"],
                 "issuer": credential_issuer,
-                "validFrom": (now - Duration::minutes(10)).to_rfc3339(),
-                "validUntil": (now + Duration::hours(1)).to_rfc3339(),
+                "validFrom": credential_valid_from.to_rfc3339(),
+                "validUntil": credential_valid_until.to_rfc3339(),
                 "credentialSubject": {
                     "id": "did:example:holder",
                     "type": "AchievementSubject",
@@ -714,8 +745,8 @@ mod tests {
                 "id": LIST_URL,
                 "type": ["VerifiableCredential", "BitstringStatusListCredential"],
                 "issuer": status_issuer,
-                "validFrom": (now - Duration::minutes(10)).to_rfc3339(),
-                "validUntil": (now + Duration::hours(1)).to_rfc3339(),
+                "validFrom": status_valid_from.to_rfc3339(),
+                "validUntil": status_valid_until.to_rfc3339(),
                 "credentialSubject": {
                     "id": "https://status.example/lists/1#list",
                     "type": "BitstringStatusList",
@@ -907,6 +938,167 @@ mod tests {
         result["error_codes"]
             .as_array()
             .is_some_and(|codes| codes.iter().any(|value| value.as_str() == Some(code)))
+    }
+
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
+    fn caller_time_controls_signed_ob3_validity_boundaries() {
+        futures::executor::block_on(async {
+            // Future-dated, signed inputs distinguish the supplied clock from real time.
+            let from = Utc::now() + Duration::days(2);
+            let until = from + Duration::hours(1);
+            let fixture = Fixture::new_with_windows(
+                "revocation",
+                1,
+                0,
+                from,
+                until,
+                from - Duration::hours(1),
+                until + Duration::hours(1),
+            )
+            .await;
+            // Keep the signed credential intact and admit its authenticated status.
+            let authenticated = fixture.authenticated_with(
+                fixture.status_list.clone(),
+                fixture.status_issuer.clone(),
+                from - Duration::hours(1),
+                until + Duration::hours(1),
+            );
+            for (time, valid) in [
+                (from - Duration::seconds(1), false),
+                (from, true),
+                (until - Duration::seconds(1), true),
+                (until, false),
+            ] {
+                let result = result_value(
+                    verify_ob3_json_with_status_lists_at_async(
+                        &fixture.request,
+                        &[authenticated.clone()],
+                        time,
+                    )
+                    .await
+                    .expect("verify signed validity boundary"),
+                );
+                assert_eq!(result["valid"], valid, "{time}: {result:#}");
+                if !valid {
+                    assert!(has_code(&result, error_codes::OPEN_BADGES_PROOF_INVALID));
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
+    fn caller_time_controls_authenticated_status_freshness_boundaries() {
+        futures::executor::block_on(async {
+            let retrieved = Utc::now() + Duration::days(2);
+            let fresh_until = retrieved + Duration::hours(1);
+            let fixture = Fixture::new_with_windows(
+                "revocation",
+                1,
+                0,
+                retrieved - Duration::hours(2),
+                fresh_until + Duration::hours(2),
+                retrieved - Duration::hours(1),
+                fresh_until + Duration::hours(1),
+            )
+            .await;
+            let authenticated = fixture.authenticated_with(
+                fixture.status_list.clone(),
+                fixture.status_issuer.clone(),
+                retrieved,
+                fresh_until,
+            );
+            for (time, valid) in [
+                (retrieved - Duration::seconds(1), false),
+                (retrieved, true),
+                (fresh_until - Duration::seconds(1), true),
+                (fresh_until, false),
+            ] {
+                let result = result_value(
+                    verify_ob3_json_with_status_lists_at_async(
+                        &fixture.request,
+                        &[authenticated.clone()],
+                        time,
+                    )
+                    .await
+                    .expect("verify status freshness boundary"),
+                );
+                assert_eq!(result["valid"], valid, "{time}: {result:#}");
+                if !valid {
+                    assert!(has_code(
+                        &result,
+                        error_codes::OPEN_BADGES_STATUS_CHECK_FAILED
+                    ));
+                }
+            }
+        });
+    }
+
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped status-list signers"]
+    fn caller_time_controls_signed_status_validity_and_no_status_wrappers() {
+        futures::executor::block_on(async {
+            let from = Utc::now() + Duration::days(2);
+            let until = from + Duration::hours(1);
+            let fixture = Fixture::new_with_windows(
+                "revocation",
+                1,
+                0,
+                from - Duration::hours(2),
+                until + Duration::hours(2),
+                from,
+                until,
+            )
+            .await;
+            // Freshness may not outlive signed validity: preserve that fail-closed rule.
+            let authenticated = fixture.authenticated_with(
+                fixture.status_list.clone(),
+                fixture.status_issuer.clone(),
+                from - Duration::hours(1),
+                until,
+            );
+            for (time, valid) in [
+                (from - Duration::seconds(1), false),
+                (from, true),
+                (until - Duration::seconds(1), true),
+                (until, false),
+            ] {
+                let result = result_value(
+                    verify_ob3_json_with_status_lists_at_async(
+                        &fixture.request,
+                        &[authenticated.clone()],
+                        time,
+                    )
+                    .await
+                    .expect("verify signed status validity"),
+                );
+                assert_eq!(result["valid"], valid, "{time}: {result:#}");
+                if !valid {
+                    assert!(has_code(
+                        &result,
+                        error_codes::OPEN_BADGES_STATUS_CHECK_FAILED
+                    ));
+                }
+            }
+            // No-status JSON and typed wrappers must retain status authority checks.
+            let json_result = result_value(
+                verify_ob3_json_at_async(&fixture.request, from)
+                    .await
+                    .unwrap(),
+            );
+            let typed_request: VerifyOb3Request = serde_json::from_str(&fixture.request).unwrap();
+            let typed_result = verify_ob3_at_async(typed_request, from).await.unwrap();
+            assert!(has_code(
+                &json_result,
+                error_codes::OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED
+            ));
+            assert!(!typed_result.valid);
+            assert!(typed_result
+                .error_codes
+                .iter()
+                .any(|code| code == error_codes::OPEN_BADGES_STATUS_AUTHORITY_UNTRUSTED));
+        });
     }
 
     #[test]
@@ -1242,9 +1434,15 @@ mod tests {
             let mut errors = Vec::new();
             let mut codes = Vec::new();
             let mut warnings = Vec::new();
-            let checks =
-                check_credential_status(&credential, &[], &mut errors, &mut codes, &mut warnings)
-                    .await;
+            let checks = check_credential_status(
+                &credential,
+                &[],
+                None,
+                &mut errors,
+                &mut codes,
+                &mut warnings,
+            )
+            .await;
 
             assert!(checks.is_empty());
             assert!(codes.contains(&error_codes::OPEN_BADGES_UNSUPPORTED.to_string()));

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
@@ -30,6 +31,14 @@ pub async fn verify_ob3_json_async(request_json: &str) -> VerificationResult<Str
     verify_ob3_json_with_status_lists_async(request_json, &[]).await
 }
 
+/// Verify at the caller's UTC evaluation instant rather than the system clock.
+pub async fn verify_ob3_json_at_async(
+    request_json: &str,
+    evaluation_time: DateTime<Utc>,
+) -> VerificationResult<String> {
+    verify_ob3_json_with_status_lists_at_async(request_json, &[], evaluation_time).await
+}
+
 /// Verify an Open Badge v3 credential using status lists admitted by a trusted
 /// orchestrator. Untyped documents in `document_store` never establish status
 /// authority on their own.
@@ -47,6 +56,23 @@ pub async fn verify_ob3_json_with_status_lists_async(
     })
 }
 
+/// JSON verification with separately authenticated status lists at one caller-supplied instant.
+pub async fn verify_ob3_json_with_status_lists_at_async(
+    request_json: &str,
+    authenticated_status_lists: &[AuthenticatedStatusList],
+    evaluation_time: DateTime<Utc>,
+) -> VerificationResult<String> {
+    let req: VerifyOb3Request = serde_json::from_str(request_json).map_err(|e| {
+        VerificationError::open_badges(format!("Invalid OB3 verify request: {}", e))
+    })?;
+    let result =
+        verify_ob3_with_status_lists_at_async(req, authenticated_status_lists, evaluation_time)
+            .await?;
+    serde_json::to_string(&result).map_err(|e| {
+        VerificationError::open_badges(format!("Failed to serialize OB3 verify result: {}", e))
+    })
+}
+
 /// Verify an OB3 credential without an intermediate JSON request or response.
 pub async fn verify_ob3_async(
     req: VerifyOb3Request,
@@ -54,11 +80,41 @@ pub async fn verify_ob3_async(
     verify_ob3_with_status_lists_async(req, &[]).await
 }
 
+/// Verify a typed OB3 request at a caller-supplied UTC instant.
+pub async fn verify_ob3_at_async(
+    req: VerifyOb3Request,
+    evaluation_time: DateTime<Utc>,
+) -> VerificationResult<OpenBadgesVerificationResult> {
+    verify_ob3_with_status_lists_at_async(req, &[], evaluation_time).await
+}
+
 /// Verify an OB3 credential with separately authenticated status-list inputs.
 /// Documents in the request's store never establish status authority themselves.
 pub async fn verify_ob3_with_status_lists_async(
     req: VerifyOb3Request,
     authenticated_status_lists: &[AuthenticatedStatusList],
+) -> VerificationResult<OpenBadgesVerificationResult> {
+    verify_ob3_with_status_lists_internal_async(req, authenticated_status_lists, None).await
+}
+
+/// Verify a typed OB3 request and authenticated status lists at one supplied instant.
+pub async fn verify_ob3_with_status_lists_at_async(
+    req: VerifyOb3Request,
+    authenticated_status_lists: &[AuthenticatedStatusList],
+    evaluation_time: DateTime<Utc>,
+) -> VerificationResult<OpenBadgesVerificationResult> {
+    verify_ob3_with_status_lists_internal_async(
+        req,
+        authenticated_status_lists,
+        Some(evaluation_time),
+    )
+    .await
+}
+
+async fn verify_ob3_with_status_lists_internal_async(
+    req: VerifyOb3Request,
+    authenticated_status_lists: &[AuthenticatedStatusList],
+    evaluation_time: Option<DateTime<Utc>>,
 ) -> VerificationResult<OpenBadgesVerificationResult> {
     let credential: AnyCredential = serde_json::from_value(req.credential.clone())
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 credential: {}", e)))?;
@@ -92,8 +148,11 @@ pub async fn verify_ob3_with_status_lists_async(
     );
 
     let loader = open_badges_context_loader()?;
-    let params =
+    let mut params =
         VerificationParameters::from_resolver(collected.resolver).with_json_ld_loader(loader);
+    if let Some(evaluation_time) = evaluation_time {
+        params = params.with_date_time(evaluation_time);
+    }
 
     match credential.verify(params).await {
         Ok(Ok(())) => {}
@@ -114,6 +173,7 @@ pub async fn verify_ob3_with_status_lists_async(
     let status_checks = check_credential_status(
         &req.credential,
         authenticated_status_lists,
+        evaluation_time,
         &mut errors,
         &mut error_codes_out,
         &mut warnings,
@@ -141,6 +201,14 @@ pub fn verify_ob3_json(request_json: &str) -> VerificationResult<String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn verify_ob3_json_at(
+    request_json: &str,
+    evaluation_time: DateTime<Utc>,
+) -> VerificationResult<String> {
+    futures::executor::block_on(verify_ob3_json_at_async(request_json, evaluation_time))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn verify_ob3_json_with_status_lists(
     request_json: &str,
     authenticated_status_lists: &[AuthenticatedStatusList],
@@ -148,6 +216,19 @@ pub fn verify_ob3_json_with_status_lists(
     futures::executor::block_on(verify_ob3_json_with_status_lists_async(
         request_json,
         authenticated_status_lists,
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn verify_ob3_json_with_status_lists_at(
+    request_json: &str,
+    authenticated_status_lists: &[AuthenticatedStatusList],
+    evaluation_time: DateTime<Utc>,
+) -> VerificationResult<String> {
+    futures::executor::block_on(verify_ob3_json_with_status_lists_at_async(
+        request_json,
+        authenticated_status_lists,
+        evaluation_time,
     ))
 }
 
