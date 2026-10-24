@@ -1134,8 +1134,8 @@ impl PaceKeyPair {
             Self::Ephemeral(key) => key.public_key_uncompressed(),
             #[cfg(test)]
             Self::Deterministic(key) => {
-                use elliptic_curve::sec1::ToEncodedPoint;
-                key.public_key().to_encoded_point(false).as_bytes().to_vec()
+                use elliptic_curve::sec1::ToSec1Point;
+                key.public_key().to_sec1_point(false).as_bytes().to_vec()
             }
         }
     }

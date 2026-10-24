@@ -14,6 +14,16 @@ use crate::{CryptoError, CryptoResult};
 /// ```compile_fail
 /// let _ = marty_crypto::ecdsa::generate_p256_keypair();
 /// ```
+///
+/// The selected upstream backend also omits signing APIs:
+///
+/// ```compile_fail
+/// let _: Option<ecdsa_core::SigningKey<p256::NistP256>> = None;
+/// ```
+///
+/// ```compile_fail
+/// let _ = ecdsa_core::hazmat::sign_prehashed::<p256::NistP256>;
+/// ```
 pub struct VerificationOnly;
 
 // ============================================================================
@@ -62,10 +72,8 @@ pub fn verify_p256_sha256(
 
     use sha2::Digest;
     let digest = sha2::Sha256::digest(message);
-    let z = ecdsa_core::hazmat::bits2field::<p256::NistP256>(&digest)
-        .map_err(|_| CryptoError::invalid_signature("ECDSA P-256 digest"))?;
     let public_point = p256::ProjectivePoint::from(*public_key.as_affine());
-    match ecdsa_core::hazmat::verify_prehashed::<p256::NistP256>(&public_point, &z, &sig) {
+    match ecdsa_core::hazmat::verify_prehashed::<p256::NistP256>(&public_point, &digest, &sig) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -113,10 +121,8 @@ pub fn verify_p384_sha384(
 
     use sha2::Digest;
     let digest = sha2::Sha384::digest(message);
-    let z = ecdsa_core::hazmat::bits2field::<p384::NistP384>(&digest)
-        .map_err(|_| CryptoError::invalid_signature("ECDSA P-384 digest"))?;
     let public_point = p384::ProjectivePoint::from(*public_key.as_affine());
-    match ecdsa_core::hazmat::verify_prehashed::<p384::NistP384>(&public_point, &z, &sig) {
+    match ecdsa_core::hazmat::verify_prehashed::<p384::NistP384>(&public_point, &digest, &sig) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -164,10 +170,8 @@ pub fn verify_p521_sha512(
 
     use sha2::Digest;
     let digest = sha2::Sha512::digest(message);
-    let z = ecdsa_core::hazmat::bits2field::<p521::NistP521>(&digest)
-        .map_err(|_| CryptoError::invalid_signature("ECDSA P-521 digest"))?;
     let public_point = p521::ProjectivePoint::from(*public_key.as_affine());
-    match ecdsa_core::hazmat::verify_prehashed::<p521::NistP521>(&public_point, &z, &sig) {
+    match ecdsa_core::hazmat::verify_prehashed::<p521::NistP521>(&public_point, &digest, &sig) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }

@@ -5,7 +5,6 @@
 
 use crate::{CryptoError, CryptoResult};
 use der::{Decode, DecodePem, Encode};
-use elliptic_curve::sec1::FromEncodedPoint;
 use spki::SubjectPublicKeyInfoOwned;
 
 /// Marker documenting the public-key-only codec boundary.
@@ -20,29 +19,23 @@ pub struct PublicKeyOnly;
 /// Convert raw EC public key bytes to SPKI DER format.
 ///
 /// # Arguments
-/// * `raw_key` - Raw public key bytes (65 bytes for P-256/P-384 uncompressed, 32 for Ed25519)
+/// * `raw_key` - Raw public key bytes (65/97 bytes for uncompressed P-256/P-384, 32 for Ed25519)
 /// * `key_type` - One of "EC_P256", "EC_P384", "Ed25519"
 pub fn raw_public_key_to_spki(raw_key: &[u8], key_type: &str) -> CryptoResult<Vec<u8>> {
     match key_type {
         "EC_P256" | "P256" | "secp256r1" => {
-            let point = p256::EncodedPoint::from_bytes(raw_key)
-                .map_err(|e| CryptoError::key_error(format!("Invalid P-256 public key: {}", e)))?;
-            let public_key = p256::PublicKey::from_encoded_point(&point)
-                .into_option()
-                .ok_or_else(|| CryptoError::key_error("Invalid P-256 public key point"))?;
-            use pkcs8::EncodePublicKey;
+            let public_key = p256::PublicKey::from_sec1_bytes(raw_key)
+                .map_err(|e| CryptoError::key_error(format!("Invalid P-256 public key: {e}")))?;
+            use p256::pkcs8::EncodePublicKey;
             let doc = public_key.to_public_key_der().map_err(|e| {
                 CryptoError::encoding_error(format!("Failed to encode SPKI: {}", e))
             })?;
             Ok(doc.as_bytes().to_vec())
         }
         "EC_P384" | "P384" | "secp384r1" => {
-            let point = p384::EncodedPoint::from_bytes(raw_key)
-                .map_err(|e| CryptoError::key_error(format!("Invalid P-384 public key: {}", e)))?;
-            let public_key = p384::PublicKey::from_encoded_point(&point)
-                .into_option()
-                .ok_or_else(|| CryptoError::key_error("Invalid P-384 public key point"))?;
-            use pkcs8::EncodePublicKey;
+            let public_key = p384::PublicKey::from_sec1_bytes(raw_key)
+                .map_err(|e| CryptoError::key_error(format!("Invalid P-384 public key: {e}")))?;
+            use p384::pkcs8::EncodePublicKey;
             let doc = public_key.to_public_key_der().map_err(|e| {
                 CryptoError::encoding_error(format!("Failed to encode SPKI: {}", e))
             })?;

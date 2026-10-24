@@ -15,7 +15,8 @@ marty-crypto = { version = "0.2", default-features = false, features = ["signatu
 
 | Feature | Capability |
 | --- | --- |
-| `signature-verification` | ECDSA, EdDSA, and RSA verification |
+| `signature-verification` | NIST ECDSA, EdDSA, and RSA verification |
+| `secp256k1-verification` | ES256K public verification for JOSE and COSE |
 | `bbs-verification` | BBS signature/proof verification and holder proof generation |
 | `x509` | X.509 parsing and signature verification |
 | `crl` | CRL parsing and verification |

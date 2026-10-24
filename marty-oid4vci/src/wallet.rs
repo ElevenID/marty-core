@@ -1574,7 +1574,7 @@ mod tests {
     fn remote_p256_holder() -> (crate::openbao_transit::ScopedTransitSigner, String) {
         let signer = crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
         let mut multicodec_key = vec![0x80, 0x24];
-        multicodec_key.extend_from_slice(signer.verifying_key().to_encoded_point(true).as_bytes());
+        multicodec_key.extend_from_slice(signer.verifying_key().to_sec1_point(true).as_bytes());
         let did = format!(
             "did:key:z{}",
             crate::proof::base58btc_encode(&multicodec_key)

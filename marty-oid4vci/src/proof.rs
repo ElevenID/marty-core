@@ -5,7 +5,7 @@
 //! only extracting the `kid` header without signature verification.
 
 use base64::Engine;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use serde::Deserialize;
 use ssi_jwk::{Params, JWK};
 
@@ -558,7 +558,7 @@ fn base58btc_decode(input: &str) -> Oid4vciResult<Vec<u8>> {
 fn p256_sec1_to_xy(sec1: &[u8]) -> Oid4vciResult<(Vec<u8>, Vec<u8>)> {
     let pk = p256::PublicKey::from_sec1_bytes(sec1)
         .map_err(|e| Oid4vciError::KeyError(format!("Invalid P-256 SEC1 key in did:key: {e}")))?;
-    let ep = pk.to_encoded_point(false); // false = uncompressed
+    let ep = pk.to_sec1_point(false); // false = uncompressed
     let x = ep
         .x()
         .ok_or_else(|| Oid4vciError::KeyError("P-256: missing x coordinate".into()))?
@@ -806,26 +806,12 @@ fn verify_secp256k1_signature(
     message: &[u8],
     signature: &[u8],
 ) -> Oid4vciResult<bool> {
-    use sha2::Digest as _;
-
-    let public_key = ec_sec1_public_key(params, 32)?;
-    let public_key = k256::PublicKey::from_sec1_bytes(&public_key).map_err(|error| {
-        Oid4vciError::KeyError(format!("Invalid secp256k1 public key: {error}"))
-    })?;
-    let signature = k256::ecdsa::Signature::from_slice(signature).map_err(|error| {
-        Oid4vciError::ProofVerificationFailed(format!("Invalid ES256K signature encoding: {error}"))
-    })?;
-    let digest = sha2::Sha256::digest(message);
-    let z = k256::ecdsa::hazmat::bits2field::<k256::Secp256k1>(&digest).map_err(|error| {
-        Oid4vciError::ProofVerificationFailed(format!(
-            "Could not prepare ES256K signature digest: {error}"
-        ))
-    })?;
-    let public_point = k256::ProjectivePoint::from(*public_key.as_affine());
-    Ok(
-        k256::ecdsa::hazmat::verify_prehashed::<k256::Secp256k1>(&public_point, &z, &signature)
-            .is_ok(),
-    )
+    marty_crypto::secp256k1::verify_sha256(&ec_sec1_public_key(params, 32)?, message, signature)
+        .map_err(|error| {
+            Oid4vciError::ProofVerificationFailed(format!(
+                "Invalid ES256K public key or signature: {error}"
+            ))
+        })
 }
 
 /// Verify an RSA signature (RS256).

@@ -1,5 +1,6 @@
 [workspace]
 members = ["marty-python-adapters", "marty-types", "marty-canonical-digest", "marty-crypto", "marty-crypto-test-support", "marty-emrtd-issuance", "marty-verification", "marty-x509-verification", "marty-headless-verifier", "marty-secure-storage", "marty-biometrics", "marty-iso18013", "marty-zkp", "marty-status", "marty-edge-state", "marty-bindings", "marty-oid4vci", "marty-oid4vci/tests/ui/wasm-serial-probe", "marty-didcomm", "marty-test-wallet"]
+exclude = ["third_party/ecdsa"]
 resolver = "2"
 
 [workspace.package]
@@ -18,13 +19,13 @@ der = { version = "0.7", features = ["pem", "derive"] }
 const-oid = "0.9"
 sha1 = { version = "0.10", features = ["oid"] }
 sha2 = "0.10"
-p256 = { version = "0.13", default-features = false }
-p384 = { version = "0.13", default-features = false }
-p521 = { version = "0.13", default-features = false }
-k256 = { version = "0.13", default-features = false }
-ecdsa = "0.16"
-ecdsa-core = { package = "ecdsa", version = "0.16", default-features = false }
-elliptic-curve = "0.13"
+p256 = { version = "0.14", default-features = false }
+p384 = { version = "0.14", default-features = false }
+p521 = { version = "0.14", default-features = false }
+k256 = { version = "0.14", default-features = false }
+ecdsa = "0.17"
+ecdsa-core = { package = "ecdsa", version = "0.17", default-features = false }
+elliptic-curve = "0.14.1"
 pem-rfc7468 = "0.7"
 signature = "2.0"
 
@@ -164,6 +165,8 @@ inherits = "dev"
 debug = "full"
 
 [patch.crates-io]
+# Shared upstream arithmetic with verification-only module gates; see its patch notes.
+ecdsa = { path = "third_party/ecdsa" }
 # Reviewed KMS-only SSI fork; keep all selected SSI and DID crates on one revision.
 # https://github.com/ElevenID/ssi-elevenid/pull/9
 ssi-bbs = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "584a0d1e2f6a80f92a8483151f6cc6b78b021ad1" }

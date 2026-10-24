@@ -97,7 +97,7 @@ pub fn generate_ephemeral_keypair(
 fn generate_ephemeral_keypair_inner(
     algorithm: EacAlgorithm,
 ) -> VerificationResult<(Vec<u8>, Vec<u8>)> {
-    use elliptic_curve::sec1::ToEncodedPoint;
+    use elliptic_curve::sec1::ToSec1Point;
     use rand::rngs::OsRng;
 
     match algorithm {
@@ -105,14 +105,14 @@ fn generate_ephemeral_keypair_inner(
             let key = p256::SecretKey::random(&mut OsRng);
             Ok((
                 key.to_bytes().to_vec(),
-                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+                key.public_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
         EacAlgorithm::EcdhP384Sha384 => {
             let key = p384::SecretKey::random(&mut OsRng);
             Ok((
                 key.to_bytes().to_vec(),
-                key.public_key().to_encoded_point(false).as_bytes().to_vec(),
+                key.public_key().to_sec1_point(false).as_bytes().to_vec(),
             ))
         }
         EacAlgorithm::EcdhBrainpoolP256r1Sha256 => Err(VerificationError::internal(

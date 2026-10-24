@@ -153,6 +153,16 @@ def check_repository(root: Path = ROOT) -> None:
         "the direct ECDSA primitive dependency must inherit an optional, default-free workspace declaration",
     )
 
+    require(
+        crypto["dependencies"]["k256"] == {"workspace": True, "optional": True}
+        and set(crypto_features["secp256k1-verification"])
+        == {
+            "dep:ecdsa-core", "ecdsa-core/verifying", "ecdsa-core/der", "dep:k256",
+            "k256/arithmetic", "k256/ecdsa-core", "k256/sha256", "dep:sha2",
+        },
+        "shared secp256k1 verification must not restore combined signing support",
+    )
+
     verification_features = verification["features"]
     require(
         set(verification_features["kms-only"])
@@ -196,7 +206,7 @@ def check_repository(root: Path = ROOT) -> None:
     require(
         oid4vci_crypto.get("default-features") is False
         and set(oid4vci_crypto["features"])
-        == {"ecdsa-verification", "eddsa-verification"},
+        == {"ecdsa-verification", "eddsa-verification", "secp256k1-verification"},
         "marty-oid4vci must not transitively restore marty-crypto defaults",
     )
     require(
@@ -214,10 +224,9 @@ def check_repository(root: Path = ROOT) -> None:
         "remote-signature issuer assembly must select signature codecs without signing",
     )
     require(
-        oid4vci["dependencies"]["ecdsa-core"].get("workspace") is True
-        and oid4vci["dependencies"]["ecdsa-core"].get("default-features") is not True
-        and oid4vci["dependencies"]["ecdsa-core"].get("features") == ["verifying"],
-        "OID4VCI ECDSA primitives must remain verification-only",
+        "ecdsa-core" not in oid4vci["dependencies"]
+        and "secp256k1-verification" in oid4vci["dependencies"]["marty-crypto"]["features"],
+        "OID4VCI must delegate ECDSA arithmetic to shared verification-only primitives",
     )
     require(
         workspace_dependencies["k256"].get("default-features") is False

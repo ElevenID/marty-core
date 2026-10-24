@@ -27,6 +27,7 @@ kms-only = []
 ecdsa-verification = [
     "dep:ecdsa-core",
     "ecdsa-core/verifying",
+    "ecdsa-core/der",
     "dep:elliptic-curve",
     "dep:p256",
     "dep:p384",
@@ -44,6 +45,16 @@ ecdsa-verification = [
     "p521/arithmetic",
     "p521/sha512",
     "p521/std",
+]
+secp256k1-verification = [
+    "dep:ecdsa-core",
+    "ecdsa-core/verifying",
+    "ecdsa-core/der",
+    "dep:k256",
+    "k256/arithmetic",
+    "k256/ecdsa-core",
+    "k256/sha256",
+    "dep:sha2",
 ]
 eddsa-verification = ["dep:ed25519-dalek"]
 # Ed448 is an eMRTD algorithm. Marty uses only the backend's public
@@ -70,7 +81,9 @@ ecdh = [
     "dep:x25519-dalek",
     "dep:zeroize",
     "p256/ecdh",
+    "p256/getrandom",
     "p384/ecdh",
+    "p384/getrandom",
     "kdf",
     "symmetric",
 ]
@@ -109,6 +122,7 @@ sha2 = { workspace = true, features = ["compress"], optional = true }
 p256 = { workspace = true, optional = true }
 p384 = { workspace = true, optional = true }
 p521 = { workspace = true, optional = true }
+k256 = { workspace = true, optional = true }
 ecdsa-core = { workspace = true, optional = true }
 elliptic-curve = { workspace = true, optional = true }
 pem-rfc7468 = { workspace = true, optional = true }

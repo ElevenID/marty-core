@@ -102,7 +102,9 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
         def mutated_manifest(path):
             manifest = load_toml(path)
             if path == ROOT / "marty-oid4vci" / "Cargo.toml":
-                manifest["dependencies"]["ecdsa-core"]["features"].append("signing")
+                manifest["dependencies"]["ecdsa-core"] = {
+                    "workspace": True, "features": ["signing"]
+                }
             return manifest
 
         with patch(

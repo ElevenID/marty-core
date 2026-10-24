@@ -13,7 +13,7 @@
 //! - TLS key exchange
 //! - Secure messaging in mDL and Verifiable Credentials
 
-use elliptic_curve::sec1::ToEncodedPoint;
+use elliptic_curve::{sec1::ToSec1Point, Generate};
 use p256::{
     ecdh::diffie_hellman as p256_dh, PublicKey as P256PublicKey, SecretKey as P256SecretKey,
 };
@@ -157,20 +157,20 @@ pub struct P256KeyPair {
 impl P256KeyPair {
     /// Generate a new random P-256 key pair.
     pub fn generate() -> Self {
-        let secret = P256SecretKey::random(&mut OsRng);
+        let secret = P256SecretKey::generate();
         Self { secret }
     }
 
     /// Get the public key in uncompressed SEC1 format (65 bytes: 04 || x || y).
     pub fn public_key_uncompressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(false).as_bytes().to_vec()
+        public.to_sec1_point(false).as_bytes().to_vec()
     }
 
     /// Get the public key in compressed SEC1 format (33 bytes: 02/03 || x).
     pub fn public_key_compressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(true).as_bytes().to_vec()
+        public.to_sec1_point(true).as_bytes().to_vec()
     }
 
     /// Perform ECDH key agreement.
@@ -221,20 +221,20 @@ pub struct P384KeyPair {
 impl P384KeyPair {
     /// Generate a new random P-384 key pair.
     pub fn generate() -> Self {
-        let secret = P384SecretKey::random(&mut OsRng);
+        let secret = P384SecretKey::generate();
         Self { secret }
     }
 
     /// Get the public key in uncompressed SEC1 format (97 bytes).
     pub fn public_key_uncompressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(false).as_bytes().to_vec()
+        public.to_sec1_point(false).as_bytes().to_vec()
     }
 
     /// Get the public key in compressed SEC1 format (49 bytes).
     pub fn public_key_compressed(&self) -> Vec<u8> {
         let public = self.secret.public_key();
-        public.to_encoded_point(true).as_bytes().to_vec()
+        public.to_sec1_point(true).as_bytes().to_vec()
     }
 
     /// Perform ECDH key agreement.
