@@ -76,6 +76,28 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         check_repository()
 
+    def test_ed448_upgrade_cannot_restore_backend_private_key_modules(self) -> None:
+        for feature in ("default", "signing", "kex", "pkcs8", "std"):
+            with self.subTest(feature=feature):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "Cargo.toml":
+                        backend = manifest["workspace"]["dependencies"][
+                            "ed448-goldilocks-plus"
+                        ]
+                        if feature == "default":
+                            backend["default-features"] = True
+                        else:
+                            backend["features"].append(feature)
+                    return manifest
+
+                with patch(
+                    "check_verification_feature_boundary.load_toml",
+                    side_effect=mutated_manifest,
+                ):
+                    with self.assertRaisesRegex(ValueError, "Ed448 verification"):
+                        check_repository()
+
     def test_oid4vci_ecdsa_primitive_cannot_restore_signing(self) -> None:
         def mutated_manifest(path):
             manifest = load_toml(path)

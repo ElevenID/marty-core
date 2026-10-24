@@ -48,7 +48,7 @@ ecdsa-verification = [
 eddsa-verification = ["dep:ed25519-dalek"]
 # Ed448 is an eMRTD algorithm. Marty uses only the backend's public
 # curve/scalar types and does not enable its combined signing module.
-ed448-verification = ["dep:ed448-goldilocks-plus"]
+ed448-verification = ["dep:ed448-goldilocks-plus", "dep:shake"]
 rsa-verification = ["dep:rsa", "dep:sha2"]
 # Legacy ICAO algorithms stay first-class for eMRTD artifacts, but are absent
 # from unrelated verifier/session builds unless this capability is selected.
@@ -141,6 +141,7 @@ x25519-dalek = { workspace = true, optional = true }
 
 # Ed448
 ed448-goldilocks-plus = { workspace = true, optional = true }
+shake = { workspace = true, optional = true }
 
 # Time
 chrono = { workspace = true }

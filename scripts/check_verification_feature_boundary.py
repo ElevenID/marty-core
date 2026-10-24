@@ -99,6 +99,17 @@ def check_repository(root: Path = ROOT) -> None:
         "workspace Ed25519 dependencies must not globally enable key codecs or generation",
     )
 
+    ed448 = workspace_dependencies["ed448-goldilocks-plus"]
+    require(
+        ed448.get("default-features") is False
+        and ed448.get("features") == ["zeroize"]
+        and crypto["dependencies"]["ed448-goldilocks-plus"]
+        == {"workspace": True, "optional": True}
+        and set(crypto["features"]["ed448-verification"])
+        == {"dep:ed448-goldilocks-plus", "dep:shake"},
+        "Ed448 verification must enable only public arithmetic and zeroization, without signing or key exchange",
+    )
+
     crypto_features = crypto["features"]
     require(
         crypto_features["default"] == [],
