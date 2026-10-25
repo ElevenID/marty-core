@@ -39,7 +39,7 @@ const ATTESTATION_JWT_LIMITS: CompactJwtLimits = CompactJwtLimits {
 pub struct VerifiedProof {
     /// The holder's DID or key identifier (from JWT `kid` header or `iss` claim).
     pub holder_id: String,
-    /// The JWK from the proof (if provided via `jwk` header).
+    /// The public JWK verified from the header or a self-certifying key reference.
     pub holder_jwk: Option<JWK>,
     /// The c_nonce that was proven.
     pub nonce: Option<String>,
@@ -623,6 +623,65 @@ fn resolve_did_key_to_jwk(kid: &str) -> Oid4vciResult<(String, Option<JWK>)> {
     Ok((did.to_string(), Some(jwk)))
 }
 
+/// Resolve the single public key in a did:jwk DID or its #0 verification method.
+/// https://github.com/quartzjer/did-jwk/blob/main/spec.md
+fn resolve_did_jwk_to_jwk(identifier: &str) -> Oid4vciResult<(String, Option<JWK>)> {
+    let (did, fragment) = identifier
+        .split_once('#')
+        .map_or((identifier, None), |(did, fragment)| (did, Some(fragment)));
+    if fragment.is_some_and(|fragment| fragment != "0") {
+        return Err(Oid4vciError::ProofVerificationFailed(
+            "did:jwk has only the #0 verification method".into(),
+        ));
+    }
+    let encoded = did
+        .strip_prefix("did:jwk:")
+        .ok_or_else(|| Oid4vciError::ProofVerificationFailed("Not a did:jwk identifier".into()))?;
+    let bytes = decode_segment(
+        encoded,
+        marty_crypto::jwk::MAX_PUBLIC_JWK_JSON_BYTES,
+        "did:jwk public key is not canonical base64url",
+        "did:jwk public key exceeds its size limit",
+    )
+    .map_err(|message| Oid4vciError::ProofVerificationFailed(message.into()))?;
+    let invalid_key = || {
+        Oid4vciError::ProofVerificationFailed(
+            "did:jwk must contain a valid public signing JWK".into(),
+        )
+    };
+    let json = std::str::from_utf8(&bytes).map_err(|_| invalid_key())?;
+    // Reuse the public-only bounded parser: reject private members, duplicate
+    // JSON keys and oversized/deep extension values without echoing key input.
+    let public = marty_crypto::jwk::PublicJwk::from_json(json).map_err(|_| invalid_key())?;
+    if public.use_.as_deref().is_some_and(|usage| usage != "sig")
+        || public
+            .key_ops
+            .as_ref()
+            .is_some_and(|operations| !operations.iter().any(|operation| operation == "verify"))
+    {
+        return Err(invalid_key());
+    }
+    let jwk: JWK = serde_json::from_str(&public.to_json().map_err(|_| invalid_key())?)
+        .map_err(|_| invalid_key())?;
+    if jwk_has_private_material(&jwk) {
+        return Err(invalid_key());
+    }
+    Ok((did.to_owned(), Some(jwk)))
+}
+
+fn resolve_self_certifying_holder_key(identifier: &str) -> Oid4vciResult<(String, Option<JWK>)> {
+    if identifier.starts_with("did:key:z") {
+        resolve_did_key_to_jwk(identifier)
+    } else if identifier.starts_with("did:jwk:") {
+        resolve_did_jwk_to_jwk(identifier)
+    } else {
+        Err(Oid4vciError::ProofVerificationFailed(
+            "Proof key reference cannot be resolved locally; provide an embedded public JWK, did:key or did:jwk verification method"
+                .into(),
+        ))
+    }
+}
+
 /// Extract the holder's identity and optional JWK from the proof header.
 fn extract_holder_key(header: &ProofHeader) -> Oid4vciResult<(String, Option<JWK>)> {
     match (&header.kid, &header.jwk) {
@@ -647,18 +706,16 @@ fn extract_holder_key(header: &ProofHeader) -> Oid4vciResult<(String, Option<JWK
 
             Ok((public_jwk_holder_id(&jwk)?, Some(jwk)))
         }
-        // kid only — resolve did:key locally.  Other DID methods require a
+        // kid only — resolve self-certifying keys locally. Other DID methods require a
         // trusted resolver and verification-method authorization supplied by
         // the caller; accepting them here would skip signature verification.
         (Some(kid), None) => {
-            if kid.contains("did:key:z") {
-                resolve_did_key_to_jwk(kid)
-            } else {
-                Err(Oid4vciError::ProofVerificationFailed(format!(
-                    "Proof JWT kid '{}' cannot be resolved locally; provide an embedded public JWK or a did:key verification method",
-                    kid
-                )))
+            if kid.starts_with("did:jwk:") && !kid.ends_with("#0") {
+                return Err(Oid4vciError::ProofVerificationFailed(
+                    "did:jwk proof kid must identify the #0 verification method".into(),
+                ));
             }
+            resolve_self_certifying_holder_key(kid)
         }
         // Neither kid nor jwk
         (None, None) => Err(Oid4vciError::ProofVerificationFailed(
@@ -675,11 +732,11 @@ fn verified_holder_id(
     let Some(client_id) = client_id else {
         return Ok(derived_holder_id.to_string());
     };
-    if !client_id.starts_with("did:key:z") {
+    if !client_id.starts_with("did:key:z") && !client_id.starts_with("did:jwk:") {
         return Ok(derived_holder_id.to_string());
     }
 
-    let (client_did, client_jwk) = resolve_did_key_to_jwk(client_id)?;
+    let (client_did, client_jwk) = resolve_self_certifying_holder_key(client_id)?;
     let client_jwk = client_jwk.ok_or_else(|| {
         Oid4vciError::ProofVerificationFailed(
             "Self-certifying proof client_id did not resolve to key material".into(),
@@ -1078,6 +1135,156 @@ mod tests {
 
         let error = verify_jwt_proof("invalid-proof", "", None, -1).unwrap_err();
         assert!(error.to_string().contains("must be nonnegative"));
+    }
+
+    fn did_jwk_for_public_key(jwk: &serde_json::Value) -> String {
+        format!("did:jwk:{}", B64.encode(serde_json::to_vec(jwk).unwrap()))
+    }
+
+    fn did_jwk_public_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "kty":"EC", "crv":"P-256",
+            "x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+            "y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+            "kid":"ignored-jwk-metadata-kid", "use":"sig", "key_ops":["verify"],
+        })
+    }
+
+    #[test]
+    fn did_jwk_resolution_enforces_the_single_signing_verification_method() {
+        let public = did_jwk_public_fixture();
+        let did = did_jwk_for_public_key(&public);
+        let (holder, jwk) = resolve_did_jwk_to_jwk(&format!("{did}#0")).unwrap();
+        assert_eq!(holder, did);
+        assert_eq!(
+            jwk.unwrap().thumbprint().unwrap(),
+            serde_json::from_value::<JWK>(public.clone())
+                .unwrap()
+                .thumbprint()
+                .unwrap()
+        );
+        for suffix in [
+            "#1",
+            "#",
+            "#00",
+            "#ignored-jwk-metadata-kid",
+            "#0#0",
+            "?version=1#0",
+            "/key#0",
+        ] {
+            assert!(resolve_did_jwk_to_jwk(&format!("{did}{suffix}")).is_err());
+        }
+        for patch in [
+            serde_json::json!({"use":"enc"}),
+            serde_json::json!({"key_ops":["encrypt"]}),
+        ] {
+            let mut key = public.clone();
+            key.as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            assert!(resolve_did_jwk_to_jwk(&did_jwk_for_public_key(&key)).is_err());
+        }
+        let header = ProofHeader {
+            alg: "ES256".into(),
+            kid: Some(did),
+            jwk: None,
+            typ: Some("openid4vci-proof+jwt".into()),
+            key_attestation: None,
+        };
+        assert!(
+            extract_holder_key(&header).is_err(),
+            "a proof kid must reference #0"
+        );
+    }
+
+    #[test]
+    fn did_jwk_resolution_rejects_private_and_ambiguous_json_without_echoing_input() {
+        for member in ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            let mut public = did_jwk_public_fixture();
+            public[member] = serde_json::json!("secret-sentinel");
+            let error = resolve_did_jwk_to_jwk(&did_jwk_for_public_key(&public)).unwrap_err();
+            assert!(!error.to_string().contains("secret-sentinel"));
+        }
+        let duplicate = br#"{"kty":"EC","kty":"OKP","crv":"Ed25519","x":"secret-sentinel"}"#;
+        let error =
+            resolve_did_jwk_to_jwk(&format!("did:jwk:{}", B64.encode(duplicate))).unwrap_err();
+        assert!(!error.to_string().contains("secret-sentinel"));
+        for encoded in ["not+base64", "a", "e30=", "", "_w"] {
+            assert!(resolve_did_jwk_to_jwk(&format!("did:jwk:{encoded}")).is_err());
+        }
+        let oversized = vec![b'x'; marty_crypto::jwk::MAX_PUBLIC_JWK_JSON_BYTES + 1];
+        let error =
+            resolve_did_jwk_to_jwk(&format!("did:jwk:{}", B64.encode(oversized))).unwrap_err();
+        assert!(error.to_string().contains("size limit"));
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
+    fn did_jwk_proof_verifies_kms_signature_and_preserves_the_verified_holder_key() {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
+        let public = embedded_p256_jwk(&signer);
+        let did = did_jwk_for_public_key(&public);
+        for key_header in [
+            serde_json::json!({"kid":format!("{did}#0")}),
+            serde_json::json!({"jwk":public}),
+        ] {
+            let mut header = serde_json::json!({"alg":"ES256","typ":"openid4vci-proof+jwt"});
+            header
+                .as_object_mut()
+                .unwrap()
+                .extend(key_header.as_object().unwrap().clone());
+            let proof = sign_test_p256_proof(
+                &signer,
+                header,
+                serde_json::json!({
+                    "iss":did, "aud":"https://issuer.example", "nonce":"nonce-did-jwk",
+                    "iat":chrono::Utc::now().timestamp(),
+                }),
+            );
+            let verified =
+                verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-did-jwk"), 300)
+                    .unwrap();
+            assert_eq!(verified.holder_id, did);
+            assert!(
+                verified.holder_jwk.is_some(),
+                "mDL device binding needs the verified public key"
+            );
+            assert_eq!(verified.nonce.as_deref(), Some("nonce-did-jwk"));
+            assert!(
+                verify_jwt_proof(&proof, "https://issuer.example", Some("wrong-nonce"), 300)
+                    .is_err()
+            );
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit"]
+    fn did_jwk_proof_rejects_wrong_signer_and_mismatched_self_certifying_client_id() {
+        let signer = DisposableOpenBao::from_marked_env().create_es256();
+        let other = DisposableOpenBao::from_marked_env().create_es256();
+        let did = did_jwk_for_public_key(&embedded_p256_jwk(&signer));
+        let other_did = did_jwk_for_public_key(&embedded_p256_jwk(&other));
+        let header = serde_json::json!({"alg":"ES256","typ":"openid4vci-proof+jwt","kid":format!("{did}#0")});
+        let payload = serde_json::json!({"iss":did,"aud":"https://issuer.example","nonce":"nonce-did-jwk","iat":chrono::Utc::now().timestamp()});
+        let wrong_signer = sign_test_p256_proof(&other, header.clone(), payload.clone());
+        assert!(verify_jwt_proof(
+            &wrong_signer,
+            "https://issuer.example",
+            Some("nonce-did-jwk"),
+            300
+        )
+        .is_err());
+        let mut wrong_client = payload;
+        wrong_client["iss"] = serde_json::json!(other_did);
+        let proof = sign_test_p256_proof(&signer, header, wrong_client);
+        assert!(
+            verify_jwt_proof(&proof, "https://issuer.example", Some("nonce-did-jwk"), 300)
+                .unwrap_err()
+                .to_string()
+                .contains("does not identify the verified proof key")
+        );
     }
 
     #[test]

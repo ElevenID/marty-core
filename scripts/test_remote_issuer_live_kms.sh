@@ -23,13 +23,21 @@ if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
   # chain/hostname; tolerate only unavailable revocation distribution points.
   curl_options+=(--ssl-revoke-best-effort)
 fi
-trap 'docker rm -f "$name" >/dev/null 2>&1 || true; rm -f "$ca_cert"' EXIT
+container_id=''
+cleanup() {
+  if [[ -n "$container_id" ]]; then
+    docker rm -f "$container_id" >/dev/null 2>&1 || true
+  fi
+  rm -f "$ca_cert"
+}
+trap cleanup EXIT
 
-docker run --rm -d --name "$name" \
+container_id="$(docker run --rm -d --name "$name" \
   --tmpfs /tmp/certs:mode=0777 \
   -e "BAO_DEV_ROOT_TOKEN_ID=$token" \
   -p 127.0.0.1::8200 \
-  "$image" server -dev-tls -dev-tls-cert-dir=/tmp/certs '-dev-listen-address=:8200' >/dev/null
+  "$image" server -dev-tls -dev-tls-cert-dir=/tmp/certs '-dev-listen-address=:8200')"
+[[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid owned disposable container ID' >&2; exit 1; }
 
 binding="$(docker port "$name" 8200/tcp | tr -d '\r')"
 [[ "$binding" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid disposable loopback binding' >&2; exit 1; }
@@ -86,6 +94,18 @@ elif [[ "$cargo" == *.exe ]]; then
   # executables unless they are named in WSLENV. This is local probe wiring;
   # Linux CI continues to use its native cargo and inherited environment.
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
+fi
+if [[ "${MARTY_TEST_DID_JWK_ONLY:-0}" == '1' ]]; then
+  proof_test() {
+    "$cargo" test --locked --offline -j2 -p marty-oid4vci --no-default-features \
+      --features "$features" --lib "$1" -- --include-ignored "${@:2}"
+  }
+  proof_test proof::tests::did_jwk_
+  proof_test proof::tests::test_extract_holder_key_from_kid --exact
+  proof_test proof::tests::test_non_self_resolving_kid_cannot_bypass_signature_verification --exact
+  proof_test proof::tests::test_mismatched_self_certifying_client_id_is_rejected --exact
+  proof_test proof::tests::test_iss_client_id_cannot_replace_cryptographic_holder_identity --exact
+  exit 0
 fi
 if [[ "${MARTY_TEST_HOLDER_SIGNING_BINARIES_ONLY:-0}" == '1' ]]; then
   "$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
