@@ -1158,6 +1158,7 @@ class CorePreflightSplitContractTests(unittest.TestCase):
                 "cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings",
                 "cargo test --locked -p marty-oid4vci --no-default-features --lib",
                 "cargo test --locked -p marty-oid4vci --lib",
+                "cargo test --locked -p marty-oid4vci --no-default-features --features kms-only,wallet --lib",
                 "cargo test --locked -p marty-crypto --no-default-features --features signature-verification ed448_requires_explicit_verification_capability",
                 "cargo test --locked -p marty-crypto --no-default-features --features ed448-verification ed448::tests",
                 "cargo test --locked -p marty-emrtd-issuance",
