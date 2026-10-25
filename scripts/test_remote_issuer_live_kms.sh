@@ -96,6 +96,8 @@ elif [[ "$cargo" == *.exe ]]; then
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
 fi
 if [[ "${MARTY_TEST_DID_JWK_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked --offline -j2 -p marty-crypto --no-default-features \
+    --features kms-only --lib public_jwk::tests
   proof_test() {
     "$cargo" test --locked --offline -j2 -p marty-oid4vci --no-default-features \
       --features "$features" --lib "$1" -- --include-ignored "${@:2}"

@@ -639,7 +639,7 @@ fn resolve_did_jwk_to_jwk(identifier: &str) -> Oid4vciResult<(String, Option<JWK
         .ok_or_else(|| Oid4vciError::ProofVerificationFailed("Not a did:jwk identifier".into()))?;
     let bytes = decode_segment(
         encoded,
-        marty_crypto::jwk::MAX_PUBLIC_JWK_JSON_BYTES,
+        marty_crypto::public_jwk::MAX_PUBLIC_JWK_JSON_BYTES,
         "did:jwk public key is not canonical base64url",
         "did:jwk public key exceeds its size limit",
     )
@@ -652,7 +652,7 @@ fn resolve_did_jwk_to_jwk(identifier: &str) -> Oid4vciResult<(String, Option<JWK
     let json = std::str::from_utf8(&bytes).map_err(|_| invalid_key())?;
     // Reuse the public-only bounded parser: reject private members, duplicate
     // JSON keys and oversized/deep extension values without echoing key input.
-    let public = marty_crypto::jwk::PublicJwk::from_json(json).map_err(|_| invalid_key())?;
+    let public = marty_crypto::public_jwk::PublicJwk::from_json(json).map_err(|_| invalid_key())?;
     if public.use_.as_deref().is_some_and(|usage| usage != "sig")
         || public
             .key_ops
@@ -1212,7 +1212,7 @@ mod tests {
         for encoded in ["not+base64", "a", "e30=", "", "_w"] {
             assert!(resolve_did_jwk_to_jwk(&format!("did:jwk:{encoded}")).is_err());
         }
-        let oversized = vec![b'x'; marty_crypto::jwk::MAX_PUBLIC_JWK_JSON_BYTES + 1];
+        let oversized = vec![b'x'; marty_crypto::public_jwk::MAX_PUBLIC_JWK_JSON_BYTES + 1];
         let error =
             resolve_did_jwk_to_jwk(&format!("did:jwk:{}", B64.encode(oversized))).unwrap_err();
         assert!(error.to_string().contains("size limit"));

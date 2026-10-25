@@ -36,7 +36,7 @@ mso_mdoc = ["dep:isomdl"] # ISO 18013-5 mDoc format; issuer adds planning
 zk_mdoc = ["dep:marty-zkp", "dep:marty-iso18013"]  # ZK proof verification; issuance additionally selects issuer,mso_mdoc
 
 [dependencies]
-marty-crypto = { workspace = true, default-features = false, features = ["ecdsa-verification", "eddsa-verification", "secp256k1-verification", "jwk"] }
+marty-crypto = { workspace = true, default-features = false, features = ["ecdsa-verification", "eddsa-verification", "secp256k1-verification"] }
 marty-iso18013 = { workspace = true, default-features = false, features = ["verifier"], optional = true }
 
 # Serialization
