@@ -54,6 +54,7 @@ pub mod jwk;
 pub mod kdf;
 #[cfg(feature = "ocsp")]
 pub mod ocsp;
+pub mod public_jwk;
 #[cfg(feature = "rsa-verification")]
 pub mod rsa;
 #[cfg(feature = "secp256k1-verification")]
