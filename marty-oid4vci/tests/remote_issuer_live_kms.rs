@@ -860,6 +860,137 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
 
 #[test]
 #[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn verified_wallet_selects_only_requested_flat_or_w3c_subject_disclosures() {
+    let (client, base, root_token) = disposable_openbao();
+    let issuer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let unrelated_holder = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let resolver = PublicIssuerResolver {
+        key: ResolvedSdJwtIssuerKey::new(
+            ISSUER_DID,
+            Some(issuer.kid_url()),
+            SigningAlgorithm::ES256,
+            issuer.public_jwk.clone(),
+        ),
+    };
+
+    for (format, nested) in [
+        (CredentialPayloadFormat::IetfSdJwt, false),
+        (CredentialPayloadFormat::W3cVcdmV2SdJwt, true),
+    ] {
+        let mut submitted = claims(format);
+        submitted.credential_type = "SelectiveDisclosureCredential".into();
+        submitted.expiration_seconds = None;
+        submitted.claims = HashMap::from([
+            ("email".into(), json!("member@example.com")),
+            ("secret_role".into(), json!("unrequested-role")),
+            ("public_label".into(), json!("member")),
+        ]);
+        submitted.selective_disclosure_claims = vec!["email".into(), "secret_role".into()];
+        // W3C claim maps become credentialSubject. The holder binding must be
+        // an explicit root protocol field, not an ordinary subject `cnf` claim.
+        let prepared = prepare_sd_jwt_with_options(
+            &issuer,
+            &submitted,
+            SdJwtPreparationOptions {
+                confirmation: Some(json!({
+                    "jwk": serde_json::from_str::<Value>(&holder.public_jwk).unwrap()
+                })),
+                ..SdJwtPreparationOptions::default()
+            },
+        )
+        .unwrap();
+        let signature = issuer.sign(prepared.signing_payload()).unwrap();
+        let SignedCredential::SdJwt { compact, .. } =
+            assemble_sd_jwt(prepared, &signature).unwrap()
+        else {
+            panic!("expected remotely signed SD-JWT")
+        };
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let audience = "https://verifier.example";
+        let prepare = |credential: &str, names: &[String], public_jwk: &str| {
+            WalletEngine::new().prepare_verified_sd_jwt_presentation(
+                credential, names, &nonce, audience, public_jwk, &resolver,
+            )
+        };
+        let present = |names: &[String]| {
+            let prepared = prepare(&compact, names, &holder.public_jwk).unwrap();
+            let signature = holder.sign(prepared.signing_input()).unwrap();
+            let presentation = prepared.complete(&signature).unwrap();
+            verify_sd_jwt(
+                &presentation,
+                &issuer.public_jwk,
+                Some(audience.into()),
+                Some(nonce.clone()),
+            )
+            .unwrap()
+        };
+
+        let selected = present(&["email".into()]);
+        let selected_claims = if nested {
+            &selected["credentialSubject"]
+        } else {
+            &selected
+        };
+        assert_eq!(selected_claims["email"], "member@example.com");
+        assert_eq!(selected_claims["public_label"], "member");
+        assert!(selected_claims.get("secret_role").is_none());
+        let undisclosed = present(&[]);
+        let undisclosed_claims = if nested {
+            &undisclosed["credentialSubject"]
+        } else {
+            &undisclosed
+        };
+        assert!(undisclosed_claims.get("email").is_none());
+        assert!(undisclosed_claims.get("secret_role").is_none());
+
+        let holder_calls = holder.payloads.lock().unwrap().len();
+        assert!(prepare(&compact, &["missing".into()], &holder.public_jwk).is_err());
+        assert!(prepare(&compact, &["email".into()], &unrelated_holder.public_jwk).is_err());
+        let (jws, suffix) = compact.split_once('~').unwrap();
+        let mut parts = jws.split('.').map(str::to_owned).collect::<Vec<_>>();
+        let replacement = if parts[2].starts_with('A') { "B" } else { "A" };
+        parts[2].replace_range(..1, replacement);
+        let tampered = format!("{}~{suffix}", parts.join("."));
+        assert!(prepare(&tampered, &["email".into()], &holder.public_jwk).is_err());
+
+        if nested {
+            let decoy = resign_sd_jwt_with_remote_issuer(&compact, &issuer, |_, payload| {
+                payload["missing"] = json!("top-level decoy must not satisfy a subject request");
+            });
+            assert!(prepare(&decoy, &["missing".into()], &holder.public_jwk).is_err());
+            for malformed in [Value::Null, json!([]), json!("not-an-object")] {
+                let malformed =
+                    resign_sd_jwt_with_remote_issuer(&compact, &issuer, |_, payload| {
+                        payload["credentialSubject"] = malformed;
+                    });
+                assert!(prepare(&malformed, &["email".into()], &holder.public_jwk).is_err());
+            }
+        }
+        assert_eq!(holder.payloads.lock().unwrap().len(), holder_calls);
+    }
+}
+
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
 fn issuer_formats_use_remote_non_exportable_keys() {
     let (client, base, root_token) = disposable_openbao();
     let es256 = create_signer(

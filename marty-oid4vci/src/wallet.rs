@@ -836,6 +836,10 @@ impl WalletEngine {
     /// the supplied public JWK before comparing it with the verified `cnf.jwk`.
     /// The returned object contains the exact signing input for a KMS, secure
     /// enclave, or platform keystore; this crate never accepts the private key.
+    /// Requested claim names are literal names inside an object-valued signed
+    /// `credentialSubject`, or top-level names when that member is absent. They
+    /// are not JSONPaths. A non-object subject or missing requested claim fails
+    /// closed; an empty request selects no optional disclosures.
     pub fn prepare_verified_sd_jwt_presentation(
         &self,
         credential: &str,
