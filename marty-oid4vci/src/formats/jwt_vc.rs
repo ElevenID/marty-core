@@ -121,6 +121,9 @@ pub struct JwtVcPreparationOptions {
     pub credential_subject: Option<serde_json::Value>,
     /// Optional VCDM credential status object.
     pub credential_status: Option<serde_json::Value>,
+    /// Human-readable VCDM credential display from a validated issuer profile.
+    pub credential_name: Option<String>,
+    pub credential_description: Option<String>,
     /// Bind the JWT `sub` claim to `CredentialClaims::subject_id`.
     pub include_subject_claim: bool,
     /// Include the credential identifier inside the VCDM object.
@@ -136,6 +139,8 @@ impl Default for JwtVcPreparationOptions {
             credential_id: None,
             credential_subject: None,
             credential_status: None,
+            credential_name: None,
+            credential_description: None,
             include_subject_claim: true,
             include_vc_id: true,
             include_nbf: false,
@@ -222,6 +227,15 @@ pub fn apply_open_badge_v3_profile(
     ensure_required_type(achievement_object, "Achievement", "achievement")?;
     merge_required_string(achievement_object, "name", legacy_name)?;
     merge_required_string(achievement_object, "description", legacy_description)?;
+    // The achievement owns the authoritative labels. Mirror them only after
+    // profile validation into the optional signed credential display fields.
+    let credential_name =
+        require_non_empty_string(achievement_object.get("name"), "achievement name")?.to_owned();
+    let credential_description = require_non_empty_string(
+        achievement_object.get("description"),
+        "achievement description",
+    )?
+    .to_owned();
     if let Some(criteria) = legacy_criteria {
         if achievement_object
             .insert("criteria".into(), criteria)
@@ -246,6 +260,8 @@ pub fn apply_open_badge_v3_profile(
     }
     claims.claims.clear();
     options.credential_subject = Some(subject);
+    options.credential_name = Some(credential_name);
+    options.credential_description = Some(credential_description);
     Ok(())
 }
 
@@ -519,6 +535,12 @@ pub fn prepare_jwt_vc_with_options(
         v
     };
     let mut vc = vc;
+    if let Some(ref name) = options.credential_name {
+        vc["name"] = serde_json::json!(name);
+    }
+    if let Some(ref description) = options.credential_description {
+        vc["description"] = serde_json::json!(description);
+    }
     if let Some(ref credential_status) = options.credential_status {
         vc["credentialStatus"] = credential_status.clone();
     }
@@ -854,6 +876,11 @@ mod tests {
         assert_eq!(
             vc["credentialSubject"]["achievement"]["description"],
             "Membership verified by Marty"
+        );
+        assert_eq!(vc["name"], vc["credentialSubject"]["achievement"]["name"]);
+        assert_eq!(
+            vc["description"],
+            vc["credentialSubject"]["achievement"]["description"]
         );
         assert_eq!(
             vc["credentialSubject"]["achievement"]["id"],

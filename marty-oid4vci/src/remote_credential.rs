@@ -413,6 +413,8 @@ pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<Prepa
         credential_id: request.credential_id,
         credential_subject: request.credential_subject,
         credential_status,
+        credential_name: None,
+        credential_description: None,
         include_subject_claim,
         include_vc_id: false,
         include_nbf: true,
@@ -1443,6 +1445,47 @@ mod tests {
         assert_eq!(
             payload["vc"]["credentialStatus"]["type"],
             "BitstringStatusListEntry"
+        );
+        assert!(payload["vc"].get("name").is_none());
+        assert!(payload["vc"].get("description").is_none());
+    }
+
+    #[test]
+    fn remote_open_badge_mirrors_validated_achievement_display_in_signed_input() {
+        let prepared = prepare_remote_jwt_vc(RemoteJwtVcRequest {
+            issuer_id: "did:web:issuer.example".to_owned(),
+            verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+            algorithm: "ES256".to_owned(),
+            issuer_public_jwk: issuer_public_jwk(),
+            subject_id: Some("did:key:holder".to_owned()),
+            credential_type: "open_badge".to_owned(),
+            claims: HashMap::from([
+                (
+                    "achievement_name".to_owned(),
+                    serde_json::json!("Member Badge"),
+                ),
+                (
+                    "achievement_description".to_owned(),
+                    serde_json::json!("Membership badge"),
+                ),
+            ]),
+            expiration_seconds: Some(3600),
+            credential_id: Some("urn:uuid:00000000-0000-0000-0000-000000000457".to_owned()),
+            credential_subject: None,
+            credential_profile: Some("open_badge_v3".to_owned()),
+            achievement_id: Some("https://issuer.example/achievement".to_owned()),
+        })
+        .expect("Open Badge JWT-VC preparation");
+        let payload = segment(prepared.signing_input(), 1);
+        let vc = &payload["vc"];
+        assert_eq!(vc["name"], vc["credentialSubject"]["achievement"]["name"]);
+        assert_eq!(
+            vc["description"],
+            vc["credentialSubject"]["achievement"]["description"]
+        );
+        assert_eq!(
+            payload["jti"],
+            "urn:uuid:00000000-0000-0000-0000-000000000457"
         );
     }
 
