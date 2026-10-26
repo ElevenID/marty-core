@@ -134,3 +134,31 @@ fn direct_and_nested_serde_paths_enforce_the_same_member_limits() {
     );
     assert!(serde_json::from_str::<Jwk>(&aggregate).is_err());
 }
+
+#[test]
+fn crypto_and_verifier_share_bounded_public_jwk_acceptance() {
+    use marty_crypto::public_jwk::PublicJwk;
+    let mut cases = vec![
+        (r#"{"kty":"EC","custom":{"safe":true}}"#.to_owned(), true),
+        (r#"{"kty":"EC","kty":"RSA"}"#.to_owned(), false),
+        (r#"{"kty":"EC","custom":{"a":1,"a":2}}"#.to_owned(), false),
+        (r#"{"kty":"EC","d":null}"#.to_owned(), false),
+        (r#"{"kty":"EC","key_ops":null}"#.to_owned(), true),
+    ];
+    for length in [16_384, 16_385] {
+        cases.push((
+            serde_json::json!({"kty":"EC", "kid":"a".repeat(length)}).to_string(),
+            length == 16_384,
+        ));
+    }
+    for length in [128, 129] {
+        cases.push((
+            serde_json::json!({"kty":"EC", "key_ops":vec!["verify";length]}).to_string(),
+            length == 128,
+        ));
+    }
+    for (input, accepted) in cases {
+        assert_eq!(PublicJwk::from_json(&input).is_ok(), accepted);
+        assert_eq!(Jwk::from_json(&input).is_ok(), accepted);
+    }
+}
