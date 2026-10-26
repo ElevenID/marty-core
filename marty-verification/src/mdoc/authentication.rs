@@ -699,9 +699,15 @@ mod tests {
     #[test]
     fn migrated_credentials_mso_rejects_inverted_validity_window() {
         let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
-        let mso = mso_with_validity(now + time::Duration::hours(1), now - time::Duration::hours(1));
-        assert!(validated_mso_evidence(&mso, "org.iso.18013.5.1.mDL", "ES256", b"cert", now)
-            .unwrap_err().contains("validity window is contradictory"));
+        let mso = mso_with_validity(
+            now + time::Duration::hours(1),
+            now - time::Duration::hours(1),
+        );
+        assert!(
+            validated_mso_evidence(&mso, "org.iso.18013.5.1.mDL", "ES256", b"cert", now)
+                .unwrap_err()
+                .contains("validity window is contradictory")
+        );
     }
 
     #[test]
