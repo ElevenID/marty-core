@@ -697,6 +697,25 @@ mod tests {
     }
 
     #[test]
+    fn migrated_credentials_direct_pin_requires_a_certificate_pem_block() {
+        let certificate = pem_rfc7468::encode_string(
+            "CERTIFICATE",
+            pem_rfc7468::LineEnding::LF,
+            b"public-certificate",
+        )
+        .unwrap();
+        assert_eq!(
+            certificate_der_from_pem(&certificate).unwrap(),
+            b"public-certificate"
+        );
+        let public_key =
+            pem_rfc7468::encode_string("PUBLIC KEY", pem_rfc7468::LineEnding::LF, b"public")
+                .unwrap();
+        assert!(certificate_der_from_pem(&public_key).is_err());
+        assert!(certificate_der_from_pem("not pem").is_err());
+    }
+
+    #[test]
     fn migrated_credentials_mso_rejects_inverted_validity_window() {
         let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
         let mso = mso_with_validity(
