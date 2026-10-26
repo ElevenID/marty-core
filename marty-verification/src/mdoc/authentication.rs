@@ -697,6 +697,14 @@ mod tests {
     }
 
     #[test]
+    fn migrated_credentials_mso_rejects_inverted_validity_window() {
+        let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
+        let mso = mso_with_validity(now + time::Duration::hours(1), now - time::Duration::hours(1));
+        assert!(validated_mso_evidence(&mso, "org.iso.18013.5.1.mDL", "ES256", b"cert", now)
+            .unwrap_err().contains("validity window is contradictory"));
+    }
+
+    #[test]
     #[ignore = "requires marked disposable OpenBao Transit and scoped certificate signer"]
     fn direct_pin_requires_a_valid_mdoc_document_signer_profile() {
         use marty_crypto_test_support::remote_certificate::{
