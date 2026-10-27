@@ -10,6 +10,7 @@ use base64::Engine as _;
 use marty_oid4vci::types::{CredentialFormat, SigningAlgorithm};
 use marty_oid4vci::wallet::{DcqlCredentialQuery, WalletEngine};
 use marty_oid4vci::{ResolvedSdJwtIssuerKey, TrustedSdJwtIssuerKeys};
+use marty_test_wallet::holder_signing_probe::{probe_holder_signing, HolderSigningReadiness};
 use marty_test_wallet::signer_ipc::{request_signature, SignerAuthenticationKey};
 use marty_test_wallet::wallet_sessions::{
     session_cookie, SessionError, SessionLease, WalletSessions, SESSION_COOKIE,
@@ -38,6 +39,7 @@ struct RemoteHolderSigner {
     key_id: String,
     public_jwk_json: String,
     authentication_key: SignerAuthenticationKey,
+    readiness: Arc<HolderSigningReadiness>,
 }
 
 #[derive(Deserialize)]
@@ -132,19 +134,43 @@ impl RemoteHolderSigner {
             key_id,
             public_jwk_json,
             authentication_key,
+            readiness: Arc::new(HolderSigningReadiness::default()),
         })
     }
 
     async fn sign(&self, signing_input: &[u8]) -> Result<Vec<u8>, AppError> {
-        request_signature(
+        let result = request_signature(
             &self.endpoint,
             &self.authentication_key,
             "ES256",
             &self.key_id,
             signing_input,
         )
-        .await
-        .map_err(|_| AppError::unprocessable("Opaque holder signer rejected the request"))
+        .await;
+        if result.is_err() {
+            self.readiness.invalidate().await;
+        }
+        result.map_err(|_| AppError::unprocessable("Opaque holder signer rejected the request"))
+    }
+
+    async fn check_readiness(self: &Arc<Self>, fresh: bool) -> Result<(), AppError> {
+        let signer = self.clone();
+        self.readiness
+            .check(fresh, move || async move {
+                probe_holder_signing(
+                    &signer.endpoint,
+                    &signer.authentication_key,
+                    &signer.key_id,
+                    &signer.public_jwk_json,
+                )
+                .await
+                .map(|_| ())
+            })
+            .await
+            .map_err(|_| AppError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message: "Holder signing is unavailable".into(),
+            })
     }
 }
 
@@ -408,11 +434,12 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("../static/index.html"))
 }
 
-async fn ready(State(state): State<AppState>) -> Json<Value> {
-    Json(
+async fn ready(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    state.holder_signer.check_readiness(false).await?;
+    Ok(Json(
         serde_json::json!({"status": "ready", "instance_id": state.sessions.instance_id(),
-        "features": {"isolated_sessions": 1}}),
-    )
+        "features": {"isolated_sessions": 1, "holder_signing_preflight": 1}}),
+    ))
 }
 
 async fn list_credentials(
@@ -497,6 +524,9 @@ async fn receive_credential(
         .resolve_token_endpoint(&metadata)
         .await
         .map_err(|error| AppError::bad_request(error.to_string()))?;
+    // Detect an already unavailable signer before consuming a one-use offer.
+    // This fresh proof intentionally does not trust the routine /ready cache.
+    state.holder_signer.check_readiness(true).await?;
     let token = state
         .engine
         .exchange_pre_auth_code(
@@ -843,8 +873,7 @@ mod tests {
         assert_eq!(body["submission"]["verifier_error"], "invalid_presentation");
     }
 
-    #[tokio::test]
-    async fn wallet_sessions_http_bind_run_ownership_and_preserve_other_wallets() {
+    fn test_state() -> AppState {
         // These in-memory records test storage isolation; they are deliberately
         // not cryptographic issuance or production-wallet qualification evidence.
         let public_jwk = serde_json::json!({"kty":"EC", "crv":"P-256",
@@ -852,7 +881,7 @@ mod tests {
                 "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296").unwrap()),
             "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hex::decode(
                 "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5").unwrap())});
-        let state = AppState {
+        AppState {
             engine: Arc::new(WalletEngine::new()),
             holder_signer: Arc::new(RemoteHolderSigner {
                 endpoint: "/unused-test-signer.sock".into(),
@@ -862,6 +891,7 @@ mod tests {
                     &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([1u8; 32]),
                 )
                 .unwrap(),
+                readiness: Arc::new(HolderSigningReadiness::default()),
             }),
             issuer_resolver: Arc::new(
                 TrustedSdJwtIssuerKeys::new(vec![ResolvedSdJwtIssuerKey::new(
@@ -874,7 +904,86 @@ mod tests {
             ),
             wallet: Arc::new(RwLock::new(WalletData::default())),
             sessions: Arc::new(WalletSessions::default()),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn unavailable_signer_blocks_readiness_and_preserves_one_use_offer() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let token_requests = Arc::new(AtomicUsize::new(0));
+        let metadata_requests = Arc::new(AtomicUsize::new(0));
+        let issuer_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let issuer = format!("http://{}", issuer_listener.local_addr().unwrap());
+        let metadata = serde_json::json!({
+            "credential_issuer": issuer, "token_endpoint": format!("{issuer}/token"),
+            "credential_endpoint": format!("{issuer}/credential"),
+            "credential_configurations_supported": {"owned": {"format":"vc+sd-jwt"}}
+        });
+        let metadata_counter = metadata_requests.clone();
+        let token_counter = token_requests.clone();
+        let issuer_app = Router::new()
+            .route(
+                "/.well-known/openid-credential-issuer",
+                get(move || {
+                    metadata_counter.fetch_add(1, Ordering::SeqCst);
+                    let value = metadata.clone();
+                    async move { Json(value) }
+                }),
+            )
+            .route(
+                "/token",
+                post(move || {
+                    token_counter.fetch_add(1, Ordering::SeqCst);
+                    async { StatusCode::INTERNAL_SERVER_ERROR }
+                }),
+            );
+        let issuer_server = tokio::spawn(async move {
+            axum::serve(issuer_listener, issuer_app).await.unwrap();
+        });
+        let state = test_state();
+        let wallet_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let wallet = format!("http://{}", wallet_listener.local_addr().unwrap());
+        let app = wallet_router(state.clone());
+        let wallet_server = tokio::spawn(async move {
+            axum::serve(wallet_listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let ready = client.get(format!("{wallet}/ready")).send().await.unwrap();
+        assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            ready.json::<Value>().await.unwrap(),
+            serde_json::json!({"error":"Holder signing is unavailable"})
+        );
+        let offer = serde_json::json!({"credential_issuer":issuer,
+            "credential_configuration_ids":["owned"],
+            "grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":uuid::Uuid::new_v4().to_string()}}});
+        let mut offer_uri = reqwest::Url::parse("https://offer.invalid/").unwrap();
+        offer_uri
+            .query_pairs_mut()
+            .append_pair("credential_offer", &offer.to_string());
+        let response = client
+            .post(format!("{wallet}/api/receive"))
+            .json(&serde_json::json!({"offer_uri":offer_uri.as_str()}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(metadata_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(token_requests.load(Ordering::SeqCst), 0);
+        assert!(state.wallet.read().await.credentials.is_empty());
+        wallet_server.abort();
+        let _ = wallet_server.await;
+        issuer_server.abort();
+        let _ = issuer_server.await;
+    }
+
+    #[tokio::test]
+    async fn wallet_sessions_http_bind_run_ownership_and_preserve_other_wallets() {
+        let state = test_state();
         let record = |id: &str| StoredCredential {
             id: id.into(),
             credential_configuration_id: "isolation-test".into(),
