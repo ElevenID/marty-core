@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use coset::{cbor::value::Value as CoseValue, iana, Label, RegisteredLabelWithPrivate};
+use der::Decode;
 use isomdl::definitions::device_response::{DeviceResponse, Status};
 use isomdl::definitions::helpers::Tag24;
 use isomdl::definitions::x509::x5chain::{X5Chain, X5CHAIN_COSE_HEADER_LABEL};
@@ -40,12 +41,25 @@ pub struct MdocDocumentVerificationEvidence {
     pub not_revoked: Option<bool>,
 }
 
+/// Certificate-trust failures are independent from issuer and device signatures.
+/// These verifier-owned diagnostics do not make a rejected credential trusted.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MdocCertificateTrustFailure {
+    MissingTrustAnchors,
+    InvalidTrustConfiguration,
+    CertificateChainRejected,
+}
+
 /// Result of issuer-only authentication for a stored mdoc credential.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MdocIssuerVerificationResult {
     pub signature_valid: bool,
     pub issuer_trusted: bool,
+    /// Typed trust-stage diagnostics; never inferred from a signature failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub certificate_trust_failures: Vec<MdocCertificateTrustFailure>,
     pub document_types: Vec<String>,
     pub document_evidence: Vec<MdocDocumentVerificationEvidence>,
     pub revocation_checked: bool,
@@ -59,6 +73,9 @@ pub struct MdocIssuerVerificationResult {
 pub struct MdocPresentationVerificationResult {
     pub issuer_signature_valid: bool,
     pub issuer_trusted: bool,
+    /// Typed trust-stage diagnostics; never inferred from a signature failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub certificate_trust_failures: Vec<MdocCertificateTrustFailure>,
     pub device_authentication_valid: bool,
     pub document_types: Vec<String>,
     pub document_evidence: Vec<MdocDocumentVerificationEvidence>,
@@ -99,6 +116,7 @@ pub fn verify_mdoc_issuer_at(
     MdocIssuerVerificationResult {
         signature_valid: issuer.signature_valid,
         issuer_trusted: issuer.issuer_trusted,
+        certificate_trust_failures: issuer.certificate_trust_failures,
         document_types: issuer.document_types,
         document_evidence: issuer.document_evidence,
         revocation_checked: false,
@@ -157,6 +175,7 @@ pub fn verify_mdoc_presentation_at(
     MdocPresentationVerificationResult {
         issuer_signature_valid: issuer.signature_valid,
         issuer_trusted: issuer.issuer_trusted,
+        certificate_trust_failures: issuer.certificate_trust_failures,
         device_authentication_valid,
         document_types,
         document_evidence: issuer.document_evidence,
@@ -236,6 +255,7 @@ pub fn parse_valid_device_response(
 struct IssuerAuthenticationResult {
     signature_valid: bool,
     issuer_trusted: bool,
+    certificate_trust_failures: Vec<MdocCertificateTrustFailure>,
     document_types: Vec<String>,
     document_evidence: Vec<MdocDocumentVerificationEvidence>,
     error: Option<String>,
@@ -268,7 +288,9 @@ fn verify_issuer_authentication(
     let mut trust_configuration_valid =
         !trusted_root_certs_pem.is_empty() || !pinned_issuer_certs_pem.is_empty();
     let mut errors = Vec::new();
+    let mut certificate_trust_failures = Vec::new();
     if !trust_configuration_valid {
+        certificate_trust_failures.push(MdocCertificateTrustFailure::MissingTrustAnchors);
         errors.push("No trusted issuer certificates were configured".to_string());
     }
     for trusted_cert in trusted_root_certs_pem {
@@ -280,12 +302,22 @@ fn verify_issuer_authentication(
     let mut pinned_issuer_certs_der = Vec::with_capacity(pinned_issuer_certs_pem.len());
     for pinned_cert in pinned_issuer_certs_pem {
         match certificate_der_from_pem(pinned_cert) {
-            Ok(certificate) => pinned_issuer_certs_der.push(certificate),
+            Ok(certificate) => match x509_cert::Certificate::from_der(&certificate) {
+                Ok(_) => pinned_issuer_certs_der.push(certificate),
+                Err(error) => {
+                    trust_configuration_valid = false;
+                    errors.push(format!("Invalid pinned mdoc issuer certificate: {error}"));
+                }
+            },
             Err(error) => {
                 trust_configuration_valid = false;
                 errors.push(format!("Invalid pinned mdoc issuer certificate: {error}"));
             }
         }
+    }
+
+    if !trust_configuration_valid && certificate_trust_failures.is_empty() {
+        certificate_trust_failures.push(MdocCertificateTrustFailure::InvalidTrustConfiguration);
     }
 
     let mut all_signatures_valid = true;
@@ -351,6 +383,12 @@ fn verify_issuer_authentication(
                 &pinned_issuer_certs_der,
             ) {
                 issuer_trusted = false;
+                if !certificate_trust_failures
+                    .contains(&MdocCertificateTrustFailure::CertificateChainRejected)
+                {
+                    certificate_trust_failures
+                        .push(MdocCertificateTrustFailure::CertificateChainRejected);
+                }
                 errors.push(format!(
                     "Issuer certificate trust validation failed for {}: {error}",
                     document.doc_type
@@ -375,6 +413,7 @@ fn verify_issuer_authentication(
     IssuerAuthenticationResult {
         signature_valid: all_signatures_valid,
         issuer_trusted,
+        certificate_trust_failures,
         document_types,
         document_evidence,
         error: (!errors.is_empty()).then(|| errors.join("; ")),
@@ -535,6 +574,7 @@ fn issuer_failure(error: impl Into<String>) -> IssuerAuthenticationResult {
     IssuerAuthenticationResult {
         signature_valid: false,
         issuer_trusted: false,
+        certificate_trust_failures: Vec::new(),
         document_types: Vec::new(),
         document_evidence: Vec::new(),
         error: Some(error.into()),
@@ -929,6 +969,101 @@ mod tests {
             contract,
         )
     }
+    #[test]
+    fn certificate_trust_diagnostics_preserve_real_signature_and_device_verdicts() {
+        let (response, transcript, _, pinned_certificate, _) = authenticated_presentation_fixture();
+        let trusted = verify_mdoc_presentation(
+            &response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        assert!(trusted.issuer_signature_valid);
+        assert!(trusted.issuer_trusted);
+        assert!(trusted.device_authentication_valid);
+        assert!(trusted.certificate_trust_failures.is_empty());
+        assert_eq!(trusted.document_evidence.len(), 1);
+
+        // Public, independently signed NIST CA; no credential issuer private key.
+        // This valid configured root cannot authenticate the fixture's DSC chain.
+        let foreign_root = pem_rfc7468::encode_string(
+            "CERTIFICATE",
+            pem_rfc7468::LineEnding::LF,
+            include_bytes!(
+                "../../../tests/cert_validator/fixtures/nist_pkits/certs/TrustAnchorRootCertificate.crt"
+            ),
+        )
+        .unwrap();
+        let untrusted = verify_mdoc_presentation(
+            &response,
+            &transcript,
+            std::slice::from_ref(&foreign_root),
+            &[],
+        );
+        assert!(untrusted.issuer_signature_valid);
+        assert!(untrusted.device_authentication_valid);
+        assert!(!untrusted.issuer_trusted);
+        assert_eq!(
+            untrusted.certificate_trust_failures,
+            [MdocCertificateTrustFailure::CertificateChainRejected]
+        );
+        assert_eq!(untrusted.document_evidence, trusted.document_evidence);
+        assert!(!untrusted.revocation_checked);
+        assert_eq!(untrusted.not_revoked, None);
+        assert_eq!(
+            serde_json::to_value(&untrusted).unwrap()["certificate_trust_failures"],
+            serde_json::json!(["CERTIFICATE_CHAIN_REJECTED"])
+        );
+        // Issuer-only and interactive verification share the same trust stage.
+        let issuer = verify_mdoc_issuer(&response, &[foreign_root], &[]);
+        assert!(issuer.signature_valid);
+        assert_eq!(
+            issuer.certificate_trust_failures,
+            untrusted.certificate_trust_failures
+        );
+
+        let malformed =
+            verify_mdoc_presentation(&response, &transcript, &["not a certificate".into()], &[]);
+        assert!(malformed.issuer_signature_valid);
+        assert!(malformed.device_authentication_valid);
+        assert!(!malformed.issuer_trusted);
+        assert_eq!(
+            malformed.certificate_trust_failures,
+            [MdocCertificateTrustFailure::InvalidTrustConfiguration]
+        );
+        let malformed_pin = pem_rfc7468::encode_string(
+            "CERTIFICATE",
+            pem_rfc7468::LineEnding::LF,
+            b"not a DER certificate",
+        )
+        .unwrap();
+        let malformed_pin = verify_mdoc_presentation(&response, &transcript, &[], &[malformed_pin]);
+        assert!(malformed_pin.issuer_signature_valid);
+        assert!(!malformed_pin.issuer_trusted);
+        assert_eq!(
+            malformed_pin.certificate_trust_failures,
+            [MdocCertificateTrustFailure::InvalidTrustConfiguration]
+        );
+        let missing = verify_mdoc_presentation(&response, &transcript, &[], &[]);
+        assert_eq!(
+            missing.certificate_trust_failures,
+            [MdocCertificateTrustFailure::MissingTrustAnchors]
+        );
+
+        let mut corrupted: DeviceResponse = isomdl::cbor::from_slice(&response).unwrap();
+        let mut documents = corrupted.documents.take().unwrap().into_inner();
+        documents[0].issuer_signed.issuer_auth.signature[0] ^= 1;
+        corrupted.documents = Some(documents.try_into().unwrap());
+        let corrupted = isomdl::cbor::to_vec(&corrupted).unwrap();
+        let invalid_signature =
+            verify_mdoc_presentation(&corrupted, &transcript, &[], &[pinned_certificate]);
+        assert!(!invalid_signature.issuer_signature_valid);
+        assert!(!invalid_signature.issuer_trusted);
+        assert!(invalid_signature.document_evidence.is_empty());
+        // Signature failure is not reclassified as rejection of a foreign CA.
+        assert!(invalid_signature.certificate_trust_failures.is_empty());
+    }
+
     #[test]
     fn complete_presentation_authentication_matches_the_language_neutral_vector() {
         let (response, transcript, device_signature, pinned_certificate, contract) =
