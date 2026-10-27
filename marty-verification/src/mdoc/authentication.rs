@@ -970,6 +970,34 @@ mod tests {
         )
     }
     #[test]
+    fn certificate_trust_diagnostics_preserve_old_json_defaults_and_trusted_shape() {
+        let (response, transcript, _, certificate, _) = authenticated_presentation_fixture();
+        let trusted = verify_mdoc_presentation(
+            &response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&certificate),
+        );
+        assert!(trusted.issuer_trusted);
+        let old_shape = serde_json::to_value(&trusted).unwrap();
+        assert!(old_shape.get("certificate_trust_failures").is_none());
+        assert_eq!(
+            serde_json::from_value::<MdocPresentationVerificationResult>(old_shape).unwrap(),
+            trusted,
+        );
+        let issuer = verify_mdoc_issuer(&response, &[], &[certificate]);
+        assert!(issuer.issuer_trusted);
+        let old_shape = serde_json::to_value(&issuer).unwrap();
+        assert!(old_shape.get("certificate_trust_failures").is_none());
+        assert_eq!(
+            serde_json::from_value::<MdocIssuerVerificationResult>(old_shape).unwrap(),
+            issuer,
+        );
+        // New readers accept old JSON; this does not promise old strict readers
+        // accept the new nonempty diagnostic field on rejected credentials.
+    }
+
+    #[test]
     fn certificate_trust_diagnostics_preserve_real_signature_and_device_verdicts() {
         let (response, transcript, _, pinned_certificate, _) = authenticated_presentation_fixture();
         let trusted = verify_mdoc_presentation(
