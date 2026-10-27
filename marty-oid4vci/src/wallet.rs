@@ -29,7 +29,9 @@ use base64::Engine;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Oid4vciError, Oid4vciResult};
+use crate::error::{
+    Oid4vciError, Oid4vciResult, RequestObjectEndpointError, MAX_REQUEST_OBJECT_ERROR_BYTES,
+};
 use crate::types::{
     AuthorizationDetail, AuthorizationRequest, CodeChallengeMethod, CredentialOffer,
     CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject, TokenResponse,
@@ -1379,11 +1381,22 @@ impl WalletEngine {
 
     async fn fetch_request_object_value(&self, uri: &str) -> Oid4vciResult<serde_json::Value> {
         let (client, endpoint) = crate::network::public_request_client(uri).await?;
-        let resp = client.get(endpoint).send().await.map_err(|e| {
-            Oid4vciError::InvalidRequest(format!("Request object fetch failed: {}", e))
-        })?;
+        let resp = client
+            .get(endpoint)
+            .send()
+            .await
+            .map_err(|_| Oid4vciError::InvalidRequest("Request object fetch failed".into()))?;
 
         let status = resp.status();
+        if status.is_client_error() || status.is_server_error() {
+            let body =
+                bounded_response_body(resp, "Request object error", MAX_REQUEST_OBJECT_ERROR_BYTES)
+                    .await
+                    .unwrap_or_default();
+            return Err(Oid4vciError::RequestObjectRejected(
+                RequestObjectEndpointError::from_public_response(status.as_u16(), &body),
+            ));
+        }
         if !status.is_success() {
             return Err(Oid4vciError::InvalidRequest(format!(
                 "Request object endpoint returned HTTP {}",
@@ -1656,6 +1669,54 @@ mod tests {
             let _ = request_tx.send(request_line);
         });
         (response_uri, request_rx)
+    }
+
+    #[tokio::test]
+    async fn request_object_http_rejection_keeps_safe_flow_identifiers() {
+        let secret = uuid::Uuid::new_v4().to_string();
+        let (uri, observed) = json_response_server(
+            "400 Bad Request",
+            serde_json::json!({
+                "error":"verification_request_invalid",
+                "detail":format!("FLOW.REQUEST_OBJECT_INVALID_IDENTITY: {secret}"),
+                "id_token":secret,
+            }),
+        )
+        .await;
+        let error = WalletEngine::new()
+            .fetch_request_object_value(&uri)
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().contains(&secret));
+        let Oid4vciError::RequestObjectRejected(diagnostic) = error else {
+            panic!("typed endpoint rejection required");
+        };
+        assert_eq!(diagnostic.http_status(), 400);
+        assert_eq!(diagnostic.code(), Some("verification_request_invalid"));
+        assert_eq!(
+            diagnostic.detail(),
+            Some("FLOW.REQUEST_OBJECT_INVALID_IDENTITY")
+        );
+        assert!(observed.await.unwrap().starts_with("GET /present "));
+    }
+
+    #[tokio::test]
+    async fn request_object_oversized_error_keeps_only_http_status() {
+        let (uri, observed) = json_response_server("400 Bad Request", serde_json::json!({
+            "error":"verification_request_invalid", "detail":"x".repeat(MAX_REQUEST_OBJECT_ERROR_BYTES)
+        })).await;
+        let error = WalletEngine::new()
+            .fetch_request_object_value(&uri)
+            .await
+            .unwrap_err();
+        let Oid4vciError::RequestObjectRejected(diagnostic) = error else {
+            panic!("typed endpoint rejection required");
+        };
+        assert_eq!(
+            serde_json::to_value(diagnostic).unwrap(),
+            serde_json::json!({"http_status":400})
+        );
+        assert!(observed.await.unwrap().starts_with("GET /present "));
     }
 
     fn encode_query_json(value: &str) -> String {
