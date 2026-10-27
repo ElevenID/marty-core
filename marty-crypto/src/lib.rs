@@ -33,6 +33,8 @@ pub mod bbs;
 pub mod certificate;
 #[cfg(feature = "crl")]
 pub mod crl;
+#[cfg(feature = "crl")]
+pub mod crl_preparation;
 #[cfg(feature = "emrtd-compat")]
 pub mod des;
 #[cfg(feature = "ecdh")]
