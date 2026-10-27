@@ -155,3 +155,24 @@ fresh public input for the verifier probe, not a standalone custody or release
 attestation. The integration runner pins the exact producer executable digest
 and verifies the result against the released service image; live KMS provider,
 tenant, wallet and release provenance still require their own evidence.
+
+
+### Signer readiness and one-use offers
+
+`GET /ready` succeeds only after the existing authenticated IPC holder probe
+obtains a remote-KMS signature and verifies it against the configured public
+JWK. Routine checks are single-flight and cache success or failure for at most
+60 seconds, so repeated health polls do not spend all 128 uses of a scoped
+one-hour leaf. A cancelled HTTP poll does not cancel the owned, bounded IPC probe; later
+polls share its result. Failed probe tasks retain backoff rather than immediately
+spending another token use. Errors return a generic 503 without KMS credentials.
+
+Credential receipt always performs a fresh probe after validating the offer
+and before exchanging its pre-authorized code; cached health cannot authorize
+that exchange. This detects an already failed signer, not an atomic guarantee
+that a provider cannot fail later. An actual signing failure invalidates health.
+
+The signer does not mint or renew tokens. A nonrenewable, revoked or expired
+leaf must be replaced by its governed owner under the existing scoped-token
+lifecycle, with the signer restarted to consume the new configuration. No
+software-key fallback or broader signing authority is introduced.

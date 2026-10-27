@@ -5,11 +5,17 @@ use marty_oid4vci::jose::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use std::{
+    future::Future,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::signer_ipc::{request_signature, SignerAuthenticationKey, MAX_KEY_ID_BYTES};
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
 pub enum HolderSigningProbeError {
     #[error("Holder signing preflight public configuration is invalid")]
     Configuration,
@@ -19,6 +25,73 @@ pub enum HolderSigningProbeError {
         "Holder signing preflight signature does not verify against the configured public key"
     )]
     Verification,
+}
+
+// At most one routine health signature per minute, leaving a finite-use KMS
+// leaf available for actual wallet operations. Issuance always checks afresh.
+const READINESS_CACHE_TTL: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+pub struct HolderSigningReadiness {
+    observation: Mutex<Option<ReadinessObservation>>,
+}
+
+struct ReadinessObservation {
+    attempted_at: Instant,
+    result: Result<(), HolderSigningProbeError>,
+}
+
+impl HolderSigningReadiness {
+    /// Coalesce routine checks. `fresh` is selected only by the wallet's
+    /// pre-issuance path, never by a public readiness query parameter.
+    pub async fn check<F, P>(
+        self: &Arc<Self>,
+        fresh: bool,
+        probe: F,
+    ) -> Result<(), HolderSigningProbeError>
+    where
+        F: FnOnce() -> P + Send + 'static,
+        P: Future<Output = Result<(), HolderSigningProbeError>> + Send + 'static,
+    {
+        let readiness = self.clone();
+        // A short-lived HTTP waiter must not cancel a slow, already dispatched
+        // KMS probe. Its bounded IPC deadline still applies. All routine callers
+        // coalesce under the same observation lock and use the completed proof.
+        tokio::spawn(async move { readiness.check_inner(fresh, probe).await })
+            .await
+            .unwrap_or(Err(HolderSigningProbeError::Signing))
+    }
+
+    async fn check_inner<F, P>(&self, fresh: bool, probe: F) -> Result<(), HolderSigningProbeError>
+    where
+        F: FnOnce() -> P,
+        P: Future<Output = Result<(), HolderSigningProbeError>>,
+    {
+        let mut observation = self.observation.lock().await;
+        if !fresh {
+            if let Some(previous) = observation.as_ref() {
+                if previous.attempted_at.elapsed() < READINESS_CACHE_TTL {
+                    return previous.result;
+                }
+            }
+        }
+        // Retain a failed attempt even if an HTTP client cancels this future.
+        // Otherwise aborted health polls could repeatedly spend token uses.
+        *observation = Some(ReadinessObservation {
+            attempted_at: Instant::now(),
+            result: Err(HolderSigningProbeError::Signing),
+        });
+        let result = probe().await;
+        observation.as_mut().expect("attempt recorded").result = result;
+        result
+    }
+
+    pub async fn invalidate(&self) {
+        *self.observation.lock().await = Some(ReadinessObservation {
+            attempted_at: Instant::now(),
+            result: Err(HolderSigningProbeError::Signing),
+        });
+    }
 }
 
 /// Public, independently verifiable observations only; never a credential or demo pass.
@@ -91,4 +164,125 @@ pub async fn probe_holder_signing(
         signature_base64url: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature),
         verified,
     })
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn concurrent_health_polls_share_one_probe_and_expiry_is_bounded() {
+        let readiness = Arc::new(HolderSigningReadiness::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let readiness = readiness.clone();
+            let calls = calls.clone();
+            tasks.push(tokio::spawn(async move {
+                readiness
+                    .check(false, move || async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        tokio::task::yield_now().await;
+                        Ok(())
+                    })
+                    .await
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        readiness
+            .observation
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .attempted_at = Instant::now() - READINESS_CACHE_TTL;
+        let probe_calls = calls.clone();
+        assert!(readiness
+            .check(false, move || async move {
+                probe_calls.fetch_add(1, Ordering::SeqCst);
+                Err(HolderSigningProbeError::Signing)
+            })
+            .await
+            .is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn fresh_issuance_probe_bypasses_cached_success_and_can_recover() {
+        let readiness = Arc::new(HolderSigningReadiness::default());
+        readiness.check(false, || async { Ok(()) }).await.unwrap();
+        assert!(readiness
+            .check(true, || async { Err(HolderSigningProbeError::Signing) })
+            .await
+            .is_err());
+        assert!(readiness
+            .check(false, || async { panic!("failed probe must be cached") })
+            .await
+            .is_err());
+        readiness.check(true, || async { Ok(()) }).await.unwrap();
+        readiness
+            .check(false, || async {
+                panic!("fresh recovery must update health")
+            })
+            .await
+            .unwrap();
+        readiness.invalidate().await;
+        assert!(readiness
+            .check(false, || async {
+                panic!("signing failure must invalidate health")
+            })
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelled_http_waiter_does_not_cancel_or_repeat_the_owned_probe() {
+        let readiness = Arc::new(HolderSigningReadiness::default());
+        let started = Arc::new(Notify::new());
+        let finish = Arc::new(Notify::new());
+        let worker = {
+            let readiness = readiness.clone();
+            let started = started.clone();
+            let finish = finish.clone();
+            tokio::spawn(async move {
+                readiness
+                    .check(false, move || async move {
+                        started.notify_one();
+                        finish.notified().await;
+                        Ok(())
+                    })
+                    .await
+            })
+        };
+        started.notified().await;
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        finish.notify_one();
+        readiness
+            .check(false, || async {
+                panic!("existing probe must finish without another token use")
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_probe_task_retains_fail_closed_backoff() {
+        let readiness = Arc::new(HolderSigningReadiness::default());
+        assert!(readiness
+            .check(false, || async { panic!("controlled probe failure") })
+            .await
+            .is_err());
+        assert!(readiness
+            .check(false, || async {
+                panic!("failed probe must not retry immediately")
+            })
+            .await
+            .is_err());
+    }
 }
