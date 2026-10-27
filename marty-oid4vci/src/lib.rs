@@ -99,7 +99,7 @@ pub mod wallet;
 #[cfg(feature = "wallet")]
 mod wallet_sd_jwt;
 
-pub use error::{Oid4vciError, Oid4vciResult};
+pub use error::{Oid4vciError, Oid4vciResult, RequestObjectEndpointError};
 
 /// The default issuer surface cannot construct or use an in-process issuer key.
 ///

@@ -5,6 +5,119 @@ use std::fmt;
 /// Result type alias for OID4VCI operations.
 pub type Oid4vciResult<T> = Result<T, Oid4vciError>;
 
+/// Error bodies are untrusted. Keep only these public Flow identifiers, never
+/// arbitrary descriptions, credential material, URLs or provider messages.
+pub(crate) const MAX_REQUEST_OBJECT_ERROR_BYTES: usize = 4096;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RequestObjectEndpointError {
+    http_status: u16,
+    #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<&'static str>,
+}
+
+impl RequestObjectEndpointError {
+    pub fn from_public_response(http_status: u16, body: &[u8]) -> Self {
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            error: Option<String>,
+            detail: Option<String>,
+            error_description: Option<String>,
+        }
+        let mut result = Self {
+            http_status,
+            code: None,
+            detail: None,
+        };
+        if body.len() > MAX_REQUEST_OBJECT_ERROR_BYTES {
+            return result;
+        }
+        let Ok(envelope) = serde_json::from_slice::<Envelope>(body) else {
+            return result;
+        };
+        // Deployed Flow93b78d14 http_verification/http_read public error codes.
+        result.code = [
+            "verification_request_invalid",
+            "verification_request_method_not_allowed",
+            "invalid_stored_flow_state",
+            "flow_reference_invalid",
+            "flow_authorization_failed",
+        ]
+        .into_iter()
+        .find(|code| envelope.error.as_deref() == Some(*code));
+        if result.code.is_none() {
+            return result;
+        }
+        let detail = match (
+            envelope.detail.as_deref(),
+            envelope.error_description.as_deref(),
+        ) {
+            (Some(a), Some(b)) if a != b => None,
+            (Some(a), _) | (_, Some(a)) => Some(a),
+            _ => None,
+        };
+        if let Some(detail) = detail {
+            // Dynamic suffixes after ':' can contain provider/tenant material.
+            // Return only an exact known identifier, never any suffix bytes.
+            let identifier = detail.split_once(':').map_or(detail, |(prefix, _)| prefix);
+            result.detail = [
+                "FLOW.VERIFICATION_REQUEST_INVALID_STATE",
+                "FLOW.VERIFICATION_REQUEST_UNSIGNED_TRANSPORT",
+                "FLOW.VERIFICATION_REQUEST_METHOD_NOT_ALLOWED",
+                "FLOW.VERIFICATION_REQUEST_WALLET_NONCE_REQUIRED",
+                "FLOW.VERIFICATION_REQUEST_INVALID_CONTEXT",
+                "FLOW.REQUEST_OBJECT_INVALID_INSTANCE",
+                "FLOW.REQUEST_OBJECT_UNSUPPORTED_PROFILE",
+                "FLOW.REQUEST_OBJECT_SERIALIZATION",
+                "FLOW.REQUEST_OBJECT_INVALID_CLOCK",
+                "FLOW.REQUEST_OBJECT_TOO_LARGE",
+                "FLOW.REQUEST_OBJECT_INVALID_IDENTITY",
+                "FLOW.PRESENTATION_REQUEST_INVALID_POLICY",
+                "FLOW.PRESENTATION_REQUEST_POLICY_NOT_VISIBLE",
+                "FLOW.PRESENTATION_REQUEST_POLICY_INACTIVE",
+                "FLOW.PRESENTATION_REQUEST_INVALID_TEMPLATE",
+                "FLOW.PRESENTATION_REQUEST_TEMPLATE_NOT_VISIBLE",
+                "FLOW.PRESENTATION_REQUEST_TEMPLATE_INACTIVE",
+                "FLOW.PRESENTATION_REQUEST_NATIVE",
+                "FLOW.PROVIDER_NOT_FOUND",
+                "FLOW.PROVIDER_CONFLICT",
+                "FLOW.PROVIDER_REJECTED",
+                "FLOW.PROVIDER_INVALID_RESPONSE",
+                "FLOW.PROVIDER_UNAVAILABLE",
+                "FLOW.PROVIDERS_MISSING",
+            ]
+            .into_iter()
+            .find(|known| *known == identifier);
+        }
+        result
+    }
+
+    pub fn http_status(&self) -> u16 {
+        self.http_status
+    }
+    pub fn code(&self) -> Option<&'static str> {
+        self.code
+    }
+    pub fn detail(&self) -> Option<&'static str> {
+        self.detail
+    }
+}
+
+impl fmt::Display for RequestObjectEndpointError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HTTP {}", self.http_status)?;
+        if let Some(code) = self.code {
+            write!(f, " ({code})")?;
+        }
+        if let Some(detail) = self.detail {
+            write!(f, ": {detail}")?;
+        }
+        Ok(())
+    }
+}
+
 /// Errors that can occur during OID4VCI protocol operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Oid4vciError {
@@ -67,6 +180,10 @@ pub enum Oid4vciError {
     /// Invalid request (wallet-side: malformed input, bad HTTP response, etc.).
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
+
+    /// Bounded, allowlisted public request-object endpoint failure.
+    #[error("Request object endpoint returned {0}")]
+    RequestObjectRejected(RequestObjectEndpointError),
 
     /// Configuration error.
     #[error("Configuration error: {0}")]
@@ -131,6 +248,63 @@ impl fmt::Display for Oid4vciErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_object_diagnostics_preserve_only_known_public_identifiers() {
+        let secret = uuid::Uuid::new_v4().to_string();
+        let body = serde_json::json!({"error":"verification_request_invalid",
+            "detail":format!("FLOW.REQUEST_OBJECT_INVALID_IDENTITY: {secret}"),
+            "access_token":secret, "request":"untrusted request material"});
+        let diagnostic =
+            RequestObjectEndpointError::from_public_response(400, body.to_string().as_bytes());
+        assert_eq!(diagnostic.http_status(), 400);
+        assert_eq!(diagnostic.code(), Some("verification_request_invalid"));
+        assert_eq!(
+            diagnostic.detail(),
+            Some("FLOW.REQUEST_OBJECT_INVALID_IDENTITY")
+        );
+        let public = serde_json::to_string(&diagnostic).unwrap();
+        assert!(!public.contains(&secret));
+        assert!(!format!("{diagnostic:?} {diagnostic}").contains(&secret));
+        assert_eq!(
+            serde_json::to_value(&diagnostic).unwrap(),
+            serde_json::json!({
+            "http_status":400,"error":"verification_request_invalid",
+            "detail":"FLOW.REQUEST_OBJECT_INVALID_IDENTITY"})
+        );
+    }
+
+    #[test]
+    fn malformed_oversized_or_unknown_request_errors_do_not_echo_server_material() {
+        let secret = uuid::Uuid::new_v4().to_string();
+        for body in [
+            format!("<html>{secret}</html>"),
+            serde_json::json!({"error":secret,"detail":"FLOW.REQUEST_OBJECT_TOO_LARGE"})
+                .to_string(),
+            serde_json::json!({"error":"verification_request_invalid","detail":{"private":secret}})
+                .to_string(),
+            r#"{"error":"verification_request_invalid","error":"flow_reference_invalid"}"#
+                .to_owned(),
+            "x".repeat(MAX_REQUEST_OBJECT_ERROR_BYTES + 1),
+        ] {
+            let diagnostic = RequestObjectEndpointError::from_public_response(400, body.as_bytes());
+            assert_eq!(
+                serde_json::to_value(diagnostic).unwrap(),
+                serde_json::json!({"http_status":400})
+            );
+        }
+        for body in [
+            serde_json::json!({"error":"verification_request_invalid","detail":format!("https://issuer.invalid/?token={secret}")}),
+            serde_json::json!({"error":"verification_request_invalid","detail":"FLOW.REQUEST_OBJECT_TOO_LARGE",
+                "error_description":"FLOW.REQUEST_OBJECT_INVALID_CLOCK"}),
+        ] {
+            let diagnostic =
+                RequestObjectEndpointError::from_public_response(400, body.to_string().as_bytes());
+            assert_eq!(diagnostic.code(), Some("verification_request_invalid"));
+            assert_eq!(diagnostic.detail(), None);
+            assert!(!format!("{diagnostic:?} {diagnostic}").contains(&secret));
+        }
+    }
 
     // ====================================================================
     // Oid4vciError Display

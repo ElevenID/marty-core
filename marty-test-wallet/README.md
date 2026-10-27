@@ -176,3 +176,12 @@ The signer does not mint or renew tokens. A nonrenewable, revoked or expired
 leaf must be replaced by its governed owner under the existing scoped-token
 lifecycle, with the signer restarted to consume the new configuration. No
 software-key fallback or broader signing authority is introduced.
+
+
+Request-object endpoint failures keep the wallet HTTP400 behavior and include an
+optional `request_object_error` with the upstream `http_status` and allowlisted
+public Flow error/detail identifiers. Error bodies are capped at4KiB; malformed,
+oversized or unknown bodies reduce to status only. Dynamic provider suffixes,
+URLs, JWTs and tokens are never copied. These are observations of request retrieval,
+not a presentation submission or verifier decision. The actual previous server
+subtype remains unknown until a fresh, separately owned run obtains that response.

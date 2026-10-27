@@ -170,6 +170,7 @@ impl RemoteHolderSigner {
             .map_err(|_| AppError {
                 status: StatusCode::SERVICE_UNAVAILABLE,
                 message: "Holder signing is unavailable".into(),
+                request_object_error: None,
             })
     }
 }
@@ -224,13 +225,27 @@ struct PresentResponse {
 struct AppError {
     status: StatusCode,
     message: String,
+    request_object_error: Option<marty_oid4vci::RequestObjectEndpointError>,
 }
 
 impl AppError {
+    fn presentation_request(error: marty_oid4vci::Oid4vciError) -> Self {
+        let message = error.to_string();
+        match error {
+            marty_oid4vci::Oid4vciError::RequestObjectRejected(diagnostic) => Self {
+                status: StatusCode::BAD_REQUEST,
+                message,
+                request_object_error: Some(diagnostic),
+            },
+            _ => Self::bad_request(message),
+        }
+    }
+
     fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
+            request_object_error: None,
         }
     }
 
@@ -238,17 +253,19 @@ impl AppError {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             message: message.into(),
+            request_object_error: None,
         }
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        (
-            self.status,
-            Json(serde_json::json!({"error": self.message})),
-        )
-            .into_response()
+        let mut body = serde_json::json!({"error": self.message});
+        if let Some(diagnostic) = self.request_object_error {
+            body["request_object_error"] =
+                serde_json::to_value(diagnostic).expect("bounded public request error serializes");
+        }
+        (self.status, Json(body)).into_response()
     }
 }
 
@@ -264,6 +281,7 @@ impl From<SessionError> for AppError {
         Self {
             status,
             message: error.to_string(),
+            request_object_error: None,
         }
     }
 }
@@ -288,6 +306,7 @@ impl AppState {
                     return Err(AppError {
                         status: StatusCode::FORBIDDEN,
                         message: "The wallet session belongs to another run".into(),
+                        request_object_error: None,
                     });
                 }
                 Ok(Some(session))
@@ -336,6 +355,7 @@ async fn create_session(
         return Err(AppError {
             status: StatusCode::CONFLICT,
             message: "Close the existing isolated wallet session before creating another".into(),
+            request_object_error: None,
         });
     }
     let (info, token) = state.sessions.create(&request.run_id)?;
@@ -601,7 +621,7 @@ async fn present_credential(
         .engine
         .parse_presentation_request(request.request_uri.trim())
         .await
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
+        .map_err(AppError::presentation_request)?;
     let dcql = presentation_request.dcql_query.as_ref().ok_or_else(|| {
         AppError::unprocessable("The browser test wallet requires a DCQL presentation request")
     })?;
@@ -849,6 +869,49 @@ fn disclosed_claim_names(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn request_object_error_projects_sanitized_fields_without_submission_or_claims() {
+        let secret = uuid::Uuid::new_v4().to_string();
+        let diagnostic = marty_oid4vci::RequestObjectEndpointError::from_public_response(
+            400,
+            serde_json::json!({"error":"verification_request_invalid",
+                "detail":format!("FLOW.REQUEST_OBJECT_INVALID_IDENTITY: {secret}"),
+                "vp_token":secret})
+            .to_string()
+            .as_bytes(),
+        );
+        let response = AppError::presentation_request(
+            marty_oid4vci::Oid4vciError::RequestObjectRejected(diagnostic),
+        )
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(!std::str::from_utf8(&bytes).unwrap().contains(&secret));
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["request_object_error"],
+            serde_json::json!({"http_status":400,
+            "error":"verification_request_invalid","detail":"FLOW.REQUEST_OBJECT_INVALID_IDENTITY"})
+        );
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("verification_request_invalid"));
+        assert_eq!(body.as_object().unwrap().len(), 2);
+        assert!(body.get("submission").is_none());
+        assert!(body.get("claims").is_none());
+        let ordinary = AppError::bad_request("Malformed request").into_response();
+        let plain: Value = serde_json::from_slice(
+            &axum::body::to_bytes(ordinary.into_body(), 4096)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(plain, serde_json::json!({"error":"Malformed request"}));
+    }
 
     #[tokio::test]
     async fn verifier_rejection_retains_transport_evidence_without_success() {
