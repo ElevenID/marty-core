@@ -33,7 +33,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - name: Verify successful exact-main tag preparation
@@ -120,12 +120,12 @@ jobs:
             HEAD
           cargo metadata --locked --format-version 1 > release/marty-core-metadata.json
       - name: Generate source SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           path: .
           format: spdx-json
           output-file: release/marty-core.spdx.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: crate-release-assets
           path: release
@@ -198,7 +198,7 @@ jobs:
     runs-on: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64' && 'ubuntu-24.04-arm' || matrix.os == 'macos-latest' && matrix.target == 'x86_64' && 'macos-15-intel' || matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
@@ -247,7 +247,7 @@ jobs:
           if [[ "${{ matrix.package }}" == "marty-verification" ]]; then
             python scripts/check_verifier_clean_wheel_consumer.py "${wheels[0]}"
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: wheels-${{ matrix.package }}-${{ matrix.os }}-${{ matrix.target }}
           path: ${{ matrix.package }}/dist/*
@@ -269,7 +269,7 @@ jobs:
           working-directory: ${{ matrix.package }}
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sdist-${{ matrix.package }}
           path: ${{ matrix.package }}/dist/*
@@ -284,17 +284,17 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: "wheels-*"
           path: dist
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: "sdist-*"
           path: dist
           merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
         with:
           packages-dir: dist
 
@@ -343,7 +343,7 @@ jobs:
           bundle="$(find "$RUNNER_TEMP/consumer" -mindepth 1 -maxdepth 1 -type d -print -quit)"
           jq -e --arg sha "$GITHUB_SHA" '.product == "marty-headless-verifier" and .architecture == "linux-amd64" and .build_os == "ubuntu-24.04" and .support_state == "preview" and .source_commit == $sha' "$bundle/manifest.json"
           bash "$bundle/acceptance.sh" "$bundle"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: headless-verifier-release-assets
           path: release/headless-verifier
@@ -361,7 +361,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           path: release-assets
           merge-multiple: true
