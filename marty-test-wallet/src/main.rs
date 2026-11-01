@@ -57,6 +57,8 @@ struct StoredCredential {
     format: CredentialFormat,
     raw: String,
     vct: Option<String>,
+    achievement_id: Option<String>,
+    credential_types: Vec<String>,
     claim_names: Vec<String>,
     received_at: String,
 }
@@ -67,6 +69,10 @@ struct CredentialSummary {
     credential_configuration_id: String,
     format: String,
     vct: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    achievement_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    credential_types: Vec<String>,
     claim_names: Vec<String>,
     received_at: String,
 }
@@ -78,6 +84,8 @@ impl From<&StoredCredential> for CredentialSummary {
             credential_configuration_id: credential.credential_configuration_id.clone(),
             format: credential.format.as_str().to_string(),
             vct: credential.vct.clone(),
+            achievement_id: credential.achievement_id.clone(),
+            credential_types: credential.credential_types.clone(),
             claim_names: credential.claim_names.clone(),
             received_at: credential.received_at.clone(),
         }
@@ -595,13 +603,15 @@ async fn receive_credential(
         AppError::unprocessable("Credential response contained no credential value")
     })?;
     let payload = decode_credential_payload(&raw, &format)?;
-    let vct = credential_vct(&payload);
+    let identity = credential_identity(&payload, &format);
     let claim_names = credential_claim_names(&raw, &format, &payload);
     let credential = StoredCredential {
         id: uuid::Uuid::new_v4().to_string(),
         credential_configuration_id: configuration_id,
         format,
-        vct,
+        vct: identity.vct,
+        achievement_id: identity.achievement_id,
+        credential_types: identity.credential_types,
         claim_names,
         raw,
         received_at: chrono::Utc::now().to_rfc3339(),
@@ -772,6 +782,43 @@ fn credential_vct(payload: &Value) -> Option<String> {
         .or_else(|| payload.pointer("/vc/credentialSchema/id"))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+struct CredentialIdentity {
+    vct: Option<String>,
+    achievement_id: Option<String>,
+    credential_types: Vec<String>,
+}
+
+fn credential_identity(payload: &Value, format: &CredentialFormat) -> CredentialIdentity {
+    let vct = credential_vct(payload);
+    if *format != CredentialFormat::JwtVcJson {
+        return CredentialIdentity {
+            vct,
+            achievement_id: None,
+            credential_types: Vec::new(),
+        };
+    }
+    let credential_types = payload
+        .pointer("/vc/type")
+        .and_then(Value::as_array)
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let achievement_id = payload
+        .pointer("/vc/credentialSubject/achievement/id")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    CredentialIdentity {
+        vct,
+        achievement_id,
+        credential_types,
+    }
 }
 
 fn credential_claim_names(raw: &str, format: &CredentialFormat, payload: &Value) -> Vec<String> {
@@ -1053,6 +1100,8 @@ mod tests {
             format: CredentialFormat::SdJwt,
             raw: "not-a-real-credential".into(),
             vct: None,
+            achievement_id: None,
+            credential_types: vec![],
             claim_names: vec![],
             received_at: "2026-01-01T00:00:00Z".into(),
         };
@@ -1196,6 +1245,8 @@ mod tests {
             format: CredentialFormat::SdJwt,
             raw: "sensitive.raw.credential".into(),
             vct: Some("https://issuer.example/member".into()),
+            achievement_id: None,
+            credential_types: vec![],
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
         };
@@ -1227,6 +1278,63 @@ mod tests {
     }
 
     #[test]
+    fn vc_jwt_receipt_exposes_exact_open_badge_identity_without_raw_credential() {
+        let raw = jwt(serde_json::json!({
+            "iss": "did:web:issuer.example",
+            "vc": {
+                "type": ["VerifiableCredential", "OpenBadgeCredential"],
+                "credentialSubject": {
+                    "achievement": {"id": "https://issuer.example/achievements/canvas"}
+                }
+            }
+        }));
+        let payload = decode_credential_payload(&raw, &CredentialFormat::JwtVcJson).unwrap();
+        let identity = credential_identity(&payload, &CredentialFormat::JwtVcJson);
+        assert_eq!(identity.vct, None);
+        assert_eq!(
+            identity.achievement_id.as_deref(),
+            Some("https://issuer.example/achievements/canvas")
+        );
+        assert_eq!(
+            identity.credential_types,
+            ["VerifiableCredential", "OpenBadgeCredential"]
+        );
+        let stored = StoredCredential {
+            id: "wallet-1".into(),
+            credential_configuration_id: "OpenBadgeCredential".into(),
+            format: CredentialFormat::JwtVcJson,
+            raw: raw.clone(),
+            vct: identity.vct,
+            achievement_id: identity.achievement_id,
+            credential_types: identity.credential_types,
+            claim_names: vec!["achievement".into()],
+            received_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let summary = serde_json::to_value(CredentialSummary::from(&stored)).unwrap();
+        assert_eq!(
+            summary["achievement_id"],
+            "https://issuer.example/achievements/canvas"
+        );
+        assert_eq!(
+            summary["credential_types"],
+            serde_json::json!(["VerifiableCredential", "OpenBadgeCredential"])
+        );
+        assert!(!summary.to_string().contains(&raw));
+    }
+
+    #[test]
+    fn sd_jwt_receipt_keeps_vct_without_vc_jwt_identity_fields() {
+        let payload = serde_json::json!({"vct":"https://issuer.example/member"});
+        let identity = credential_identity(&payload, &CredentialFormat::SdJwt);
+        assert_eq!(
+            identity.vct.as_deref(),
+            Some("https://issuer.example/member")
+        );
+        assert!(identity.achievement_id.is_none());
+        assert!(identity.credential_types.is_empty());
+    }
+
+    #[test]
     fn vc_jwt_matches_dcql_type_values_fail_closed() {
         let raw = jwt(serde_json::json!({
             "vc": {
@@ -1240,6 +1348,8 @@ mod tests {
             format: CredentialFormat::JwtVcJson,
             raw,
             vct: None,
+            achievement_id: None,
+            credential_types: vec![],
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
         };
@@ -1278,6 +1388,8 @@ mod tests {
             format: CredentialFormat::SdJwt,
             raw: "issuer.payload.signature~disclosure".into(),
             vct: Some("https://issuer.example/member".into()),
+            achievement_id: None,
+            credential_types: vec![],
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
         };
