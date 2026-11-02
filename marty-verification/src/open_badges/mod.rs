@@ -1,8 +1,9 @@
 //! Open Badges verification helpers.
 //!
 //! Open Badges 3 (OB3) is the current/default profile. Open Badges 2 (OB2)
-//! verification remains available for a short migration window, reviewed on
-//! 2026-09-01 with target removal on 2026-10-01. Local issuance helpers exist
+//! verification remains a non-default temporary capability. The owner approved
+//! this short migration extension on 2026-11-02, with review on 2026-11-05
+//! and target removal on 2026-11-09. Local issuance helpers exist
 //! only for crate-internal regression tests; production builds are verification-only.
 //! New integrations must use OB3. The exception is tracked in
 //! <https://github.com/ElevenID/marty-core/issues/96>.
