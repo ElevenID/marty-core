@@ -13,6 +13,8 @@ Foundational Rust crates for the Marty ecosystem.
 
 | [`marty-status`](./marty-status) | Canonical IETF Token Status List and W3C Bitstring Status List processing | Current |
 
+Crate status markers summarize library work only; a qualified Marty installer, complete business workflow, standards-conformance claim or production deployment requires its own evidence for the exact version, platform and profile.
+
 **Note:** marty-core is the canonical source for all Rust verification and crypto libraries. All other projects ([marty-credentials](../marty-credentials), [marty-verifier](../marty-verifier)) depend on these crates.
 
 ## Architecture
