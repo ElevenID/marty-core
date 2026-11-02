@@ -36,8 +36,8 @@ pip install marty-verification-py
 ### Open Badges
 
 Open Badges 3 is the current/default profile. Open Badges 2 remains a non-default
-temporary capability. A proposed short migration extension, pending owner approval,
-sets review on 2026-11-05 and target removal on 2026-11-09, tracked in
+temporary capability. The owner approved this short migration extension on
+2026-11-02, with review on 2026-11-05 and target removal on 2026-11-09, tracked in
 [marty-core#96](https://github.com/ElevenID/marty-core/issues/96). Do not build
 new integrations against the OB2 entry points.
 

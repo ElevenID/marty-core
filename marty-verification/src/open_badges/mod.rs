@@ -1,8 +1,8 @@
 //! Open Badges verification helpers.
 //!
 //! Open Badges 3 (OB3) is the current/default profile. Open Badges 2 (OB2)
-//! verification remains a non-default temporary capability. A proposed short
-//! migration extension, pending owner approval, sets review on 2026-11-05
+//! verification remains a non-default temporary capability. The owner approved
+//! this short migration extension on 2026-11-02, with review on 2026-11-05
 //! and target removal on 2026-11-09. Local issuance helpers exist
 //! only for crate-internal regression tests; production builds are verification-only.
 //! New integrations must use OB3. The exception is tracked in
