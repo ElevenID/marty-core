@@ -9,10 +9,7 @@ use jsonwebtoken::{
     crypto::verify as verify_jws_signature, decode, decode_header, DecodingKey, Validation,
 };
 use jsonwebtoken::{jwk::Jwk, Algorithm};
-use serde::de::{self, Error as DeError, MapAccess, SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer};
-use serde_json::{Map, Value};
-use std::fmt;
+use serde_json::Value;
 
 use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
 use crate::error::{Oid4vciError, Oid4vciResult};
@@ -58,98 +55,15 @@ pub struct VerifiedCompactJwt {
     pub claims: Value,
 }
 
-struct UniqueValue(Value);
-
-impl<'de> Deserialize<'de> for UniqueValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(UniqueValueVisitor)
-    }
-}
-
-struct UniqueValueVisitor;
-
-impl<'de> Visitor<'de> for UniqueValueVisitor {
-    type Value = UniqueValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("JSON without duplicate object members")
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Bool(value)))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Number(value.into())))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Number(value.into())))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        serde_json::Number::from_f64(value)
-            .map(Value::Number)
-            .map(UniqueValue)
-            .ok_or_else(|| E::custom("non-finite JSON number"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::String(value.to_owned())))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::String(value)))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Null))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(UniqueValue(Value::Null))
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element::<UniqueValue>()? {
-            values.push(value.0);
-        }
-        Ok(UniqueValue(Value::Array(values)))
-    }
-
-    fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut object = Map::new();
-        while let Some((name, value)) = access.next_entry::<String, UniqueValue>()? {
-            if object.insert(name, value.0).is_some() {
-                return Err(A::Error::custom("duplicate JSON object member"));
-            }
-        }
-        Ok(UniqueValue(Value::Object(object)))
-    }
-}
-
 pub(crate) fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Value> {
-    let value = serde_json::from_slice::<UniqueValue>(bytes)
+    let value = marty_crypto::strict_json::parse_unique_json(bytes)
         .map_err(|error| Oid4vciError::JwtError(format!("Invalid {field} JSON: {error}")))?;
-    if !value.0.is_object() {
+    if !value.is_object() {
         return Err(Oid4vciError::JwtError(format!(
             "Invalid {field} JSON: expected an object"
         )));
     }
-    Ok(value.0)
+    Ok(value)
 }
 
 /// Decode the protected header of a compact JWT without treating its claims as trusted.
@@ -411,6 +325,24 @@ mod tests {
         let error = parse_unique_object(br#"{"cnf":{"jwk":{"kty":"EC","kty":"oct"}}}"#, "claims")
             .unwrap_err();
         assert!(error.to_string().contains("duplicate JSON object member"));
+    }
+
+    #[test]
+    fn unique_object_wrapper_keeps_root_policy_and_field_diagnostics() {
+        for raw in [b"null".as_slice(), b"[]", b"true", b"42"] {
+            let Oid4vciError::JwtError(message) = parse_unique_object(raw, "claims").unwrap_err()
+            else {
+                panic!("expected JWT error");
+            };
+            assert_eq!(message, "Invalid claims JSON: expected an object");
+        }
+        let Oid4vciError::JwtError(message) =
+            parse_unique_object(br#"{"a":1,"\u0061":2}"#, "header").unwrap_err()
+        else {
+            panic!("expected JWT error");
+        };
+        assert!(message.starts_with("Invalid header JSON: duplicate JSON object member"));
+        assert!(message.contains("line 1 column"));
     }
 
     #[test]

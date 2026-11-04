@@ -74,6 +74,7 @@ mod secret_buffer;
 mod secret_hash;
 #[cfg(feature = "public-key-codec")]
 pub mod serialization;
+pub mod strict_json;
 #[cfg(feature = "symmetric")]
 pub mod symmetric;
 

@@ -140,7 +140,7 @@ impl JweHeader {
                 "JWE protected header exceeds the configured size limit".to_string(),
             ));
         }
-        let value = crate::key_attestation::parse_unique_json(json)
+        let value = marty_crypto::strict_json::parse_unique_json(json)
             .map_err(|e| VerificationError::internal(format!("JWE header parsing failed: {e}")))?;
         serde_json::from_value(value)
             .map_err(|e| VerificationError::internal(format!("JWE header parsing failed: {}", e)))
