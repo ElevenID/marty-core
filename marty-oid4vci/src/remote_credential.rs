@@ -557,8 +557,33 @@ pub fn prepare_remote_mdoc(request: RemoteMdocRequest) -> Oid4vciResult<Prepared
 /// and restored by `(batch_id, job_id)`. Any error discards the entire batch;
 /// this function prepares signing inputs only and does not sign, activate, or
 /// persist credentials.
+///
+/// To select a different trusted executor, use
+/// [`prepare_remote_mdoc_batch_with_digest_executor`].
 pub fn prepare_remote_mdoc_batch(
     batch: Vec<RemoteMdocBatchItem>,
+) -> Oid4vciResult<Vec<PreparedRemoteMdocBatchItem>> {
+    prepare_remote_mdoc_batch_with_digest_executor(batch, &SerialDigestExecutor)
+}
+
+/// Prepare remote mdocs using a caller-selected, trusted digest executor.
+///
+/// Request validation, credential identifiers, timestamps, random salts, and
+/// canonical assembly remain in the same preparation path as
+/// [`prepare_remote_mdoc_batch`]. The executor receives digest jobs only; it
+/// receives no signing keys or signer handles. Results may arrive in any order
+/// and are restored by identity. An execution or result-validation error
+/// discards the entire batch without retrying through the serial executor.
+///
+/// The executor remains inside the issuer's trusted computing boundary: its
+/// inputs contain sensitive claims, and checking same-length digest contents
+/// would repeat its work. Implementations must satisfy the [`DigestExecutor`]
+/// correctness, call-isolation, and confidentiality contract. This function
+/// retains production randomness and time generation; it does not expose
+/// deterministic source injection.
+pub fn prepare_remote_mdoc_batch_with_digest_executor(
+    batch: Vec<RemoteMdocBatchItem>,
+    digest_executor: &dyn DigestExecutor,
 ) -> Oid4vciResult<Vec<PreparedRemoteMdocBatchItem>> {
     let mut rng = rand::thread_rng();
     prepare_remote_mdoc_batch_with_sources(
@@ -566,7 +591,7 @@ pub fn prepare_remote_mdoc_batch(
         uuid::Uuid::new_v4,
         chrono::Utc::now,
         || rng.gen(),
-        &SerialDigestExecutor,
+        digest_executor,
     )
 }
 
