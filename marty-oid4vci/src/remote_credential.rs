@@ -936,7 +936,8 @@ mod tests {
 
     use super::{
         prepare_remote_jwt_vc, prepare_remote_mdoc, prepare_remote_mdoc_batch,
-        prepare_remote_mdoc_batch_with_sources, prepare_remote_sd_jwt,
+        prepare_remote_mdoc_batch_with_digest_executor, prepare_remote_mdoc_batch_with_sources,
+        prepare_remote_sd_jwt, prepare_remote_sd_jwt_batch_with_digest_executor,
         prepare_remote_sd_jwt_batch_with_sources, RemoteJwtVcRequest, RemoteMdocBatchItem,
         RemoteMdocRequest, RemoteSdJwtBatchItem, RemoteSdJwtRequest, PRIVATE_JWK_MEMBERS,
     };
@@ -978,6 +979,56 @@ mod tests {
             self.calls.fetch_add(1, Ordering::Relaxed);
             self.jobs.store(jobs.len(), Ordering::Relaxed);
             SerialDigestExecutor.execute(jobs)
+        }
+    }
+
+    struct ReversedDigestExecutor;
+
+    impl DigestExecutor for ReversedDigestExecutor {
+        fn execute(&self, jobs: &[DigestJob]) -> Result<Vec<DigestResult>, DigestExecutionError> {
+            let mut results = SerialDigestExecutor.execute(jobs)?;
+            results.reverse();
+            Ok(results)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum DigestFault {
+        Execution,
+        MissingResult,
+        WrongIdentity,
+        WrongOrdinal,
+        WrongDigestLength,
+    }
+
+    struct FaultyDigestExecutor {
+        fault: DigestFault,
+        calls: AtomicUsize,
+    }
+
+    impl DigestExecutor for FaultyDigestExecutor {
+        fn execute(&self, jobs: &[DigestJob]) -> Result<Vec<DigestResult>, DigestExecutionError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if matches!(self.fault, DigestFault::Execution) {
+                return Err(DigestExecutionError);
+            }
+            let mut results = SerialDigestExecutor.execute(jobs)?;
+            match self.fault {
+                DigestFault::Execution => unreachable!(),
+                DigestFault::MissingResult => {
+                    results.pop().unwrap();
+                }
+                DigestFault::WrongIdentity => {
+                    results.last_mut().unwrap().credential_id = u64::MAX;
+                }
+                DigestFault::WrongOrdinal => {
+                    results.last_mut().unwrap().ordinal = usize::MAX;
+                }
+                DigestFault::WrongDigestLength => {
+                    results.last_mut().unwrap().digest.pop().unwrap();
+                }
+            }
+            Ok(results)
         }
     }
 
@@ -1095,50 +1146,63 @@ mod tests {
             .collect::<Vec<[u8; 16]>>();
         let now = chrono::DateTime::from_timestamp(contract["issued_at_unix"].as_i64().unwrap(), 0)
             .unwrap();
-        let mut salt_index = 0;
-        let deterministic = prepare_remote_sd_jwt_batch_with_sources(
-            fixture_batch(),
-            || panic!("explicit IDs require no UUID source"),
-            || now,
-            || {
-                let salt = salts[salt_index % salts.len()];
-                salt_index += 1;
-                salt
-            },
-            &SerialDigestExecutor,
-        )
-        .unwrap();
-        for (case, item) in contract["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .zip(deterministic)
-        {
-            assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
-            assert_eq!(
-                item.prepared_sd_jwt().credential_id(),
-                case["credential_id"].as_str().unwrap()
-            );
-            assert_eq!(
-                item.prepared_sd_jwt().signing_input(),
-                case["signing_input"].as_str().unwrap()
-            );
-            assert_eq!(
-                item.prepared_sd_jwt().disclosures_suffix(),
-                case["disclosures_suffix"].as_str().unwrap()
-            );
+        for executor in [
+            &SerialDigestExecutor as &dyn DigestExecutor,
+            &ReversedDigestExecutor,
+        ] {
+            let mut salt_index = 0;
+            let deterministic = prepare_remote_sd_jwt_batch_with_sources(
+                fixture_batch(),
+                || panic!("explicit IDs require no UUID source"),
+                || now,
+                || {
+                    let salt = salts[salt_index % salts.len()];
+                    salt_index += 1;
+                    salt
+                },
+                executor,
+            )
+            .unwrap();
+            for (case, item) in contract["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(deterministic)
+            {
+                assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
+                assert_eq!(
+                    item.prepared_sd_jwt().credential_id(),
+                    case["credential_id"].as_str().unwrap()
+                );
+                assert_eq!(
+                    item.prepared_sd_jwt().signing_input(),
+                    case["signing_input"].as_str().unwrap()
+                );
+                assert_eq!(
+                    item.prepared_sd_jwt().disclosures_suffix(),
+                    case["disclosures_suffix"].as_str().unwrap()
+                );
+            }
         }
+        let executor = CountingDigestExecutor::default();
+        let custom =
+            prepare_remote_sd_jwt_batch_with_digest_executor(fixture_batch(), &executor).unwrap();
+        assert_eq!(executor.calls.load(Ordering::Relaxed), 1);
+        assert!(executor.jobs.load(Ordering::Relaxed) > 0);
         let public = super::prepare_remote_sd_jwt_batch(fixture_batch()).unwrap();
-        for (case, item) in contract["items"].as_array().unwrap().iter().zip(public) {
-            assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
-            assert_eq!(
-                item.prepared_sd_jwt().credential_id(),
-                case["credential_id"].as_str().unwrap()
-            );
-            let header = segment(item.prepared_sd_jwt().signing_input(), 0);
-            let payload = segment(item.prepared_sd_jwt().signing_input(), 1);
-            assert_eq!(header["kid"], contract["verification_method_id"]);
-            assert_eq!(payload["iss"], contract["issuer_id"]);
+        for prepared in [public, custom] {
+            assert_eq!(prepared.len(), contract["items"].as_array().unwrap().len());
+            for (case, item) in contract["items"].as_array().unwrap().iter().zip(prepared) {
+                assert_eq!(item.batch_id(), case["batch_id"].as_u64().unwrap());
+                assert_eq!(
+                    item.prepared_sd_jwt().credential_id(),
+                    case["credential_id"].as_str().unwrap()
+                );
+                let header = segment(item.prepared_sd_jwt().signing_input(), 0);
+                let payload = segment(item.prepared_sd_jwt().signing_input(), 1);
+                assert_eq!(header["kid"], contract["verification_method_id"]);
+                assert_eq!(payload["iss"], contract["issuer_id"]);
+            }
         }
     }
 
@@ -1600,7 +1664,7 @@ mod tests {
         let mut times = [fixed_time(56), fixed_time(57), fixed_time(58)].into_iter();
         let mut salts = (0..3).map(|salt| std::array::from_fn(|index| (salt * 41 + index) as u8));
         let prepared = prepare_remote_mdoc_batch_with_sources(
-            batch,
+            batch.clone(),
             || panic!("reserved credential IDs must not allocate UUIDs"),
             || times.next().expect("one timestamp per credential"),
             || salts.next().expect("one salt per claim"),
@@ -1612,6 +1676,34 @@ mod tests {
         assert!(salts.next().is_none());
         assert_eq!(executor.calls.load(Ordering::Relaxed), 1);
         assert_eq!(executor.jobs.load(Ordering::Relaxed), 3);
+
+        let mut reversed_times = [fixed_time(56), fixed_time(57), fixed_time(58)].into_iter();
+        let mut reversed_salts =
+            (0..3).map(|salt| std::array::from_fn(|index| (salt * 41 + index) as u8));
+        let reversed = prepare_remote_mdoc_batch_with_sources(
+            batch,
+            || panic!("reserved credential IDs must not allocate UUIDs"),
+            || reversed_times.next().unwrap(),
+            || reversed_salts.next().unwrap(),
+            &ReversedDigestExecutor,
+        )
+        .unwrap();
+        assert_eq!(reversed.len(), prepared.len());
+        for (expected, actual) in prepared.iter().zip(reversed) {
+            assert_eq!(actual.batch_id(), expected.batch_id());
+            assert_eq!(
+                actual.prepared_mdoc().credential_id(),
+                expected.prepared_mdoc().credential_id()
+            );
+            assert_eq!(
+                actual.prepared_mdoc().algorithm(),
+                expected.prepared_mdoc().algorithm()
+            );
+            assert_eq!(
+                actual.prepared_mdoc().signing_payload(),
+                expected.prepared_mdoc().signing_payload()
+            );
+        }
         assert_eq!(
             prepared
                 .iter()
@@ -1935,14 +2027,117 @@ mod tests {
             "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
             "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
         }));
-        let prepared = prepare_remote_mdoc_batch(vec![RemoteMdocBatchItem::new(789, request)])
-            .expect("public batch preparation");
-        assert_eq!(prepared.len(), 1);
-        assert_eq!(prepared[0].batch_id(), 789);
-        assert_eq!(
-            prepared[0].prepared_mdoc().credential_id(),
-            "urn:uuid:00000000-0000-0000-0000-000000000789"
+        let executor = CountingDigestExecutor::default();
+        let custom = prepare_remote_mdoc_batch_with_digest_executor(
+            vec![RemoteMdocBatchItem::new(789, request.clone())],
+            &executor,
+        )
+        .expect("custom executor batch preparation");
+        assert_eq!(executor.calls.load(Ordering::Relaxed), 1);
+        assert_eq!(executor.jobs.load(Ordering::Relaxed), 1);
+        let public = prepare_remote_mdoc_batch(vec![RemoteMdocBatchItem::new(789, request)])
+            .expect("serial batch preparation");
+        for prepared in [public, custom] {
+            assert_eq!(prepared.len(), 1);
+            assert_eq!(prepared[0].batch_id(), 789);
+            assert_eq!(
+                prepared[0].prepared_mdoc().credential_id(),
+                "urn:uuid:00000000-0000-0000-0000-000000000789"
+            );
+            assert!(!prepared[0].prepared_mdoc().signing_payload().is_empty());
+        }
+    }
+
+    #[test]
+    fn public_digest_executor_routes_fail_closed_without_a_serial_retry() {
+        for fault in [
+            DigestFault::Execution,
+            DigestFault::MissingResult,
+            DigestFault::WrongIdentity,
+            DigestFault::WrongOrdinal,
+            DigestFault::WrongDigestLength,
+        ] {
+            let executor = FaultyDigestExecutor {
+                fault,
+                calls: AtomicUsize::new(0),
+            };
+            let mdoc_error = prepare_remote_mdoc_batch_with_digest_executor(
+                [91, 7]
+                    .into_iter()
+                    .map(|batch_id| {
+                        RemoteMdocBatchItem::new(
+                            batch_id,
+                            remote_mdoc_request(
+                                None,
+                                "ES256",
+                                HashMap::from([("name".into(), serde_json::json!("Alice"))]),
+                            ),
+                        )
+                    })
+                    .collect(),
+                &executor,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                mdoc_error,
+                crate::Oid4vciError::MdocError(message)
+                    if message == "mdoc digest execution failed"
+            ));
+            assert_eq!(executor.calls.load(Ordering::Relaxed), 1);
+
+            let sd_jwt_error = prepare_remote_sd_jwt_batch_with_digest_executor(
+                [91, 7]
+                    .into_iter()
+                    .map(|batch_id| RemoteSdJwtBatchItem::new(batch_id, sd_jwt_batch_request(None)))
+                    .collect(),
+                &executor,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                sd_jwt_error,
+                crate::Oid4vciError::SdJwtError(message)
+                    if message == "SD-JWT disclosure batch digest failed"
+            ));
+            assert_eq!(executor.calls.load(Ordering::Relaxed), 2);
+        }
+    }
+
+    #[test]
+    fn public_digest_executor_routes_validate_before_execution_and_skip_empty_batches() {
+        assert!(
+            prepare_remote_mdoc_batch_with_digest_executor(vec![], &MustNotExecute)
+                .unwrap()
+                .is_empty()
         );
-        assert!(!prepared[0].prepared_mdoc().signing_payload().is_empty());
+        assert!(
+            prepare_remote_sd_jwt_batch_with_digest_executor(vec![], &MustNotExecute)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mdoc_error = prepare_remote_mdoc_batch_with_digest_executor(
+            vec![
+                RemoteMdocBatchItem::new(91, remote_mdoc_request(None, "ES256", HashMap::new())),
+                RemoteMdocBatchItem::new(7, remote_mdoc_request(None, "invalid", HashMap::new())),
+            ],
+            &MustNotExecute,
+        )
+        .unwrap_err();
+        assert!(matches!(mdoc_error, crate::Oid4vciError::InvalidRequest(_)));
+
+        let mut invalid = sd_jwt_batch_request(None);
+        invalid.algorithm = "invalid".into();
+        let sd_jwt_error = prepare_remote_sd_jwt_batch_with_digest_executor(
+            vec![
+                RemoteSdJwtBatchItem::new(91, sd_jwt_batch_request(None)),
+                RemoteSdJwtBatchItem::new(7, invalid),
+            ],
+            &MustNotExecute,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            sd_jwt_error,
+            crate::Oid4vciError::InvalidRequest(_)
+        ));
     }
 }
