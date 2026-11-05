@@ -226,8 +226,31 @@ struct ValidatedSdJwtBatchItem {
 /// Prepare caller-ordered remote SD-JWTs with one disclosure digest call.
 /// All request fields and time-dependent validity are checked before UUID or
 /// salt allocation. Failures discard the entire batch.
+///
+/// Uses the serial executor. To select a different trusted executor, use
+/// [`prepare_remote_sd_jwt_batch_with_digest_executor`].
 pub fn prepare_remote_sd_jwt_batch(
     batch: Vec<RemoteSdJwtBatchItem>,
+) -> Oid4vciResult<Vec<PreparedRemoteSdJwtBatchItem>> {
+    prepare_remote_sd_jwt_batch_with_digest_executor(batch, &SerialDigestExecutor)
+}
+
+/// Prepare remote SD-JWTs using a caller-selected, trusted digest executor.
+///
+/// Request and validity checks, credential identifiers, timestamps, random
+/// salts, and canonical assembly use the same path as
+/// [`prepare_remote_sd_jwt_batch`]. The executor receives disclosure digest
+/// jobs rather than signing keys or signer handles. Results are restored by
+/// identity; execution and result-validation errors discard the entire batch
+/// without a serial retry.
+///
+/// The executor is trusted with sensitive disclosure bytes and digest
+/// correctness. It must follow the [`DigestExecutor`] call-isolation and
+/// confidentiality contract. Production randomness and time generation remain
+/// internal; deterministic source injection is not exposed.
+pub fn prepare_remote_sd_jwt_batch_with_digest_executor(
+    batch: Vec<RemoteSdJwtBatchItem>,
+    digest_executor: &dyn DigestExecutor,
 ) -> Oid4vciResult<Vec<PreparedRemoteSdJwtBatchItem>> {
     let mut rng = rand::rngs::OsRng;
     prepare_remote_sd_jwt_batch_with_sources(
@@ -239,7 +262,7 @@ pub fn prepare_remote_sd_jwt_batch(
             rng.fill_bytes(&mut salt);
             salt
         },
-        &SerialDigestExecutor,
+        digest_executor,
     )
 }
 
