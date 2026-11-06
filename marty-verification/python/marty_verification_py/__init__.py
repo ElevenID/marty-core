@@ -6,6 +6,7 @@ and certificate operations through Rust FFI.
 """
 
 from ._marty_verification import (
+    OPEN_BADGES_SUPPORTED_VERSIONS,
     # Open Badges
     open_badge_ob3_issue,
     open_badge_ob3_verify,
@@ -22,6 +23,7 @@ except ImportError:
 __version__ = "0.1.0"
 
 __all__ = [
+    "OPEN_BADGES_SUPPORTED_VERSIONS",
     # Open Badges
     "open_badge_ob3_issue",
     "open_badge_ob3_verify",

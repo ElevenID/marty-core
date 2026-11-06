@@ -2555,6 +2555,7 @@ fn build_oid4vp_presentation_request(request_json: &str) -> PyResult<String> {
 /// Downstream extension crates use this entry point to extend ``_marty_rs``
 /// without copying bindings or publishing a second, incompatible module.
 pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("OPEN_BADGES_SUPPORTED_VERSIONS", ("3.0",))?;
     flow::register_flow_bindings(m)?;
     oid4vp_identity::register(m)?;
     siop::register(m)?;
@@ -2755,6 +2756,18 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_badges_capability_is_ob3_only() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_marty_rs").unwrap();
+            register_marty_bindings(&module).unwrap();
+            let versions = module.getattr("OPEN_BADGES_SUPPORTED_VERSIONS").unwrap();
+            assert!(versions.is_instance_of::<pyo3::types::PyTuple>());
+            assert_eq!(versions.extract::<(String,)>().unwrap(), ("3.0".into(),));
+        });
+    }
 
     fn remote_mdoc_batch_input(
         batch_id: u64,
