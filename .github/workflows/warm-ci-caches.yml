@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   rust:
+    if: vars.PRIVATE_FORKS_ENABLED != 'true'
     name: Warm Rust cache (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
@@ -79,9 +80,9 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
       - name: Report compiler cache effectiveness
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         run: sccache --show-stats
       - name: Report sanitized Linux cache backend status counts
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.diagnose_linux_cache && runner.os == 'Linux'
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always() && github.event_name == 'workflow_dispatch' && inputs.diagnose_linux_cache && runner.os == 'Linux')
         shell: bash
         run: python3 scripts/summarize_sccache_errors.py "$RUNNER_TEMP/sccache-backend-errors.log"

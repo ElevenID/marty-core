@@ -34,11 +34,14 @@ jobs:
           EXPECTED_SHA: ${{ inputs.source_sha }}
           RUN_SHA: ${{ github.sha }}
           RUN_REF: ${{ github.ref }}
+          CODEQL_ADVANCED_ENABLED: ${{ vars.CODEQL_ADVANCED_ENABLED }}
         run: |
           set -euo pipefail
           test "$RUN_REF" = refs/heads/main
           test "$RUN_SHA" = "$EXPECTED_SHA"
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          # A skipped advanced analysis must never satisfy release evidence.
+          test "$CODEQL_ADVANCED_ENABLED" = "true"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
