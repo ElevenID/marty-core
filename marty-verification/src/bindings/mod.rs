@@ -109,6 +109,7 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 ///
 /// Called from marty-rs to add verification functions directly.
 pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("OPEN_BADGES_SUPPORTED_VERSIONS", ("3.0",))?;
     // Trust-registry synchronization kernel
     m.add_function(wrap_pyfunction!(trust_registry_catalog_json, m)?)?;
     m.add_function(wrap_pyfunction!(trust_registry_behavior_fixture_json, m)?)?;
@@ -284,7 +285,6 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
-    m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify_at, m)?)?;
     m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
@@ -309,6 +309,24 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod domain_contract_tests {
     use super::*;
     use pyo3::exceptions::PyValueError;
+
+    #[test]
+    fn open_badges_capability_is_ob3_only_at_both_entry_points() {
+        Python::initialize();
+        Python::attach(|py| {
+            for standalone in [true, false] {
+                let module = PyModule::new(py, "_verification_contract").unwrap();
+                if standalone {
+                    _marty_verification(&module).unwrap();
+                } else {
+                    register_marty_verification(&module).unwrap();
+                }
+                let versions = module.getattr("OPEN_BADGES_SUPPORTED_VERSIONS").unwrap();
+                assert!(versions.is_instance_of::<pyo3::types::PyTuple>());
+                assert_eq!(versions.extract::<(String,)>().unwrap(), ("3.0".into(),));
+            }
+        });
+    }
 
     #[test]
     fn both_entry_points_exclude_generic_secret_byte_apis() {

@@ -22,7 +22,6 @@ pub enum DetectedCredentialFormat {
     W3cVcdmDi,
     SdJwt,
     Mdoc,
-    OpenbadgeV2,
     OpenbadgeV3,
     Unknown,
 }
@@ -34,11 +33,53 @@ impl DetectedCredentialFormat {
             Self::W3cVcdmDi => "w3c-vcdm-di",
             Self::SdJwt => "sd-jwt",
             Self::Mdoc => "mdoc",
-            Self::OpenbadgeV2 => "openbadge-v2",
             Self::OpenbadgeV3 => "openbadge-v3",
             Self::Unknown => "unknown",
         }
     }
+}
+
+/// Identify retired OB2 assertions before choosing a supported verifier.
+///
+/// This recognizes legacy context/type markers in raw credentials and common
+/// request/presentation envelopes. JWT claims are decoded only for rejection;
+/// this does not verify a signature or convert a credential.
+/// Mixed OB2/OB3 markers remain retired and must not reach another verifier.
+pub fn is_retired_ob2(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => return values.iter().any(is_retired_ob2),
+        Value::String(token) => {
+            let issuer_token = token.split('~').next().unwrap_or_default();
+            return decode_jwt_parts(issuer_token)
+                .is_some_and(|(_, payload)| is_retired_ob2(&payload));
+        }
+        _ => {}
+    }
+    if ["@context", "context"].iter().any(|field| {
+        string_values(value.get(*field))
+            .iter()
+            .any(|context| context == OB2_CONTEXT)
+    }) || string_values(value.get("type")).iter().any(|kind| {
+        matches!(
+            kind.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+                .as_str(),
+            "assertion" | "openbadgev2"
+        )
+    }) {
+        return true;
+    }
+    [
+        "credential",
+        "vc",
+        "assertion",
+        "vp",
+        "verifiableCredential",
+    ]
+    .iter()
+    .any(|field| value.get(*field).is_some_and(is_retired_ob2))
 }
 
 /// Detect the credential format without accepting malformed candidates.
@@ -77,7 +118,10 @@ pub fn detect_credential_format(input: &str) -> DetectedCredentialFormat {
 
 fn detect_sd_jwt(input: &str) -> DetectedCredentialFormat {
     let issuer_jwt = input.split('~').next().unwrap_or_default();
-    if issuer_jwt.matches('.').count() != 2 || decode_jwt_parts(issuer_jwt).is_none() {
+    let Some((_, payload)) = decode_jwt_parts(issuer_jwt) else {
+        return DetectedCredentialFormat::Unknown;
+    };
+    if is_retired_ob2(&payload) {
         return DetectedCredentialFormat::Unknown;
     }
     DetectedCredentialFormat::SdJwt
@@ -87,12 +131,14 @@ fn detect_jwt(input: &str) -> DetectedCredentialFormat {
     let Some((header, payload)) = decode_jwt_parts(input) else {
         return DetectedCredentialFormat::Unknown;
     };
+    if is_retired_ob2(&payload) {
+        return DetectedCredentialFormat::Unknown;
+    }
     if header.get("typ").and_then(Value::as_str) == Some("openBadgeCredential") {
         return DetectedCredentialFormat::OpenbadgeV3;
     }
     let credential = payload.get("vc").unwrap_or(&payload);
     match detect_json(credential) {
-        DetectedCredentialFormat::OpenbadgeV2 => DetectedCredentialFormat::OpenbadgeV2,
         DetectedCredentialFormat::OpenbadgeV3 => DetectedCredentialFormat::OpenbadgeV3,
         _ if credential.is_object() => DetectedCredentialFormat::W3cVc,
         _ => DetectedCredentialFormat::Unknown,
@@ -118,6 +164,9 @@ fn decode_json_segment(segment: &str) -> Option<Value> {
 }
 
 fn detect_json(value: &Value) -> DetectedCredentialFormat {
+    if is_retired_ob2(value) {
+        return DetectedCredentialFormat::Unknown;
+    }
     let credential = value.get("credential").unwrap_or(value);
     let has_data_integrity = match credential.get("proof") {
         Some(Value::Object(proof)) => {
@@ -133,9 +182,6 @@ fn detect_json(value: &Value) -> DetectedCredentialFormat {
     }
 
     let contexts = string_values(credential.get("@context"));
-    if contexts.iter().any(|value| value == OB2_CONTEXT) {
-        return DetectedCredentialFormat::OpenbadgeV2;
-    }
     let types = string_values(credential.get("type"));
     if types.iter().any(|value| {
         matches!(
@@ -226,7 +272,7 @@ mod tests {
                 })
                 .to_string()
             ),
-            DetectedCredentialFormat::OpenbadgeV2
+            DetectedCredentialFormat::Unknown
         );
         assert_eq!(
             detect_credential_format(

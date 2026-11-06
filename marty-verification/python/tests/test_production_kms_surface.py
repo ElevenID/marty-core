@@ -46,6 +46,7 @@ def test_production_module_excludes_local_secret_key_operations():
         "jwe_encrypt",
         "jwe_decrypt",
         "open_badge_ob2_issue",
+        "open_badge_ob2_verify",
         "open_badge_ob3_issue",
         "dtc_sign",
         "CertProfile",
@@ -73,7 +74,6 @@ def test_production_module_excludes_local_secret_key_operations():
         "dtc_prepare_signing",
         "dtc_assemble_signature",
         "dtc_verify",
-        "open_badge_ob2_verify",
         "open_badge_ob3_verify",
         "open_badge_ob3_verify_at",
     ):

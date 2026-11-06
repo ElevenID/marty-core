@@ -185,6 +185,9 @@ required-features = ["kms-only"]
 name = "open_badges_typed_api"
 
 [[test]]
+name = "open_badges_retirement"
+
+[[test]]
 name = "passport_integrity_behavior"
 
 [[test]]

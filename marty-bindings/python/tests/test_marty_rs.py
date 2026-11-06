@@ -29,6 +29,9 @@ def test_canonical_top_level_import_exposes_native_bindings():
     import _marty_rs as canonical
     import marty_rs
 
+    for module in (_marty_rs, canonical, marty_rs):
+        assert module.OPEN_BADGES_SUPPORTED_VERSIONS == ("3.0",)
+
     assert canonical.TokenStatusList is _marty_rs.TokenStatusList
     assert canonical.oid4vci_prepare_jwt_vc is _marty_rs.oid4vci_prepare_jwt_vc
     assert canonical.oid4vci_assemble_jwt_vc is _marty_rs.oid4vci_assemble_jwt_vc

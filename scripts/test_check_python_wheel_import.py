@@ -55,6 +55,7 @@ class PythonWheelImportTests(unittest.TestCase):
         self,
     ) -> None:
         public = SimpleNamespace(
+            OPEN_BADGES_SUPPORTED_VERSIONS=("3.0",),
             **{
                 name: object()
                 for name in check_python_wheel_import.AGGREGATE_REQUIRED_APIS
@@ -111,8 +112,8 @@ class PythonWheelImportTests(unittest.TestCase):
     def test_verification_public_api_is_versioned_and_kms_only(self) -> None:
         public = SimpleNamespace(
             __version__="0.2.0",
-            open_badge_ob2_verify=object(),
             open_badge_ob3_verify=object(),
+            OPEN_BADGES_SUPPORTED_VERSIONS=("3.0",),
         )
         with (
             patch.object(
@@ -143,6 +144,35 @@ class PythonWheelImportTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "local issuance APIs"):
                 check_python_wheel_import.verify_public_api("marty-verification")
+
+    def test_verification_public_api_rejects_retired_ob2_verifier(self) -> None:
+        public = SimpleNamespace(
+            __version__="0.2.0",
+            open_badge_ob3_verify=object(),
+            OPEN_BADGES_SUPPORTED_VERSIONS=("3.0",),
+            open_badge_ob2_verify=object(),
+        )
+        with (
+            patch.object(check_python_wheel_import.importlib, "import_module", return_value=public),
+            patch.object(check_python_wheel_import.metadata, "version", return_value="0.2.0"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "retired OB2 verification API"):
+                check_python_wheel_import.verify_public_api("marty-verification")
+
+    def test_ob3_capability_must_come_from_native_and_public_surfaces(self) -> None:
+        for package in ("marty-bindings", "marty-verification"):
+            for versions in (None, (), ("2.0", "3.0"), "3.0", ["3.0"]):
+                with self.subTest(package=package, versions=versions):
+                    public = SimpleNamespace(OPEN_BADGES_SUPPORTED_VERSIONS=("3.0",))
+                    native = SimpleNamespace(OPEN_BADGES_SUPPORTED_VERSIONS=versions)
+                    native_name = check_python_wheel_import.EXTENSION_MODULES[package]
+                    with patch.object(
+                        check_python_wheel_import.importlib,
+                        "import_module",
+                        side_effect=lambda name: native if name == native_name else public,
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "OB3-only native capability"):
+                            check_python_wheel_import.verify_public_api(package)
 
     def test_iso_public_api_version_matches_distribution_metadata(self) -> None:
         public = SimpleNamespace(

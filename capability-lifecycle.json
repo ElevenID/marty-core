@@ -4,23 +4,19 @@
     {
       "id": "open-badges-2",
       "standard": "IMS Open Badges 2.0",
-      "status": "temporary",
+      "status": "retired",
       "default": false,
       "successor": "open-badges-3",
-      "review_on": "2026-11-05",
-      "target_removal": "2026-11-09",
+      "retired_on": "2026-11-06",
       "tracking_issue": "https://github.com/ElevenID/marty-core/issues/96",
-      "public_interfaces": [
+      "public_interfaces": [],
+      "removed_interfaces": [
         "marty_verification_py.open_badge_ob2_verify",
-        "marty_verification::open_badges::verify_ob2_json"
+        "marty_verification::open_badges::verify_ob2_json",
+        "marty_verification::open_badges::verify_ob2",
+        "marty_verification::open_badges::VerifyOb2Request"
       ],
-      "constraints": [
-        "Open Badges 3 remains the default profile",
-        "no new OB2-only capabilities or algorithm support",
-        "no new dependency exception may be justified only by OB2",
-        "verification remains covered by positive and negative tests until removal"
-      ],
-      "rationale": "Short migration bridge through November 9, 2026, approved by the owner on November 2, 2026, with a November 5 review to coordinate remaining first-party verification callers while the stack remains pre-1.0; this is not a general backward-compatibility commitment."
+      "rationale": "Open Badges 2 runtime support is removed. Legacy assertions are retained only as rejection fixtures. Obtain a newly issued Open Badges 3 credential; changing an OB2 context or routing label does not migrate its signed contents."
     },
     {
       "id": "open-badges-3",

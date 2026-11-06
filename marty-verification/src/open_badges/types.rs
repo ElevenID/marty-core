@@ -306,7 +306,6 @@ mod status_authority_tests {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OpenBadgesVersion {
-    V2,
     V3,
     Unknown,
 }
@@ -314,7 +313,6 @@ pub enum OpenBadgesVersion {
 impl OpenBadgesVersion {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::V2 => "2.0",
             Self::V3 => "3.0",
             Self::Unknown => "unknown",
         }
