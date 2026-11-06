@@ -30,8 +30,7 @@ pip install marty-verification-py
 Open Badges 3 is the current/default profile. A maintenance-only bridge for
 the existing Open Badges 2 issuance and verification interfaces is proposed
 through 2026-11-09 inclusive, following review on 2026-11-06. This extension
-is pending explicit owner approval; main's verification-only approval does
-not cover maintenance issuance. The proposal retains the existing
+is pending owner approval. The proposal retains the existing
 restrictions, positive/negative coverage, and next-day expiry enforcement,
 tracked in [marty-core#96](https://github.com/ElevenID/marty-core/issues/96).
 Do not build new integrations against the OB2 entry points.
