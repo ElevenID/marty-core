@@ -55,6 +55,10 @@ packages instead of a second hard-coded value.
 
 ## Development
 
+Native builds use the downstream Rust forks described in
+[Native build access](docs/private-native-builds.md). That document records the
+private-fork cutover switch and its effect on public CI and publishing.
+
 ### Quick Start
 
 ```bash

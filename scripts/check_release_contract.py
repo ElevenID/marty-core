@@ -286,6 +286,14 @@ def _cargo_test_commands(step: str) -> list[str]:
     ]
 
 
+PRIVATE_FORKS_BOUNDARY_STEP = """      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1"""
+
 WASM_SECURITY_TEST_COMMANDS = {
     "oid4vci-wasm-security": (
         "cargo test --locked -p marty-oid4vci --target wasm32-unknown-unknown "
@@ -373,7 +381,7 @@ WASM_SECURITY_TEST_STEPS = {
 }
 CI_GATE_SHA256 = "1c8a43312aa7cc5040d2345bf15ce10354cc184272f9a777a804971f3c4a01fd"
 ZKP_NATIVE_SECURITY_JOB_SHA256 = (
-    "d230b5ab4c6c5ba18c2a5874332467cb879ff51b84de2d2f95ea73504ac1987e"
+    "fead54a1e909ab3754e79ce2504e133abca4535ab6e0ba8e575efc2a7415ac66"
 )
 WASM_SECURITY_WORKFLOW_ENV = """env:
   CARGO_TERM_COLOR: always
@@ -568,6 +576,11 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                     f"{execution_override} override"
                 )
         steps = _workflow_step_blocks(block)
+        if not steps or _normalized_step(steps[0]) != PRIVATE_FORKS_BOUNDARY_STEP:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must enforce the exact private "
+                "fork boundary before checkout, caches, or test execution"
+            )
         if re.search(r"^      -\s*$", block, re.MULTILINE) or any(
             re.match(r"^      - (?:name|uses|run):", step) is None for step in steps
         ):
@@ -578,7 +591,11 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
         observed_run_commands = tuple(
             command for step in steps for command in _step_run_commands(step)
         )
-        if observed_run_commands != WASM_SECURITY_TEST_COMMANDS[job]:
+        expected_run_commands = (
+            *tuple(_step_run_commands(PRIVATE_FORKS_BOUNDARY_STEP)),
+            *WASM_SECURITY_TEST_COMMANDS[job],
+        )
+        if observed_run_commands != expected_run_commands:
             errors.append(
                 f".github/workflows/ci.yml: {job} must use its exact approved "
                 "Cargo test script"
