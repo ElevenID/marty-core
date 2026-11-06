@@ -1,14 +1,20 @@
 """Check the credential boundary and the release behavior that privacy changes."""
 
 import ast
+import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import textwrap
 import unittest
 
 from check_release_contract import _workflow_step_blocks
+import stable_tag_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 FETCH_JOBS = {
+    "codeql.yml": {"analyze"},
     "ci.yml": {"preflight", "kms-role-graphs", "rust-lint-compat", "affected-tests",
                "zkp-native-security", "platform-tests", "security", "feature-matrix",
                "feature-combinations", "python-tests", "python-conformance", "wasm-tests",
@@ -98,6 +104,85 @@ class PrivateForkWorkflowTests(unittest.TestCase):
                 for failure in ("failure", "cancelled", "skipped"):
                     self.assertFalse(release_condition(workflow[name], private | {producer: failure}, True), (name, producer, failure))
             self.assertFalse(release_condition(workflow[name], success | {"build-python-sdists": "failure"}, True))
+
+
+class CodeQLBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = (ROOT / ".github/workflows/codeql.yml").read_text()
+        self.steps = _workflow_step_blocks(jobs("codeql.yml")["analyze"])
+
+    def test_same_language_coverage_uses_result_uploads_without_source_exports(self):
+        self.assertIn("language: [actions, c-cpp, python, rust]", self.workflow)
+        self.assertIn("name: Analyze (${{ matrix.language }})", self.workflow)
+        self.assertEqual(self.workflow.count("branches: [main, maintenance/0.1.x]"), 2)
+        self.assertIn('cron: "47 11 * * 4"', self.workflow)
+        self.assertIn("  merge_group:\n    types: [checks_requested]", self.workflow)
+        self.assertIn("  workflow_dispatch:", self.workflow)
+        self.assertIn("if: vars.CODEQL_ADVANCED_ENABLED == 'true'", self.workflow)
+        self.assertIn("CODEQL_OVERLAY_DATABASE_MODE: none", self.workflow)
+        self.assertIn("CODEQL_ACTION_DEBUG_COMBINED_SARIF: 'false'", self.workflow)
+        init = next(step for step in self.steps if "github/codeql-action/init@" in step)
+        analyze = next(step for step in self.steps if "github/codeql-action/analyze@" in step)
+        for setting in ("build-mode: none", "dependency-caching: false", "trap-caching: false", "debug: false"):
+            self.assertIn(setting, init)
+        self.assertNotIn("queries:", init)  # Retain the default/high-precision suite.
+        self.assertIn("upload-database: false", analyze)
+        self.assertIn("category: /language:${{ matrix.language }}", analyze)
+        self.assertNotIn("upload: never", analyze)
+        self.assertNotIn("continue-on-error", self.workflow)
+        self.assertNotIn("upload-artifact@", self.workflow)
+        condition = "if: vars.PRIVATE_FORKS_ENABLED == 'true' && matrix.language == 'rust'"
+        check = next(step for step in self.steps if "private-forks.py check" in step)
+        fetch = next(step for step in self.steps if "secrets.PRIVATE_FORKS_READ_TOKEN" in step)
+        self.assertIn(condition, check)
+        self.assertIn(condition, fetch)
+        self.assertLess(self.steps.index(check), self.steps.index(fetch))
+        self.assertLess(self.steps.index(fetch), self.steps.index(init))
+        self.assertEqual(self.workflow.count("secrets.PRIVATE_FORKS_READ_TOKEN"), 1)
+        self.assertNotIn("PRIVATE_FORKS_READ_TOKEN", init + analyze)
+
+    def test_debug_rerun_stops_before_initialization_or_private_source_fetch(self):
+        guard = self.steps[0]
+        self.assertIn("name: Reject debug runs that would export source databases", guard)
+        self.assertNotIn("if:", guard)
+        command = textwrap.dedent(guard.split("        run: |\n", 1)[1])
+        for value, expected in ((None, 0), ("0", 0), ("1", 1)):
+            with self.subTest(runner_debug=value):
+                env = {"PATH": os.environ["PATH"]}
+                if value is not None:
+                    env["RUNNER_DEBUG"] = value
+                result = subprocess.run(["bash", "--noprofile", "--norc", "-c", command],
+                                        env=env, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_disabled_advanced_scan_cannot_create_a_release_preparation(self):
+        first = _workflow_step_blocks(jobs("prepare-stable-tag.yml")["prepare-stable-tag"])[0]
+        self.assertNotIn("if:", first)
+        command = textwrap.dedent(first.split("        run: |\n", 1)[1])
+        sha = "a" * 40
+        for enabled, actual_sha, expected in (("", sha, 1), ("false", sha, 1),
+                                              ("true", sha, 0), ("true", "b" * 40, 1)):
+            with self.subTest(enabled=enabled, sha=actual_sha):
+                env = {"PATH": os.environ["PATH"], "EXPECTED_SHA": sha,
+                       "RUN_SHA": actual_sha, "RUN_REF": "refs/heads/main",
+                       "CODEQL_ADVANCED_ENABLED": enabled}
+                result = subprocess.run(["bash", "--noprofile", "--norc", "-c", command],
+                                        env=env, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_new_release_policy_requires_exact_advanced_scan_evidence(self):
+        policy = json.loads((ROOT / ".github/stable-tag-policy.json").read_text())
+        sha = "a" * 40
+        runs = [{**item, "id": number, "head_sha": sha, "status": "completed",
+                 "conclusion": "success"}
+                for number, item in enumerate(policy["required_workflows"], 1)]
+        scan = next(run for run in runs if run["path"] == ".github/workflows/codeql.yml")
+        self.assertEqual(scan["event"], "workflow_dispatch")
+        accepted = stable_tag_gate.validate_workflow_runs({"workflow_runs": runs}, policy, sha, 99)
+        self.assertEqual(len(accepted), len(runs))
+        scan.update(path="dynamic/github-code-scanning/codeql", event="dynamic")
+        with self.assertRaises(stable_tag_gate.StableTagGatePending):
+            stable_tag_gate.validate_workflow_runs({"workflow_runs": runs}, policy, sha, 99)
 
 
 if __name__ == "__main__":

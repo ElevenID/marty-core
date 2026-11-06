@@ -981,6 +981,7 @@ def check_stable_tag_gate() -> list[str]:
         "git tag -a",
         "git ls-remote --tags",
         'test "$protected_main" = "$COMMIT"',
+        'test "$CODEQL_ADVANCED_ENABLED" = "true"',
         "refs/remotes/origin/main^{commit}",
         "stable-tag-evidence-${{ inputs.tag }}",
         "gh workflow run release.yml --ref",
