@@ -943,7 +943,7 @@ def check_stable_tag_policy(policy: dict[str, object]) -> list[str]:
         ".github/workflows/organization-quality.yml",
         ".github/workflows/license-compliance.yml",
         ".github/workflows/mip-release-wallet.yml",
-        "dynamic/github-code-scanning/codeql",
+        ".github/workflows/codeql.yml",
     }
     if policy.get("schema") != "elevenid.stable-tag-preparation/v1":
         errors.append(".github/stable-tag-policy.json: invalid schema")
@@ -954,11 +954,7 @@ def check_stable_tag_policy(policy: dict[str, object]) -> list[str]:
             continue
         path = item.get("path")
         event = item.get("event")
-        expected_event = (
-            "dynamic"
-            if path == "dynamic/github-code-scanning/codeql"
-            else "workflow_dispatch"
-        )
+        expected_event = "workflow_dispatch"
         if event != expected_event:
             errors.append(
                 f".github/stable-tag-policy.json: {path} must use {expected_event} evidence"

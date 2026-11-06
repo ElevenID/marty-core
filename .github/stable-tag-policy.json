@@ -22,8 +22,8 @@
       "event": "workflow_dispatch"
     },
     {
-      "path": "dynamic/github-code-scanning/codeql",
-      "event": "dynamic"
+      "path": ".github/workflows/codeql.yml",
+      "event": "workflow_dispatch"
     }
   ]
 }

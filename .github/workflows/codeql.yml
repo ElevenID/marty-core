@@ -1,0 +1,92 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main, maintenance/0.1.x]
+  pull_request:
+    branches: [main, maintenance/0.1.x]
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "47 11 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    # Default setup remains active until the owner completes the settings
+    # cutover. Stable-tag preparation rejects this disabled state.
+    if: vars.CODEQL_ADVANCED_ENABLED == 'true'
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, c-cpp, python, rust]
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: write
+    env:
+      # Overlay databases contain source archives independently of the
+      # analyze action's upload-database setting.
+      CODEQL_OVERLAY_DATABASE_MODE: none
+      CODEQL_ACTION_DEBUG_COMBINED_SARIF: 'false'
+    steps:
+      - name: Reject debug runs that would export source databases
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${RUNNER_DEBUG:-0}" == "1" ]]; then
+            echo "::error::CodeQL debug artifacts can contain dependency sources. Rerun without debug logging."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up private fork access helper
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && matrix.language == 'rust'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && matrix.language == 'rust'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python .github/scripts/private-forks.py check
+          printf '%s\n' 'RUSTC_WRAPPER=' 'SCCACHE_GHA_ENABLED=false' >> "$GITHUB_ENV"
+      - name: Install Cargo for locked private dependency fetch
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && matrix.language == 'rust'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+      - name: Fetch private Rust dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && matrix.language == 'rust'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python .github/scripts/private-forks.py fetch --manifest-path Cargo.toml --manifest-path examples/offline-chain-headless/Cargo.toml
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          # Preserve the existing default/high-precision query suite.
+          dependency-caching: false
+          trap-caching: false
+          debug: false
+      - name: Analyze
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066
+        with:
+          category: /language:${{ matrix.language }}
+          upload-database: false
