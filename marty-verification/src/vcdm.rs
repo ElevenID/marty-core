@@ -794,6 +794,11 @@ fn validate_data_integrity_identity(
     issuer_did: &str,
     verification_method_id: &str,
 ) -> Result<(), String> {
+    if is_retired_ob2(credential) {
+        return Err(
+            "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential".to_string(),
+        );
+    }
     if !issuer_did.starts_with("did:") {
         return Err("issuer_did must be a DID".to_string());
     }

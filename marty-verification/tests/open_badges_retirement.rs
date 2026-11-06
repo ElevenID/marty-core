@@ -140,8 +140,10 @@ fn maintenance_ob3_issuance_rejects_a_retired_assertion() {
 #[test]
 fn direct_vcdm_boundaries_reject_mixed_legacy_profiles_before_proof_processing() {
     use marty_verification::vcdm::{
-        validate_vcdm_issuance_document_json, verify_open_badge_v3_jwt_json_async,
-        verify_vcdm_data_integrity_json_async, verify_vcdm_jwt_json_async,
+        complete_vcdm_data_integrity_credential_json_async,
+        prepare_vcdm_data_integrity_credential_json_async, validate_vcdm_issuance_document_json,
+        verify_open_badge_v3_jwt_json_async, verify_vcdm_data_integrity_json_async,
+        verify_vcdm_jwt_json_async,
     };
     let mut mixed = legacy_assertion();
     mixed["@context"] = json!([
@@ -158,6 +160,33 @@ fn direct_vcdm_boundaries_reject_mixed_legacy_profiles_before_proof_processing()
         "type": ["VerifiableCredential", "OpenBadgeCredential", "OpenBadgeV2"]
     });
     for credential in [legacy_assertion(), mixed, alias, type_alias] {
+        // Invalid key material is a trap: retirement must be checked before
+        // the direct prepare/complete APIs reach key or proof processing.
+        let prepare = json!({
+            "credential": credential,
+            "issuer_did": "did:example:issuer",
+            "verification_method_id": "did:example:issuer#key-1",
+            "public_jwk": {}
+        });
+        let mut prepared = prepare.clone();
+        prepared["algorithm"] = json!("EdDSA");
+        prepared["signing_input_b64"] = json!(URL_SAFE_NO_PAD.encode([0_u8; 64]));
+        let complete = json!({
+            "prepared": prepared,
+            "signature_b64": URL_SAFE_NO_PAD.encode([0_u8; 64])
+        });
+        for error in [
+            futures::executor::block_on(prepare_vcdm_data_integrity_credential_json_async(
+                &prepare.to_string(),
+            ))
+            .unwrap_err(),
+            futures::executor::block_on(complete_vcdm_data_integrity_credential_json_async(
+                &complete.to_string(),
+            ))
+            .unwrap_err(),
+        ] {
+            assert!(error.contains("Open Badges 2 is retired"), "{error}");
+        }
         assert_eq!(
             validate_vcdm_issuance_document_json(&json!({"credential": credential}).to_string()),
             Err("open_badges_2_retired".to_string())
