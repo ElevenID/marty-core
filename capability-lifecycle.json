@@ -22,7 +22,7 @@
         "no new dependency exception may be justified only by OB2",
         "issuance and verification remain covered by positive and negative tests until removal"
       ],
-      "rationale": "Proposed maintenance/0.1.x migration bridge through November 9, 2026 inclusive, pending owner approval following review on November 6. This branch still exposes the listed OB2 issuance and verification interfaces; both retain the existing restrictions and positive/negative coverage. This proposal is not a general backward-compatibility commitment."
+      "rationale": "Maintenance/0.1.x migration bridge through November 9, 2026 inclusive, with review on November 6. This branch retains the listed OB2 issuance and verification interfaces for that bounded window; both retain the existing restrictions and positive/negative coverage. This is not a general backward-compatibility commitment."
     },
     {
       "id": "open-badges-3",

@@ -1,10 +1,10 @@
 //! Open Badges verification and issuance helpers.
 //!
 //! Open Badges 3 (OB3) is the current/default profile. Open Badges 2 (OB2)
-//! issuance and verification on maintenance/0.1.x have a proposed migration
-//! bridge through 2026-11-09 inclusive, following review on 2026-11-06.
-//! This extension is pending owner approval. New integrations must use
-//! OB3. The temporary exception is tracked in
+//! issuance and verification on maintenance/0.1.x remain temporary,
+//! non-default capabilities through 2026-11-09 inclusive, with review on
+//! 2026-11-06 and next-day CI/release expiry enforcement. New integrations
+//! must use OB3. The temporary exception is tracked in
 //! <https://github.com/ElevenID/marty-core/issues/96>.
 //!
 //! OB2 uses JWS signatures; OB3 uses Data Integrity proofs.
