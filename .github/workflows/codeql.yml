@@ -22,7 +22,7 @@ jobs:
   analyze:
     # Default setup remains active until the owner completes the settings
     # cutover. Stable-tag preparation rejects this disabled state.
-    if: vars.CODEQL_ADVANCED_ENABLED == 'true'
+    if: vars.CODEQL_ADVANCED_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -41,6 +41,13 @@ jobs:
       CODEQL_OVERLAY_DATABASE_MODE: none
       CODEQL_ACTION_DEBUG_COMBINED_SARIF: 'false'
     steps:
+      - name: Require the completed CodeQL cutover
+        shell: bash
+        env:
+          CODEQL_ADVANCED_ENABLED: ${{ vars.CODEQL_ADVANCED_ENABLED }}
+        run: |
+          set -euo pipefail
+          test "$CODEQL_ADVANCED_ENABLED" = "true"
       - name: Reject debug runs that would export source databases
         shell: bash
         run: |

@@ -118,7 +118,7 @@ class CodeQLBoundaryTests(unittest.TestCase):
         self.assertIn('cron: "47 11 * * 4"', self.workflow)
         self.assertIn("  merge_group:\n    types: [checks_requested]", self.workflow)
         self.assertIn("  workflow_dispatch:", self.workflow)
-        self.assertIn("if: vars.CODEQL_ADVANCED_ENABLED == 'true'", self.workflow)
+        self.assertIn("if: vars.CODEQL_ADVANCED_ENABLED == 'true' || github.event_name == 'workflow_dispatch'", self.workflow)
         self.assertIn("CODEQL_OVERLAY_DATABASE_MODE: none", self.workflow)
         self.assertIn("CODEQL_ACTION_DEBUG_COMBINED_SARIF: 'false'", self.workflow)
         init = next(step for step in self.steps if "github/codeql-action/init@" in step)
@@ -142,7 +142,7 @@ class CodeQLBoundaryTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_FORKS_READ_TOKEN", init + analyze)
 
     def test_debug_rerun_stops_before_initialization_or_private_source_fetch(self):
-        guard = self.steps[0]
+        guard = self.steps[1]
         self.assertIn("name: Reject debug runs that would export source databases", guard)
         self.assertNotIn("if:", guard)
         command = textwrap.dedent(guard.split("        run: |\n", 1)[1])
@@ -153,6 +153,20 @@ class CodeQLBoundaryTests(unittest.TestCase):
                     env["RUNNER_DEBUG"] = value
                 result = subprocess.run(["bash", "--noprofile", "--norc", "-c", command],
                                         env=env, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_every_manual_scan_fails_closed_while_cutover_is_disabled(self):
+        self.assertIn("if: vars.CODEQL_ADVANCED_ENABLED == 'true' || github.event_name == 'workflow_dispatch'", self.workflow)
+        guard = self.steps[0]
+        self.assertIn("name: Require the completed CodeQL cutover", guard)
+        self.assertNotIn("if:", guard)
+        self.assertIn("CODEQL_ADVANCED_ENABLED: ${{ vars.CODEQL_ADVANCED_ENABLED }}", guard)
+        command = textwrap.dedent(guard.split("        run: |\n", 1)[1])
+        for enabled, expected in (("", 1), ("false", 1), ("true", 0)):
+            with self.subTest(enabled=enabled):
+                result = subprocess.run(["bash", "--noprofile", "--norc", "-c", command],
+                                        env={"PATH": os.environ["PATH"], "CODEQL_ADVANCED_ENABLED": enabled},
+                                        capture_output=True, text=True, timeout=5)
                 self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_disabled_advanced_scan_cannot_create_a_release_preparation(self):
