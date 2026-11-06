@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   rust:
+    if: vars.PRIVATE_FORKS_ENABLED != 'true'
     name: Warm Rust cache (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
