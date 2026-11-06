@@ -10,8 +10,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/99
-    review-after: 2026-10-08
-    rationale: Re-reviewed 2026-09-08. The certificate, SPKI, signature, elliptic-curve, and RSA crates must move as one compatibility set. x509-cert 0.3, der 0.8, signature 3, and elliptic-curve 0.14 are stable, but the compatible RSA 0.10 line remains a release candidate. Updating their major versions independently creates duplicate, incompatible signature, SPKI, and rand trait implementations and breaks certificate and signing paths. ElevenID retains the current stable set until RSA stabilizes, then will qualify the coordinated stack against the existing RSA, certificate, JOSE, passport, mdoc, and Python conformance tests. No RSA functionality is being removed.
+    review-after: 2026-11-13
+    rationale: Re-reviewed 2026-11-06 against the maintenance lock. Its certificate and CMS compatibility family is cms 0.2.3, x509-cert 0.2.5, der 0.7.10, spki 0.7.3, signature 2.2.0, elliptic-curve 0.13.8, and rsa 0.9.10. Stable x509-cert 0.3.0, der 0.8.3, signature 3.0.0, and elliptic-curve 0.14.3 are available, but the matching CMS 0.3.0-rc.1 and RSA 0.10.0-rc.21 lines remain prereleases. CMS rc.1 moves to that newer certificate/signature family and optionally RSA 0.10 rc.20 or later. The separate der 0.8.1 in the lock belongs to ureq; this record does not claim a single-generation graph. Retain the existing certificate/CMS family pending coordinated qualification of RSA, certificates, JOSE, passport, mdoc, and Python behavior. Recheck the newly progressing release candidates within one week; no functionality or exception scope changes.
   - package: affinidi-messaging-didcomm
     ecosystem: rust
     owner: ElevenID
@@ -34,8 +34,8 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2022-0040, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-10-20
-    rationale: Re-reviewed 2026-09-20. The umbrella crate remains removed. Narrow SSI crates are still required for DID, VC, SD-JWT, and Open Badges verification. spruceid/ssi#706 closed unmerged on 2026-08-25 without maintainer review after remaining CLA-pending, so the exact ElevenID ssi-jwt revision remains necessary. Upstream main still declares serde_with 2.3.2 in ssi-jwt and serde_cbor 0.11.2 directly in ssi-data-integrity-suites, so a consumer-only version bump cannot remove either exception. The lock contains only patched serde_with 3.22.0, owning_ref is absent, cargo-deny reports no unignored SSI exception advisory after the rustls 0.23.45 lock repair, and issue 26 remains the replacement gate.
+    review-after: 2026-11-20
+    rationale: Re-reviewed 2026-11-06. Upstream SSI main 886a6cf694dfdb6b019d5f69a04dd16f01cb58a4 and published ssi-jwt 0.6.0 still declare serde_with 2.3.2; spruceid/ssi#706 remains closed and unmerged. Maintenance uses the distinct ssi-jwt-elevenid revision 957c8b0fbf3e4b967fe73c858a22b38e907b3023, whose manifest removes that dependency, not the combined SSI revision used by current main. The lock contains only serde_with 3.22.0 through Cedar, above GHSA-7gcf-g7xr-8hxj fixed version 3.21.0, and no owning_ref. Published ssi-data-integrity-suites 0.4.0 still requires the sole locked serde_cbor 0.11.2, which RustSec lists as unmaintained without a patched version. Retain the exact JWT fork and issue 26 replacement gate until a compatible upstream release removes these dependencies. This review verifies manifests and the existing lock; it does not claim a new cargo-deny run.
   - package: linked-data
     ecosystem: rust
     owner: ElevenID
@@ -46,8 +46,8 @@ dependencies:
     decision: fork
     advisories: [RUSTSEC-2023-0126, RUSTSEC-2026-0255]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-09-30
-    rationale: The exact-revision dependency retains the complete spruceid/linked-data-rs history on the dedicated deps/linked-data-rs-v0.1.2-hardening ref in ElevenID/ssi-elevenid. It replaces the traversal-only im dependency with standard-library path-local sets, removing im and sized-chunks from Marty's graph while preserving shared-node expansion, cycle termination, visitor-error cleanup, public API, default features, and MSRV 1.71.1. The ref must be published before this consumer commit and retired after an equivalent maintained upstream release is qualified.
+    review-after: 2026-11-13
+    rationale: Re-reviewed 2026-11-06. The exact ssi-elevenid revision 6f86efc1579033e14ff2ad7d115ca0857e16a67f retains linked-data-rs history on its dedicated hardening lineage and keeps the 0.1.2 API and MSRV 1.71.1. Its existing path-local-set hardening removes im, and the complete maintenance lock contains neither im nor sized-chunks. RustSec still lists no patched version for those affected crates. Upstream linked-data 0.2.0, published October 30, removes im but moves to rdf-syntax 2, xsd-types 0.12, thiserror 2, MSRV 1.87, and a different default feature family. Maintenance still uses SSI and JSON-LD 0.21 with linked-data 0.1.2 and xsd-types 0.9.6. Qualify that upstream migration with the dependent types, default features, shared-node expansion, cycle termination, and visitor-error behavior before replacing the exact fork; recheck within one week because an upstream replacement now exists.
   - package: sd-jwt-rs
     ecosystem: rust
     owner: ElevenID
@@ -106,5 +106,5 @@ dependencies:
     decision: retain
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-10-18
-    rationale: RSA 0.9 is retained only for currently supported passport, certificate, CMS/CRL, and JOSE operations. Open Badges 2 has a separately governed proposed maintenance issuance and verification bridge through 2026-11-09, pending explicit owner approval; it does not justify retaining RSA or any other dependency after its current-standard consumers are removed. RSA remains isolated behind marty-crypto; no patched RustCrypto release exists.
+    review-after: 2026-11-13
+    rationale: Re-reviewed 2026-11-06. RustSec RUSTSEC-2023-0071 still recognizes no patched stable release for the locked RSA 0.9.10. Upstream issue 626 closed after the November 1 implicit-rejection commit 6b7d70fe66f6843ffe728c1f1e25fda7b42caf28, and RSA 0.10.0-rc.21 was published November 5; assess that work with the coordinated certificate/CMS migration rather than claiming the locked stable release is fixed. Maintenance retains local RSA key generation and signing, with locked parents cms 0.2.3, jsonwebtoken 10.4.0, marty-crypto 0.1.62, and marty-verification 0.1.62. The existing advisory risk and exception remain; recheck migration and advisory status within one week. Open Badges 2 has a separately governed proposed maintenance issuance and verification bridge through 2026-11-09, pending owner approval; it does not justify retaining RSA or any other dependency after its current-standard consumers are removed.
