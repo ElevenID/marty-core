@@ -9,3 +9,7 @@ Its old signature and assertion body must remain unchanged. It is no longer an
 accepted verification request and has no environment override or OB2 verifier.
 The retirement tests require raw, wrapped, mixed-context, and JWT-contained legacy
 assertions to remain unsupported. Migration requires a newly issued OB3 credential.
+
+`ob3_jwt_verify_request.json` retains the public-only signed ES256 OB3 JWT vector
+also used by the presentation-policy issuer-key regression suite. It checks that
+direct JWT verification continues accepting OB3 while rejecting retired markers.

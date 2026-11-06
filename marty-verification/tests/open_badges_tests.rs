@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use marty_verification::jwk::generate_ed25519;
-
 fn assert_invalid(label: &str, result_json: &str) {
     let value: Value = serde_json::from_str(result_json)
         .unwrap_or_else(|e| panic!("{} output is not JSON: {}", label, e));
