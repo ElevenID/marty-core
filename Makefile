@@ -257,7 +257,7 @@ conformance-iso18013:
 
 # Phase 2 (continued) — MDL trust-chain + OB3 credential verification conformance
 #   mdl_conformance:         X5Chain/IACA/MdlVerificationResult conformance (ISO 18013-5 §9)
-#   open_badges_conformance: 1EdTech Open Badges 3.0 + OB2 backward-compat conformance
+#   open_badges_conformance: 1EdTech Open Badges 3.0 conformance
 conformance-verification:
 	@echo "==> Running Phase 2/4: verification conformance tests"
 	cargo test -p marty-verification \

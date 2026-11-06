@@ -57,6 +57,12 @@ pub async fn issue_ob3_json_async(request_json: &str) -> VerificationResult<Stri
     let req: IssueOb3Request = serde_json::from_str(request_json)
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 issue request: {}", e)))?;
 
+    if super::is_retired_ob2(&req.credential) {
+        return Err(VerificationError::open_badges_unsupported(
+            "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential".to_string(),
+        ));
+    }
+
     let credential: AnyJsonCredential = serde_json::from_value(req.credential.clone())
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 credential: {}", e)))?;
 
@@ -161,6 +167,12 @@ pub async fn verify_ob3_json_with_status_lists_async(
     let req: VerifyOb3Request = serde_json::from_str(request_json).map_err(|e| {
         VerificationError::open_badges(format!("Invalid OB3 verify request: {}", e))
     })?;
+
+    if super::is_retired_ob2(&req.credential) {
+        return Err(VerificationError::open_badges_unsupported(
+            "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential".to_string(),
+        ));
+    }
 
     let credential: AnyCredential = serde_json::from_value(req.credential.clone())
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 credential: {}", e)))?;

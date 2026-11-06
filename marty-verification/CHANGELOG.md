@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Remove Open Badges 2 runtime verification, legacy contexts, and public bindings.
+  The maintenance branch also removes OB2 issuance. Retained legacy fixtures now
+  verify rejection; migration requires newly issued Open Badges 3 credentials.
+
 ### Security
 
 - Bound EUDI LoTL and member-state trusted-list downloads to 16 MiB before

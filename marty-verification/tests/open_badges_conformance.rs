@@ -1,6 +1,6 @@
 //! 1EdTech Open Badges 3.0 specification conformance tests.
 //!
-//! Extends the existing ob2/ob3 round-trip tests with normative scenarios
+//! Extends the existing OB3 round-trip tests with normative scenarios
 //! from the IMS Global Open Badges 3.0 conformance suite:
 //!
 //!  §1  Achievement structure — mandatory fields per OB3 §8.1
@@ -10,17 +10,10 @@
 //!  §5  Achievement criteria — optional criteria field
 //!  §6  Expiry and validity date handling
 //!  §7  Rejection scenarios — mismatched proof, wrong issuer, missing fields
-//!  §8  OB2 backward compatibility — hashed recipient, badge class resolution
 
 use serde_json::{json, Value};
 
-use marty_verification::{
-    jwk::generate_ed25519,
-    open_badges::{
-        issue_ob2_json, issue_ob3_json, ob2_context_uri, ob3_context_uri, verify_ob2_json,
-        verify_ob3_json,
-    },
-};
+use marty_verification::open_badges::{issue_ob3_json, ob3_context_uri, verify_ob3_json};
 use ssi_dids::DIDJWK;
 use ssi_jwk::JWK;
 
@@ -452,131 +445,4 @@ fn ob3_expired_credential_fails_verification() {
         let verify_result = verify_ob3_json(&verify_req.to_string()).expect("verify");
         assert_invalid("OB3 expired credential", &verify_result);
     }
-}
-
-// ── §7  OB2 backward compatibility ───────────────────────────────────────────
-
-/// OB2 badges must issue with SHA-256 hashed recipient identity.
-#[test]
-fn ob2_hashed_recipient_round_trip() {
-    let mut jwk = generate_ed25519().expect("Ed25519");
-    jwk.kid = Some("did:example:ob2-issuer#key-1".to_string());
-
-    let assertion = json!({
-        "@context": ob2_context_uri(),
-        "type": "Assertion",
-        "id": "urn:uuid:ob2-hashed-recipient-test",
-        "badge": "urn:uuid:badge-2"
-    });
-
-    let req = json!({
-        "assertion": assertion,
-        "recipient": {
-            "identity": "conformance@example.org",
-            "type": "email",
-            "hashed": true,
-            "salt": "conformance-salt",
-            "hash_alg": "sha256"
-        },
-        "signing": {
-            "jwk": serde_json::to_value(&jwk).unwrap(),
-            "creator": "did:example:ob2-issuer#key-1"
-        }
-    });
-
-    let issue_result_str = issue_ob2_json(&req.to_string()).expect("OB2 issue");
-    let issue_result: Value = serde_json::from_str(&issue_result_str).expect("json");
-    assert!(
-        issue_result
-            .get("issued")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        "OB2 hashed recipient must issue: {:?}",
-        issue_result
-    );
-
-    let cred = issue_result.get("credential").cloned().expect("credential");
-
-    // The recipient hash must NOT contain the plaintext identity (privacy check)
-    let cred_str = serde_json::to_string(&cred).unwrap();
-    assert!(
-        !cred_str.contains("conformance@example.org"),
-        "OB2 hashed credential must not contain plaintext identity"
-    );
-
-    // Verify with correct identity
-    let mut store = std::collections::BTreeMap::new();
-    store.insert(
-        "urn:uuid:badge-2".to_string(),
-        json!({ "id": "urn:uuid:badge-2", "issuer": "did:example:ob2-issuer" }),
-    );
-    store.insert(
-        "did:example:ob2-issuer".to_string(),
-        json!({ "id": "did:example:ob2-issuer" }),
-    );
-    store.insert(
-        "did:example:ob2-issuer#key-1".to_string(),
-        json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }),
-    );
-
-    let verify_req = json!({
-        "assertion": cred,
-        "document_store": store,
-        "recipient_identity": "conformance@example.org"
-    });
-    let verify_result = verify_ob2_json(&verify_req.to_string()).expect("OB2 verify");
-    assert_valid("OB2 hashed recipient verification", &verify_result);
-}
-
-/// OB2 verification must fail if wrong recipient identity is provided.
-#[test]
-fn ob2_wrong_recipient_identity_fails() {
-    let mut jwk = generate_ed25519().expect("Ed25519");
-    jwk.kid = Some("did:example:ob2-issuer#key-2".to_string());
-
-    let req = json!({
-        "assertion": {
-            "@context": ob2_context_uri(),
-            "type": "Assertion",
-            "id": "urn:uuid:ob2-wrong-recipient",
-            "badge": "urn:uuid:badge-3"
-        },
-        "recipient": {
-            "identity": "alice@example.org",
-            "type": "email",
-            "hashed": true,
-            "salt": "salt",
-            "hash_alg": "sha256"
-        },
-        "signing": {
-            "jwk": serde_json::to_value(&jwk).unwrap(),
-            "creator": "did:example:ob2-issuer#key-2"
-        }
-    });
-
-    let issue_str = issue_ob2_json(&req.to_string()).expect("issue");
-    let issue_v: Value = serde_json::from_str(&issue_str).expect("json");
-    let cred = issue_v.get("credential").cloned().expect("credential");
-
-    let mut store = std::collections::BTreeMap::new();
-    store.insert(
-        "urn:uuid:badge-3".to_string(),
-        json!({ "id": "urn:uuid:badge-3", "issuer": "did:example:ob2-issuer" }),
-    );
-    store.insert(
-        "did:example:ob2-issuer".to_string(),
-        json!({ "id": "did:example:ob2-issuer" }),
-    );
-    store.insert(
-        "did:example:ob2-issuer#key-2".to_string(),
-        json!({ "publicKeyJwk": serde_json::to_value(jwk.to_public()).unwrap() }),
-    );
-
-    let verify_req = json!({
-        "assertion": cred,
-        "document_store": store,
-        "recipient_identity": "wrong@example.org"
-    });
-    let result = verify_ob2_json(&verify_req.to_string()).expect("verify call");
-    assert_invalid("OB2 wrong recipient", &result);
 }

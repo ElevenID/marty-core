@@ -2496,18 +2496,6 @@ fn jws_verify<'py>(py: Python<'py>, jws: &str, key: &PyJwk) -> PyResult<Bound<'p
 }
 
 #[pyfunction]
-fn open_badge_ob2_issue(request_json: &str) -> PyResult<String> {
-    crate::open_badges::issue_ob2_json(request_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-}
-
-#[pyfunction]
-fn open_badge_ob2_verify(request_json: &str) -> PyResult<String> {
-    crate::open_badges::verify_ob2_json(request_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
-}
-
-#[pyfunction]
 fn open_badge_ob3_issue(request_json: &str) -> PyResult<String> {
     crate::open_badges::issue_ob3_json(request_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
@@ -4626,8 +4614,6 @@ pub fn _marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
-    m.add_function(wrap_pyfunction!(open_badge_ob2_issue, m)?)?;
-    m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
     m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;
@@ -4915,8 +4901,6 @@ pub fn register_marty_verification(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_ocsp_response, m)?)?;
 
     // Open Badges
-    m.add_function(wrap_pyfunction!(open_badge_ob2_issue, m)?)?;
-    m.add_function(wrap_pyfunction!(open_badge_ob2_verify, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_issue, m)?)?;
     m.add_function(wrap_pyfunction!(open_badge_ob3_verify, m)?)?;
     m.add_function(wrap_pyfunction!(compare_passport_hashes_json, m)?)?;

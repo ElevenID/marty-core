@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use marty_verification::jwk::generate_ed25519;
-use marty_verification::open_badges::{issue_ob2_json, ob2_context_uri, verify_ob2_json};
 
 fn assert_invalid(label: &str, result_json: &str) {
     let value: Value = serde_json::from_str(result_json)
@@ -14,121 +13,6 @@ fn assert_invalid(label: &str, result_json: &str) {
         "{} verification unexpectedly valid: {:?}",
         label, value
     );
-}
-
-fn ob2_issue_fixture() -> (Value, BTreeMap<String, Value>, String) {
-    let mut jwk = generate_ed25519().expect("failed to generate test JWK");
-    jwk.kid = Some("did:example:issuer#key-1".to_string());
-
-    let assertion = json!({
-        "@context": ob2_context_uri(),
-        "type": "Assertion",
-        "id": "urn:uuid:assertion-1",
-        "badge": "urn:uuid:badge-1"
-    });
-
-    let recipient_identity = "user@example.org".to_string();
-    let issue_request = json!({
-        "assertion": assertion,
-        "recipient": {
-            "identity": recipient_identity,
-            "type": "email",
-            "hashed": true,
-            "salt": "pepper",
-            "hash_alg": "sha256"
-        },
-        "signing": {
-            "jwk": serde_json::to_value(&jwk).expect("failed to serialize JWK"),
-            "creator": "did:example:issuer#key-1"
-        }
-    });
-
-    let issue_result = issue_ob2_json(&issue_request.to_string()).expect("OB2 issue failed");
-    let issue_value: Value = serde_json::from_str(&issue_result).expect("invalid OB2 issue JSON");
-    assert!(
-        issue_value
-            .get("issued")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        "expected issue to succeed"
-    );
-
-    let credential = issue_value
-        .get("credential")
-        .cloned()
-        .expect("missing issued credential");
-
-    let mut store = BTreeMap::new();
-    store.insert(
-        "urn:uuid:badge-1".to_string(),
-        json!({
-            "id": "urn:uuid:badge-1",
-            "issuer": "did:example:issuer"
-        }),
-    );
-    store.insert(
-        "did:example:issuer".to_string(),
-        json!({
-            "id": "did:example:issuer",
-            "name": "Example Issuer"
-        }),
-    );
-    store.insert(
-        "did:example:issuer#key-1".to_string(),
-        json!({
-            "publicKeyJwk": serde_json::to_value(jwk.to_public()).expect("failed to serialize public JWK")
-        }),
-    );
-
-    (credential, store, "user@example.org".to_string())
-}
-
-#[test]
-fn ob2_issue_verify_round_trip() {
-    let (credential, store, recipient_identity) = ob2_issue_fixture();
-
-    let verify_request = json!({
-        "assertion": credential,
-        "document_store": store,
-        "recipient_identity": recipient_identity
-    });
-
-    let verify_result = verify_ob2_json(&verify_request.to_string()).expect("OB2 verify failed");
-    let verify_value: Value =
-        serde_json::from_str(&verify_result).expect("invalid OB2 verify JSON");
-    assert!(
-        verify_value
-            .get("valid")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        "expected verification to succeed: {:?}",
-        verify_value
-    );
-}
-
-#[test]
-fn ob2_verify_rejects_wrong_recipient() {
-    let (credential, store, _recipient_identity) = ob2_issue_fixture();
-    let verify_request = json!({
-        "assertion": credential,
-        "document_store": store,
-        "recipient_identity": "wrong@example.org"
-    });
-
-    let verify_result = verify_ob2_json(&verify_request.to_string()).expect("OB2 verify failed");
-    assert_invalid("OB2 wrong recipient", &verify_result);
-}
-
-#[test]
-fn ob2_verify_rejects_missing_document_store() {
-    let (credential, _store, recipient_identity) = ob2_issue_fixture();
-    let verify_request = json!({
-        "assertion": credential,
-        "recipient_identity": recipient_identity
-    });
-
-    let verify_result = verify_ob2_json(&verify_request.to_string()).expect("OB2 verify failed");
-    assert_invalid("OB2 missing document_store", &verify_result);
 }
 
 #[cfg(not(target_arch = "wasm32"))]

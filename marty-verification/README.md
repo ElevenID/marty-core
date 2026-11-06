@@ -5,7 +5,6 @@ Python bindings for the `marty-verification` Rust library, providing cryptograph
 ## Features
 
 - **Open Badges 3**: Current/default issuance and verification profile
-- **Open Badges 2**: Temporary migration-only issuance and verification support
 - **mDoc/mDL Verification**: Verify mobile driver's licenses (ISO 18013-5)
 - **eMRTD Verification**: Verify electronic machine-readable travel documents
 - **MRZ Parsing**: Parse and validate machine-readable zone data
@@ -27,35 +26,21 @@ pip install marty-verification-py
 
 ### Open Badges
 
-Open Badges 3 is the current/default profile. On maintenance/0.1.x, the
-existing Open Badges 2 issuance and verification interfaces remain
-temporary, non-default capabilities through 2026-11-09 inclusive, with
-review on 2026-11-06. This bounded window retains the existing restrictions,
-positive/negative coverage, and next-day CI/release expiry enforcement,
-tracked in [marty-core#96](https://github.com/ElevenID/marty-core/issues/96).
-Do not build new integrations against the OB2 entry points.
+Open Badges 3 is the supported profile. Open Badges 2 issuance and verification
+APIs have been removed, including the Python `open_badge_ob2_issue` and
+`open_badge_ob2_verify` entry points. Legacy assertions are rejected even when
+wrapped or labelled as OB3. Ask the original issuer for a newly issued OB3
+credential; editing the context, type, or version does not migrate a signed badge.
 
-Current integrations should use `open_badge_ob3_issue` and
-`open_badge_ob3_verify`. The OB2 example below documents the temporary
-migration interface only.
+This maintenance branch retains `open_badge_ob3_issue` and
+`open_badge_ob3_verify` for OB3 issuance and verification.
 
 ```python
-from marty_verification_py import open_badge_ob2_issue, open_badge_ob2_verify
+import json
+from marty_verification_py import open_badge_ob3_verify
 
-# Temporarily issue an Open Badge v2 credential during migration
-request = {
-    "assertion": {
-        "@context": "https://w3id.org/openbadges/v2",
-        "type": "Assertion",
-        "badge": {...},
-        "recipient": {"identity": "user@example.com", "type": "email"}
-    },
-    "signing": {
-        "jwk": {...},
-        "alg": "ES256"
-    }
-}
-result = open_badge_ob2_issue(json.dumps(request))
+request = {"credential": signed_credential, "document_store": issuer_documents}
+result = json.loads(open_badge_ob3_verify(json.dumps(request)))
 ```
 
 ### MRZ Parsing

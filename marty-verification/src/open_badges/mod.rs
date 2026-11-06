@@ -1,13 +1,8 @@
 //! Open Badges verification and issuance helpers.
 //!
-//! Open Badges 3 (OB3) is the current/default profile. Open Badges 2 (OB2)
-//! issuance and verification on maintenance/0.1.x remain temporary,
-//! non-default capabilities through 2026-11-09 inclusive, with review on
-//! 2026-11-06 and next-day CI/release expiry enforcement. New integrations
-//! must use OB3. The temporary exception is tracked in
-//! <https://github.com/ElevenID/marty-core/issues/96>.
-//!
-//! OB2 uses JWS signatures; OB3 uses Data Integrity proofs.
+//! Open Badges 3 (OB3) is the supported profile. Open Badges 2 issuance and
+//! verification have been removed. An OB2 assertion must be reissued by its
+//! issuer as OB3; changing its context or routing label is not a migration.
 //!
 //! # WASM Compatibility Note
 //!
@@ -26,17 +21,12 @@
 //!
 //! # Feature Summary
 //!
-//! | Feature | OB2 | OB3 |
-//! |---------|-----|-----|
-//! | JWS Signatures | ✓ (ES256, ES384, EdDSA) | — |
-//! | Data Integrity Proofs | — | ✓ (JsonWebSignature2020, Ed25519Signature2018/2020) |
-//! | Recipient Hashing | ✓ (SHA1, SHA256, SHA512) | — |
-//! | Credential Status / Revocation | — | ✓ (authenticated W3C Bitstring Status List v1.0) |
-//! | Offline JSON-LD Contexts | ✓ | ✓ |
+//! - OB3 Data Integrity proofs (JsonWebSignature2020, Ed25519Signature2018/2020)
+//! - Authenticated W3C Bitstring Status List v1.0 revocation
+//! - Offline, pinned JSON-LD contexts
 
 mod contexts;
 mod method_wrapper;
-mod ob2;
 mod ob3;
 mod status;
 mod suite_wrapper;
@@ -46,9 +36,9 @@ mod x509_verification_method;
 
 use serde_json::Value;
 
-pub use contexts::{ob2_context_uri, ob3_context_uri, open_badges_context_loader};
+pub use crate::credential_format::is_retired_ob2;
+pub use contexts::{ob3_context_uri, open_badges_context_loader};
 pub use method_wrapper::{parse_open_badge_method, OpenBadgeMethod};
-pub use ob2::{issue_ob2_json, verify_ob2_json};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ob3::{issue_ob3_json, verify_ob3_json, verify_ob3_json_with_status_lists};
 pub use ob3::{
@@ -63,9 +53,20 @@ pub use types::{
 pub use x509_suite::X509Signature2021;
 pub use x509_verification_method::X509VerificationKey2021;
 
+/// Detect the supported Open Badges profile; retired assertions are unknown.
+///
+/// Retired verification and issuance APIs are absent from the public surface.
+///
+/// ```compile_fail
+/// use marty_verification::open_badges::verify_ob2_json;
+/// ```
+///
+/// ```compile_fail
+/// use marty_verification::open_badges::issue_ob2_json;
+/// ```
 pub fn detect_version(value: &Value) -> OpenBadgesVersion {
-    if has_context(value, ob2_context_uri()) {
-        return OpenBadgesVersion::V2;
+    if is_retired_ob2(value) {
+        return OpenBadgesVersion::Unknown;
     }
     if has_context(value, ob3_context_uri())
         || has_context(value, "https://w3id.org/openbadges/v3")
