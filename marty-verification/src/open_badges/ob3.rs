@@ -116,6 +116,12 @@ async fn verify_ob3_with_status_lists_internal_async(
     authenticated_status_lists: &[AuthenticatedStatusList],
     evaluation_time: Option<DateTime<Utc>>,
 ) -> VerificationResult<OpenBadgesVerificationResult> {
+    if super::is_retired_ob2(&req.credential) {
+        return Err(VerificationError::open_badges_unsupported(
+            "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential".to_string(),
+        ));
+    }
+
     let credential: AnyCredential = serde_json::from_value(req.credential.clone())
         .map_err(|e| VerificationError::open_badges(format!("Invalid OB3 credential: {}", e)))?;
 

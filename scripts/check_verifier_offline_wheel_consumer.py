@@ -41,13 +41,10 @@ def verify_fixture(
             f"{fixture_name}: valid signed fixture was rejected: {result}"
         )
 
-    # Probe one signed-payload edit per format. This is not a comprehensive
+    # Probe one signed-payload edit. This is not a comprehensive
     # payload-binding or trust-store authentication test.
     wrong_key = copy.deepcopy(request)
-    if fixture_name.startswith("ob2"):
-        request["assertion"]["id"] = "urn:uuid:tampered"
-    else:
-        request["credential"]["credentialSubject"]["achievement"]["name"] = "Tampered"
+    request["credential"]["credentialSubject"]["achievement"]["name"] = "Tampered"
     negative = json.loads(verify(json.dumps(request)))
     if negative.get("valid") is not False:
         raise RuntimeError(f"{fixture_name}: negative fixture was accepted: {negative}")
@@ -67,6 +64,21 @@ def verify_fixture(
         raise RuntimeError(
             f"{fixture_name}: mismatched issuer key was accepted: {wrong_key_result}"
         )
+
+
+def reject_retired_fixture(
+    verify: Callable[[str], str], fixtures_dir: Path = FIXTURES
+) -> None:
+    """An old signed assertion must never acquire an OB3 verification route."""
+    legacy = json.loads((fixtures_dir / "ob2_verify_request.json").read_text(encoding="utf-8"))
+    request = {"credential": legacy["assertion"], "document_store": legacy.get("document_store", {})}
+    try:
+        verify(json.dumps(request))
+    except ValueError as error:
+        if "Open Badges 2 is retired" not in str(error):
+            raise RuntimeError("retired OB2 fixture gave an unexpected error") from error
+    else:
+        raise RuntimeError("retired OB2 fixture reached an active verifier")
 
 
 def verify_ob3_at_caller_time(
@@ -123,15 +135,16 @@ def main() -> int:
         Path(verifier.__file__), Path(native.__file__), Path(sys.prefix)
     )
 
-    verify_fixture(
-        verifier.open_badge_ob2_verify, "ob2_verify_request.json", args.fixtures_dir
-    )
+    for module in (verifier, native):
+        if hasattr(module, "open_badge_ob2_verify") or hasattr(module, "open_badge_ob2_issue"):
+            raise RuntimeError("verifier wheel exposes a retired OB2 API")
+    reject_retired_fixture(verifier.open_badge_ob3_verify, args.fixtures_dir)
     verify_fixture(
         verifier.open_badge_ob3_verify, "ob3_verify_request.json", args.fixtures_dir
     )
     verify_ob3_at_caller_time(verifier.open_badge_ob3_verify_at, args.fixtures_dir)
     print(
-        "verifier-offline-wheel-consumer: OB2/OB3 positive, tamper, wrong-key, and OB3 caller-time fixtures passed"
+        "verifier-offline-wheel-consumer: OB3 positive, tamper, wrong-key, caller-time, and retired OB2 rejection fixtures passed"
     )
     return 0
 
