@@ -27,34 +27,63 @@ class CapabilityLifecycleTests(unittest.TestCase):
             with patch.object(check_release_contract, "CAPABILITY_LIFECYCLE", policy):
                 return check_release_contract.check_capability_lifecycle(as_of=as_of)
 
-    def test_checked_in_policy_is_current(self) -> None:
-        self.assertEqual(self.check(self.load_policy(), date(2026, 11, 2)), [])
+    def test_checked_in_retirement_has_no_future_expiry(self) -> None:
+        self.assertEqual(self.check(self.load_policy(), date(2026, 11, 6)), [])
+        self.assertEqual(self.check(self.load_policy(), date(2030, 1, 1)), [])
 
-    def test_temporary_capability_is_supported_through_removal_date(self) -> None:
-        self.assertEqual(self.check(self.load_policy(), date(2026, 11, 9)), [])
+    def test_retired_capability_cannot_reactivate(self) -> None:
+        for status in ("current", "temporary"):
+            with self.subTest(status=status):
+                document = copy.deepcopy(self.load_policy())
+                document["capabilities"][0]["status"] = status
+                errors = self.check(document, date(2026, 11, 6))
+                self.assertTrue(any("must remain retired" in error for error in errors))
 
-    def test_expired_temporary_capability_fails(self) -> None:
-        errors = self.check(self.load_policy(), date(2026, 11, 10))
+    def test_retired_capability_cannot_be_default_or_expose_interfaces(self) -> None:
+        for field, value, message in (
+            ("default", True, "cannot be the default"),
+            ("public_interfaces", ["legacy.verify"], "cannot expose public interfaces"),
+            ("removed_interfaces", [], "must record removed APIs"),
+            ("retired_on", "not-a-date", "must be an ISO calendar date"),
+            ("target_removal", "2026-11-09", "cannot retain temporary deadlines"),
+            ("successor", "open-badges-4", "unknown successor"),
+        ):
+            with self.subTest(field=field):
+                document = copy.deepcopy(self.load_policy())
+                document["capabilities"][0][field] = value
+                errors = self.check(document, date(2026, 11, 6))
+                self.assertTrue(any(message in error for error in errors), errors)
+
+    def temporary_policy(self) -> dict[str, object]:
+        document = self.load_policy()
+        document["capabilities"].append({
+            "id": "test-temporary-capability",
+            "status": "temporary",
+            "default": False,
+            "successor": "open-badges-3",
+            "tracking_issue": "https://github.com/ElevenID/marty-core/issues/96",
+            "public_interfaces": ["test.temporary"],
+            "review_on": "2026-11-06",
+            "target_removal": "2026-11-09",
+        })
+        return document
+
+    def test_other_temporary_capabilities_still_expire(self) -> None:
+        document = self.temporary_policy()
+        self.assertEqual(self.check(document, date(2026, 11, 9)), [])
+        errors = self.check(document, date(2026, 11, 10))
         self.assertTrue(any("temporary support expired" in error for error in errors))
 
     def test_temporary_capability_cannot_be_default(self) -> None:
-        document = copy.deepcopy(self.load_policy())
-        capabilities = document["capabilities"]
-        assert isinstance(capabilities, list)
-        ob2 = capabilities[0]
-        assert isinstance(ob2, dict)
-        ob2["default"] = True
-        errors = self.check(document, date(2026, 8, 2))
+        document = self.temporary_policy()
+        document["capabilities"][-1]["default"] = True
+        errors = self.check(document, date(2026, 11, 6))
         self.assertTrue(any("cannot be the default" in error for error in errors))
 
     def test_temporary_capability_requires_known_successor(self) -> None:
-        document = copy.deepcopy(self.load_policy())
-        capabilities = document["capabilities"]
-        assert isinstance(capabilities, list)
-        ob2 = capabilities[0]
-        assert isinstance(ob2, dict)
-        ob2["successor"] = "open-badges-4"
-        errors = self.check(document, date(2026, 8, 2))
+        document = self.temporary_policy()
+        document["capabilities"][-1]["successor"] = "open-badges-4"
+        errors = self.check(document, date(2026, 11, 6))
         self.assertTrue(any("unknown successor" in error for error in errors))
 
 

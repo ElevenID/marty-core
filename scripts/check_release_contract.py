@@ -1035,10 +1035,31 @@ def check_capability_lifecycle(as_of: date | None = None) -> list[str]:
         if not isinstance(capability.get("default"), bool):
             errors.append(f"{prefix}.default must be a boolean")
         interfaces = capability.get("public_interfaces")
-        if not isinstance(interfaces, list) or not interfaces or not all(
+        if not isinstance(interfaces, list) or not all(
             isinstance(value, str) and value for value in interfaces
-        ):
+        ) or (status != "retired" and not interfaces):
             errors.append(f"{prefix}.public_interfaces must contain non-empty strings")
+
+        if status == "retired":
+            if capability.get("default") is not False:
+                errors.append(f"{prefix}: a retired capability cannot be the default")
+            if interfaces != []:
+                errors.append(f"{prefix}: a retired capability cannot expose public interfaces")
+            removed = capability.get("removed_interfaces")
+            if not isinstance(removed, list) or not removed or not all(
+                isinstance(value, str) and value for value in removed
+            ):
+                errors.append(f"{prefix}.removed_interfaces must record removed APIs")
+            retired_on = capability.get("retired_on")
+            try:
+                date.fromisoformat(retired_on)
+            except (TypeError, ValueError):
+                errors.append(f"{prefix}.retired_on must be an ISO calendar date")
+            if "review_on" in capability or "target_removal" in capability:
+                errors.append(f"{prefix}: a retired capability cannot retain temporary deadlines")
+            if not isinstance(capability.get("successor"), str) or not capability.get("successor"):
+                errors.append(f"{prefix}.successor is required for a retired capability")
+            continue
 
         if status != "temporary":
             continue
@@ -1072,7 +1093,7 @@ def check_capability_lifecycle(as_of: date | None = None) -> list[str]:
                 )
 
     for identifier, capability in by_id.items():
-        if capability.get("status") != "temporary":
+        if capability.get("status") not in {"temporary", "retired"}:
             continue
         successor = capability.get("successor")
         if isinstance(successor, str) and successor not in by_id:
@@ -1081,10 +1102,12 @@ def check_capability_lifecycle(as_of: date | None = None) -> list[str]:
             )
 
     ob2 = by_id.get("open-badges-2")
-    if not ob2 or ob2.get("status") != "temporary" or ob2.get("default") is not False:
+    if not ob2 or ob2.get("status") != "retired" or ob2.get("default") is not False:
         errors.append(
-            "capability-lifecycle.json: Open Badges 2 must remain an explicit non-default temporary capability"
+            "capability-lifecycle.json: Open Badges 2 must remain retired and non-default"
         )
+    if ob2 and ob2.get("successor") != "open-badges-3":
+        errors.append("capability-lifecycle.json: Open Badges 2 must direct migration to Open Badges 3")
     ob3 = by_id.get("open-badges-3")
     if not ob3 or ob3.get("status") != "current" or ob3.get("default") is not True:
         errors.append(
@@ -1156,7 +1179,7 @@ def main() -> int:
     print("release-contract: every native Python wheel is import-checked")
     print("release-contract: canonical digest crate precedes verification publication")
     print("release-contract: stable tags require exact-main preparation evidence")
-    print("release-contract: temporary capability lifecycle policy is current")
+    print("release-contract: capability retirement and temporary expiry policies verified")
     return 0
 
 

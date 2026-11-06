@@ -3,7 +3,7 @@
 
 use base64::{engine::general_purpose, Engine as _};
 use flate2::{write::GzEncoder, Compression};
-use marty_verification::open_badges::{ob3_context_uri, verify_ob2_json, verify_ob3_json};
+use marty_verification::open_badges::{ob3_context_uri, verify_ob3_json};
 use serde_json::{json, Value};
 use std::io::Write;
 
@@ -12,7 +12,6 @@ fn vector(name: &str) -> Value {
         "ob3" => include_str!("vectors/open_badges_ob3_public.json"),
         "ob3_image" => include_str!("vectors/open_badges_ob3_image_public.json"),
         "ob3_expired" => include_str!("vectors/open_badges_ob3_expired_public.json"),
-        "ob2" => include_str!("vectors/open_badges_ob2_public.json"),
         _ => panic!("unknown Open Badges vector"),
     };
     let value: Value = serde_json::from_str(source).unwrap();
@@ -115,56 +114,6 @@ fn ob3_expired_signed_credential_is_rejected() {
     let request = ob3_verification_request(&source, source["public_jwk"].clone());
     let result = verify_ob3_json(&request.to_string()).unwrap();
     assert_invalid("OB3 expired", &result);
-}
-
-fn ob2_verification_request(source: &Value, recipient_identity: &str) -> Value {
-    json!({
-        "assertion": source["credential"],
-        "document_store": {
-            "urn:uuid:badge-2": {
-                "id": "urn:uuid:badge-2", "issuer": "did:example:ob2-issuer"
-            },
-            "did:example:ob2-issuer": {
-                "id": "did:example:ob2-issuer"
-            },
-            "did:example:ob2-issuer#key-1": {
-                "id": "did:example:ob2-issuer#key-1",
-                "controller": "did:example:ob2-issuer",
-                "publicKeyJwk": source["public_jwk"]
-            }
-        },
-        "recipient_identity": recipient_identity
-    })
-}
-
-#[test]
-fn ob2_hashed_recipient_verifies_without_plaintext_identity() {
-    let source = vector("ob2");
-    let credential = &source["credential"];
-    assert!(!credential.to_string().contains("conformance@example.org"));
-    assert!(credential["signature"].is_string());
-    let request = ob2_verification_request(&source, "conformance@example.org");
-    let result = verify_ob2_json(&request.to_string()).unwrap();
-    assert_valid("OB2 hashed recipient", &result);
-}
-
-#[test]
-fn ob2_wrong_recipient_identity_is_rejected() {
-    let source = vector("ob2");
-    let request = ob2_verification_request(&source, "wrong@example.org");
-    let result = verify_ob2_json(&request.to_string()).unwrap();
-    assert_invalid("OB2 wrong recipient", &result);
-}
-
-#[test]
-fn ob2_requires_document_store() {
-    let source = vector("ob2");
-    let request = json!({
-        "assertion": source["credential"],
-        "recipient_identity": "conformance@example.org"
-    });
-    let result = verify_ob2_json(&request.to_string()).unwrap();
-    assert_invalid("OB2 missing document store", &result);
 }
 
 fn method_vector(year: &str) -> Value {

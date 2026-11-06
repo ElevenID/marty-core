@@ -12,7 +12,6 @@ checks the built wheel through the public import and clean-consumer boundaries.
 ## Features
 
 - **Open Badges 3**: Current/default verification profile
-- **Open Badges 2**: Temporary migration-only verification support
 - **mDoc/mDL Verification**: Verify mobile driver's licenses (ISO 18013-5)
 - **eMRTD Verification**: Verify electronic machine-readable travel documents
 - **MRZ Parsing**: Parse and validate machine-readable zone data
@@ -35,11 +34,11 @@ pip install marty-verification-py
 
 ### Open Badges
 
-Open Badges 3 is the current/default profile. Open Badges 2 remains a non-default
-temporary capability. The owner approved this short migration extension on
-2026-11-02, with review on 2026-11-05 and target removal on 2026-11-09, tracked in
-[marty-core#96](https://github.com/ElevenID/marty-core/issues/96). Do not build
-new integrations against the OB2 entry points.
+Open Badges 3 is the supported profile. Open Badges 2 issuance and verification
+APIs have been removed, including the Python `open_badge_ob2_issue` and
+`open_badge_ob2_verify` entry points. Legacy assertions are rejected even when
+wrapped or labelled as OB3. Ask the original issuer for a newly issued OB3
+credential; editing the context, type, or version does not migrate a signed badge.
 
 Current integrations should use the Open Badges verification entry points.
 Issuance must use a service-level prepare/KMS/assemble flow rather than passing
@@ -56,8 +55,7 @@ result = json.loads(open_badge_ob3_verify_at(json.dumps(request), "2026-01-01T00
 The explicit-time entry point evaluates OB3 credential validity at the supplied
 RFC 3339 instant. The caller must obtain a trustworthy clock and authenticate
 issuer documents; supplying either value does not make it trusted. The existing
-`open_badge_ob3_verify(request_json)` retains its system-clock behavior. OB2
-expiry semantics are not part of this entry point.
+`open_badge_ob3_verify(request_json)` retains its system-clock behavior.
 
 ### MRZ Parsing
 

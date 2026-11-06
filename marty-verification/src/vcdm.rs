@@ -35,7 +35,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::open_badges::open_badges_context_loader;
+use crate::open_badges::{is_retired_ob2, open_badges_context_loader};
 
 type AnyCredential = DataIntegrity<AnyJsonCredential, AnySuite>;
 type AnyPresentation = DataIntegrity<AnyJsonPresentation, AnySuite>;
@@ -199,6 +199,9 @@ fn validate_vcdm_issuance_document(
     credential: &Value,
     issuer_did: Option<&str>,
 ) -> Result<(), String> {
+    if is_retired_ob2(credential) {
+        return Err("open_badges_2_retired".to_string());
+    }
     let object = credential
         .as_object()
         .filter(|value| !value.is_empty())
@@ -816,6 +819,11 @@ fn validate_data_integrity_identity(
     issuer_did: &str,
     verification_method_id: &str,
 ) -> Result<(), String> {
+    if is_retired_ob2(credential) {
+        return Err(
+            "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential".to_string(),
+        );
+    }
     if !issuer_did.starts_with("did:") {
         return Err("issuer_did must be a DID".to_string());
     }
@@ -914,6 +922,19 @@ pub async fn verify_vcdm_data_integrity_json_async(request_json: &str) -> String
         }
     };
 
+    if is_retired_ob2(&request.document) {
+        return serialize_result(VerifyResult {
+            valid: false,
+            kind: "unknown",
+            verified_proofs: 0,
+            verified_credentials: 0,
+            errors: vec![
+                "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential"
+                    .to_string(),
+            ],
+        });
+    }
+
     let is_presentation = has_type(&request.document, "VerifiablePresentation");
     let is_credential = has_type(&request.document, "VerifiableCredential");
     if is_presentation == is_credential {
@@ -1008,6 +1029,20 @@ pub async fn verify_vcdm_jwt_json_async(request_json: &str) -> String {
             });
         }
     };
+    // Inspect decoded claims only to reject retired profiles before resolving
+    // keys. A successful result still requires signature and profile validation.
+    if is_retired_ob2(&unverified_claims) {
+        return serialize_jwt_result(VerifyJwtResult {
+            valid: false,
+            algorithm: Some(algorithm),
+            issuer: None,
+            claims: None,
+            errors: vec![
+                "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential"
+                    .to_string(),
+            ],
+        });
+    }
     let unverified_issuer = unverified_claims
         .get("iss")
         .and_then(Value::as_str)

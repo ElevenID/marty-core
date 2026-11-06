@@ -22,22 +22,17 @@ without network access. Those remain explicit qualification work.
 
 The native verifier wheel step additionally installs that locally built wheel
 into a fresh virtual environment with package indexes disabled and dependency
-resolution enabled. It stages only the probe scripts and exact OB2/OB3 JSON
-vectors in a temporary consumer directory outside the source checkout, runs
-them there with Python's isolated mode, and requires the package and native
-extension to resolve inside the fresh environment. From that environment it
-repeats the native-extension import check and runs a bounded, headless
-**in-process** consumer probe against
-signed Open Badges 2/3 fixtures, an OB2 changed-assertion-ID
-case, an OB3 changed-achievement-name case, and a mismatched but well-formed
-Ed25519 issuer key for each format. The wrong-key negative tests signature
-verification against altered caller-supplied key material, not a governed
-trust policy. The former OB2 assertion-ID
-binding gap is now covered by an active typed Rust regression test and by this
-local-wheel consumer probe. These checks do not prove every signed-payload
-field is bound or authenticate the caller-supplied `document_store`: an OB2
-`valid: true` result remains relative to the issuer and key records supplied
-by the caller, which must be authenticated by that caller.
+resolution enabled. It stages the probe scripts, signed OB3 JSON vectors, and
+a retained OB2 rejection fixture in a temporary consumer directory outside the
+source checkout. It runs them with Python's isolated mode and requires the
+package and native extension to resolve inside the fresh environment. From that
+environment it repeats the native-extension import check and verifies the signed
+OB3 fixture, a changed achievement name, and a mismatched Ed25519 issuer key.
+The caller-time API is also exercised. The retired OB2 fixture must produce an
+explicit retirement error, and neither the public package nor native extension
+may expose OB2 issuance or verification APIs. These checks cover the selected
+vectors and supplied key material; they do not authenticate caller-supplied
+issuer documents or establish a complete trust policy.
 Python's audit hook rejects audited socket operations during import and
 verification; it does not sandbox native Rust network calls.
 This provides local release-matrix wheel behavior evidence only. The earlier

@@ -28,6 +28,32 @@ pub const OPEN_BADGES_V3_CONTEXT: &str = "https://purl.imsglobal.org/spec/ob/v3p
 /// Canonical W3C credential type for an Open Badges 3.0 credential.
 pub const OPEN_BADGES_V3_CREDENTIAL_TYPE: &str = "OpenBadgeCredential";
 
+const OPEN_BADGES_V2_CONTEXT: &str = "https://w3id.org/openbadges/v2";
+const OPEN_BADGES_V2_RETIRED: &str =
+    "Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential";
+
+fn retired_ob2_type(kind: &str) -> bool {
+    matches!(
+        kind.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+            .as_str(),
+        "assertion" | "openbadgev2"
+    )
+}
+
+fn contains_string(value: Option<&serde_json::Value>, predicate: fn(&str) -> bool) -> bool {
+    match value {
+        Some(serde_json::Value::String(value)) => predicate(value),
+        Some(serde_json::Value::Array(values)) => values
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(predicate),
+        _ => false,
+    }
+}
+
 #[cfg(any(test, feature = "issuer"))]
 /// Compute an optional JWT VC expiration without overflowing the time range.
 pub fn checked_jwt_vc_expiration(
@@ -161,6 +187,15 @@ pub fn apply_open_badge_v3_profile(
     options: &mut JwtVcPreparationOptions,
     achievement_id: &str,
 ) -> Oid4vciResult<()> {
+    if claims
+        .w3c_context
+        .iter()
+        .any(|context| context == OPEN_BADGES_V2_CONTEXT)
+        || claims.w3c_types.iter().any(|kind| retired_ob2_type(kind))
+        || retired_ob2_type(&claims.credential_type)
+    {
+        return Err(Oid4vciError::InvalidRequest(OPEN_BADGES_V2_RETIRED.into()));
+    }
     url::Url::parse(achievement_id).map_err(|error| {
         Oid4vciError::InvalidRequest(format!(
             "Open Badges achievement_id must be an absolute URI: {error}"
@@ -272,6 +307,14 @@ pub fn apply_open_badge_v3_profile(
 /// Data Integrity proof. Keeping the shape rules beside the issuer-side
 /// profile builder prevents issuance and verification from drifting apart.
 pub fn validate_open_badge_v3_profile(credential: &serde_json::Value) -> Oid4vciResult<()> {
+    if ["@context", "context"].iter().any(|field| {
+        contains_string(credential.get(*field), |context| {
+            context == OPEN_BADGES_V2_CONTEXT
+        })
+    }) || contains_string(credential.get("type"), retired_ob2_type)
+    {
+        return Err(Oid4vciError::InvalidRequest(OPEN_BADGES_V2_RETIRED.into()));
+    }
     let credential = credential.as_object().ok_or_else(|| {
         Oid4vciError::InvalidRequest("Open Badges credential must be one JSON object".into())
     })?;
@@ -470,6 +513,15 @@ pub fn prepare_jwt_vc_with_options(
     claims: &CredentialClaims,
     options: JwtVcPreparationOptions,
 ) -> Oid4vciResult<PreparedJwtVc> {
+    if claims
+        .w3c_context
+        .iter()
+        .any(|context| context == OPEN_BADGES_V2_CONTEXT)
+        || claims.w3c_types.iter().any(|kind| retired_ob2_type(kind))
+        || retired_ob2_type(&claims.credential_type)
+    {
+        return Err(Oid4vciError::InvalidRequest(OPEN_BADGES_V2_RETIRED.into()));
+    }
     let credential_id = options
         .credential_id
         .clone()
@@ -808,6 +860,48 @@ mod tests {
     }
 
     #[test]
+    fn retired_ob2_claims_cannot_be_relabelled_or_prepared_for_signing() {
+        for legacy in ["Assertion", "OpenBadgeV2", "open_badge_v2"] {
+            let mut claims = claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2JwtVc, 3600);
+            claims.credential_type = legacy.to_owned();
+            assert!(prepare_jwt_vc(&test_p256_signer(), &claims)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Open Badges 2 is retired"));
+            let error = apply_open_badge_v3_profile(
+                &mut claims,
+                &mut JwtVcPreparationOptions::default(),
+                "https://issuer.example/achievements/member",
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("Open Badges 2 is retired"));
+            assert_eq!(claims.credential_type, legacy);
+        }
+        for type_marker in [false, true] {
+            let mut claims = claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2JwtVc, 3600);
+            if type_marker {
+                claims.w3c_types.push("Assertion".into());
+            } else {
+                claims.w3c_context.push(OPEN_BADGES_V2_CONTEXT.into());
+            }
+            assert!(prepare_jwt_vc(&test_p256_signer(), &claims)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Open Badges 2 is retired"));
+            assert!(apply_open_badge_v3_profile(
+                &mut claims,
+                &mut JwtVcPreparationOptions::default(),
+                "https://issuer.example/achievements/member",
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("Open Badges 2 is retired"));
+        }
+    }
+
+    #[test]
     fn open_badge_v3_profile_builds_canonical_achievement_subject() {
         let signer = test_p256_signer();
         let mut claims = CredentialClaims {
@@ -1009,6 +1103,33 @@ mod tests {
             }
         });
         validate_open_badge_v3_profile(&credential).unwrap();
+
+        for (field, legacy) in [
+            (
+                "@context",
+                serde_json::json!([
+                    "https://www.w3.org/ns/credentials/v2",
+                    OPEN_BADGES_V3_CONTEXT,
+                    OPEN_BADGES_V2_CONTEXT
+                ]),
+            ),
+            ("context", serde_json::json!(OPEN_BADGES_V2_CONTEXT)),
+            (
+                "type",
+                serde_json::json!([
+                    "VerifiableCredential",
+                    OPEN_BADGES_V3_CREDENTIAL_TYPE,
+                    "Assertion"
+                ]),
+            ),
+        ] {
+            let mut mixed = credential.clone();
+            mixed[field] = legacy;
+            assert!(validate_open_badge_v3_profile(&mixed)
+                .unwrap_err()
+                .to_string()
+                .contains("Open Badges 2 is retired"));
+        }
 
         for pointer in [
             "/credentialSubject/id",

@@ -3,11 +3,9 @@ use std::fs;
 
 use serde_json::Value;
 
-use marty_verification::open_badges::{verify_ob2_json, verify_ob3_json};
+use marty_verification::open_badges::verify_ob3_json;
 
-const OB2_VERIFY_REQUEST_ENV: &str = "OPEN_BADGES_OB2_VERIFY_REQUEST";
 const OB3_VERIFY_REQUEST_ENV: &str = "OPEN_BADGES_OB3_VERIFY_REQUEST";
-const OB2_FIXTURE_PATH: &str = "tests/fixtures/open_badges/ob2_verify_request.json";
 const OB3_FIXTURE_PATH: &str = "tests/fixtures/open_badges/ob3_verify_request.json";
 const OTHER_ED25519_PUBLIC_KEY: &str = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo";
 
@@ -47,27 +45,6 @@ fn assert_invalid(label: &str, result_json: &str) {
     assert_eq!(value.get("valid").and_then(Value::as_bool), Some(false));
 }
 
-#[test]
-fn ob2_verify_external_fixture() {
-    // Fixture must be a JSON request accepted by verify_ob2_json:
-    // {"assertion": {...}, "document_store": {...}, "recipient_identity": "..."}
-    let request = match load_request(OB2_VERIFY_REQUEST_ENV, OB2_FIXTURE_PATH) {
-        Some(value) => value,
-        None => return,
-    };
-
-    let result = verify_ob2_json(&request).expect("OB2 fixture verification failed");
-    assert_valid("OB2 fixture", &result);
-
-    let mut tampered: Value = serde_json::from_str(&request).unwrap();
-    tampered["assertion"]
-        .as_object_mut()
-        .unwrap()
-        .remove("@context");
-    let result = verify_ob2_json(&tampered.to_string()).expect("OB2 tampered request failed");
-    assert_invalid("OB2 tampered fixture", &result);
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn ob3_verify_external_fixture() {
@@ -90,13 +67,6 @@ fn ob3_verify_external_fixture() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn bundled_fixtures_reject_mismatched_issuer_key() {
-    let mut ob2: Value =
-        serde_json::from_str(include_str!("fixtures/open_badges/ob2_verify_request.json")).unwrap();
-    ob2["document_store"]["did:example:issuer#key-1"]["publicKeyJwk"]["x"] =
-        Value::from(OTHER_ED25519_PUBLIC_KEY);
-    let result = verify_ob2_json(&ob2.to_string()).expect("OB2 wrong-key request failed");
-    assert_invalid("OB2 wrong-key fixture", &result);
-
     let mut ob3: Value =
         serde_json::from_str(include_str!("fixtures/open_badges/ob3_verify_request.json")).unwrap();
     ob3["document_store"]["did:example:issuer#key-1"]["publicKeyJwk"]["x"] =

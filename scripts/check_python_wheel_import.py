@@ -139,9 +139,11 @@ def verify_public_api(package: str) -> None:
         _require_distribution_version(public, package)
         _require_attributes(
             public,
-            frozenset({"open_badge_ob2_verify", "open_badge_ob3_verify"}),
+            frozenset({"open_badge_ob3_verify"}),
             "marty_verification_py",
         )
+        if hasattr(public, "open_badge_ob2_verify"):
+            raise RuntimeError("marty_verification_py exposes a retired OB2 verification API")
         forbidden = sorted(
             name
             for name in ("open_badge_ob2_issue", "open_badge_ob3_issue")

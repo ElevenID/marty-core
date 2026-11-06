@@ -56,12 +56,12 @@ class OfflineWheelConsumerTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 probe.verify_fixture(
                     lambda _: '{"valid": true}',
-                    "ob2_verify_request.json",
+                    "ob3_verify_request.json",
                     Path(directory),
                 )
 
     def test_fixture_probe_requires_valid_then_invalid(self) -> None:
-        for fixture in ("ob2_verify_request.json", "ob3_verify_request.json"):
+        for fixture in ("ob3_verify_request.json",):
             with self.subTest(fixture=fixture):
                 seen = []
 
@@ -77,21 +77,16 @@ class OfflineWheelConsumerTests(unittest.TestCase):
                     probe.OTHER_ED25519_PUBLIC_KEY,
                 )
                 self.assertEqual(
-                    seen[0]["assertion" if fixture.startswith("ob2") else "credential"],
-                    seen[2]["assertion" if fixture.startswith("ob2") else "credential"],
+                    seen[0]["credential"],
+                    seen[2]["credential"],
                 )
-                if fixture.startswith("ob2"):
-                    self.assertEqual(seen[1]["assertion"]["id"], "urn:uuid:tampered")
-                else:
-                    self.assertEqual(
-                        seen[1]["credential"]["credentialSubject"]["achievement"][
-                            "name"
-                        ],
-                        "Tampered",
-                    )
+                self.assertEqual(
+                    seen[1]["credential"]["credentialSubject"]["achievement"]["name"],
+                    "Tampered",
+                )
 
     def test_rejects_false_positive_and_false_negative(self) -> None:
-        fixture = "ob2_verify_request.json"
+        fixture = "ob3_verify_request.json"
         with self.assertRaisesRegex(RuntimeError, "valid signed fixture was rejected"):
             probe.verify_fixture(lambda _: '{"valid": false}', fixture)
         with self.assertRaisesRegex(RuntimeError, "negative fixture was accepted"):
@@ -107,6 +102,26 @@ class OfflineWheelConsumerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "mismatched issuer key was accepted"):
             probe.verify_fixture(accepts_wrong_key, fixture)
 
+
+    def test_retired_fixture_requires_explicit_retirement_error(self) -> None:
+        seen = []
+
+        def reject(raw: str) -> str:
+            seen.append(json.loads(raw))
+            raise ValueError("Open Badges 2 is retired; obtain a newly issued Open Badges 3 credential")
+
+        probe.reject_retired_fixture(reject)
+        self.assertEqual(seen[0]["credential"]["type"], "Assertion")
+        self.assertIn("signature", seen[0]["credential"])
+        for result in ('{"valid": true}', '{"valid": false}'):
+            with self.assertRaisesRegex(RuntimeError, "reached an active verifier"):
+                probe.reject_retired_fixture(lambda _: result)
+
+        def wrong_error(_: str) -> str:
+            raise ValueError("Invalid OB3 credential")
+
+        with self.assertRaisesRegex(RuntimeError, "unexpected error"):
+            probe.reject_retired_fixture(wrong_error)
 
     def test_ob3_caller_time_uses_signed_fixture_and_rejects_naive_time(self) -> None:
         seen: list[tuple[dict, str]] = []
