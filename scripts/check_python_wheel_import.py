@@ -104,10 +104,17 @@ def _require_distribution_version(module: object, package: str) -> None:
         )
 
 
+def _require_ob3_capability(module: object, label: str) -> None:
+    if getattr(module, "OPEN_BADGES_SUPPORTED_VERSIONS", None) != ("3.0",):
+        raise RuntimeError(f"{label} does not declare the OB3-only native capability")
+
+
 def verify_public_api(package: str) -> None:
     """Exercise the installed wheel through its supported consumer boundary."""
     if package == "marty-bindings":
         public = importlib.import_module("marty_rs")
+        for name in ("marty_rs", "_marty_rs", EXTENSION_MODULES[package]):
+            _require_ob3_capability(importlib.import_module(name), name)
         _require_attributes(public, AGGREGATE_REQUIRED_APIS, "marty_rs")
         present = sorted(
             name for name in AGGREGATE_FORBIDDEN_APIS if hasattr(public, name)
@@ -136,6 +143,10 @@ def verify_public_api(package: str) -> None:
 
     if package == "marty-verification":
         public = importlib.import_module("marty_verification_py")
+        for name in (
+            "marty_verification_py", "marty_verification", EXTENSION_MODULES[package]
+        ):
+            _require_ob3_capability(importlib.import_module(name), name)
         _require_distribution_version(public, package)
         _require_attributes(
             public,

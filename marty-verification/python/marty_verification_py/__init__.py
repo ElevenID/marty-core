@@ -8,6 +8,7 @@ and certificate operations through Rust FFI.
 from importlib.metadata import PackageNotFoundError, version
 
 from ._marty_verification import (
+    OPEN_BADGES_SUPPORTED_VERSIONS,
     open_badge_ob3_verify,
     open_badge_ob3_verify_at,
 )
@@ -27,6 +28,7 @@ except PackageNotFoundError:
     __version__ = "unknown"
 
 __all__ = [
+    "OPEN_BADGES_SUPPORTED_VERSIONS",
     "open_badge_ob3_verify",
     "open_badge_ob3_verify_at",
 ]
