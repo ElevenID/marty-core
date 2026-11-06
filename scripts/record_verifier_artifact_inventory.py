@@ -48,7 +48,7 @@ def wheel_platform(filename: str) -> str:
     raise ValueError(f"unexpected verifier wheel platform tag: {tag}")
 
 
-def build_inventory(assets: Path, tag: str, commit: str) -> dict[str, object]:
+def build_inventory(assets: Path, tag: str, commit: str, *, without_sdist: bool = False) -> dict[str, object]:
     if not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
         raise ValueError("tag must be a stable vMAJOR.MINOR.PATCH version")
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
@@ -69,11 +69,13 @@ def build_inventory(assets: Path, tag: str, commit: str) -> dict[str, object]:
     )
     wheels = [path for path in candidates if path.name.endswith(".whl")]
     sdists = [path for path in candidates if path.name.endswith(".tar.gz")]
-    if len(wheels) != WHEEL_COUNT or len(sdists) != 1:
-        raise ValueError("expected exactly five verifier wheels and one sdist")
+    expected_sdists = 0 if without_sdist else 1
+    if len(wheels) != WHEEL_COUNT or len(sdists) != expected_sdists:
+        raise ValueError("expected exactly five verifier wheels and "
+                         + ("no sdists for private forks" if without_sdist else "one sdist"))
     if any(not wheel_pattern.fullmatch(path.name) for path in wheels):
         raise ValueError("verifier wheel name, version, or Python ABI is invalid")
-    if sdists[0].name != sdist_name:
+    if sdists and sdists[0].name != sdist_name:
         raise ValueError("verifier sdist name or version does not match release tag")
     platforms = [wheel_platform(path.name) for path in wheels]
     if set(platforms) != EXPECTED_PLATFORMS or len(set(platforms)) != WHEEL_COUNT:
@@ -110,12 +112,14 @@ def main() -> int:
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--without-sdist", action="store_true",
+                        help="Require wheels only when private Git dependencies cannot be vendored")
     args = parser.parse_args()
     output = args.assets / OUTPUT_NAME
     if output.exists():
         parser.error(f"refusing to overwrite existing inventory: {output}")
     try:
-        inventory = build_inventory(args.assets, args.tag, args.commit)
+        inventory = build_inventory(args.assets, args.tag, args.commit, without_sdist=args.without_sdist)
     except ValueError as error:
         parser.error(str(error))
     output.write_text(

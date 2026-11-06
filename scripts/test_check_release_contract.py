@@ -256,34 +256,34 @@ class NativeBuildCacheContractTests(unittest.TestCase):
     def test_checked_in_wasm_security_jobs_provide_sccache(self) -> None:
         self.assertEqual(check_release_contract.check_wasm_security_cache_setup(), [])
 
-    def test_wasm_private_fork_boundary_cannot_be_disabled_or_allowed_to_pass(self) -> None:
+    def test_wasm_private_fork_authorization_cannot_be_disabled_or_bypassed(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
         )
-        boundary = check_release_contract.PRIVATE_FORKS_BOUNDARY_STEP
+        boundary = check_release_contract.PRIVATE_FORKS_AUTHORIZATION_STEP
         for changed in (
             boundary.replace("== 'true'", "== 'false'"),
-            boundary.replace("exit 1", "exit 0"),
+            boundary.replace("private-forks.py check", "private-forks.py credential"),
             boundary.replace("        shell:", "        continue-on-error: true\n        shell:"),
         ):
             with self.subTest(changed=changed):
                 errors = check_release_contract.check_wasm_security_cache_setup(
                     workflow.replace(boundary, changed)
                 )
-                self.assertTrue(any("exact private fork boundary" in error for error in errors))
+                self.assertTrue(any("exact private fork authorization" in error for error in errors))
 
-    def test_wasm_private_fork_boundary_must_precede_cache_and_checkout(self) -> None:
+    def test_wasm_private_fork_authorization_must_precede_fetch_and_cache(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
         )
-        boundary = check_release_contract.PRIVATE_FORKS_BOUNDARY_STEP
+        boundary = check_release_contract.PRIVATE_FORKS_AUTHORIZATION_STEP
         start = workflow.index("  crypto-wasm-security:\n")
         before, job = workflow[:start], workflow[start:]
         job = job.replace(boundary + "\n", "", 1)
         at = job.index("      - name: Install wasm-bindgen test runner")
         job = job[:at] + boundary + "\n" + job[at:]
         errors = check_release_contract.check_wasm_security_cache_setup(before + job)
-        self.assertTrue(any("exact private fork boundary" in error for error in errors))
+        self.assertTrue(any("exact private fork authorization" in error for error in errors))
 
     def test_checked_in_ci_executes_every_native_zkp_security_binary(self) -> None:
         self.assertEqual(check_release_contract.check_zkp_native_security_tests(), [])
@@ -1224,10 +1224,15 @@ class CorePreflightSplitContractTests(unittest.TestCase):
             self.assertNotIn("\n    if:", job)
             self.assertNotIn("continue-on-error:", job)
             self.assertIn("      - name: Enable compiler cache", job)
-        boundary = check_release_contract.PRIVATE_FORKS_BOUNDARY_STEP + "\n"
+        boundary = check_release_contract.PRIVATE_FORKS_AUTHORIZATION_STEP + "\n"
         self.assertEqual(kms.count(boundary), 1)
-        self.assertIn("    steps:\n" + boundary, kms)
-        self.assertNotIn("\n        if:", kms.replace(boundary, "", 1))
+        steps = check_release_contract._workflow_step_blocks(kms)
+        authorization = next(i for i, step in enumerate(steps) if "Authorize private fork access" in step)
+        fetch = next(i for i, step in enumerate(steps) if "Fetch private Rust dependencies" in step)
+        self.assertLess(authorization, fetch)
+        for step in steps:
+            if "PRIVATE_FORKS_ENABLED" not in step:
+                self.assertNotIn("\n        if:", step)
         for required_step in (
             "Run clippy",
             "Check OID4VCI WASM serial fallback contract",

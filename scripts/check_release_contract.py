@@ -286,13 +286,28 @@ def _cargo_test_commands(step: str) -> list[str]:
     ]
 
 
-PRIVATE_FORKS_BOUNDARY_STEP = """      - name: Enforce private native build boundary
+PRIVATE_FORKS_PYTHON_STEP = r"""      - name: Set up private fork access helper
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'"""
+
+PRIVATE_FORKS_AUTHORIZATION_STEP = r"""      - name: Authorize private fork access
         if: vars.PRIVATE_FORKS_ENABLED == 'true'
         shell: bash
-        working-directory: ${{ runner.temp }}
+        working-directory: ${{ github.workspace }}
         run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1"""
+          python .github/scripts/private-forks.py check
+          printf '%s\n' 'RUSTC_WRAPPER=' 'SCCACHE_GHA_ENABLED=false' >> "$GITHUB_ENV"
+""".rstrip()
+
+PRIVATE_FORKS_FETCH_STEP = r"""      - name: Fetch private Rust dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python .github/scripts/private-forks.py fetch"""
 
 WASM_SECURITY_TEST_COMMANDS = {
     "oid4vci-wasm-security": (
@@ -317,6 +332,7 @@ WASM_TEST_RUNNER_ENV = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER"
 WASM_TEST_RUNNER = "wasm-bindgen-test-runner"
 WASM_SECURITY_ACTIONS = (
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
     "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4",
     "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
     WASM_BINDGEN_INSTALLER_ACTION,
@@ -325,11 +341,13 @@ WASM_SECURITY_ACTION_STEPS = (
     """      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false""",
+    PRIVATE_FORKS_PYTHON_STEP,
     """      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown""",
     """      - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0""",
@@ -381,7 +399,7 @@ WASM_SECURITY_TEST_STEPS = {
 }
 CI_GATE_SHA256 = "1c8a43312aa7cc5040d2345bf15ce10354cc184272f9a777a804971f3c4a01fd"
 ZKP_NATIVE_SECURITY_JOB_SHA256 = (
-    "fead54a1e909ab3754e79ce2504e133abca4535ab6e0ba8e575efc2a7415ac66"
+    "6492d548afcdcd9627ea01e2f6771a2a90c52c22288ac29777f8d999babbb32f"
 )
 WASM_SECURITY_WORKFLOW_ENV = """env:
   CARGO_TERM_COLOR: always
@@ -576,10 +594,19 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                     f"{execution_override} override"
                 )
         steps = _workflow_step_blocks(block)
-        if not steps or _normalized_step(steps[0]) != PRIVATE_FORKS_BOUNDARY_STEP:
+        expected_prefix = (
+            WASM_SECURITY_ACTION_STEPS[0], PRIVATE_FORKS_PYTHON_STEP,
+            PRIVATE_FORKS_AUTHORIZATION_STEP,
+        )
+        if tuple(_normalized_step(step) for step in steps[:3]) != expected_prefix:
             errors.append(
                 f".github/workflows/ci.yml: {job} must enforce the exact private "
-                "fork boundary before checkout, caches, or test execution"
+                "fork authorization before credentials, caches, or test execution"
+            )
+        if len(steps) < 5 or _normalized_step(steps[4]) != PRIVATE_FORKS_FETCH_STEP:
+            errors.append(
+                f".github/workflows/ci.yml: {job} must use the exact fetch-only "
+                "private reader after authorization and toolchain setup"
             )
         if re.search(r"^      -\s*$", block, re.MULTILINE) or any(
             re.match(r"^      - (?:name|uses|run):", step) is None for step in steps
@@ -592,7 +619,8 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             command for step in steps for command in _step_run_commands(step)
         )
         expected_run_commands = (
-            *tuple(_step_run_commands(PRIVATE_FORKS_BOUNDARY_STEP)),
+            *tuple(_step_run_commands(PRIVATE_FORKS_AUTHORIZATION_STEP)),
+            *tuple(_step_run_commands(PRIVATE_FORKS_FETCH_STEP)),
             *WASM_SECURITY_TEST_COMMANDS[job],
         )
         if observed_run_commands != expected_run_commands:
@@ -624,7 +652,8 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
             (
                 index
                 for index, step in enumerate(steps)
-                if _step_uses_action(step, pinned_sccache)
+                if (_step_uses_action(step, pinned_sccache)
+                    or _normalized_step(step) == WASM_SECURITY_ACTION_STEPS[3])
             ),
             None,
         )

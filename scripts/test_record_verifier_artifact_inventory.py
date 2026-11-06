@@ -55,6 +55,17 @@ class VerifierArtifactInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "five verifier wheels"):
             build_inventory(self.assets, TAG, COMMIT)
 
+    def test_private_forks_require_all_wheels_and_forbid_an_sdist(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no sdists"):
+            build_inventory(self.assets, TAG, COMMIT, without_sdist=True)
+        next(self.assets.glob("*.tar.gz")).unlink()
+        result = build_inventory(self.assets, TAG, COMMIT, without_sdist=True)
+        self.assertEqual(len(result["artifacts"]), 5)
+        self.assertTrue(all(record["kind"] == "wheel" for record in result["artifacts"]))
+        next(self.assets.glob("*.whl")).unlink()
+        with self.assertRaisesRegex(ValueError, "five verifier wheels"):
+            build_inventory(self.assets, TAG, COMMIT, without_sdist=True)
+
     def test_wrong_version_fails(self) -> None:
         wheel = next(self.assets.glob("*.whl"))
         wheel.rename(wheel.with_name(wheel.name.replace("0.2.0", "0.2.1")))
