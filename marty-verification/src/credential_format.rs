@@ -55,13 +55,20 @@ pub fn is_retired_ob2(value: &Value) -> bool {
         }
         _ => {}
     }
-    if string_values(value.get("@context"))
-        .iter()
-        .any(|context| context == OB2_CONTEXT)
-        || string_values(value.get("type"))
+    if ["@context", "context"].iter().any(|field| {
+        string_values(value.get(*field))
             .iter()
-            .any(|kind| kind == "Assertion")
-    {
+            .any(|context| context == OB2_CONTEXT)
+    }) || string_values(value.get("type")).iter().any(|kind| {
+        matches!(
+            kind.chars()
+                .filter(char::is_ascii_alphanumeric)
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+                .as_str(),
+            "assertion" | "openbadgev2"
+        )
+    }) {
         return true;
     }
     [

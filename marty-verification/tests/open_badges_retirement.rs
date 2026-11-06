@@ -16,7 +16,9 @@ fn legacy_assertion() -> Value {
 fn jwt(kind: &str, payload: &Value) -> String {
     let header = URL_SAFE_NO_PAD.encode(json!({"alg": "EdDSA", "typ": kind}).to_string());
     let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
-    format!("{header}.{payload}.signature")
+    // A well-formed placeholder reaches the pre-proof rejection boundary.
+    let signature = URL_SAFE_NO_PAD.encode([0_u8; 64]);
+    format!("{header}.{payload}.{signature}")
 }
 
 #[test]
@@ -40,7 +42,17 @@ fn retired_markers_cannot_be_relabelled_as_ob3_or_data_integrity() {
     mixed["type"] = json!(["VerifiableCredential", "OpenBadgeCredential"]);
     mixed["proof"] = json!({"type": "DataIntegrityProof"});
     let assertion_type_only = json!({"type": "Assertion", "@context": ob3_context_uri()});
-    for credential in [legacy_assertion(), mixed, assertion_type_only] {
+    let conflicting_alias = json!({
+        "@context": ob3_context_uri(),
+        "context": ["https://w3id.org/openbadges/v2"],
+        "type": ["VerifiableCredential", "OpenBadgeCredential"]
+    });
+    for credential in [
+        legacy_assertion(),
+        mixed,
+        assertion_type_only,
+        conflicting_alias,
+    ] {
         assert!(is_retired_ob2(&credential));
         assert_eq!(detect_version(&credential), OpenBadgesVersion::Unknown);
         assert_eq!(
@@ -106,5 +118,88 @@ fn supported_ob3_contexts_keep_their_route() {
             detect_credential_format(&jwt("vc+jwt", &json!({"vc": credential}))),
             DetectedCredentialFormat::OpenbadgeV3
         );
+    }
+}
+
+#[test]
+fn direct_vcdm_boundaries_reject_mixed_legacy_profiles_before_proof_processing() {
+    use marty_verification::vcdm::{
+        validate_vcdm_issuance_document_json, verify_open_badge_v3_jwt_json_async,
+        verify_vcdm_data_integrity_json_async, verify_vcdm_jwt_json_async,
+    };
+    let mut mixed = legacy_assertion();
+    mixed["@context"] = json!([
+        "https://www.w3.org/ns/credentials/v2",
+        ob3_context_uri(),
+        "https://w3id.org/openbadges/v2"
+    ]);
+    mixed["type"] = json!(["VerifiableCredential", "OpenBadgeCredential"]);
+    let mut alias = mixed.clone();
+    alias["@context"] = json!(["https://www.w3.org/ns/credentials/v2", ob3_context_uri()]);
+    alias["context"] = json!("https://w3id.org/openbadges/v2");
+    let type_alias = json!({
+        "@context": ["https://www.w3.org/ns/credentials/v2", ob3_context_uri()],
+        "type": ["VerifiableCredential", "OpenBadgeCredential", "OpenBadgeV2"]
+    });
+    for credential in [legacy_assertion(), mixed, alias, type_alias] {
+        assert_eq!(
+            validate_vcdm_issuance_document_json(&json!({"credential": credential}).to_string()),
+            Err("open_badges_2_retired".to_string())
+        );
+        for document in [
+            credential.clone(),
+            json!({
+                "type": ["VerifiablePresentation"], "verifiableCredential": [credential]
+            }),
+        ] {
+            let raw = futures::executor::block_on(verify_vcdm_data_integrity_json_async(
+                &json!({"document": document}).to_string(),
+            ));
+            let result: Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(result["valid"], false, "{result}");
+            assert_eq!(result["verified_proofs"], 0);
+            assert_eq!(result["verified_credentials"], 0);
+            assert!(result["errors"][0]
+                .as_str()
+                .unwrap()
+                .contains("Open Badges 2 is retired"));
+        }
+        let request =
+            json!({"token": jwt("openBadgeCredential", &json!({"vc": credential}))}).to_string();
+        for raw in [
+            futures::executor::block_on(verify_vcdm_jwt_json_async(&request)),
+            futures::executor::block_on(verify_open_badge_v3_jwt_json_async(&request)),
+        ] {
+            let result: Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(result["valid"], false, "{result}");
+            assert!(result["claims"].is_null());
+            assert!(result["issuer"].is_null());
+            assert!(result["errors"][0]
+                .as_str()
+                .unwrap()
+                .contains("Open Badges 2 is retired"));
+        }
+    }
+}
+
+#[test]
+fn existing_public_ob3_jwt_remains_valid() {
+    use marty_verification::vcdm::{
+        verify_open_badge_v3_jwt_json_async, verify_vcdm_jwt_json_async,
+    };
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/open_badges/ob3_jwt_verify_request.json"
+    ))
+    .unwrap();
+    let request =
+        json!({"token": fixture["token"], "issuer_public_jwk": fixture["public_jwk"]}).to_string();
+    for raw in [
+        futures::executor::block_on(verify_vcdm_jwt_json_async(&request)),
+        futures::executor::block_on(verify_open_badge_v3_jwt_json_async(&request)),
+    ] {
+        let result: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(result["valid"], true, "{result}");
+        assert_eq!(result["issuer"], fixture["issuer"]);
+        assert!(result["claims"].is_object());
     }
 }
