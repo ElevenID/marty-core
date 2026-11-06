@@ -28,10 +28,13 @@ class CapabilityLifecycleTests(unittest.TestCase):
                 return check_release_contract.check_capability_lifecycle(as_of=as_of)
 
     def test_checked_in_policy_is_current(self) -> None:
-        self.assertEqual(self.check(self.load_policy(), date(2026, 8, 2)), [])
+        self.assertEqual(self.check(self.load_policy(), date(2026, 11, 6)), [])
+
+    def test_temporary_capability_includes_the_proposed_deadline(self) -> None:
+        self.assertEqual(self.check(self.load_policy(), date(2026, 11, 9)), [])
 
     def test_expired_temporary_capability_fails(self) -> None:
-        errors = self.check(self.load_policy(), date(2026, 10, 2))
+        errors = self.check(self.load_policy(), date(2026, 11, 10))
         self.assertTrue(any("temporary support expired" in error for error in errors))
 
     def test_temporary_capability_cannot_be_default(self) -> None:
