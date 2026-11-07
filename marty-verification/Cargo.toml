@@ -103,7 +103,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-error = { workspace = true }
 regex = { workspace = true, features = ["std"] }
-cedar-policy = { version = "=4.12.0", default-features = false }
+cedar-policy = { version = "=4.14.0", default-features = false }
 # Keep the published 2.0 floor for downstream consumers.
 url = "2"
 
