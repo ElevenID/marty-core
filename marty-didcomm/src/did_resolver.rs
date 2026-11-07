@@ -68,7 +68,8 @@ impl DidResolver {
 
     /// Add deployment-owned bases that mirror standard `did:web` document
     /// paths. Bases are tried in order before any public or Universal Resolver
-    /// route.
+    /// route. Canonical IPv4 authorities are accepted as identifiers here;
+    /// requests still go only to the configured base, never to the DID's IP.
     #[cfg(feature = "did_web")]
     pub fn with_did_web_internal_base_urls<I, S>(mut self, urls: I) -> Self
     where
@@ -618,6 +619,22 @@ struct DidWebAuthority {
 
 #[cfg(feature = "did_web")]
 fn did_web_authority(did: &str) -> DidcommResult<DidWebAuthority> {
+    let authority = did_web_identifier_authority(did)?;
+    if matches!(
+        authority.url.host(),
+        Some(url::Host::Ipv4(_) | url::Host::Ipv6(_))
+    ) {
+        return Err(DidcommError::InvalidDid(format!(
+            "did:web contains an unsafe authority: {did}"
+        )));
+    }
+    Ok(authority)
+}
+
+// Identifier admission for a configured mirror is separate from permission to
+// contact that authority. Direct and fallback paths retain did_web_authority.
+#[cfg(feature = "did_web")]
+fn did_web_identifier_authority(did: &str) -> DidcommResult<DidWebAuthority> {
     let stripped = did
         .strip_prefix("did:web:")
         .ok_or_else(|| DidcommError::InvalidDid(did.to_string()))?;
@@ -691,7 +708,21 @@ fn did_web_authority(did: &str) -> DidcommResult<DidWebAuthority> {
     }
     let host = match authority_url.host() {
         Some(url::Host::Domain(host)) => host.trim_end_matches('.').to_ascii_lowercase(),
-        Some(url::Host::Ipv4(_) | url::Host::Ipv6(_)) => {
+        Some(url::Host::Ipv4(address)) => {
+            let host = address.to_string();
+            let supplied_host = authority
+                .split_once(':')
+                .map_or(authority.as_str(), |(host, _)| host);
+            // URL parsing accepts shortened, integer, hexadecimal, and other
+            // normalized spellings. Only exact dotted decimal is an identifier.
+            if supplied_host != host {
+                return Err(DidcommError::InvalidDid(format!(
+                    "did:web contains an unsafe authority: {did}"
+                )));
+            }
+            host
+        }
+        Some(url::Host::Ipv6(_)) => {
             return Err(DidcommError::InvalidDid(format!(
                 "did:web contains an unsafe authority: {did}"
             )))
@@ -779,7 +810,7 @@ async fn resolve_did_web(did: &str, allowed_hosts: &HashSet<String>) -> DidcommR
 
 #[cfg(feature = "did_web")]
 fn internal_did_web_url(base_url: &str, did: &str) -> DidcommResult<url::Url> {
-    did_web_authority(did)?;
+    did_web_identifier_authority(did)?;
     let path_parts = did_web_path_parts(did)?;
     let mut url = url::Url::parse(base_url).map_err(|_| DidcommError::ResolutionFailed {
         did: did.to_string(),
@@ -1512,6 +1543,197 @@ mod tests {
         assert_eq!(result.source, "configured_internal_resolver");
         assert_eq!(result.document.verification_method[0].id, "#key-1");
         assert_eq!(result.document.assertion_method[0], "#key-1");
+    }
+
+    #[cfg(feature = "did_web")]
+    fn internal_ipv4_document(did: &str) -> serde_json::Value {
+        let key_id = format!("{did}#key-1");
+        serde_json::json!({
+            "id": did,
+            "controller": did,
+            "verificationMethod": [{
+                "id": key_id,
+                "type": "JsonWebKey2020",
+                "controller": did,
+                "publicKeyJwk": {
+                    "kty": "OKP", "crv": "Ed25519",
+                    "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+                }
+            }],
+            "assertionMethod": [key_id]
+        })
+    }
+
+    #[cfg(feature = "did_web")]
+    async fn internal_did_web_fixture(
+        status: &'static str,
+        body: String,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                    .await
+                    .expect("configured mirror was not contacted")
+                    .unwrap();
+            let mut request = [0_u8; 4096];
+            let mut length = 0;
+            while !request[..length]
+                .windows(4)
+                .any(|window| window == b"\r\n\r\n")
+            {
+                assert!(
+                    length < request.len(),
+                    "request headers exceed fixture limit"
+                );
+                let count = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    stream.read(&mut request[length..]),
+                )
+                .await
+                .expect("request headers were not completed")
+                .unwrap();
+                assert_ne!(count, 0, "request ended before its headers were complete");
+                length += count;
+            }
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/did+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8(request[..length].to_vec()).unwrap()
+        });
+        (format!("http://{address}/base"), server)
+    }
+
+    #[cfg(feature = "did_web")]
+    #[tokio::test]
+    async fn internal_did_web_mirror_resolves_canonical_ipv4_identifiers() {
+        for (did, path) in [
+            ("did:web:192.0.2.20", "/base/.well-known/did.json"),
+            (
+                "did:web:192.0.2.20:orgs:tenant-a",
+                "/base/orgs/tenant-a/did.json",
+            ),
+            (
+                "did:web:192.0.2.20%3A8443:orgs:tenant-a",
+                "/base/orgs/tenant-a/did.json",
+            ),
+        ] {
+            let (base, server) =
+                internal_did_web_fixture("200 OK", internal_ipv4_document(did).to_string()).await;
+            let result = DidResolver::new()
+                .with_did_web_internal_base_urls([base])
+                .resolve_with_metadata(did)
+                .await
+                .unwrap();
+            let request = server.await.unwrap();
+
+            assert!(request.starts_with(&format!("GET {path} ")));
+            assert_eq!(result.source, "configured_internal_resolver");
+            assert_eq!(result.document.id, did);
+            assert_eq!(result.document.verification_method[0].controller, did);
+            assert_eq!(result.document.assertion_method[0], format!("{did}#key-1"));
+        }
+    }
+
+    #[cfg(feature = "did_web")]
+    #[tokio::test]
+    async fn direct_did_web_ipv4_is_rejected_even_when_allowlisted() {
+        for (did, authority) in [
+            ("did:web:192.0.2.20", "192.0.2.20"),
+            ("did:web:192.0.2.20%3A8443:orgs:tenant-a", "192.0.2.20:8443"),
+        ] {
+            let error = DidResolver::with_did_web_allowed_hosts([authority])
+                .resolve(did)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, DidcommError::InvalidDid(_)), "{error}");
+        }
+    }
+
+    #[cfg(feature = "did_web")]
+    #[test]
+    fn internal_did_web_mirror_rejects_unsafe_ipv4_identifiers() {
+        for did in [
+            "did:web:2130706433",
+            "did:web:127.1",
+            "did:web:0x7f000001",
+            "did:web:0177.0.0.1",
+            "did:web:192.0.2.020",
+            "did:web:192.0.2.20.",
+            "did:web: 192.0.2.20",
+            "did:web:192.0.2.20\t",
+            "did:web:192.0.2.20\n",
+            "did:web:192.0.2.20\\",
+            "did:web:192.0.2.20@other.example",
+            "did:web:192.0.2.20%40other.example",
+            "did:web:192.0.2.20%3A0",
+            "did:web:192.0.2.20%3A65536",
+            "did:web:192.0.2.20%3Anot-a-port",
+            "did:web:192.0.2.20%3A8443%3A9443",
+            "did:web:192.0.2.20%253A8443",
+            "did:web:192.0.2.20%2Fadmin",
+            "did:web:192.0.2.20%3Ftarget=internal",
+            "did:web:192.0.2.20%23fragment",
+            "did:web:192.0.2.20:%2e%2e:admin",
+            "did:web:192.0.2.20:%2fadmin",
+            "did:web:192.0.2.20:%5cadmin",
+            "did:web:192.0.2.20:",
+            "did:web:[%3A%3A1]",
+        ] {
+            assert!(
+                matches!(
+                    internal_did_web_url("http://gateway/base", did),
+                    Err(DidcommError::InvalidDid(_))
+                ),
+                "accepted {did:?}",
+            );
+        }
+    }
+
+    #[cfg(feature = "did_web")]
+    #[tokio::test]
+    async fn failed_internal_ipv4_mirror_cannot_fall_back_to_direct_egress() {
+        let did = "did:web:192.0.2.20%3A8443:orgs:tenant-a";
+        let document = internal_ipv4_document(did);
+        let mut wrong_id = document.clone();
+        wrong_id["id"] = serde_json::json!("did:web:192.0.2.20%3a8443:orgs:tenant-a");
+        let mut duplicate_method = document.clone();
+        duplicate_method["verificationMethod"] = serde_json::json!([
+            document["verificationMethod"][0],
+            document["verificationMethod"][0]
+        ]);
+        let mut private_key = document.clone();
+        private_key["verificationMethod"][0]["publicKeyJwk"]["d"] =
+            serde_json::json!("must-not-be-accepted");
+        let mut unknown_assertion = document.clone();
+        unknown_assertion["assertionMethod"] = serde_json::json!(["#unknown"]);
+        let serialized = document.to_string();
+        let duplicate_member = format!("{{\"id\":\"{did}\",{}", &serialized[1..]);
+
+        for (status, body) in [
+            ("503 Service Unavailable", "{}".to_string()),
+            ("200 OK", wrong_id.to_string()),
+            ("200 OK", duplicate_method.to_string()),
+            ("200 OK", private_key.to_string()),
+            ("200 OK", unknown_assertion.to_string()),
+            ("200 OK", duplicate_member),
+        ] {
+            let (base, server) = internal_did_web_fixture(status, body).await;
+            let error = DidResolver::with_did_web_allowed_hosts(["192.0.2.20:8443"])
+                .with_did_web_internal_base_urls([base])
+                .resolve(did)
+                .await
+                .unwrap_err();
+            let request = server.await.unwrap();
+
+            assert!(request.starts_with("GET /base/orgs/tenant-a/did.json "));
+            assert!(matches!(error, DidcommError::InvalidDid(_)), "{error}");
+        }
     }
 
     #[cfg(feature = "did_web")]
