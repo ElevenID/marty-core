@@ -1369,11 +1369,14 @@ fn map_open_badge_key_strict(
 ) -> Result<OpenBadgeVerificationMethod, StorageError> {
     let id: String = row.get(0)?;
     let document_json: String = row.get(1)?;
-    let document = serde_json::from_str(&document_json).map_err(|_| {
-        StorageError::InvalidTrustPackage(format!(
-            "Open Badge method {id} has malformed document JSON"
-        ))
-    })?;
+    // Authenticated method documents must keep their stored JSON token shape,
+    // including literal objects that resemble Serde's private number/raw markers.
+    let document =
+        marty_crypto::strict_json::parse_unique_json(document_json.as_bytes()).map_err(|_| {
+            StorageError::InvalidTrustPackage(format!(
+                "Open Badge method {id} has malformed document JSON"
+            ))
+        })?;
     let source = match row.get::<_, String>(8)?.as_str() {
         "sync" => OpenBadgeKeySource::Sync,
         "usb_import" => OpenBadgeKeySource::UsbImport,
@@ -2846,6 +2849,56 @@ mod tests {
     // ====================================================================
     // Open Badge trust packages
     // ====================================================================
+
+    #[test]
+    fn authenticated_method_document_preserves_json_shape_through_storage() {
+        runtime().block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let package = package_provenance("usb:json-shape", 1, "1.0.0", 1, "usb-root-1", 'a');
+            let mut method = open_badge_method("did:example:issuer#key-1", "did:example:issuer");
+            method.document["signed_shape"] = serde_json::json!({
+                "fractional": 1.5,
+                "literal_number": {"$serde_json::private::Number": "1.5"},
+                "literal_raw": {"$serde_json::private::RawValue": "true"}
+            });
+            storage
+                .apply_trust_package(&package, &[], std::slice::from_ref(&method))
+                .await
+                .unwrap();
+            let records = storage.get_open_badge_trust_records().await.unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].method.document, method.document);
+            assert_eq!(records[0].provenance.as_ref(), Some(&package));
+        });
+    }
+
+    #[test]
+    fn stored_method_documents_reject_duplicate_members_and_trailing_data() {
+        runtime().block_on(async {
+            let storage = SecureStorage::new_in_memory().unwrap();
+            let method = open_badge_method("did:example:issuer#key-1", "did:example:issuer");
+            storage.store_open_badge_key(&method).await.unwrap();
+            for invalid in [
+                r#"{"id":"first","\u0069d":"second"}"#,
+                r#"{"nested":{"value":1,"value":2}}"#,
+                r#"{} true"#,
+            ] {
+                storage
+                    .with_connection(|connection| {
+                        connection.execute(
+                            "UPDATE open_badge_keys SET document_json = ? WHERE id = ?",
+                            rusqlite::params![invalid, method.id],
+                        )
+                    })
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    storage.get_open_badge_trust_records().await,
+                    Err(StorageError::InvalidTrustPackage(_))
+                ));
+            }
+        });
+    }
 
     #[test]
     fn direct_open_badge_storage_rejects_private_material_before_writing() {

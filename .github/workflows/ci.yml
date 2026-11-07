@@ -153,6 +153,7 @@ jobs:
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
           cargo test --locked -p marty-oid4vci --test sd_jwt_verifier_policy --no-default-features --features kms-only,verifier,sd_jwt
           cargo test --locked -p marty-crypto --no-default-features --features serde_json/arbitrary_precision,serde_json/raw_value --lib strict_json::tests
+          cargo test --locked -p marty-secure-storage --features serde_json/arbitrary_precision,serde_json/raw_value --lib database::tests
           cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings
           cargo test --locked -p marty-oid4vci --no-default-features --lib
           cargo test --locked -p marty-oid4vci --lib
