@@ -14,8 +14,53 @@ use crate::error::{VerificationError, VerificationResult};
 use crate::trust_anchor::IacaRegistry;
 
 // Re-export isomdl types for convenience
-pub use isomdl::definitions::x509::validation::{ValidationOutcome, ValidationRuleset};
+pub use isomdl::definitions::x509::validation::ValidationOutcome;
 pub use isomdl::definitions::x509::x5chain::{Builder as X5ChainBuilder, X5Chain};
+
+/// The legacy certificate policies supported by Core's synchronous mDL API.
+///
+/// isomdl 0.4 expresses these policies as explicit certificate profiles. Keeping
+/// this boundary in Core preserves existing Rust and Python callers without
+/// enabling additional document profiles or network revocation fetching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ValidationRuleset {
+    Mdl,
+    AamvaMdl,
+    MdlReaderOneStep,
+}
+
+impl ValidationRuleset {
+    /// Validate the certificate policy offline.
+    ///
+    /// An empty `errors` list means the certificate policy passed. Revocation is
+    /// deliberately not fetched; `revocation_errors` retains the fork's warnings
+    /// and must not be interpreted as evidence that the certificate is unrevoked.
+    pub fn validate(
+        self,
+        x5chain: &X5Chain,
+        registry: &isomdl::definitions::x509::trust_anchor::TrustAnchorRegistry,
+    ) -> ValidationOutcome {
+        use futures::FutureExt;
+        use isomdl::definitions::x509::validation::{validate, MdocProfile};
+
+        // The unit fetcher completes immediately without I/O. This synchronous
+        // compatibility API must also work inside an existing executor, without
+        // entering a nested executor or blocking on unexpected future I/O.
+        let outcome = match self {
+            Self::Mdl => validate(&MdocProfile::MDL.issuer, x5chain, registry, &()).now_or_never(),
+            Self::AamvaMdl => {
+                validate(&MdocProfile::AAMVA_MDL.issuer, x5chain, registry, &()).now_or_never()
+            }
+            Self::MdlReaderOneStep => {
+                validate(&MdocProfile::MDL.reader, x5chain, registry, &()).now_or_never()
+            }
+        };
+        outcome.unwrap_or_else(|| ValidationOutcome {
+            errors: vec!["Offline certificate validation did not complete immediately".into()],
+            ..Default::default()
+        })
+    }
+}
 
 /// Validate the ISO 18013-5 document-signer constraints Marty requires before
 /// accepting an mdoc issuer certificate as trusted.
@@ -142,6 +187,9 @@ pub struct MdlDeviceAuthenticationResult {
 /// This verifies the detached COSE device signature with the device public key
 /// bound into each document's issuer-signed MSO. The caller must independently
 /// verify the issuer signature, certificate chain, validity, and revocation.
+/// This legacy proof-only API retains that precondition; complete verification
+/// should use [`crate::mdoc::verify_mdoc_presentation`], which passes the MSO
+/// returned by issuer authentication directly to the holder verifier.
 /// The session transcript must be derived from verifier-owned request state;
 /// accepting a transcript supplied by the wallet would defeat nonce and
 /// audience binding.
@@ -150,7 +198,8 @@ pub fn verify_device_authentication(
     session_transcript_cbor: &[u8],
 ) -> VerificationResult<MdlDeviceAuthenticationResult> {
     use isomdl::definitions::device_response::{DeviceResponse, Status};
-    use isomdl::presentation::authentication::mdoc::device_authentication_with_raw_session_transcript;
+    use isomdl::definitions::helpers::Tag24;
+    use isomdl::definitions::Mso;
 
     let response: DeviceResponse = isomdl::cbor::from_slice(device_response_cbor).map_err(|e| {
         VerificationError::cbor_error(format!("Unable to parse mdoc DeviceResponse: {e}"))
@@ -171,19 +220,71 @@ pub fn verify_device_authentication(
     })?;
     let mut document_types = Vec::with_capacity(documents.len());
     for document in documents.iter() {
-        device_authentication_with_raw_session_transcript(document, session_transcript_cbor)
-            .map_err(|e| {
-                VerificationError::device_auth_failed(format!(
-                    "Holder authentication failed for document type {}: {e}",
-                    document.doc_type
-                ))
+        // Only the legacy proof-only boundary decodes this value. Its caller
+        // must authenticate this exact issuerSigned object independently.
+        let payload = document
+            .issuer_signed
+            .issuer_auth
+            .payload
+            .as_ref()
+            .ok_or_else(|| {
+                VerificationError::device_auth_failed("issuerAuth payload is detached")
             })?;
+        let mso = isomdl::cbor::from_slice::<Tag24<Mso>>(payload)
+            .map_err(|error| {
+                VerificationError::device_auth_failed(format!("Unable to parse MSO: {error}"))
+            })?
+            .into_inner();
+        verify_document_device_signature(document, &mso, session_transcript_cbor)?;
         document_types.push(document.doc_type.clone());
     }
 
     Ok(MdlDeviceAuthenticationResult {
         verified: true,
         document_types,
+    })
+}
+
+/// Verify the public holder proof using the MSO authenticated by the caller.
+pub(crate) fn verify_document_device_signature(
+    document: &isomdl::definitions::device_response::Document,
+    authenticated_mso: &isomdl::definitions::Mso,
+    session_transcript_cbor: &[u8],
+) -> VerificationResult<()> {
+    use isomdl::definitions::device_key::{CoseKey, EC2Curve};
+    use isomdl::definitions::DeviceAuth;
+    use isomdl::presentation::authentication::mdoc::device_signature_authentication_with_raw_session_transcript;
+
+    // The fork also implements P-384. Adopting its API must not widen Core's
+    // existing holder algorithm policy before that product path is qualified.
+    if !matches!(
+        &authenticated_mso.device_key_info.device_key,
+        CoseKey::EC2 {
+            crv: EC2Curve::P256,
+            ..
+        }
+    ) || !matches!(
+        &document.device_signed.device_auth,
+        DeviceAuth::DeviceSignature(signature)
+            if signature.protected.header.alg == Some(coset::RegisteredLabelWithPrivate::Assigned(
+                coset::iana::Algorithm::ES256,
+            ))
+    ) {
+        return Err(VerificationError::device_auth_failed(
+            "Core mdoc holder verification requires an ES256 signature and P-256 public key",
+        ));
+    }
+
+    device_signature_authentication_with_raw_session_transcript(
+        document,
+        authenticated_mso,
+        session_transcript_cbor,
+    )
+    .map_err(|error| {
+        VerificationError::device_auth_failed(format!(
+            "Holder authentication failed for document type {}: {error}",
+            document.doc_type
+        ))
     })
 }
 
@@ -202,6 +303,15 @@ pub struct MdlVerificationResult {
     pub issuer_auth_status: AuthStatus,
     /// Authentication status for device.
     pub device_auth_status: AuthStatus,
+    /// This compatibility API verifies certificates offline.
+    #[serde(default)]
+    pub revocation_checked: bool,
+    /// `None` means revocation is unknown, including a successful chain check.
+    #[serde(default)]
+    pub not_revoked: Option<bool>,
+    /// Revocation diagnostics are independent of certificate-policy failures.
+    #[serde(default)]
+    pub revocation_errors: Vec<String>,
 }
 
 impl Default for MdlVerificationResult {
@@ -213,6 +323,9 @@ impl Default for MdlVerificationResult {
             errors: Vec::new(),
             issuer_auth_status: AuthStatus::Unknown,
             device_auth_status: AuthStatus::Unknown,
+            revocation_checked: false,
+            not_revoked: None,
+            revocation_errors: Vec::new(),
         }
     }
 }
@@ -226,18 +339,6 @@ pub enum AuthStatus {
     Invalid,
     /// Authentication was not performed.
     Unknown,
-}
-
-impl From<isomdl::presentation::authentication::AuthenticationStatus> for AuthStatus {
-    fn from(status: isomdl::presentation::authentication::AuthenticationStatus) -> Self {
-        match status {
-            isomdl::presentation::authentication::AuthenticationStatus::Valid => AuthStatus::Valid,
-            isomdl::presentation::authentication::AuthenticationStatus::Invalid => {
-                AuthStatus::Invalid
-            }
-            _ => AuthStatus::Unknown,
-        }
-    }
 }
 
 /// Verify an mDL issuer certificate chain against a trust anchor registry.
@@ -283,6 +384,9 @@ pub fn verify_x5chain(
         errors,
         issuer_auth_status: AuthStatus::Unknown,
         device_auth_status: AuthStatus::Unknown,
+        revocation_checked: false,
+        not_revoked: None,
+        revocation_errors: outcome.revocation_errors,
     }
 }
 
@@ -294,31 +398,37 @@ pub fn verify_issuer_signature(
     x5chain: &X5Chain,
     issuer_signed: &isomdl::definitions::IssuerSigned,
 ) -> VerificationResult<()> {
+    verify_issuer_mso(x5chain, issuer_signed).map(|_| ())
+}
+
+/// Return the signature-authenticated MSO for subsequent evidence and holder checks.
+pub(crate) fn verify_issuer_mso(
+    x5chain: &X5Chain,
+    issuer_signed: &isomdl::definitions::IssuerSigned,
+) -> VerificationResult<isomdl::definitions::Mso> {
     use isomdl::presentation::authentication::mdoc::issuer_authentication;
 
-    issuer_authentication(x5chain.clone(), issuer_signed).map_err(|e| {
+    // Preserve the existing Core issuer-verification policy while the fork's
+    // broader algorithm support is qualified separately.
+    if issuer_signed.issuer_auth.protected.header.alg
+        != Some(coset::RegisteredLabelWithPrivate::Assigned(
+            coset::iana::Algorithm::ES256,
+        ))
+    {
+        return Err(VerificationError::issuer_auth_failed(
+            "Core mdoc issuer verification requires protected ES256",
+        ));
+    }
+
+    let mso = issuer_authentication(x5chain.clone(), issuer_signed).map_err(|e| {
         VerificationError::issuer_auth_failed(format!("COSE signature verification failed: {}", e))
     })?;
-
-    let mso_bytes =
-        issuer_signed.issuer_auth.payload.as_ref().ok_or_else(|| {
-            VerificationError::issuer_auth_failed("issuerAuth payload is detached")
-        })?;
-    let mso = isomdl::cbor::from_slice::<
-        isomdl::definitions::helpers::Tag24<isomdl::definitions::Mso>,
-    >(mso_bytes)
-    .map_err(|error| {
-        VerificationError::issuer_auth_failed(format!(
-            "unable to parse the signature-authenticated MSO: {error}"
-        ))
-    })?
-    .into_inner();
 
     if let Some(namespaces) = &issuer_signed.namespaces {
         verify_issuer_value_digests(&mso, namespaces)?;
     }
 
-    Ok(())
+    Ok(mso)
 }
 
 /// Bind every disclosed issuer-signed value to the digest authenticated by the MSO.
@@ -676,6 +786,7 @@ mod tests {
                 valid_until: now + Duration::days(1),
                 expected_update: None,
             },
+            status: None,
         };
 
         (mso, namespaces)
@@ -824,6 +935,7 @@ mod tests {
                 valid_until: now + Duration::days(1),
                 expected_update: None,
             },
+            status: None,
         };
         let issuer_auth = PreparedCoseSign1::new(
             coset::CoseSign1Builder::new()
@@ -921,6 +1033,76 @@ mod tests {
         assert!(!result.verified);
         assert!(result.errors.is_empty());
         assert_eq!(result.issuer_auth_status, AuthStatus::Unknown);
+        assert!(!result.revocation_checked);
+        assert_eq!(result.not_revoked, None);
+    }
+
+    #[test]
+    fn offline_certificate_adapter_rejects_missing_trust_without_revocation_claims() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/vectors/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let chain =
+            build_x5chain_from_pem(&[fixture["certificate_pem"].as_str().unwrap().as_bytes()])
+                .unwrap();
+        let registry = IacaRegistry::new();
+        for ruleset in [
+            ValidationRuleset::Mdl,
+            ValidationRuleset::AamvaMdl,
+            ValidationRuleset::MdlReaderOneStep,
+        ] {
+            // This legacy synchronous API must remain usable from an async
+            // host; entering another futures executor here would panic.
+            let result =
+                futures::executor::block_on(async { verify_x5chain(&chain, &registry, ruleset) });
+            assert!(!result.verified);
+            assert!(!result.errors.is_empty());
+            assert!(!result.revocation_checked);
+            assert_eq!(result.not_revoked, None);
+            assert_eq!(result.issuer_auth_status, AuthStatus::Unknown);
+            assert_eq!(result.device_auth_status, AuthStatus::Unknown);
+        }
+    }
+
+    #[test]
+    fn fork_adoption_preserves_core_es256_verification_policy() {
+        use isomdl::definitions::device_key::{CoseKey, EC2Curve};
+        use isomdl::definitions::device_response::DeviceResponse;
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/vectors/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let chain =
+            build_x5chain_from_pem(&[fixture["certificate_pem"].as_str().unwrap().as_bytes()])
+                .unwrap();
+        let response: DeviceResponse = isomdl::cbor::from_slice(
+            &STANDARD
+                .decode(fixture["response_b64"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let mut document = response.documents.unwrap().into_inner().remove(0);
+        let mut mso = verify_issuer_mso(&chain, &document.issuer_signed).unwrap();
+        let transcript = STANDARD
+            .decode(fixture["transcript_b64"].as_str().unwrap())
+            .unwrap();
+
+        document.issuer_signed.issuer_auth.protected.header.alg = Some(
+            coset::RegisteredLabelWithPrivate::Assigned(coset::iana::Algorithm::ES384),
+        );
+        let error = verify_issuer_mso(&chain, &document.issuer_signed).unwrap_err();
+        assert!(error.to_string().contains("requires protected ES256"));
+
+        let CoseKey::EC2 { crv, .. } = &mut mso.device_key_info.device_key else {
+            panic!("fixture must use an EC2 key");
+        };
+        *crv = EC2Curve::P384;
+        let error = verify_document_device_signature(&document, &mso, &transcript).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires an ES256 signature and P-256 public key"));
     }
 
     #[test]
@@ -990,6 +1172,9 @@ mod tests {
             errors: vec![],
             issuer_auth_status: AuthStatus::Valid,
             device_auth_status: AuthStatus::Unknown,
+            revocation_checked: false,
+            not_revoked: None,
+            revocation_errors: Vec::new(),
         };
 
         assert!(result.verified);

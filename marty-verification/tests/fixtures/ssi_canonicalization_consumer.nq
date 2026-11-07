@@ -1,0 +1,13 @@
+<urn:example:credential> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://www.w3.org/2018/credentials#VerifiableCredential> .
+<urn:example:credential> <https://www.w3.org/2018/credentials#credentialSubject> <urn:example:subject> .
+<urn:example:credential> <https://www.w3.org/2018/credentials#issuer> <did:web:issuer.example> .
+<urn:example:credential> <https://www.w3.org/2018/credentials#validFrom> "2026-01-01T00:00:00Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<urn:example:graph-node> <urn:example:custom> "{\"z\":1,\"a\":2}"^^<urn:example:ExactDatatype> <urn:example:subject> .
+<urn:example:graph-node> <urn:example:payload> "{\"a\":{\"a\":null,\"z\":2},\"z\":1}"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> <urn:example:subject> .
+<urn:example:included-node> <urn:example:payload> "{\"a\":{\"a\":null,\"z\":2},\"z\":1}"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .
+<urn:example:subject> <urn:example:custom> "unchanged lexical value"^^<urn:example:ExactDatatype> .
+<urn:example:subject> <urn:example:node> _:c14n0 .
+<urn:example:subject> <urn:example:node> _:c14n1 .
+<urn:example:subject> <urn:example:payload> "{\"a\":{\"a\":null,\"z\":2},\"z\":1}"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .
+_:c14n0 <urn:example:name> "same" .
+_:c14n1 <urn:example:name> "same" .

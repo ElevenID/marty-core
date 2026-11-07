@@ -1,0 +1,69 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    {
+      "payload": {
+        "@id": "urn:example:payload",
+        "@type": "@json"
+      },
+      "custom": {
+        "@id": "urn:example:custom",
+        "@type": "urn:example:ExactDatatype"
+      },
+      "node": "urn:example:node",
+      "label": "urn:example:name"
+    }
+  ],
+  "id": "urn:example:credential",
+  "type": [
+    "VerifiableCredential"
+  ],
+  "issuer": "did:web:issuer.example",
+  "validFrom": "2026-01-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "urn:example:subject",
+    "custom": "unchanged lexical value",
+    "payload": {
+      "z": 1,
+      "a": {
+        "z": 2,
+        "a": null
+      }
+    },
+    "node": [
+      {
+        "@id": "_:first",
+        "label": "same"
+      },
+      {
+        "@id": "_:second",
+        "label": "same"
+      }
+    ],
+    "@graph": [
+      {
+        "id": "urn:example:graph-node",
+        "payload": {
+          "z": 1,
+          "a": {
+            "z": 2,
+            "a": null
+          }
+        },
+        "custom": "{\"z\":1,\"a\":2}"
+      }
+    ],
+    "@included": [
+      {
+        "id": "urn:example:included-node",
+        "payload": {
+          "z": 1,
+          "a": {
+            "z": 2,
+            "a": null
+          }
+        }
+      }
+    ]
+  }
+}

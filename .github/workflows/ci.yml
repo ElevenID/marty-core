@@ -151,10 +151,13 @@ jobs:
           cargo test --locked -p marty-oid4vci --test remote_jwt_vc_boundary --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo test --locked -p marty-oid4vci --test signing_payload_semantics --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
+          cargo test --locked -p marty-oid4vci --test sd_jwt_verifier_policy --no-default-features --features kms-only,verifier,sd_jwt
+          cargo test --locked -p marty-crypto --no-default-features --features serde_json/arbitrary_precision,serde_json/raw_value --lib strict_json::tests
           cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings
           cargo test --locked -p marty-oid4vci --no-default-features --lib
           cargo test --locked -p marty-oid4vci --lib
           cargo test --locked -p marty-oid4vci --no-default-features --features kms-only,wallet --lib
+          cargo test --locked -p marty-oid4vci --test sd_jwt_wallet_verified_presentation --no-default-features --features kms-only,wallet
           cargo test --locked -p marty-crypto --no-default-features --features signature-verification ed448_requires_explicit_verification_capability
           cargo test --locked -p marty-crypto --no-default-features --features ed448-verification ed448::tests
           cargo test --locked -p marty-emrtd-issuance

@@ -266,10 +266,15 @@ fn mdl_verification_result_verified_invariant() {
         errors: Vec::new(), // verified = true requires empty errors
         issuer_auth_status: AuthStatus::Valid,
         device_auth_status: AuthStatus::Unknown,
+        revocation_checked: false,
+        not_revoked: None,
+        revocation_errors: Vec::new(),
     };
     assert!(result.verified);
     assert!(result.errors.is_empty());
     assert_eq!(result.issuer_auth_status, AuthStatus::Valid);
+    assert!(!result.revocation_checked);
+    assert_eq!(result.not_revoked, None);
 }
 
 /// `MdlVerificationResult` must be Serialize/Deserialize (used in API responses).
@@ -282,6 +287,9 @@ fn mdl_verification_result_serde_roundtrip() {
         errors: vec!["E201: not in trust registry".to_string()],
         issuer_auth_status: AuthStatus::Invalid,
         device_auth_status: AuthStatus::Unknown,
+        revocation_checked: false,
+        not_revoked: None,
+        revocation_errors: vec!["CRL checking is disabled".to_string()],
     };
     let json = serde_json::to_string(&result).expect("serialize");
     let decoded: MdlVerificationResult = serde_json::from_str(&json).expect("deserialize");
@@ -289,6 +297,26 @@ fn mdl_verification_result_serde_roundtrip() {
     assert_eq!(decoded.jurisdiction, result.jurisdiction);
     assert_eq!(decoded.errors, result.errors);
     assert_eq!(decoded.issuer_auth_status, result.issuer_auth_status);
+    assert!(!decoded.revocation_checked);
+    assert_eq!(decoded.not_revoked, None);
+    assert_eq!(decoded.revocation_errors, result.revocation_errors);
+}
+
+#[test]
+fn legacy_chain_result_deserializes_with_unknown_revocation() {
+    let legacy = serde_json::json!({
+        "verified": true,
+        "common_name": "Historical document signer",
+        "jurisdiction": null,
+        "errors": [],
+        "issuer_auth_status": "Unknown",
+        "device_auth_status": "Unknown",
+    });
+    let result: MdlVerificationResult = serde_json::from_value(legacy).unwrap();
+    assert!(result.verified);
+    assert!(!result.revocation_checked);
+    assert_eq!(result.not_revoked, None);
+    assert!(result.revocation_errors.is_empty());
 }
 
 // ── §5  Error paths ───────────────────────────────────────────────────────────

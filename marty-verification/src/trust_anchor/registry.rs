@@ -17,6 +17,8 @@ pub enum TrustPurpose {
     Iaca,
     /// Reader Certificate Authority for mDL (ISO 18013-5).
     ReaderCa,
+    /// Authority that issues VICAL signer certificates, separate from an IACA.
+    VicalAuthority,
     /// Country Signing Certificate Authority for eMRTD (ICAO 9303).
     Csca,
     /// Document Signer Certificate for eMRTD (ICAO 9303).
@@ -293,6 +295,9 @@ impl From<isomdl::definitions::x509::trust_anchor::TrustAnchorRegistry> for Basi
                     isomdl::definitions::x509::trust_anchor::TrustPurpose::ReaderCa => {
                         TrustPurpose::ReaderCa
                     }
+                    isomdl::definitions::x509::trust_anchor::TrustPurpose::VicalAuthority => {
+                        TrustPurpose::VicalAuthority
+                    }
                 },
                 jurisdiction: None,
             })
@@ -315,6 +320,9 @@ impl From<&BasicTrustRegistry> for isomdl::definitions::x509::trust_anchor::Trus
                     }
                     TrustPurpose::ReaderCa => {
                         Some(isomdl::definitions::x509::trust_anchor::TrustPurpose::ReaderCa)
+                    }
+                    TrustPurpose::VicalAuthority => {
+                        Some(isomdl::definitions::x509::trust_anchor::TrustPurpose::VicalAuthority)
                     }
                     _ => None, // CSCA/DSC don't map to isomdl
                 };
@@ -354,6 +362,56 @@ mod tests {
         assert_eq!(format!("{:?}", TrustPurpose::Csca), "Csca");
         assert_eq!(format!("{:?}", TrustPurpose::Dsc), "Dsc");
         assert_eq!(format!("{:?}", TrustPurpose::ReaderCa), "ReaderCa");
+    }
+
+    #[test]
+    fn vical_authority_round_trip_never_becomes_an_iaca() {
+        use isomdl::definitions::x509::trust_anchor as isomdl_trust;
+
+        // Only a public certificate is needed to exercise registry conversion.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/vectors/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let certificate =
+            Certificate::from_pem(fixture["certificate_pem"].as_str().unwrap().as_bytes()).unwrap();
+        let fork_registry = isomdl_trust::TrustAnchorRegistry {
+            anchors: vec![isomdl_trust::TrustAnchor {
+                certificate: certificate.clone(),
+                purpose: isomdl_trust::TrustPurpose::VicalAuthority,
+            }],
+        };
+
+        let registry = BasicTrustRegistry::from(fork_registry);
+        assert!(registry
+            .get_anchors_by_purpose(TrustPurpose::Iaca)
+            .is_empty());
+        assert!(registry
+            .get_anchors_by_purpose(TrustPurpose::ReaderCa)
+            .is_empty());
+        assert_eq!(
+            registry
+                .get_anchors_by_purpose(TrustPurpose::VicalAuthority)
+                .len(),
+            1
+        );
+        assert!(registry
+            .find_issuer(&certificate, TrustPurpose::Iaca)
+            .is_none());
+
+        let restored = isomdl_trust::TrustAnchorRegistry::from(&registry);
+        assert_eq!(restored.anchors.len(), 1);
+        assert_eq!(
+            restored.anchors[0].purpose,
+            isomdl_trust::TrustPurpose::VicalAuthority
+        );
+        assert_eq!(restored.anchors[0].certificate, certificate);
+        let serialized = serde_json::to_string(&registry).unwrap();
+        let deserialized: BasicTrustRegistry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(
+            deserialized.get_anchors()[0].purpose,
+            TrustPurpose::VicalAuthority
+        );
     }
 
     #[test]
