@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use coset::{cbor::value::Value as CoseValue, iana, Label, RegisteredLabelWithPrivate};
 use der::Decode;
 use isomdl::definitions::device_response::{DeviceResponse, Status};
-use isomdl::definitions::helpers::Tag24;
 use isomdl::definitions::x509::x5chain::{X5Chain, X5CHAIN_COSE_HEADER_LABEL};
 use isomdl::definitions::{DigestAlgorithm, Mso};
 use serde::{Deserialize, Serialize};
@@ -18,7 +17,10 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use crate::{
     mdoc::parse_device_response,
     verification::{
-        mdl::{validate_document_signer_certificate_der, verify_issuer_signature},
+        mdl::{
+            validate_document_signer_certificate_der, verify_document_device_signature,
+            verify_issuer_mso,
+        },
         ChainValidator, ChainValidatorConfig,
     },
 };
@@ -158,26 +160,28 @@ pub fn verify_mdoc_presentation_at(
         verification_time,
     );
     let mut errors = issuer.error.into_iter().collect::<Vec<_>>();
-    let (device_authentication_valid, device_document_types) =
-        match crate::verify_device_authentication(mdoc_bytes, session_transcript_cbor) {
-            Ok(result) => (result.verified, result.document_types),
-            Err(error) => {
-                errors.push(format!("Holder device authentication failed: {error}"));
-                (false, Vec::new())
-            }
-        };
-    let document_types = if issuer.document_types.is_empty() {
-        device_document_types
-    } else {
-        issuer.document_types
-    };
+    // Every holder proof is checked with the MSO returned by issuer
+    // authentication for that document. A failed issuer signature cannot supply
+    // an attacker-controlled replacement device key to the complete verifier.
+    let mut device_authentication_valid = !issuer.authenticated_documents.is_empty()
+        && issuer.authenticated_documents.len() == issuer.document_types.len();
+    for authenticated in &issuer.authenticated_documents {
+        if let Err(error) = verify_document_device_signature(
+            &authenticated.document,
+            &authenticated.mso,
+            session_transcript_cbor,
+        ) {
+            device_authentication_valid = false;
+            errors.push(format!("Holder device authentication failed: {error}"));
+        }
+    }
 
     MdocPresentationVerificationResult {
         issuer_signature_valid: issuer.signature_valid,
         issuer_trusted: issuer.issuer_trusted,
         certificate_trust_failures: issuer.certificate_trust_failures,
         device_authentication_valid,
-        document_types,
+        document_types: issuer.document_types,
         document_evidence: issuer.document_evidence,
         revocation_checked: false,
         not_revoked: None,
@@ -258,7 +262,13 @@ struct IssuerAuthenticationResult {
     certificate_trust_failures: Vec<MdocCertificateTrustFailure>,
     document_types: Vec<String>,
     document_evidence: Vec<MdocDocumentVerificationEvidence>,
+    authenticated_documents: Vec<AuthenticatedDocument>,
     error: Option<String>,
+}
+
+struct AuthenticatedDocument {
+    document: isomdl::definitions::device_response::Document,
+    mso: Mso,
 }
 
 fn verify_issuer_authentication(
@@ -276,7 +286,7 @@ fn verify_issuer_authentication(
     if response.version != DeviceResponse::VERSION || !matches!(response.status, Status::OK) {
         return issuer_failure("mdoc DeviceResponse version or status is invalid");
     }
-    let Some(documents) = response.documents.as_ref() else {
+    let Some(documents) = response.documents else {
         return issuer_failure("mdoc DeviceResponse contains no documents");
     };
     let document_types = documents
@@ -323,7 +333,8 @@ fn verify_issuer_authentication(
     let mut all_signatures_valid = true;
     let mut issuer_trusted = trust_configuration_valid;
     let mut document_evidence = Vec::with_capacity(documents.len());
-    for document in documents.iter() {
+    let mut authenticated_documents = Vec::with_capacity(documents.len());
+    for document in documents.into_inner() {
         let issuer_auth = &document.issuer_signed.issuer_auth;
         let x5chain_value = issuer_auth
             .protected
@@ -367,15 +378,18 @@ fn verify_issuer_authentication(
                 continue;
             }
         };
-        if let Err(error) = verify_issuer_signature(&x5chain, &document.issuer_signed) {
-            all_signatures_valid = false;
-            issuer_trusted = false;
-            errors.push(format!(
-                "Signature verification failed for {}: {error}",
-                document.doc_type
-            ));
-            continue;
-        }
+        let mso = match verify_issuer_mso(&x5chain, &document.issuer_signed) {
+            Ok(mso) => mso,
+            Err(error) => {
+                all_signatures_valid = false;
+                issuer_trusted = false;
+                errors.push(format!(
+                    "Signature verification failed for {}: {error}",
+                    document.doc_type
+                ));
+                continue;
+            }
+        };
         if trust_configuration_valid {
             if let Err(error) = verify_issuer_trust(
                 &certificate_chain,
@@ -397,7 +411,12 @@ fn verify_issuer_authentication(
         } else {
             issuer_trusted = false;
         }
-        match authenticated_document_evidence(document, &certificate_chain[0], verification_time) {
+        match authenticated_document_evidence(
+            &document,
+            &mso,
+            &certificate_chain[0],
+            verification_time,
+        ) {
             Ok(evidence) => document_evidence.push(evidence),
             Err(error) => {
                 all_signatures_valid = false;
@@ -408,6 +427,7 @@ fn verify_issuer_authentication(
                 ));
             }
         }
+        authenticated_documents.push(AuthenticatedDocument { document, mso });
     }
 
     IssuerAuthenticationResult {
@@ -416,12 +436,14 @@ fn verify_issuer_authentication(
         certificate_trust_failures,
         document_types,
         document_evidence,
+        authenticated_documents,
         error: (!errors.is_empty()).then(|| errors.join("; ")),
     }
 }
 
 fn authenticated_document_evidence(
     document: &isomdl::definitions::device_response::Document,
+    authenticated_mso: &Mso,
     issuer_certificate_der: &[u8],
     verification_time: OffsetDateTime,
 ) -> Result<MdocDocumentVerificationEvidence, String> {
@@ -437,17 +459,8 @@ fn authenticated_document_evidence(
         Some(_) => return Err("unsupported issuer signature algorithm".to_string()),
         None => return Err("issuer signature algorithm is not protected".to_string()),
     };
-    let mso_bytes = document
-        .issuer_signed
-        .issuer_auth
-        .payload
-        .as_ref()
-        .ok_or_else(|| "issuerAuth payload is detached".to_string())?;
-    let mso = isomdl::cbor::from_slice::<Tag24<Mso>>(mso_bytes)
-        .map_err(|error| format!("unable to parse MSO: {error}"))?
-        .into_inner();
     validated_mso_evidence(
-        &mso,
+        authenticated_mso,
         &document.doc_type,
         signature_algorithm,
         issuer_certificate_der,
@@ -577,6 +590,7 @@ fn issuer_failure(error: impl Into<String>) -> IssuerAuthenticationResult {
         certificate_trust_failures: Vec::new(),
         document_types: Vec::new(),
         document_evidence: Vec::new(),
+        authenticated_documents: Vec::new(),
         error: Some(error.into()),
     }
 }
@@ -656,6 +670,7 @@ mod tests {
                 valid_until,
                 expected_update: None,
             },
+            status: None,
         }
     }
 
@@ -1161,6 +1176,115 @@ mod tests {
 
         let untrusted = verify_mdoc_presentation(&response, &transcript, &[], &[]);
         assert!(!untrusted.issuer_trusted);
+    }
+
+    #[test]
+    fn complete_presentation_requires_an_authenticated_mso_for_every_holder_proof() {
+        let (response, transcript, _, pinned_certificate, _) = authenticated_presentation_fixture();
+        let mut parsed: DeviceResponse = isomdl::cbor::from_slice(&response).unwrap();
+        let mut documents = parsed.documents.take().unwrap().into_inner();
+        let mut unauthenticated = documents[0].clone();
+        unauthenticated.issuer_signed.issuer_auth.signature[0] ^= 1;
+        documents.push(unauthenticated);
+        parsed.documents = Some(documents.try_into().unwrap());
+        let response = isomdl::cbor::to_vec(&parsed).unwrap();
+
+        // Both public holder signatures still match. The proof-only API does
+        // not authenticate the issuer and cannot replace complete verification.
+        assert!(
+            crate::verify_device_authentication(&response, &transcript)
+                .unwrap()
+                .verified
+        );
+        let result = verify_mdoc_presentation(
+            &response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        assert!(!result.issuer_signature_valid);
+        assert!(!result.device_authentication_valid);
+        assert!(!result.issuer_trusted);
+        assert_eq!(result.document_types.len(), 2);
+        assert_eq!(result.document_evidence.len(), 1);
+        assert!(!result.revocation_checked);
+        assert_eq!(result.not_revoked, None);
+    }
+
+    #[test]
+    fn authenticated_mso_holder_path_preserves_nonpreferred_transcript_encoding() {
+        let (response, canonical, _, pinned_certificate, _) = authenticated_presentation_fixture();
+        let mut parsed: DeviceResponse = isomdl::cbor::from_slice(&response).unwrap();
+        let public_vectors: JsonValue = serde_json::from_str(include_str!(
+            "../verification/fixtures/mdl_device_public_responses.json"
+        ))
+        .unwrap();
+        let nonpreferred_response: DeviceResponse = isomdl::cbor::from_slice(
+            &general_purpose::STANDARD
+                .decode(
+                    public_vectors["nonpreferred_response_cbor_base64"]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        let mut documents = parsed.documents.take().unwrap().into_inner();
+        documents[0].device_signed = nonpreferred_response
+            .documents
+            .unwrap()
+            .into_inner()
+            .remove(0)
+            .device_signed;
+        parsed.documents = Some(documents.try_into().unwrap());
+        let response = isomdl::cbor::to_vec(&parsed).unwrap();
+        let mut nonpreferred = canonical.clone();
+        let null_offset = nonpreferred.iter().position(|byte| *byte == 0xf6).unwrap();
+        nonpreferred.splice(null_offset..=null_offset, [0xf8, 0x16]);
+
+        let exact = verify_mdoc_presentation(
+            &response,
+            &nonpreferred,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        assert!(exact.issuer_signature_valid);
+        assert!(exact.issuer_trusted);
+        assert!(exact.device_authentication_valid);
+        assert_eq!(exact.error, None);
+        let reencoded = verify_mdoc_presentation(
+            &response,
+            &canonical,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        assert!(reencoded.issuer_signature_valid);
+        assert!(!reencoded.device_authentication_valid);
+    }
+
+    #[test]
+    fn passive_presentation_verification_refuses_device_mac() {
+        let (response, transcript, _, pinned_certificate, _) = authenticated_presentation_fixture();
+        let mut parsed: DeviceResponse = isomdl::cbor::from_slice(&response).unwrap();
+        let mut documents = parsed.documents.take().unwrap().into_inner();
+        documents[0].device_signed.device_auth = isomdl::definitions::DeviceAuth::DeviceMac(
+            isomdl::cose::MaybeTagged::new(false, coset::CoseMac0Builder::new().build()),
+        );
+        parsed.documents = Some(documents.try_into().unwrap());
+        let response = isomdl::cbor::to_vec(&parsed).unwrap();
+
+        assert!(crate::verify_device_authentication(&response, &transcript).is_err());
+        let result = verify_mdoc_presentation(
+            &response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&pinned_certificate),
+        );
+        assert!(result.issuer_signature_valid);
+        assert!(result.issuer_trusted);
+        assert!(!result.device_authentication_valid);
+        assert!(!result.revocation_checked);
+        assert_eq!(result.not_revoked, None);
     }
 
     #[test]

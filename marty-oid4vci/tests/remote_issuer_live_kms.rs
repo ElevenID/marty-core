@@ -18,7 +18,8 @@ use marty_oid4vci::{
         },
         sd_jwt::{
             assemble_sd_jwt, create_sd_jwt_presentation, prepare_sd_jwt_with_options,
-            sign_sd_jwt_with_signer, verify_sd_jwt, SdJwtPreparationOptions,
+            sign_sd_jwt_with_signer, verify_sd_jwt, verify_sd_jwt_with_policy,
+            SdJwtPreparationOptions, SdJwtVerificationPolicy,
         },
     },
     jose::verify_compact_jwt_with_public_jwk,
@@ -729,6 +730,10 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
     credential_claims.claims = HashMap::from([
         ("email".into(), json!("member@example.com")),
         ("role".into(), json!("member")),
+        (
+            "aud".into(),
+            json!("https://credential-relying-party.example"),
+        ),
     ]);
     credential_claims.selective_disclosure_claims = vec!["email".into()];
     credential_claims.claims.insert(
@@ -786,6 +791,30 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
     .unwrap();
     assert_eq!(verified["email"], "member@example.com");
     assert_eq!(verified["role"], "member");
+    // A credential audience is distinct from the holder's verifier audience.
+    assert_eq!(verified["aud"], "https://credential-relying-party.example");
+    let mut signature_policy = SdJwtVerificationPolicy {
+        expected_issuer: ISSUER_DID.into(),
+        issuer_algorithm: SigningAlgorithm::ES256,
+        holder_algorithms: vec![SigningAlgorithm::ES256],
+    };
+    let verify_bound = |policy: &SdJwtVerificationPolicy, presentation: &str| {
+        verify_sd_jwt_with_policy(
+            presentation,
+            &issuer.public_jwk,
+            policy,
+            Some("https://verifier.example".into()),
+            Some(nonce.clone()),
+        )
+    };
+    let authenticated = verify_bound(&signature_policy, &presentation).unwrap();
+    assert_eq!(authenticated.issuer(), ISSUER_DID);
+    signature_policy.holder_algorithms = vec![SigningAlgorithm::EdDSA];
+    assert!(verify_bound(&signature_policy, &presentation).is_err());
+    signature_policy.holder_algorithms = vec![SigningAlgorithm::ES256];
+    signature_policy.expected_issuer = "did:web:another-issuer.example".into();
+    assert!(verify_bound(&signature_policy, &presentation).is_err());
+    signature_policy.expected_issuer = ISSUER_DID.into();
     assert_eq!(holder.payloads.lock().unwrap().len(), 1);
 
     let (jws, suffix) = compact.split_once('~').unwrap();
@@ -815,10 +844,9 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
     let private_cnf = resign_sd_jwt_with_remote_issuer(&compact, &issuer, |_, payload| {
         payload["cnf"]["jwk"]["d"] = json!("rejected-private-member");
     });
-    let error = prepare(&private_cnf, &holder.public_jwk).err().unwrap();
-    assert!(error
-        .to_string()
-        .contains("contains private key material: d"));
+    // The updated fork rejects malformed confirmation material during issuer
+    // verification, before Marty's later holder-binding validation can run.
+    assert!(prepare(&private_cnf, &holder.public_jwk).is_err());
 
     let no_kid = resign_sd_jwt_with_remote_issuer(&compact, &issuer, |header, _| {
         header.as_object_mut().unwrap().remove("kid");
@@ -856,6 +884,49 @@ fn verified_wallet_presentation_uses_remote_issuer_and_holder_keys() {
         let error = prepare_without_kid(&resolver).err().unwrap();
         assert!(error.to_string().contains("non-empty string when present"));
     }
+
+    let (sd_jwt_prefix, kb_jwt) = presentation.rsplit_once('~').unwrap();
+    for invalid_issuer in [None, Some(Value::Null), Some(json!(17))] {
+        let invalid =
+            resign_sd_jwt_with_remote_issuer(
+                &compact,
+                &issuer,
+                |_, payload| match invalid_issuer {
+                    Some(value) => payload["iss"] = value,
+                    None => {
+                        payload.as_object_mut().unwrap().remove("iss");
+                    }
+                },
+            );
+        assert!(verify_sd_jwt(&invalid, &issuer.public_jwk, None, None).is_err());
+        assert!(verify_sd_jwt_with_policy(
+            &invalid,
+            &issuer.public_jwk,
+            &signature_policy,
+            None,
+            None,
+        )
+        .is_err());
+    }
+    let kb_segments = kb_jwt.split('.').collect::<Vec<_>>();
+    let resign_holder_iat = |issued_at: f64| {
+        let mut claims = kb_payload.clone();
+        claims["iat"] = json!(issued_at);
+        let input = format!(
+            "{}.{}",
+            kb_segments[0],
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+        );
+        let signature = holder.sign(input.as_bytes()).unwrap();
+        format!(
+            "{sd_jwt_prefix}~{input}.{}",
+            URL_SAFE_NO_PAD.encode(signature)
+        )
+    };
+    let now = chrono::Utc::now().timestamp() as f64;
+    verify_bound(&signature_policy, &resign_holder_iat(now - 0.25)).unwrap();
+    assert!(verify_bound(&signature_policy, &resign_holder_iat(now - 301.0)).is_err());
+    assert!(verify_bound(&signature_policy, &resign_holder_iat(now + 120.0)).is_err());
 }
 
 #[test]

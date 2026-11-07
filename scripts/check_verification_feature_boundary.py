@@ -60,7 +60,7 @@ def check_repository(root: Path = ROOT) -> None:
     )
     workspace_dependencies = workspace["workspace"]["dependencies"]
     require(
-        workspace_dependencies["isomdl"] == {"version": "0.3", "default-features": False}
+        workspace_dependencies["isomdl"] == {"version": "0.4", "default-features": False}
         and all(manifest["dependencies"]["isomdl"].get("workspace") is True
                 for manifest in (verification, oid4vci, iso18013))
         and oid4vci["dev-dependencies"]["isomdl"].get("workspace") is True,

@@ -35,6 +35,12 @@ pub struct PyMdlVerificationResult {
     pub issuer_auth_status: String,
     #[pyo3(get)]
     pub device_auth_status: String,
+    #[pyo3(get)]
+    pub revocation_checked: bool,
+    #[pyo3(get)]
+    pub not_revoked: Option<bool>,
+    #[pyo3(get)]
+    pub revocation_errors: Vec<String>,
 }
 
 impl From<MdlVerificationResult> for PyMdlVerificationResult {
@@ -54,6 +60,9 @@ impl From<MdlVerificationResult> for PyMdlVerificationResult {
                 AuthStatus::Invalid => "invalid".to_string(),
                 AuthStatus::Unknown => "unknown".to_string(),
             },
+            revocation_checked: result.revocation_checked,
+            not_revoked: result.not_revoked,
+            revocation_errors: result.revocation_errors,
         }
     }
 }
@@ -75,6 +84,9 @@ impl PyMdlVerificationResult {
         dict.set_item("errors", self.errors.clone())?;
         dict.set_item("issuer_auth_status", self.issuer_auth_status.clone())?;
         dict.set_item("device_auth_status", self.device_auth_status.clone())?;
+        dict.set_item("revocation_checked", self.revocation_checked)?;
+        dict.set_item("not_revoked", self.not_revoked)?;
+        dict.set_item("revocation_errors", self.revocation_errors.clone())?;
         Ok(dict.into())
     }
 }

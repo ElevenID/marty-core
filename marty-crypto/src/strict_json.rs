@@ -8,10 +8,109 @@ use std::fmt;
 
 /// Parse a JSON value while rejecting repeated object members recursively.
 ///
-/// This preserves the existing Serde visitor and number handling. Root shape,
+/// Duplicate diagnostics, syntax precedence and depth limits are checked before
+/// constructing values from their raw JSON token shape. Numeric values remain
+/// numbers even when a consumer enables serde_json's arbitrary_precision feature;
+/// literal objects with Serde's private-looking keys remain objects. Root shape,
 /// byte limits and protocol interpretation belong to the calling boundary.
 pub fn parse_unique_json(bytes: &[u8]) -> serde_json::Result<Value> {
-    serde_json::from_slice::<UniqueValue>(bytes).map(|value| value.0)
+    serde_json::from_slice::<UniqueValue>(bytes)?;
+    materialize_validated_json(bytes)
+}
+
+// This private second pass consumes only the exact input that passed the strict
+// recursive visitor. Containers are constructed explicitly from their wire token
+// shape; Serde interprets only strings and scalars. No private marker spelling or
+// additional serde_json feature is needed for number preservation.
+fn materialize_validated_json(bytes: &[u8]) -> serde_json::Result<Value> {
+    let mut cursor = ValidatedJsonCursor { remaining: bytes };
+    let value = cursor.value()?;
+    cursor.whitespace();
+    if !cursor.remaining.is_empty() {
+        return Err(de::Error::custom(
+            "invalid previously validated JSON structure",
+        ));
+    }
+    Ok(value)
+}
+
+struct ValidatedJsonCursor<'a> {
+    remaining: &'a [u8],
+}
+
+impl ValidatedJsonCursor<'_> {
+    fn whitespace(&mut self) {
+        while matches!(self.remaining.first(), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+            self.remaining = &self.remaining[1..];
+        }
+    }
+
+    fn consume(&mut self, expected: u8) -> serde_json::Result<()> {
+        self.whitespace();
+        if self.remaining.first() != Some(&expected) {
+            return Err(de::Error::custom(
+                "invalid previously validated JSON structure",
+            ));
+        }
+        self.remaining = &self.remaining[1..];
+        Ok(())
+    }
+
+    fn scalar<T: serde::de::DeserializeOwned>(&mut self) -> serde_json::Result<T> {
+        let mut stream = serde_json::Deserializer::from_slice(self.remaining).into_iter::<T>();
+        let value = stream.next().ok_or_else(|| {
+            <serde_json::Error as de::Error>::custom("invalid previously validated JSON structure")
+        })??;
+        // Advance only after a successful decode. byte_offset includes any JSON
+        // whitespace and UTF-8/escaped string bytes consumed by Serde.
+        self.remaining = &self.remaining[stream.byte_offset()..];
+        Ok(value)
+    }
+
+    fn value(&mut self) -> serde_json::Result<Value> {
+        self.whitespace();
+        match self.remaining.first() {
+            Some(b'{') => {
+                self.consume(b'{')?;
+                self.whitespace();
+                let mut values = Map::new();
+                if self.remaining.first() == Some(&b'}') {
+                    self.consume(b'}')?;
+                    return Ok(Value::Object(values));
+                }
+                loop {
+                    let key = self.scalar::<String>()?;
+                    self.consume(b':')?;
+                    values.insert(key, self.value()?);
+                    self.whitespace();
+                    if self.remaining.first() == Some(&b'}') {
+                        self.consume(b'}')?;
+                        return Ok(Value::Object(values));
+                    }
+                    self.consume(b',')?;
+                }
+            }
+            Some(b'[') => {
+                self.consume(b'[')?;
+                self.whitespace();
+                let mut values = Vec::new();
+                if self.remaining.first() == Some(&b']') {
+                    self.consume(b']')?;
+                    return Ok(Value::Array(values));
+                }
+                loop {
+                    values.push(self.value()?);
+                    self.whitespace();
+                    if self.remaining.first() == Some(&b']') {
+                        self.consume(b']')?;
+                        return Ok(Value::Array(values));
+                    }
+                    self.consume(b',')?;
+                }
+            }
+            _ => self.scalar::<Value>(),
+        }
+    }
 }
 
 struct UniqueValue(Value);
@@ -148,11 +247,47 @@ mod tests {
                 serde_json::from_str::<Value>(raw).unwrap()
             );
         }
-        // Preserve acceptance across both ordinary and arbitrary-precision
-        // Serde feature graphs; the existing visitor owns number handling.
-        for raw in ["1.5", "-0.0", "1e2", "-1e-2"] {
-            assert!(parse_unique_json(raw.as_bytes()).is_ok());
+        for (raw, expected) in [
+            ("1.5", 1.5),
+            ("-0.0", -0.0),
+            ("1e2", 100.0),
+            ("-1e-2", -0.01),
+        ] {
+            let parsed = parse_unique_json(raw.as_bytes()).unwrap();
+            assert!(parsed.is_number(), "number changed JSON type: {parsed}");
+            assert_eq!(parsed.as_f64(), Some(expected));
         }
+        assert!(parse_unique_json(b"-0.0")
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .is_sign_negative());
+    }
+
+    #[test]
+    fn nested_fractional_numbers_and_private_token_objects_keep_their_json_types() {
+        let value = parse_unique_json(
+            br#"{"iat":1794070000.25,"nested":[1.5,{"ratio":-1e-2}],"literal":{"$serde_json::private::Number":"1.5"},"extended":{"$serde_json::private::Number":"1.5","other":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(value["iat"].as_f64(), Some(1794070000.25));
+        assert_eq!(value["nested"][0].as_f64(), Some(1.5));
+        assert_eq!(value["nested"][1]["ratio"].as_f64(), Some(-0.01));
+        assert!(value["literal"].is_object());
+        assert_eq!(value["literal"]["$serde_json::private::Number"], "1.5");
+        assert!(value["extended"].is_object());
+        assert_eq!(value["extended"]["other"], true);
+        assert_eq!(
+            parse_unique_json(br#"{"$serde_json::private::Number":"1.5"}"#).unwrap(),
+            json!({"$serde_json::private::Number":"1.5"}),
+        );
+        assert_eq!(
+            parse_unique_json(br#"{"$serde_json::private::RawValue":"{\"x\":1}"}"#).unwrap(),
+            json!({"$serde_json::private::RawValue":r#"{"x":1}"#}),
+        );
+        assert!(parse_unique_json(
+            br#"{"nested":[{"$serde_json::private::Number":"1.5","$serde_json::private::Number":"2.5"}]}"#,
+        ).unwrap_err().to_string().contains("duplicate JSON object member"));
     }
 
     #[test]
@@ -170,5 +305,17 @@ mod tests {
         let deep = format!("{}null{}", "[".repeat(256), "]".repeat(256));
         assert!(parse_unique_json(deep.as_bytes()).is_err());
         assert!(parse_unique_json(b" \n {} \t ").is_ok());
+    }
+
+    #[test]
+    fn cursor_preserves_whitespace_escape_and_container_boundaries() {
+        let input = " \t\n {\"a\\\"\\\\\": [\"[,]{}:\", {\"\\u0062\":\"\\uD83D\\uDE00\", \"n\": 1.25}, [], {}]} \r\n";
+        let value = parse_unique_json(input.as_bytes()).unwrap();
+        let items = &value["a\"\\"];
+        assert_eq!(items[0], "[,]{}:");
+        assert_eq!(items[1]["b"], "😀");
+        assert_eq!(items[1]["n"].as_f64(), Some(1.25));
+        assert!(items[2].as_array().unwrap().is_empty());
+        assert!(items[3].as_object().unwrap().is_empty());
     }
 }

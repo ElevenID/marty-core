@@ -1,15 +1,18 @@
-//! IETF SD-JWT credential format (`vc+sd-jwt`).
+//! IETF SD-JWT credentials and the explicit legacy ElevenID SD-JWT envelope.
 //!
 //! Constructs SD-JWT Verifiable Credentials with selective disclosure
-//! per IETF draft-ietf-oauth-sd-jwt-vc and SD-JWT (RFC 9449).
+//! per the selected SD-JWT VC profile and SD-JWT (RFC 9901).
 //!
 //! Supports two payload structures selected via `CredentialPayloadFormat`:
 //!
 //! - `IetfSdJwt`: flat claims with `vct`/`iss` at top level.
 //!   SD JSONPath selectors: `$.claim_name`
-//! - `W3cVcdmV2SdJwt` (default): W3C VCDM v2 envelope with
+//! - `W3cVcdmV2SdJwt` (default): the legacy ElevenID VCDM v2 envelope with
 //!   `@context`/`type`/`issuer`/`validFrom`/`credentialSubject`.
 //!   SD JSONPath selectors: `$.credentialSubject.claim_name`
+//!
+//! The legacy envelope is not an implementation of the W3C VC SD-JWT profile.
+//! A wire `typ` alone does not select or qualify a credential profile.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 #[cfg(any(test, feature = "issuer"))]
@@ -1073,6 +1076,139 @@ pub(crate) fn prepare_sd_jwt_batch_with_digest_executor(
 // Verification
 // =============================================================================
 
+/// Trust-selected issuer and independent issuer/holder signature policies.
+///
+/// Resolve the issuer's authority and public key before constructing this policy.
+/// An issuer key does not by itself authorize that issuer to assert a credential
+/// type. The holder algorithm list applies only to the issuer-authenticated
+/// `cnf.jwk`, never to a key supplied independently in the KB-JWT header.
+#[cfg(any(test, feature = "verifier"))]
+#[derive(Debug, Clone)]
+pub struct SdJwtVerificationPolicy {
+    pub expected_issuer: String,
+    pub issuer_algorithm: crate::types::SigningAlgorithm,
+    pub holder_algorithms: Vec<crate::types::SigningAlgorithm>,
+}
+
+/// Claims whose signature and exact issuer/key relationship passed verification.
+///
+/// This evidence does not imply credential-type authorization, status validity,
+/// or holder binding unless the caller supplied the corresponding verifier context.
+#[cfg(any(test, feature = "verifier"))]
+#[derive(Debug, Clone)]
+pub struct AuthenticatedSdJwt {
+    issuer: String,
+    claims: serde_json::Value,
+}
+
+#[cfg(any(test, feature = "verifier"))]
+impl AuthenticatedSdJwt {
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    pub fn claims(&self) -> &serde_json::Value {
+        &self.claims
+    }
+
+    pub fn into_claims(self) -> serde_json::Value {
+        self.claims
+    }
+}
+
+#[cfg(any(test, feature = "verifier"))]
+const SUPPORTED_SD_JWT_SIGNATURE_ALGORITHMS: &[&str] = &[
+    "ES256", "ES384", "EdDSA", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512",
+];
+
+#[cfg(any(test, feature = "verifier"))]
+struct ScopedSdJwtSignatureVerifier {
+    inner: sd_jwt_rs::SDJWTSignatureVerifierBuiltin,
+    expected_issuer: Option<String>,
+}
+
+#[cfg(any(test, feature = "verifier"))]
+impl sd_jwt_rs::SDJWTSignatureVerifier for ScopedSdJwtSignatureVerifier {
+    fn allowed_algs(
+        &self,
+        role: sd_jwt_rs::SDJWTSignatureRole,
+    ) -> sd_jwt_rs::error::Result<Vec<String>> {
+        self.inner.allowed_algs(role)
+    }
+
+    fn verify(
+        &self,
+        message: &[u8],
+        signature: &[u8],
+        request: &sd_jwt_rs::SDJWTKeyRequest,
+    ) -> sd_jwt_rs::error::Result<()> {
+        if request.role == sd_jwt_rs::SDJWTSignatureRole::IssuerJwt {
+            // Core's established credential boundary requires a string issuer;
+            // the fork's generic provider API also supports non-VC SD-JWTs.
+            let issuer = request.iss.as_deref().ok_or_else(|| {
+                sd_jwt_rs::error::Error::KeyNotFound(
+                    "Issuer JWT must contain a string iss claim".into(),
+                )
+            })?;
+            if let Some(expected) = &self.expected_issuer {
+                if issuer != expected {
+                    return Err(sd_jwt_rs::error::Error::KeyNotFound(
+                        "issuer does not match the trust-selected public key".into(),
+                    ));
+                }
+            }
+        }
+        self.inner.verify(message, signature, request)
+    }
+}
+
+/// Verify with a configured issuer identity and separate signature-role policies.
+///
+/// `expected_aud` is the KB-JWT verifier audience. The issuer credential's own
+/// `aud`, if present, remains a separate application policy decision.
+#[cfg(any(test, feature = "verifier"))]
+pub fn verify_sd_jwt_with_policy(
+    sd_jwt_compact: &str,
+    issuer_jwk_json: &str,
+    policy: &SdJwtVerificationPolicy,
+    expected_aud: Option<String>,
+    expected_nonce: Option<String>,
+) -> Oid4vciResult<AuthenticatedSdJwt> {
+    if policy.expected_issuer.trim().is_empty()
+        || policy.expected_issuer.len() > 2048
+        || policy.expected_issuer.chars().any(char::is_control)
+    {
+        return Err(Oid4vciError::KeyError(
+            "Expected issuer identity is empty or exceeds its bounds".into(),
+        ));
+    }
+    let holder_algorithms = policy
+        .holder_algorithms
+        .iter()
+        .map(crate::types::SigningAlgorithm::as_str)
+        .collect::<Vec<_>>();
+    let claims = verify_sd_jwt_with_role_policy(
+        sd_jwt_compact,
+        issuer_jwk_json,
+        Some(&policy.expected_issuer),
+        policy.issuer_algorithm.as_str(),
+        &holder_algorithms,
+        expected_aud,
+        expected_nonce,
+    )?;
+    if claims.get("iss").and_then(serde_json::Value::as_str)
+        != Some(policy.expected_issuer.as_str())
+    {
+        return Err(Oid4vciError::SdJwtError(
+            "Verified issuer does not match the trust-selected identity".into(),
+        ));
+    }
+    Ok(AuthenticatedSdJwt {
+        issuer: policy.expected_issuer.clone(),
+        claims,
+    })
+}
+
 /// Verify an SD-JWT presentation and reconstruct the disclosed claims.
 ///
 /// The verifier checks:
@@ -1092,6 +1228,11 @@ pub(crate) fn prepare_sd_jwt_batch_with_digest_executor(
 /// * `issuer_jwk_json`  — Issuer's **public** JWK as a JSON string
 /// * `expected_aud`     — Expected KB-JWT audience (optional)
 /// * `expected_nonce`   — Expected KB-JWT nonce (optional)
+///
+/// This compatibility primitive verifies a signature under the supplied key.
+/// Its caller must establish that key's authority for the claimed issuer. New
+/// trust-policy integrations should use [`verify_sd_jwt_with_policy`] so that
+/// exact issuer identity and algorithm policies remain explicit.
 #[cfg(any(test, feature = "verifier"))]
 pub fn verify_sd_jwt(
     sd_jwt_compact: &str,
@@ -1099,18 +1240,78 @@ pub fn verify_sd_jwt(
     expected_aud: Option<String>,
     expected_nonce: Option<String>,
 ) -> Oid4vciResult<serde_json::Value> {
-    let jwk_obj: jsonwebtoken::jwk::Jwk = serde_json::from_str(issuer_jwk_json)
-        .map_err(|e| Oid4vciError::KeyError(format!("Invalid issuer JWK: {}", e)))?;
+    validate_sd_jwt_presentation_input(sd_jwt_compact)?;
+    let issuer_jwt = sd_jwt_compact.split('~').next().unwrap_or_default();
+    let (header, _) = crate::jose::decode_unverified_compact_jwt(issuer_jwt)?;
+    let issuer_algorithm = header
+        .get("alg")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            Oid4vciError::SdJwtError("Issuer JWT is missing a protected algorithm".into())
+        })?;
+    verify_sd_jwt_with_role_policy(
+        sd_jwt_compact,
+        issuer_jwk_json,
+        None,
+        issuer_algorithm,
+        SUPPORTED_SD_JWT_SIGNATURE_ALGORITHMS,
+        expected_aud,
+        expected_nonce,
+    )
+}
+
+#[cfg(any(test, feature = "verifier"))]
+fn verify_sd_jwt_with_role_policy(
+    sd_jwt_compact: &str,
+    issuer_jwk_json: &str,
+    expected_issuer: Option<&str>,
+    issuer_algorithm: &str,
+    holder_algorithms: &[&str],
+    expected_aud: Option<String>,
+    expected_nonce: Option<String>,
+) -> Oid4vciResult<serde_json::Value> {
+    validate_sd_jwt_presentation_input(sd_jwt_compact)?;
+    if !SUPPORTED_SD_JWT_SIGNATURE_ALGORITHMS.contains(&issuer_algorithm)
+        || holder_algorithms
+            .iter()
+            .any(|algorithm| !SUPPORTED_SD_JWT_SIGNATURE_ALGORITHMS.contains(algorithm))
+        || ((expected_aud.is_some() || expected_nonce.is_some()) && holder_algorithms.is_empty())
+    {
+        return Err(Oid4vciError::KeyError(
+            "SD-JWT signature role has an unsupported or empty algorithm policy".into(),
+        ));
+    }
+    if issuer_jwk_json.len() > crate::jose::MAX_PUBLIC_JWK_BYTES {
+        return Err(Oid4vciError::KeyError(
+            "Issuer public JWK exceeds its size limit".into(),
+        ));
+    }
+    let raw_jwk =
+        crate::jose::parse_unique_object(issuer_jwk_json.as_bytes(), "issuer public JWK")?;
+    let jwk_obj = crate::jose::validate_public_jwk(&raw_jwk, issuer_algorithm)?;
 
     let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&jwk_obj)
         .map_err(|e| Oid4vciError::KeyError(format!("Failed to create decoding key: {}", e)))?;
 
-    let verifier = sd_jwt_rs::SDJWTVerifier::new(
+    let signature_verifier = sd_jwt_rs::SDJWTSignatureVerifierBuiltin::new(
+        &[issuer_algorithm],
+        (!holder_algorithms.is_empty()).then_some(holder_algorithms),
+    )
+    .with_issuer_verifying_key(sd_jwt_rs::SDJWTKeyWithAlg::new(
+        decoding_key,
+        issuer_algorithm,
+    ))
+    .map_err(|error| Oid4vciError::KeyError(format!("Invalid issuer signature policy: {error}")))?;
+    let verifier = sd_jwt_rs::SDJWTVerifier::new_with_signature_verifier(
+        Box::new(ScopedSdJwtSignatureVerifier {
+            inner: signature_verifier,
+            expected_issuer: expected_issuer.map(str::to_owned),
+        }),
         sd_jwt_compact.to_string(),
-        Box::new(move |_issuer: &str, _header: &jsonwebtoken::Header| decoding_key.clone()),
         expected_aud.clone(),
         expected_nonce.clone(),
         SDJWTSerializationFormat::Compact,
+        sd_jwt_rs::SDJWTSignaturePolicy::All,
     )
     .map_err(|e| Oid4vciError::SdJwtError(format!("SD-JWT verification failed: {:?}", e)))?;
 
@@ -1280,13 +1481,12 @@ fn validate_sd_jwt_presentation_input(sd_jwt_compact: &str) -> Oid4vciResult<()>
 }
 
 #[cfg(any(test, feature = "verifier"))]
-fn key_binding_iat_is_fresh(now: i64, issued_at: i64) -> bool {
-    now.checked_sub(issued_at)
-        .and_then(i64::checked_abs)
-        .is_some_and(|difference| difference <= 300)
+fn key_binding_iat_is_fresh(now: i64, issued_at: f64) -> bool {
+    let age = now as f64 - issued_at;
+    issued_at.is_finite() && (-60.0..=300.0).contains(&age)
 }
 
-/// Validate the SD-JWT Key Binding JWT (RFC 9449 §8).
+/// Validate the SD-JWT Key Binding JWT (RFC 9901).
 ///
 /// The holder key is bound by the issuer-signed credential's `cnf.jwk`.  We
 /// deliberately validate the protected algorithm, signature, `sd_hash`,
@@ -1388,15 +1588,15 @@ fn validate_key_binding_jwt(
     }
     let issued_at = claims
         .get("iat")
-        .and_then(|value| value.as_i64())
+        .and_then(|value| value.as_f64())
         .ok_or_else(|| {
             Oid4vciError::SdJwtError("Key Binding JWT is missing a numeric iat claim".into())
         })?;
-    // OID4VP requires a verifier to limit presentation freshness. Five minutes
-    // is deliberately conservative while allowing normal device clock skew.
+    // NumericDate can contain fractional seconds. Keep the five-minute maximum
+    // age and the fork's explicit sixty-second allowance for future clock skew.
     if !key_binding_iat_is_fresh(chrono::Utc::now().timestamp(), issued_at) {
         return Err(Oid4vciError::SdJwtError(
-            "Key Binding JWT iat is outside the five-minute freshness window".into(),
+            "Key Binding JWT iat exceeds the five-minute age or sixty-second future skew".into(),
         ));
     }
 
@@ -2470,17 +2670,22 @@ mod tests {
 
     #[test]
     fn key_binding_freshness_rejects_extreme_signed_timestamps() {
-        let now = chrono::Utc::now().timestamp();
-        assert!(key_binding_iat_is_fresh(now, now));
-        assert!(key_binding_iat_is_fresh(now, now - 300));
-        assert!(key_binding_iat_is_fresh(now, now + 300));
-        assert!(!key_binding_iat_is_fresh(now, i64::MIN));
-        assert!(!key_binding_iat_is_fresh(now, i64::MAX));
+        let now = 1_794_070_000;
+        let now_seconds = now as f64;
+        assert!(key_binding_iat_is_fresh(now, now_seconds));
+        assert!(key_binding_iat_is_fresh(now, now_seconds - 300.0));
+        assert!(key_binding_iat_is_fresh(now, now_seconds + 60.0));
+        assert!(key_binding_iat_is_fresh(now, now_seconds - 0.125));
+        assert!(!key_binding_iat_is_fresh(now, now_seconds - 300.125));
+        assert!(!key_binding_iat_is_fresh(now, now_seconds + 60.125));
+        assert!(!key_binding_iat_is_fresh(now, i64::MIN as f64));
+        assert!(!key_binding_iat_is_fresh(now, i64::MAX as f64));
+        assert!(!key_binding_iat_is_fresh(now, f64::NAN));
+        assert!(!key_binding_iat_is_fresh(now, f64::INFINITY));
     }
 
-    /// SD-JWT VC RFC 9596 §3.2.1 conformance: the JWT `typ` header MUST be "vc+sd-jwt".
-    /// OID4VCI 1.0 Final §A.3 distinguishes "dc+sd-jwt" (format ID in metadata)
-    /// from "vc+sd-jwt" (the JWT `typ` in the issued credential).
+    /// Preserve the explicit legacy envelope's existing protected type. Current
+    /// IETF issuance selects `dc+sd-jwt` in its profile-specific preparation path.
     #[test]
     fn test_prepare_sd_jwt_no_disclosures() {
         let claims = CredentialClaims {
