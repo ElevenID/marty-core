@@ -2,9 +2,17 @@
 # Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
 
 version: 2
+registries:
+  elevenid-private-forks:
+    type: git
+    url: https://github.com
+    username: x-access-token
+    password: ${{secrets.PRIVATE_FORKS_DEPENDABOT_TOKEN}}
 updates:
   # Rust dependencies
   - package-ecosystem: "cargo"
+    registries:
+      - elevenid-private-forks
     directory: "/"
     schedule:
       interval: "weekly"
