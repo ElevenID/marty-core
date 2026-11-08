@@ -202,10 +202,23 @@ fn numeric_order(left: &Number, right: &Number) -> Option<Ordering> {
     if right.as_i64().is_some_and(|value| value < 0) && left.as_u64().is_some() {
         return Some(Ordering::Greater);
     }
-    const EXACT_INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
+    const EXACT_INTEGER_LIMIT: u64 = 9_007_199_254_740_992;
+    // Check the original integer before conversion: 2^53 + 1 rounds down to
+    // 2^53 as an f64 and would otherwise pass a post-conversion magnitude guard.
+    for number in [left, right] {
+        if number
+            .as_i64()
+            .is_some_and(|value| value.unsigned_abs() > EXACT_INTEGER_LIMIT)
+            || number
+                .as_u64()
+                .is_some_and(|value| value > EXACT_INTEGER_LIMIT)
+        {
+            return None;
+        }
+    }
     let left = left.as_f64()?;
     let right = right.as_f64()?;
-    if left.abs() > EXACT_INTEGER_LIMIT || right.abs() > EXACT_INTEGER_LIMIT {
+    if left.abs() > EXACT_INTEGER_LIMIT as f64 || right.abs() > EXACT_INTEGER_LIMIT as f64 {
         return None;
     }
     left.partial_cmp(&right)

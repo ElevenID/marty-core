@@ -1899,6 +1899,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mixed_numeric_predicates_check_exact_integer_bounds_before_conversion() {
+        for (actual, threshold, comparison, expected) in [
+            (
+                json!(9_007_199_254_740_993_u64),
+                json!(9_007_199_254_740_992.0_f64),
+                "lte",
+                ServiceDecision::Deny,
+            ),
+            (
+                json!(-9_007_199_254_740_993_i64),
+                json!(-9_007_199_254_740_992.0_f64),
+                "gte",
+                ServiceDecision::Deny,
+            ),
+            (
+                json!(9_007_199_254_740_992.0_f64),
+                json!(9_007_199_254_740_993_u64),
+                "gte",
+                ServiceDecision::Deny,
+            ),
+            (
+                json!(-9_007_199_254_740_992.0_f64),
+                json!(-9_007_199_254_740_993_i64),
+                "lte",
+                ServiceDecision::Deny,
+            ),
+            (
+                json!(i64::MIN),
+                json!(0.0_f64),
+                "lte",
+                ServiceDecision::Deny,
+            ),
+            (
+                json!(u64::MAX),
+                json!(0.0_f64),
+                "gte",
+                ServiceDecision::Deny,
+            ),
+            (
+                json!(9_007_199_254_740_992_u64),
+                json!(9_007_199_254_740_992.0_f64),
+                "lte",
+                ServiceDecision::Allow,
+            ),
+            (
+                json!(-9_007_199_254_740_992_i64),
+                json!(-9_007_199_254_740_992.0_f64),
+                "gte",
+                ServiceDecision::Allow,
+            ),
+        ] {
+            let spec = json!({
+                "predicate_type": "RANGE_PROOF",
+                "params": {"threshold": threshold, "comparison": comparison}
+            });
+            assert_eq!(
+                evaluate_service_policy(predicate_request(spec, actual.clone()))
+                    .unwrap()
+                    .decision,
+                expected,
+                "comparison {actual} {comparison} {threshold}"
+            );
+        }
+    }
+
     fn presentation_only_request() -> ServicePolicyEvaluationRequest {
         let mut request = request();
         request.policy.credential_requirements.clear();
