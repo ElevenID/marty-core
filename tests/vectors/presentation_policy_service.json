@@ -70,6 +70,7 @@
         "signature_verified": true,
         "signature_failure_reason": null,
         "trust_profile_verified": true,
+        "trust_profile_id": "trust-1",
         "trust_failure_reason": null,
         "trust_level": 80,
         "compliance_statuses": [],

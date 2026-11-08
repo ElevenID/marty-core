@@ -11,14 +11,15 @@ mod compat;
 pub mod disclosure;
 pub mod freshness;
 pub mod issuer;
+mod predicate;
 pub mod ranking;
 pub mod service;
 pub mod types;
 
 pub use compat::PolicyEvaluator;
 pub use service::{
-    canonical_credential_format, evaluate_service_policy, ServicePolicyError,
-    ServicePolicyEvaluationRequest,
+    canonical_credential_format, evaluate_service_policy, validate_service_policy,
+    ServicePolicyError, ServicePolicyEvaluationRequest, ServicePredicateFallback,
 };
 pub use types::{
     CredentialRankingStrategy, FreshnessRequirements, HolderBindingMethod, PolicyComponent,
@@ -80,6 +81,7 @@ mod tests {
                 .collect(),
             issuer_id: "did:example:issuer".to_string(),
             trust_profile_verified: true,
+            trust_profile_id: Some("workforce".to_string()),
             issued_at_epoch_seconds: Some(950),
             proof_epoch_seconds: Some(995),
             evaluation_time_epoch_seconds: 1_000,
@@ -102,6 +104,35 @@ mod tests {
             Some(PolicyComponentStatusValue::Passed)
         );
         assert_eq!(result.minimum_disclosure_set, vec!["age_over_18"]);
+    }
+
+    #[test]
+    fn compatibility_policy_requires_the_evaluated_profile_identity() {
+        let mut input = valid_input();
+        for profile_id in [None, Some("different-profile".into())] {
+            input.trust_profile_id = profile_id;
+            let result = PolicyEvaluator::new(policy()).evaluate(&input);
+            assert!(!result.is_satisfied);
+            assert!(result
+                .errors
+                .iter()
+                .any(|error| error.code == PolicyErrorCode::IssuerNotTrusted));
+        }
+    }
+
+    #[test]
+    fn legacy_issuer_boolean_cannot_assert_profile_identity() {
+        let profile = "workforce".to_string();
+        let checker = IssuerConstraintChecker::new(Some(&profile), &[]);
+        assert!(!checker
+            .check_issuer("did:example:issuer", true)
+            .is_trusted());
+        assert!(!checker
+            .check_issuer_for_profile("did:example:issuer", true, Some("other"))
+            .is_trusted());
+        assert!(checker
+            .check_issuer_for_profile("did:example:issuer", true, Some(&profile))
+            .is_trusted());
     }
 
     #[test]

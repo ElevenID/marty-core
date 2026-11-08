@@ -2679,6 +2679,7 @@ mod tests {
                 "claims": {"employee_id": "E-123"},
                 "issuer_id": "did:example:issuer",
                 "trust_profile_verified": true,
+                "trust_profile_id": "workforce",
                 "issued_at_epoch_seconds": 900,
                 "proof_epoch_seconds": 990,
                 "evaluation_time_epoch_seconds": 1000,

@@ -11,6 +11,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use thiserror::Error;
 
+pub use super::predicate::ServicePredicateFallback;
+
 const MAX_CREDENTIALS: usize = 128;
 const MAX_REQUIREMENTS: usize = 128;
 const MAX_CLAIMS_PER_REQUIREMENT: usize = 256;
@@ -55,6 +57,12 @@ pub struct ServicePresentationPolicy {
     pub credential_requirements: Vec<ServiceCredentialRequirement>,
     pub alternative_requirements: Vec<ServiceAlternativeRequirement>,
     pub trust_profile_id: Option<String>,
+    #[serde(default)]
+    pub fallback_policy: ServicePredicateFallback,
+    #[serde(default)]
+    pub supported_circuits: Vec<String>,
+    #[serde(default)]
+    pub accepted_credential_types: Vec<String>,
     pub holder_binding: ServiceHolderBinding,
     pub freshness: Option<ServiceFreshnessPolicy>,
     pub issuer_constraints: Option<ServiceIssuerConstraints>,
@@ -120,6 +128,8 @@ pub struct ServiceAlternativeRequirement {
 #[serde(deny_unknown_fields)]
 pub struct ServiceRequestedClaim {
     pub claim_name: String,
+    #[serde(default)]
+    pub credential_type: Option<String>,
     pub required: bool,
     pub selective_disclosure: bool,
     pub accept_derived: bool,
@@ -156,13 +166,22 @@ pub enum ServiceConstraintType {
 pub struct VerifiedCredentialFacts {
     pub credential_id: String,
     pub credential_template_ids: Vec<String>,
+    /// Exact types authenticated by the format verifier, never requested IDs.
+    #[serde(default)]
+    pub credential_types: Vec<String>,
     pub credential_format: String,
     pub claims: HashMap<String, Value>,
     pub issuer_id: String,
     pub signature_verified: bool,
     pub signature_failure_reason: Option<String>,
     pub trust_profile_verified: bool,
+    /// Identity of the profile actually used to establish this trust result.
+    #[serde(default)]
+    pub trust_profile_id: Option<String>,
     pub trust_failure_reason: Option<String>,
+    /// Authorization evaluated for this credential/profile candidate only.
+    #[serde(default)]
+    pub external_authorization: Option<ExternalAuthorizationFacts>,
     pub trust_level: Option<u32>,
     pub compliance_statuses: Vec<String>,
     pub accreditations: Vec<String>,
@@ -215,6 +234,7 @@ pub enum ServicePolicyErrorCode {
     CredentialMissing,
     SignatureInvalid,
     CredentialFormatMismatch,
+    CredentialTypeMismatch,
     TrustProfileNotVerified,
     IssuerNotAllowed,
     IssuerTrustLevelInsufficient,
@@ -500,38 +520,12 @@ pub fn evaluate_service_policy(
         }
     }
 
-    if let Some(external) = &request.external_authorization {
-        if !external.evaluated {
-            let details = external
-                .reasons
-                .iter()
-                .chain(external.errors.iter())
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("; ");
-            errors.push(global_violation(
-                ServicePolicyErrorCode::ExternalAuthorizationNotEvaluated,
-                &if details.is_empty() {
-                    "External authorization was supplied but not evaluated".to_string()
-                } else {
-                    format!("External authorization was not evaluated: {details}")
-                },
-            ));
-        } else if !external.allowed {
-            errors.push(global_violation(
-                ServicePolicyErrorCode::ExternalAuthorizationDenied,
-                &format!(
-                    "External authorization denied: {}",
-                    external
-                        .reasons
-                        .iter()
-                        .chain(external.errors.iter())
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            ));
-        }
+    if let Some((code, message)) = request
+        .external_authorization
+        .as_ref()
+        .and_then(authorization_failure)
+    {
+        errors.push(global_violation(code, &message));
     }
 
     if request.policy.single_presentation
@@ -706,8 +700,14 @@ fn evaluate_candidate(
             ));
         }
     }
-    if (requirement.trust_profile_id.is_some() || policy.trust_profile_id.is_some())
-        && !credential.trust_profile_verified
+    if requirement
+        .trust_profile_id
+        .as_ref()
+        .or(policy.trust_profile_id.as_ref())
+        .is_some_and(|required| {
+            !credential.trust_profile_verified
+                || credential.trust_profile_id.as_ref() != Some(required)
+        })
     {
         let message = credential
             .trust_failure_reason
@@ -722,6 +722,20 @@ fn evaluate_candidate(
             Some(credential),
             None,
             &message,
+        ));
+    }
+    if !policy.accepted_credential_types.is_empty()
+        && !credential
+            .credential_types
+            .iter()
+            .any(|actual| policy.accepted_credential_types.contains(actual))
+    {
+        errors.push(violation(
+            ServicePolicyErrorCode::CredentialTypeMismatch,
+            requirement,
+            Some(credential),
+            None,
+            "Authenticated credential type is not accepted by the policy",
         ));
     }
     if !policy.allowed_issuers.is_empty()
@@ -742,6 +756,19 @@ fn evaluate_candidate(
         ));
     }
     apply_issuer_constraints(requirement, policy, credential, &mut errors);
+    if let Some((code, message)) = credential
+        .external_authorization
+        .as_ref()
+        .and_then(authorization_failure)
+    {
+        errors.push(violation(
+            code,
+            requirement,
+            Some(credential),
+            None,
+            &message,
+        ));
+    }
     apply_freshness(
         requirement,
         policy,
@@ -754,6 +781,42 @@ fn evaluate_candidate(
         let value = credential.claims.get(&requested.claim_name);
         let mut constraint_results = Vec::new();
         let mut satisfied = value.is_some() || !requested.required;
+        if requested
+            .credential_type
+            .as_ref()
+            .is_some_and(|required_type| {
+                (requested.required || value.is_some())
+                    && !credential.credential_types.contains(required_type)
+            })
+        {
+            satisfied = false;
+            errors.push(violation(
+                ServicePolicyErrorCode::CredentialTypeMismatch,
+                requirement,
+                Some(credential),
+                Some(&requested.claim_name),
+                "Claim was not authenticated in the required credential type",
+            ));
+        }
+        if let Some(spec) = &requested.predicate_spec {
+            if (requested.required || value.is_some())
+                && !super::predicate::compile(
+                    spec,
+                    policy.fallback_policy,
+                    &policy.supported_circuits,
+                )
+                .is_ok_and(|predicate| predicate.accepts_raw(value))
+            {
+                satisfied = false;
+                errors.push(violation(
+                    ServicePolicyErrorCode::ClaimConstraintFailed,
+                    requirement,
+                    Some(credential),
+                    Some(&requested.claim_name),
+                    "Claim predicate was not satisfied by the permitted raw-value fallback; authenticated predicate proofs are unavailable",
+                ));
+            }
+        }
         for constraint in &requested.constraints {
             let passed = evaluate_constraint(constraint, value, evaluation_time);
             constraint_results.push(ServiceConstraintResult {
@@ -1180,43 +1243,58 @@ fn global_violation(code: ServicePolicyErrorCode, message: &str) -> ServicePolic
     }
 }
 
-fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), ServicePolicyError> {
-    if request.evaluation_time_epoch_seconds > i64::MAX as u64 {
-        return invalid("evaluation time is outside the supported timestamp range");
+fn authorization_failure(
+    external: &ExternalAuthorizationFacts,
+) -> Option<(ServicePolicyErrorCode, String)> {
+    let details = external
+        .reasons
+        .iter()
+        .chain(&external.errors)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    if !external.evaluated {
+        Some((
+            ServicePolicyErrorCode::ExternalAuthorizationNotEvaluated,
+            format!("External authorization was not evaluated: {details}"),
+        ))
+    } else if !external.allowed || !external.errors.is_empty() {
+        Some((
+            ServicePolicyErrorCode::ExternalAuthorizationDenied,
+            format!("External authorization denied: {details}"),
+        ))
+    } else {
+        None
     }
-    validate_string("policy.id", &request.policy.id)?;
-    validate_string("policy.name", &request.policy.name)?;
-    validate_string("policy.organization_id", &request.policy.organization_id)?;
+}
+
+fn validate_authorization(external: &ExternalAuthorizationFacts) -> Result<(), ServicePolicyError> {
+    validate_bounded_strings("external authorization reason", &external.reasons)?;
+    validate_bounded_strings("external authorization error", &external.errors)
+}
+
+/// Validate a saved policy before activation and again at evaluation time.
+/// Unsupported predicate semantics are errors, never ignored obligations.
+pub fn validate_service_policy(
+    policy: &ServicePresentationPolicy,
+) -> Result<(), ServicePolicyError> {
+    validate_string("policy.id", &policy.id)?;
+    validate_string("policy.name", &policy.name)?;
+    validate_string("policy.organization_id", &policy.organization_id)?;
     validate_optional_string(
         "policy.trust_profile_id",
-        request.policy.trust_profile_id.as_deref(),
+        policy.trust_profile_id.as_deref(),
     )?;
     validate_bounded_strings(
         "holder_binding.binding_methods",
-        &request.policy.holder_binding.binding_methods,
+        &policy.holder_binding.binding_methods,
     )?;
     validate_bounded_strings(
         "holder_binding.proof_profiles",
-        &request.policy.holder_binding.proof_profiles,
+        &policy.holder_binding.proof_profiles,
     )?;
-    validate_optional_string(
-        "holder_binding_method",
-        request.holder_binding_method.as_deref(),
-    )?;
-    validate_optional_string("proof_profile", request.proof_profile.as_deref())?;
-    validate_bounded_strings("policy.allowed_issuers", &request.policy.allowed_issuers)?;
-    if request.credentials.len() > MAX_CREDENTIALS {
-        return invalid("too many credentials");
-    }
-    if request
-        .presentation_count
-        .is_some_and(|count| count > MAX_CREDENTIALS)
-    {
-        return invalid("presentation count exceeds the supported limit");
-    }
-    let requirement_count = request.policy.credential_requirements.len()
-        + request
-            .policy
+    let requirement_count = policy.credential_requirements.len()
+        + policy
             .alternative_requirements
             .iter()
             .map(|alternative| alternative.credential_requirements.len())
@@ -1224,46 +1302,17 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
     if requirement_count > MAX_REQUIREMENTS {
         return invalid("too many credential requirements");
     }
-    let required_units = request
-        .policy
+    let required_units = policy
         .credential_requirements
         .iter()
         .filter(|requirement| requirement.required)
         .count()
-        + request.policy.alternative_requirements.len();
-    if required_units == 0 && !request.policy.presentation_proof_required {
+        + policy.alternative_requirements.len();
+    if required_units == 0 && !policy.presentation_proof_required {
         return invalid("policy has no required credential or presentation obligations");
     }
-    for credential in &request.credentials {
-        validate_string("credential_id", &credential.credential_id)?;
-        validate_string("issuer_id", &credential.issuer_id)?;
-        validate_string("credential_format", &credential.credential_format)?;
-        validate_optional_string(
-            "signature_failure_reason",
-            credential.signature_failure_reason.as_deref(),
-        )?;
-        validate_optional_string(
-            "trust_failure_reason",
-            credential.trust_failure_reason.as_deref(),
-        )?;
-        validate_bounded_strings(
-            "credential_template_ids",
-            &credential.credential_template_ids,
-        )?;
-        validate_bounded_strings("compliance_statuses", &credential.compliance_statuses)?;
-        validate_bounded_strings("accreditations", &credential.accreditations)?;
-        validate_bounded_strings("credential warnings", &credential.warnings)?;
-        if credential.claims.len() > MAX_CLAIMS_PER_CREDENTIAL {
-            return invalid("credential has too many claims");
-        }
-        for (claim_name, value) in &credential.claims {
-            validate_string("claim_name", claim_name)?;
-            validate_value("claim value", value)?;
-        }
-    }
-    for requirement in request.policy.credential_requirements.iter().chain(
-        request
-            .policy
+    for requirement in policy.credential_requirements.iter().chain(
+        policy
             .alternative_requirements
             .iter()
             .flat_map(|alternative| alternative.credential_requirements.iter()),
@@ -1288,8 +1337,17 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
         }
         for claim in &requirement.requested_claims {
             validate_string("claim_name", &claim.claim_name)?;
+            validate_optional_string("claim.credential_type", claim.credential_type.as_deref())?;
             if let Some(predicate_spec) = &claim.predicate_spec {
                 validate_value("predicate_spec", predicate_spec)?;
+                let predicate = super::predicate::compile(
+                    predicate_spec,
+                    policy.fallback_policy,
+                    &policy.supported_circuits,
+                )?;
+                if predicate.requires_proof() {
+                    return invalid("authenticated predicate proof evaluation is unavailable; REQUIRE_PREDICATE cannot be activated");
+                }
             }
             for constraint in &claim.constraints {
                 if constraint.claim_name != claim.claim_name {
@@ -1317,7 +1375,7 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
             }
         }
     }
-    for alternative in &request.policy.alternative_requirements {
+    for alternative in &policy.alternative_requirements {
         validate_string("alternative.id", &alternative.id)?;
         validate_string("alternative.name", &alternative.name)?;
         if alternative.min_satisfied == 0
@@ -1326,7 +1384,7 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
             return invalid("alternative min_satisfied is outside its credential range");
         }
     }
-    if let Some(constraints) = &request.policy.issuer_constraints {
+    if let Some(constraints) = &policy.issuer_constraints {
         validate_bounded_strings(
             "required_compliance_statuses",
             &constraints.required_compliance_statuses,
@@ -1336,10 +1394,71 @@ fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), Serv
             &constraints.required_accreditations,
         )?;
     }
-    if let Some(external) = &request.external_authorization {
-        for message in external.reasons.iter().chain(external.errors.iter()) {
-            validate_string("external authorization message", message)?;
+    validate_bounded_strings("policy.allowed_issuers", &policy.allowed_issuers)?;
+    validate_bounded_strings("policy.supported_circuits", &policy.supported_circuits)?;
+    validate_bounded_strings(
+        "policy.accepted_credential_types",
+        &policy.accepted_credential_types,
+    )?;
+    Ok(())
+}
+
+fn validate_request(request: &ServicePolicyEvaluationRequest) -> Result<(), ServicePolicyError> {
+    if request.evaluation_time_epoch_seconds > i64::MAX as u64 {
+        return invalid("evaluation time is outside the supported timestamp range");
+    }
+    validate_service_policy(&request.policy)?;
+    validate_optional_string(
+        "holder_binding_method",
+        request.holder_binding_method.as_deref(),
+    )?;
+    validate_optional_string("proof_profile", request.proof_profile.as_deref())?;
+    if request.credentials.len() > MAX_CREDENTIALS {
+        return invalid("too many credentials");
+    }
+    if request
+        .presentation_count
+        .is_some_and(|count| count > MAX_CREDENTIALS)
+    {
+        return invalid("presentation count exceeds the supported limit");
+    }
+    for credential in &request.credentials {
+        validate_string("credential_id", &credential.credential_id)?;
+        validate_string("issuer_id", &credential.issuer_id)?;
+        validate_string("credential_format", &credential.credential_format)?;
+        validate_bounded_strings("credential_types", &credential.credential_types)?;
+        validate_optional_string(
+            "credential.trust_profile_id",
+            credential.trust_profile_id.as_deref(),
+        )?;
+        validate_optional_string(
+            "signature_failure_reason",
+            credential.signature_failure_reason.as_deref(),
+        )?;
+        validate_optional_string(
+            "trust_failure_reason",
+            credential.trust_failure_reason.as_deref(),
+        )?;
+        validate_bounded_strings(
+            "credential_template_ids",
+            &credential.credential_template_ids,
+        )?;
+        validate_bounded_strings("compliance_statuses", &credential.compliance_statuses)?;
+        validate_bounded_strings("accreditations", &credential.accreditations)?;
+        validate_bounded_strings("credential warnings", &credential.warnings)?;
+        if let Some(external) = &credential.external_authorization {
+            validate_authorization(external)?;
         }
+        if credential.claims.len() > MAX_CLAIMS_PER_CREDENTIAL {
+            return invalid("credential has too many claims");
+        }
+        for (claim_name, value) in &credential.claims {
+            validate_string("claim_name", claim_name)?;
+            validate_value("claim value", value)?;
+        }
+    }
+    if let Some(external) = &request.external_authorization {
+        validate_authorization(external)?;
     }
     Ok(())
 }
@@ -1397,6 +1516,7 @@ mod tests {
             credential_payload_format: Some("sd_jwt_vc".to_string()),
             requested_claims: vec![ServiceRequestedClaim {
                 claim_name: claim.to_string(),
+                credential_type: None,
                 required: true,
                 selective_disclosure: true,
                 accept_derived: false,
@@ -1421,6 +1541,9 @@ mod tests {
             credential_requirements: vec![requirement("req-1", "member", "email")],
             alternative_requirements: Vec::new(),
             trust_profile_id: None,
+            fallback_policy: ServicePredicateFallback::default(),
+            supported_circuits: Vec::new(),
+            accepted_credential_types: Vec::new(),
             holder_binding: ServiceHolderBinding::default(),
             freshness: Some(ServiceFreshnessPolicy {
                 max_age_seconds: None,
@@ -1438,6 +1561,7 @@ mod tests {
         VerifiedCredentialFacts {
             credential_id: "credential-1".to_string(),
             credential_template_ids: vec!["member".to_string()],
+            credential_types: vec!["EmployeeCredential".to_string()],
             credential_format: "sd-jwt".to_string(),
             claims: [("email".to_string(), json!("member@example.com"))]
                 .into_iter()
@@ -1446,7 +1570,9 @@ mod tests {
             signature_verified: true,
             signature_failure_reason: None,
             trust_profile_verified: true,
+            trust_profile_id: Some("trust-1".to_string()),
             trust_failure_reason: None,
+            external_authorization: None,
             trust_level: Some(80),
             compliance_statuses: Vec::new(),
             accreditations: Vec::new(),
@@ -1482,6 +1608,295 @@ mod tests {
         assert_eq!(result.result, ServiceEvaluationOutcome::Passed);
         assert_eq!(result.decision, ServiceDecision::Allow);
         assert_eq!(result.verified_claims["email"], "member@example.com");
+    }
+
+    fn predicate_request(spec: Value, actual: Value) -> ServicePolicyEvaluationRequest {
+        let mut request = request();
+        let claim = &mut request.policy.credential_requirements[0].requested_claims[0];
+        claim.constraints.clear();
+        claim.predicate_spec = Some(spec);
+        request.credentials[0].claims.insert("email".into(), actual);
+        request
+    }
+
+    #[test]
+    fn policy_type_constraints_use_authenticated_types_not_template_labels() {
+        let mut request = request();
+        request.policy.accepted_credential_types = vec!["EmployeeCredential".into()];
+        request.credentials[0].credential_types = vec!["NewsletterCredential".into()];
+        let result = evaluate_service_policy(request.clone()).unwrap();
+        assert_eq!(result.decision, ServiceDecision::Deny);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.code == ServicePolicyErrorCode::CredentialTypeMismatch));
+        request.credentials[0].credential_types = vec!["EmployeeCredential".into()];
+        assert_eq!(
+            evaluate_service_policy(request.clone()).unwrap().decision,
+            ServiceDecision::Allow
+        );
+        request.policy.accepted_credential_types.clear();
+        request.policy.credential_requirements[0].requested_claims[0].credential_type =
+            Some("OtherCredential".into());
+        assert_eq!(
+            evaluate_service_policy(request).unwrap().decision,
+            ServiceDecision::Deny
+        );
+    }
+
+    #[test]
+    fn trust_boolean_cannot_substitute_a_missing_or_different_profile() {
+        let mut request = request();
+        for profile in [None, Some("trust-other".to_string())] {
+            request.credentials[0].trust_profile_id = profile;
+            let result = evaluate_service_policy(request.clone()).unwrap();
+            assert_eq!(result.decision, ServiceDecision::Deny);
+            assert!(result
+                .errors
+                .iter()
+                .any(|error| error.code == ServicePolicyErrorCode::TrustProfileNotVerified));
+        }
+        request.credentials[0].trust_profile_id = Some("trust-1".to_string());
+        assert_eq!(
+            evaluate_service_policy(request).unwrap().decision,
+            ServiceDecision::Allow
+        );
+    }
+
+    #[test]
+    fn each_requirement_selects_evidence_for_its_own_trust_profile() {
+        let mut request = request();
+        let mut second = request.policy.credential_requirements[0].clone();
+        second.id = "second-profile".into();
+        second.trust_profile_id = Some("trust-2".into());
+        request.policy.credential_requirements.push(second);
+        assert_ne!(
+            evaluate_service_policy(request.clone()).unwrap().decision,
+            ServiceDecision::Allow
+        );
+        let mut second_evaluation = request.credentials[0].clone();
+        second_evaluation.trust_profile_id = Some("trust-2".into());
+        request.credentials.push(second_evaluation);
+        assert_eq!(
+            evaluate_service_policy(request.clone()).unwrap().decision,
+            ServiceDecision::Allow
+        );
+        request.credentials[1].trust_profile_verified = false;
+        assert_ne!(
+            evaluate_service_policy(request).unwrap().decision,
+            ServiceDecision::Allow
+        );
+    }
+
+    #[test]
+    fn candidate_authorization_denial_does_not_veto_a_valid_alternative() {
+        let mut request = request();
+        request.credentials[0].external_authorization = Some(ExternalAuthorizationFacts {
+            evaluated: true,
+            allowed: false,
+            reasons: vec!["linked-forbid".into()],
+            errors: vec![],
+        });
+        assert_eq!(
+            evaluate_service_policy(request.clone()).unwrap().decision,
+            ServiceDecision::Deny
+        );
+        let mut permitted = request.credentials[0].clone();
+        permitted.credential_id = "permitted-credential".into();
+        permitted.external_authorization.as_mut().unwrap().allowed = true;
+        permitted.external_authorization.as_mut().unwrap().reasons = vec!["linked-permit".into()];
+        request.credentials.push(permitted);
+        let result = evaluate_service_policy(request.clone()).unwrap();
+        assert_eq!(result.decision, ServiceDecision::Allow);
+        assert_eq!(
+            result.credential_results[0].credential_id.as_deref(),
+            Some("permitted-credential")
+        );
+        request.credentials[1]
+            .external_authorization
+            .as_mut()
+            .unwrap()
+            .errors
+            .push("evaluation-error".into());
+        assert_eq!(
+            evaluate_service_policy(request).unwrap().decision,
+            ServiceDecision::Deny
+        );
+    }
+
+    #[test]
+    fn raw_predicates_enforce_values_without_ordinary_constraints() {
+        for (kind, params, actual, expected) in [
+            (
+                "EQUALITY",
+                json!({"target_value": true}),
+                json!(false),
+                ServiceDecision::Deny,
+            ),
+            (
+                "EQUALITY",
+                json!({"target_value": true}),
+                json!(true),
+                ServiceDecision::Allow,
+            ),
+            (
+                "INEQUALITY",
+                json!({"target_value": null}),
+                Value::Null,
+                ServiceDecision::Deny,
+            ),
+            (
+                "MEMBERSHIP",
+                json!({"allowed_values": ["US", "CA"]}),
+                json!("MX"),
+                ServiceDecision::Deny,
+            ),
+            (
+                "MEMBERSHIP",
+                json!({"allowed_values": ["US", "CA"]}),
+                json!("CA"),
+                ServiceDecision::Allow,
+            ),
+            (
+                "NON_MEMBERSHIP",
+                json!({"excluded_values": ["REVOKED"]}),
+                json!("REVOKED"),
+                ServiceDecision::Deny,
+            ),
+            (
+                "RANGE_PROOF",
+                json!({"threshold": 21, "comparison": "gte"}),
+                json!(12),
+                ServiceDecision::Deny,
+            ),
+            (
+                "RANGE_PROOF",
+                json!({"threshold": 21, "comparison": "gte"}),
+                json!(21),
+                ServiceDecision::Allow,
+            ),
+            (
+                "RANGE_PROOF",
+                json!({"min": 18, "max": 65}),
+                json!(66),
+                ServiceDecision::Deny,
+            ),
+            (
+                "RANGE_PROOF",
+                json!({"min": 18, "max": 65}),
+                json!(18),
+                ServiceDecision::Allow,
+            ),
+        ] {
+            let request = predicate_request(
+                json!({
+                    "predicate_type": kind, "params": params, "fallback_policy": "ACCEPT_RAW"
+                }),
+                actual,
+            );
+            let result = evaluate_service_policy(request).unwrap();
+            assert_eq!(result.decision, expected, "predicate {kind}");
+            if expected == ServiceDecision::Deny {
+                assert!(result.verified_claims.is_empty());
+                assert!(result
+                    .errors
+                    .iter()
+                    .any(|error| error.code == ServicePolicyErrorCode::ClaimConstraintFailed));
+            }
+        }
+    }
+
+    #[test]
+    fn raw_values_cannot_satisfy_proof_only_or_deny_fallbacks() {
+        let denied = predicate_request(
+            json!({
+                "predicate_type": "RANGE_PROOF",
+                "params": {"threshold": 21, "comparison": "gte"},
+                "fallback_policy": "DENY"
+            }),
+            json!(99),
+        );
+        assert_eq!(
+            evaluate_service_policy(denied).unwrap().decision,
+            ServiceDecision::Deny
+        );
+        let unsupported = predicate_request(
+            json!({
+                "predicate_type": "RANGE_PROOF",
+                "params": {"threshold": 21, "comparison": "gte"},
+                "supported_circuits": ["age-v1"],
+                "fallback_policy": "REQUIRE_PREDICATE"
+            }),
+            json!(99),
+        );
+        assert!(validate_service_policy(&unsupported.policy).is_err());
+        assert!(evaluate_service_policy(unsupported).is_err());
+    }
+
+    #[test]
+    fn predicate_fallback_inherits_policy_and_explicit_claim_override() {
+        let mut request = predicate_request(
+            json!({
+                "predicate_type": "EQUALITY", "params": {"target_value": true}
+            }),
+            json!(true),
+        );
+        request.policy.fallback_policy = ServicePredicateFallback::Deny;
+        assert_eq!(
+            evaluate_service_policy(request.clone()).unwrap().decision,
+            ServiceDecision::Deny
+        );
+        request.policy.credential_requirements[0].requested_claims[0]
+            .predicate_spec
+            .as_mut()
+            .unwrap()["fallback_policy"] = json!("ACCEPT_RAW");
+        assert_eq!(
+            evaluate_service_policy(request).unwrap().decision,
+            ServiceDecision::Allow
+        );
+    }
+
+    #[test]
+    fn malformed_or_unsupported_predicates_are_invalid_at_both_boundaries() {
+        for spec in [
+            json!({"predicate_type": "UNKNOWN", "params": {}}),
+            json!({"predicate_type": "EQUALITY", "params": {"value": true}}),
+            json!({"predicate_type": "EQUALITY", "params": {"target_value": true}, "fallback_policy": "IGNORE"}),
+            json!({"predicate_type": "EQUALITY", "params": {"target_value": true}, "fallback_policy": "REQUIRE_PREDICATE"}),
+            json!({"predicate_type": "RANGE_PROOF", "params": {"threshold": "21", "comparison": "gte"}}),
+            json!({"predicate_type": "RANGE_PROOF", "params": {"min": 65, "max": 18}}),
+            json!({"predicate_type": "RANGE_PROOF", "params": {"threshold": 21, "comparison": "gte", "min": 1}}),
+        ] {
+            let request = predicate_request(spec, json!(true));
+            assert!(validate_service_policy(&request.policy).is_err());
+            assert!(evaluate_service_policy(request).is_err());
+        }
+    }
+
+    #[test]
+    fn range_predicates_preserve_large_integer_boundaries_and_reject_coercion() {
+        let spec = json!({
+            "predicate_type": "RANGE_PROOF",
+            "params": {"threshold": 9_007_199_254_740_993_u64, "comparison": "gte"}
+        });
+        for actual in [
+            json!(9_007_199_254_740_992_u64),
+            json!("9007199254740993"),
+            json!(null),
+        ] {
+            assert_eq!(
+                evaluate_service_policy(predicate_request(spec.clone(), actual))
+                    .unwrap()
+                    .decision,
+                ServiceDecision::Deny
+            );
+        }
+        assert_eq!(
+            evaluate_service_policy(predicate_request(spec, json!(9_007_199_254_740_993_u64)))
+                .unwrap()
+                .decision,
+            ServiceDecision::Allow
+        );
     }
 
     fn presentation_only_request() -> ServicePolicyEvaluationRequest {
