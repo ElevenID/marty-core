@@ -24,13 +24,28 @@ impl IssuerConstraintChecker {
     /// # Arguments
     /// * `issuer_id` - DID, certificate DN, or other issuer identifier
     /// * `trust_profile_verified` - Whether issuer was verified against trust profile
+    ///
+    /// This legacy boolean cannot establish profile identity. A configured
+    /// profile fails closed; callers with scoped evidence use
+    /// [`Self::check_issuer_for_profile`].
     pub fn check_issuer(&self, issuer_id: &str, trust_profile_verified: bool) -> IssuerCheckResult {
+        self.check_issuer_for_profile(issuer_id, trust_profile_verified, None)
+    }
+
+    /// Check issuer evidence against the exact profile actually evaluated.
+    pub fn check_issuer_for_profile(
+        &self,
+        issuer_id: &str,
+        trust_profile_verified: bool,
+        evaluated_profile_id: Option<&str>,
+    ) -> IssuerCheckResult {
         let mut policy = neutral_policy();
         policy.trust_profile_id.clone_from(&self.trust_profile_id);
         policy.allowed_issuers.clone_from(&self.allowed_issuers);
         let mut input = neutral_input();
         input.issuer_id = issuer_id.to_string();
         input.trust_profile_verified = trust_profile_verified;
+        input.trust_profile_id = evaluated_profile_id.map(str::to_string);
 
         let result = PolicyEvaluator::new(policy).evaluate(&input);
         if let Some(error) = result

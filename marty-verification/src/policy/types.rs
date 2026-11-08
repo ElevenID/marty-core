@@ -105,6 +105,9 @@ pub struct PolicyEvaluationInput {
     pub claims: HashMap<String, serde_json::Value>,
     pub issuer_id: String,
     pub trust_profile_verified: bool,
+    /// The profile actually evaluated by the caller; a bare boolean is insufficient.
+    #[serde(default)]
+    pub trust_profile_id: Option<String>,
     pub issued_at_epoch_seconds: Option<u64>,
     pub proof_epoch_seconds: Option<u64>,
     pub evaluation_time_epoch_seconds: u64,

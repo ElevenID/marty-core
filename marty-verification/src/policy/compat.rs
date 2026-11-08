@@ -50,6 +50,7 @@ pub(super) fn neutral_input() -> PolicyEvaluationInput {
         claims: HashMap::new(),
         issuer_id: "legacy:compatibility-issuer".to_string(),
         trust_profile_verified: true,
+        trust_profile_id: None,
         issued_at_epoch_seconds: None,
         proof_epoch_seconds: None,
         evaluation_time_epoch_seconds: 0,
@@ -179,6 +180,9 @@ impl<'a> LegacyProjection<'a> {
                 credential_requirements,
                 alternative_requirements,
                 trust_profile_id: policy.trust_profile_id.clone(),
+                fallback_policy: super::service::ServicePredicateFallback::AcceptRaw,
+                supported_circuits: Vec::new(),
+                accepted_credential_types: Vec::new(),
                 holder_binding: ServiceHolderBinding {
                     required: holder_required,
                     binding_methods: holder_method.iter().cloned().collect(),
@@ -204,13 +208,16 @@ impl<'a> LegacyProjection<'a> {
             credentials: vec![VerifiedCredentialFacts {
                 credential_id: LEGACY_CREDENTIAL_ID.to_string(),
                 credential_template_ids,
+                credential_types: input.credential_types.clone(),
                 credential_format: "legacy-policy-facts".to_string(),
                 claims: input.claims.clone(),
                 issuer_id: input.issuer_id.clone(),
                 signature_verified: true,
                 signature_failure_reason: None,
                 trust_profile_verified: input.trust_profile_verified,
+                trust_profile_id: input.trust_profile_id.clone(),
                 trust_failure_reason: None,
+                external_authorization: None,
                 trust_level: None,
                 compliance_statuses: Vec::new(),
                 accreditations: Vec::new(),
@@ -414,6 +421,7 @@ impl<'a> LegacyProjection<'a> {
             ),
             ServiceCode::SignatureInvalid
             | ServiceCode::CredentialFormatMismatch
+            | ServiceCode::CredentialTypeMismatch
             | ServiceCode::IssuerTrustLevelInsufficient
             | ServiceCode::IssuerComplianceStatusMissing
             | ServiceCode::IssuerAccreditationMissing
@@ -472,6 +480,8 @@ fn claim_requirement(
         credential_payload_format: None,
         requested_claims: vec![ServiceRequestedClaim {
             claim_name,
+            credential_type: (!claim.credential_type.is_empty())
+                .then(|| claim.credential_type.clone()),
             required: true,
             selective_disclosure: true,
             accept_derived: claim.accept_predicate,
