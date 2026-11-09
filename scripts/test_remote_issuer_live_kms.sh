@@ -15,6 +15,7 @@ python="${MARTY_TEST_PYTHON:-python3}"
 nonce="$("$python" -c 'import secrets; print(secrets.token_hex(24))' | tr -d '\r')"
 [[ "$nonce" =~ ^[0-9a-f]{48}$ ]] || { echo 'Invalid disposable marker nonce' >&2; exit 1; }
 ca_cert="$(mktemp)"
+ca_exec_error="$(mktemp)"
 curl_ca="$ca_cert"
 curl_options=(--noproxy '*')
 if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
@@ -28,7 +29,7 @@ cleanup() {
   if [[ -n "$container_id" ]]; then
     docker rm -f "$container_id" >/dev/null 2>&1 || true
   fi
-  rm -f "$ca_cert"
+  rm -f "$ca_cert" "$ca_exec_error"
 }
 trap cleanup EXIT
 
@@ -52,12 +53,33 @@ fi
 binding="$(docker port "$name" 8200/tcp | tr -d '\r')"
 [[ "$binding" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid disposable loopback binding' >&2; exit 1; }
 base="https://127.0.0.1:${binding##*:}"
+last_ca_exec_status=0
 for attempt in {1..30}; do
-  if docker exec "$name" cat /tmp/certs/vault-ca.pem > "$ca_cert" 2>/dev/null && [[ -s "$ca_cert" ]]; then
+  # Only this public-CA exec is observed: never read server logs, which may
+  # contain disposable root or unseal material. Keep raw exec errors private.
+  if {
+    docker exec "$name" cat /tmp/certs/vault-ca.pem 2>&1 1>&3 | head -c 4096 > "$ca_exec_error"
+    ca_pipe_status=("${PIPESTATUS[@]}")
+    (( ca_pipe_status[0] == 0 && ca_pipe_status[1] == 0 ))
+  } 3> "$ca_cert"; then
+    ca_read_ok=1
+  else
+    ca_read_ok=0
+  fi
+  last_ca_exec_status="${ca_pipe_status[0]}"
+  ca_bytes="$(wc -c < "$ca_cert" | tr -d '[:space:]')"
+  ca_error_bytes="$(wc -c < "$ca_exec_error" | tr -d '[:space:]')"
+  printf 'Disposable CA read attempt=%s execStatus=%s captureStatus=%s caBytes=%s errorBytes=%s\n' \
+    "$attempt" "$last_ca_exec_status" "${ca_pipe_status[1]}" "$ca_bytes" "$ca_error_bytes" >&2
+  if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" && -s "$ca_exec_error" ]]; then
+    (umask 077; set -o noclobber; cat "$ca_exec_error" > "${MARTY_TEST_OPENBAO_CID_FILE}.ca-exec-${attempt}.private")
+  fi
+  if (( ca_read_ok == 1 && ca_bytes > 0 && ca_bytes <= 65536 )); then
     break
   fi
   if (( attempt == 30 )); then
-    echo 'Disposable OpenBao public CA is unavailable' >&2
+    ca_bytes="$(wc -c < "$ca_cert" | tr -d '[:space:]')"
+    printf 'Disposable OpenBao public CA is unavailable (exec status %s, bytes %s)\n' "$last_ca_exec_status" "$ca_bytes" >&2
     docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$name" >&2
     exit 1
   fi

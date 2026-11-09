@@ -23,8 +23,10 @@ yanked = "deny"
 # A list of advisory IDs to ignore (useful for false positives)
 ignore = [
     # RSA is required by supported passport, certificate, and legacy badge profiles.
-    # Marty exposes it through marty-crypto; RustCrypto has not published a fixed release.
-    { id = "RUSTSEC-2023-0071", reason = "required behind marty-crypto adapter; no patched RustCrypto release" },
+    # RSA >=0.10.0 is patched (RustSec review 2026-11-09); the locked 0.9.10
+    # public-verification-only adapter remains affected pending coordinated CMS/
+    # certificate migration and qualification tracked by Core issue 361.
+    { id = "RUSTSEC-2023-0071", reason = "tracked affected RSA 0.9.10 public-verification-only marty-crypto boundary; qualify patched RSA 0.10 with the coordinated CMS/certificate migration in issue 361" },
 ]
 
 [licenses]

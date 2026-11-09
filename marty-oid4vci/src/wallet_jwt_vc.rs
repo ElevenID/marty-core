@@ -509,16 +509,26 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "wallet")]
+    fn fresh_nonce() -> String {
+        // Same CSPRNG primitive as the production OID4VCI nonce endpoint.
+        uuid::Uuid::new_v4().to_string()
+    }
+
     #[test]
     #[cfg(feature = "wallet")]
     fn refuses_missing_transaction_before_resolving_or_signing() {
+        let nonce = fresh_nonce();
+        let mut empty = nonce.clone();
+        empty.clear();
+        let invalid = format!("{nonce} ");
         for (nonce, audience) in [
-            ("", "https://verifier.example"),
-            ("nonce", ""),
-            ("bad nonce", "https://verifier.example"),
+            (empty.as_str(), "https://verifier.example"),
+            (nonce.as_str(), ""),
+            (invalid.as_str(), "https://verifier.example"),
         ] {
             assert!(prepare_verified_jwt_vc_presentation(
-                "not-a-token",
+                &unsigned(json!({"alg":"ES256","kid":KID}), claims()),
                 &NeverResolve,
                 nonce,
                 audience,
@@ -542,7 +552,8 @@ mod tests {
         credential_claims["sub"] = json!(holder_id);
         credential_claims["vc"]["credentialSubject"]["id"] = json!(holder_id);
         let (token, keys) = signed(credential_claims);
-        let nonce = "owned-transaction-nonce";
+        let transaction_nonce = fresh_nonce();
+        let nonce = transaction_nonce.as_str();
         let audience = "https://verifier.example";
         let prepared = prepare_verified_jwt_vc_presentation(
             &token,
@@ -563,7 +574,9 @@ mod tests {
             proof.credential.credential_sha256,
             format!("{:x}", Sha256::digest(token.as_bytes()))
         );
-        assert!(verify_open_badge_presentation(&vp, &keys, "another-nonce", audience).is_err());
+        let mismatched_nonce = fresh_nonce();
+        assert_ne!(nonce, mismatched_nonce);
+        assert!(verify_open_badge_presentation(&vp, &keys, &mismatched_nonce, audience).is_err());
         assert!(
             verify_open_badge_presentation(&vp, &keys, nonce, "https://foreign.example").is_err()
         );
