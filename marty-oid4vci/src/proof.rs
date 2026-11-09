@@ -669,7 +669,9 @@ fn resolve_did_jwk_to_jwk(identifier: &str) -> Oid4vciResult<(String, Option<JWK
     Ok((did.to_owned(), Some(jwk)))
 }
 
-fn resolve_self_certifying_holder_key(identifier: &str) -> Oid4vciResult<(String, Option<JWK>)> {
+pub(crate) fn resolve_self_certifying_holder_key(
+    identifier: &str,
+) -> Oid4vciResult<(String, Option<JWK>)> {
     if identifier.starts_with("did:key:z") {
         resolve_did_key_to_jwk(identifier)
     } else if identifier.starts_with("did:jwk:") {

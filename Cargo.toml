@@ -112,7 +112,9 @@ tracing-error = "0.2"
 axum = "0.8"
 
 # Database (for marty-secure-storage)
-rusqlite = { version = "0.39", features = ["bundled-sqlcipher-vendored-openssl"] }
+# Direct immutable Git dependency carries its patched libsqlite3-sys to consumers.
+# No registry fallback: publishing must not silently restore affected SQLCipher.
+rusqlite = { git = "https://github.com/ElevenID/rusqlite-elevenid", rev = "9500714b77acccbfb9eacdf566691adf584d4477", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring = "4.1"
 keyring-core = "1.0"
 directories = "6.0"

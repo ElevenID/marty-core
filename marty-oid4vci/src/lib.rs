@@ -94,10 +94,24 @@ pub mod types;
 pub mod verifier;
 pub mod wallet_input;
 
+#[cfg(any(feature = "wallet", feature = "verifier"))]
+mod issuer_key;
 #[cfg(feature = "wallet")]
 pub mod wallet;
 #[cfg(feature = "wallet")]
 mod wallet_sd_jwt;
+#[cfg(any(feature = "wallet", feature = "verifier"))]
+pub use issuer_key::{ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver, TrustedSdJwtIssuerKeys};
+#[cfg(any(feature = "wallet", feature = "verifier"))]
+mod wallet_jwt_vc;
+#[cfg(feature = "wallet")]
+pub use wallet_jwt_vc::prepare_verified_jwt_vc_presentation;
+#[cfg(any(feature = "wallet", feature = "verifier"))]
+pub use wallet_jwt_vc::{
+    presented_jwt_vc, verify_jwt_vc_presentation, verify_open_badge_jwt,
+    verify_open_badge_presentation, VerifiedJwtVcPresentation, VerifiedOpenBadgeJwt,
+    VerifiedOpenBadgePresentation,
+};
 
 pub use error::{Oid4vciError, Oid4vciResult, RequestObjectEndpointError};
 
@@ -192,10 +206,7 @@ pub use wallet::{
     PresentationRequestQueryType, PresentationResponse, WalletEngine, ZkProofEntry,
 };
 #[cfg(feature = "wallet")]
-pub use wallet_sd_jwt::{
-    PreparedSdJwtPresentation, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver,
-    TrustedSdJwtIssuerKeys, VerifiedSdJwtCredential,
-};
+pub use wallet_sd_jwt::{PreparedSdJwtPresentation, VerifiedSdJwtCredential};
 
 #[cfg(feature = "lti")]
 pub use lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};

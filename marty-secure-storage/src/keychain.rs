@@ -231,8 +231,67 @@ mod tests {
         let expected_id = store.id();
         keyring_core::set_default_store(store);
         let temporary = tempfile::tempdir().unwrap();
-        let _storage = SecureStorage::new_with_process_local_keyring(temporary.path())
+        let mut storage = SecureStorage::new_with_process_local_keyring(temporary.path())
             .expect("the process-local store must support secure storage startup");
+        storage.initialize_extension(|connection| {
+            let version: String = connection
+                .pragma_query_value(None, "cipher_version", |row| row.get(0))
+                .unwrap();
+            assert!(!version.is_empty(), "SQLCipher must be linked");
+            assert!(rusqlite::version_number() >= 3_054_000);
+            let encrypted: String = connection
+                .pragma_query_value(None, "cipher_status", |row| row.get(0))
+                .unwrap();
+            assert_eq!(encrypted, "1");
+            connection
+                .execute_batch("CREATE TABLE encryption_probe (value TEXT NOT NULL); INSERT INTO encryption_probe VALUES ('owned encrypted storage probe');")
+                .unwrap();
+        });
+        drop(storage);
+        let database = std::fs::read(temporary.path().join("marty_verifier.db")).unwrap();
+        assert!(!database.starts_with(b"SQLite format 3\0"));
+        assert!(!database
+            .windows(b"owned encrypted storage probe".len())
+            .any(|bytes| bytes == b"owned encrypted storage probe"));
+        let mut reopened = SecureStorage::new_with_process_local_keyring(temporary.path()).unwrap();
+        reopened.initialize_extension(|connection| {
+            let value: String = connection
+                .query_row("SELECT value FROM encryption_probe", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(value, "owned encrypted storage probe");
+            let integrity: String = connection
+                .pragma_query_value(None, "integrity_check", |row| row.get(0))
+                .unwrap();
+            assert_eq!(integrity, "ok");
+            let mut check = connection.prepare("PRAGMA cipher_integrity_check").unwrap();
+            let failures = check
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            assert!(failures.is_empty(), "every encrypted page HMAC must verify");
+        });
+        drop(reopened);
+        // Change only the explicitly installed process-local store. A wrong key
+        // must fail an actual database read; PRAGMA key alone does not prove it.
+        let database_key = keyring_core::Entry::new(SERVICE_NAME, DB_KEY_NAME).unwrap();
+        let original_key = database_key.get_password().unwrap();
+        use base64::Engine;
+        let mut wrong_key = base64::engine::general_purpose::STANDARD
+            .decode(&original_key)
+            .unwrap();
+        wrong_key[0] ^= 0xff;
+        database_key
+            .set_password(&base64::engine::general_purpose::STANDARD.encode(wrong_key))
+            .unwrap();
+        let wrong_key_accepted =
+            SecureStorage::new_with_process_local_keyring(temporary.path()).is_ok();
+        database_key.set_password(&original_key).unwrap();
+        assert!(
+            !wrong_key_accepted,
+            "a different encryption key must be refused"
+        );
+        assert!(SecureStorage::new_with_process_local_keyring(temporary.path()).is_ok());
 
         let selected = keyring_core::get_default_store().expect("store must remain installed");
         assert_eq!(selected.id(), expected_id);

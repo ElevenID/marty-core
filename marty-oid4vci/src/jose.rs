@@ -37,7 +37,7 @@ pub const MAX_COMPACT_JWT_BYTES: usize = 256 * 1024;
 /// Maximum public JWK JSON accepted by direct JOSE verification helpers.
 pub const MAX_PUBLIC_JWK_BYTES: usize = 16 * 1024;
 const MAX_JWT_HEADER_BYTES: usize = 144 * 1024;
-const MAX_JWT_CLAIMS_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_JWT_CLAIMS_BYTES: usize = 64 * 1024;
 const MAX_JWT_SIGNATURE_BYTES: usize = crate::bounded_jwt::MAX_RSA_SIGNATURE_BYTES;
 const JWT_LIMITS: CompactJwtLimits = CompactJwtLimits {
     total: MAX_COMPACT_JWT_BYTES,

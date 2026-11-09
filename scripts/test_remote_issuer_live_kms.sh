@@ -15,6 +15,7 @@ python="${MARTY_TEST_PYTHON:-python3}"
 nonce="$("$python" -c 'import secrets; print(secrets.token_hex(24))' | tr -d '\r')"
 [[ "$nonce" =~ ^[0-9a-f]{48}$ ]] || { echo 'Invalid disposable marker nonce' >&2; exit 1; }
 ca_cert="$(mktemp)"
+ca_exec_error="$(mktemp)"
 curl_ca="$ca_cert"
 curl_options=(--noproxy '*')
 if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
@@ -28,26 +29,62 @@ cleanup() {
   if [[ -n "$container_id" ]]; then
     docker rm -f "$container_id" >/dev/null 2>&1 || true
   fi
-  rm -f "$ca_cert"
+  rm -f "$ca_cert" "$ca_exec_error"
 }
 trap cleanup EXIT
 
-container_id="$(docker run --rm -d --name "$name" \
+local_limits=()
+if [[ "${MARTY_TEST_JWT_VC_WALLET_ONLY:-0}" == '1' ]]; then
+  local_limits=(--pull=never --memory 256m --memory-swap 256m --pids-limit 32)
+fi
+if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" ]]; then
+  [[ ! -e "$MARTY_TEST_OPENBAO_CID_FILE" && ! -L "$MARTY_TEST_OPENBAO_CID_FILE" ]] || exit 2
+fi
+container_id="$(docker run "${local_limits[@]}" --rm -d --name "$name" \
   --tmpfs /tmp/certs:mode=0777 \
   -e "BAO_DEV_ROOT_TOKEN_ID=$token" \
   -p 127.0.0.1::8200 \
   "$image" server -dev-tls -dev-tls-cert-dir=/tmp/certs '-dev-listen-address=:8200')"
 [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid owned disposable container ID' >&2; exit 1; }
+if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" ]]; then
+  (set -o noclobber; printf '%s\n' "$container_id" > "$MARTY_TEST_OPENBAO_CID_FILE")
+fi
 
 binding="$(docker port "$name" 8200/tcp | tr -d '\r')"
 [[ "$binding" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid disposable loopback binding' >&2; exit 1; }
 base="https://127.0.0.1:${binding##*:}"
+last_ca_exec_status=0
 for attempt in {1..30}; do
-  if docker exec "$name" cat /tmp/certs/vault-ca.pem > "$ca_cert" 2>/dev/null && [[ -s "$ca_cert" ]]; then
+  # Only this public-CA exec is observed: never read server logs, which may
+  # contain disposable root or unseal material. Keep raw exec errors private.
+  if {
+    docker exec "$name" cat /tmp/certs/vault-ca.pem 2>&1 1>&3 | head -c 4096 > "$ca_exec_error"
+    ca_pipe_status=("${PIPESTATUS[@]}")
+    (( ca_pipe_status[0] == 0 && ca_pipe_status[1] == 0 ))
+  } 3> "$ca_cert"; then
+    ca_read_ok=1
+  else
+    ca_read_ok=0
+  fi
+  last_ca_exec_status="${ca_pipe_status[0]}"
+  ca_bytes="$(wc -c < "$ca_cert" | tr -d '[:space:]')"
+  ca_error_bytes="$(wc -c < "$ca_exec_error" | tr -d '[:space:]')"
+  printf 'Disposable CA read attempt=%s execStatus=%s captureStatus=%s caBytes=%s errorBytes=%s\n' \
+    "$attempt" "$last_ca_exec_status" "${ca_pipe_status[1]}" "$ca_bytes" "$ca_error_bytes" >&2
+  if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" && -s "$ca_exec_error" ]]; then
+    (umask 077; set -o noclobber; cat "$ca_exec_error" > "${MARTY_TEST_OPENBAO_CID_FILE}.ca-exec-${attempt}.private")
+  fi
+  if (( last_ca_exec_status != 0 )) && [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" && -s "$ca_cert" ]]; then
+    # Docker/OCI failures can arrive on stdout. Preserve only this exact failed
+    # public-CA command's bounded output privately, never in console reports.
+    (umask 077; set -o noclobber; head -c 4096 "$ca_cert" > "${MARTY_TEST_OPENBAO_CID_FILE}.ca-exec-${attempt}.stdout.private")
+  fi
+  if (( ca_read_ok == 1 && ca_bytes > 0 && ca_bytes <= 65536 )); then
     break
   fi
   if (( attempt == 30 )); then
-    echo 'Disposable OpenBao public CA is unavailable' >&2
+    ca_bytes="$(wc -c < "$ca_cert" | tr -d '[:space:]')"
+    printf 'Disposable OpenBao public CA is unavailable (exec status %s, bytes %s)\n' "$last_ca_exec_status" "$ca_bytes" >&2
     docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$name" >&2
     exit 1
   fi
@@ -94,6 +131,11 @@ elif [[ "$cargo" == *.exe ]]; then
   # executables unless they are named in WSLENV. This is local probe wiring;
   # Linux CI continues to use its native cargo and inherited environment.
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
+fi
+if [[ "${MARTY_TEST_JWT_VC_WALLET_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked --offline -j1 -p marty-oid4vci --no-default-features \
+    --features kms-only,wallet,jwt_vc_json --lib wallet_jwt_vc::tests -- --include-ignored
+  exit 0
 fi
 if [[ "${MARTY_TEST_DID_JWK_ONLY:-0}" == '1' ]]; then
   "$cargo" test --locked --offline -j2 -p marty-crypto --no-default-features \
@@ -213,6 +255,10 @@ fi
   --no-default-features --features "$features" \
   jose::tests \
   -- --ignored
+"$cargo" test --locked -p marty-oid4vci --lib \
+  --no-default-features --features "$features" \
+  wallet_jwt_vc::tests \
+  -- --include-ignored
 "$cargo" test --locked -p marty-test-wallet --lib holder_probe -- --include-ignored
 "$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
 "$cargo" test --locked -p marty-oid4vci --lib \

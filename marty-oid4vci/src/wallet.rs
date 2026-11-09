@@ -32,12 +32,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::{
     Oid4vciError, Oid4vciResult, RequestObjectEndpointError, MAX_REQUEST_OBJECT_ERROR_BYTES,
 };
+use crate::issuer_key::SdJwtIssuerKeyResolver;
 use crate::types::{
     AuthorizationDetail, AuthorizationRequest, CodeChallengeMethod, CredentialOffer,
     CredentialRequest, CredentialResponse, GrantType, NonceResponse, ProofsObject, TokenResponse,
 };
 use crate::verifier::{DescriptorMapEntry, PresentationDefinition, PresentationSubmission};
-use crate::wallet_sd_jwt::{self, SdJwtIssuerKeyResolver};
+use crate::wallet_sd_jwt;
 
 const MAX_OFFER_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_METADATA_RESPONSE_BYTES: usize = 256 * 1024;
@@ -244,6 +245,24 @@ impl std::fmt::Debug for PreparedHolderProof {
 }
 
 impl PreparedHolderProof {
+    /// Internal assembly shared by remote holder proof and presentation paths.
+    pub(crate) fn from_signing_input(
+        signing_input: String,
+        public_jwk_json: String,
+        algorithm: crate::types::SigningAlgorithm,
+    ) -> Oid4vciResult<Self> {
+        if signing_input.len().saturating_add(87) > crate::jose::MAX_COMPACT_JWT_BYTES {
+            return Err(Oid4vciError::InvalidRequest(
+                "Holder JWS exceeds its size limit".into(),
+            ));
+        }
+        Ok(Self {
+            signing_input,
+            public_jwk_json,
+            algorithm,
+        })
+    }
+
     /// Algorithm the KMS, secure enclave, or platform keystore must use.
     pub const fn algorithm(&self) -> crate::types::SigningAlgorithm {
         self.algorithm
@@ -771,16 +790,16 @@ impl WalletEngine {
             .map_err(|error| Oid4vciError::SigningError(error.to_string()))?;
         let claims = serde_json::to_vec(&claims)
             .map_err(|error| Oid4vciError::SigningError(error.to_string()))?;
-        Ok(PreparedHolderProof {
-            algorithm,
-            public_jwk_json: serde_json::to_string(&public_jwk)
-                .map_err(|error| Oid4vciError::KeyError(error.to_string()))?,
-            signing_input: format!(
+        PreparedHolderProof::from_signing_input(
+            format!(
                 "{}.{}",
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header),
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims)
             ),
-        })
+            serde_json::to_string(&public_jwk)
+                .map_err(|error| Oid4vciError::KeyError(error.to_string()))?,
+            algorithm,
+        )
     }
 
     /// Derive a self-certifying `did:key` from an Ed25519 public JWK.
