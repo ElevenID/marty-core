@@ -112,7 +112,9 @@ tracing-error = "0.2"
 axum = "0.8"
 
 # Database (for marty-secure-storage)
-rusqlite = { version = "0.41.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+# Direct immutable Git dependency carries its patched libsqlite3-sys to consumers.
+# No registry fallback: publishing must not silently restore affected SQLCipher.
+rusqlite = { git = "https://github.com/ElevenID/rusqlite-elevenid", rev = "9500714b77acccbfb9eacdf566691adf584d4477", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring = "4.1"
 keyring-core = "1.0"
 directories = "6.0"
@@ -167,8 +169,6 @@ inherits = "dev"
 debug = "full"
 
 [patch.crates-io]
-# Reviewed fork default-main SQLCipher fix; immutable pin preserves encrypted storage.
-libsqlite3-sys = { git = "https://github.com/ElevenID/rusqlite-elevenid", rev = "9500714b77acccbfb9eacdf566691adf584d4477" }
 bls12_381_plus = { path = "third_party/bls12_381_plus" }
 elliptic-curve = { path = "third_party/elliptic-curve-0.13" }
 # Shared upstream arithmetic with verification-only module gates; see its patch notes.

@@ -17,5 +17,8 @@ pub use error::StorageError;
 pub use keychain::InstanceNamespace;
 pub use models::*;
 
+/// The exact database types used by storage callbacks and errors.
+pub use rusqlite;
+
 /// Re-export for command handlers
 pub use database::{OfflineQueueStatus, VerificationHistoryEntry};

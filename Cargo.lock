@@ -5946,8 +5946,7 @@ dependencies = [
 [[package]]
 name = "rusqlite"
 version = "0.41.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
+source = "git+https://github.com/ElevenID/rusqlite-elevenid?rev=9500714b77acccbfb9eacdf566691adf584d4477#9500714b77acccbfb9eacdf566691adf584d4477"
 dependencies = [
  "bitflags 2.13.1",
  "fallible-iterator",
