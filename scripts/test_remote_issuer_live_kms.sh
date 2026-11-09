@@ -74,6 +74,11 @@ for attempt in {1..30}; do
   if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" && -s "$ca_exec_error" ]]; then
     (umask 077; set -o noclobber; cat "$ca_exec_error" > "${MARTY_TEST_OPENBAO_CID_FILE}.ca-exec-${attempt}.private")
   fi
+  if (( last_ca_exec_status != 0 )) && [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" && -s "$ca_cert" ]]; then
+    # Docker/OCI failures can arrive on stdout. Preserve only this exact failed
+    # public-CA command's bounded output privately, never in console reports.
+    (umask 077; set -o noclobber; head -c 4096 "$ca_cert" > "${MARTY_TEST_OPENBAO_CID_FILE}.ca-exec-${attempt}.stdout.private")
+  fi
   if (( ca_read_ok == 1 && ca_bytes > 0 && ca_bytes <= 65536 )); then
     break
   fi
