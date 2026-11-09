@@ -32,12 +32,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-container_id="$(docker run --rm -d --name "$name" \
+local_limits=()
+if [[ "${MARTY_TEST_JWT_VC_WALLET_ONLY:-0}" == '1' ]]; then
+  local_limits=(--pull=never --memory 256m --memory-swap 256m --pids-limit 32)
+fi
+if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" ]]; then
+  [[ ! -e "$MARTY_TEST_OPENBAO_CID_FILE" && ! -L "$MARTY_TEST_OPENBAO_CID_FILE" ]] || exit 2
+fi
+container_id="$(docker run "${local_limits[@]}" --rm -d --name "$name" \
   --tmpfs /tmp/certs:mode=0777 \
   -e "BAO_DEV_ROOT_TOKEN_ID=$token" \
   -p 127.0.0.1::8200 \
   "$image" server -dev-tls -dev-tls-cert-dir=/tmp/certs '-dev-listen-address=:8200')"
 [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid owned disposable container ID' >&2; exit 1; }
+if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" ]]; then
+  (set -o noclobber; printf '%s\n' "$container_id" > "$MARTY_TEST_OPENBAO_CID_FILE")
+fi
 
 binding="$(docker port "$name" 8200/tcp | tr -d '\r')"
 [[ "$binding" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'Invalid disposable loopback binding' >&2; exit 1; }
@@ -94,6 +104,11 @@ elif [[ "$cargo" == *.exe ]]; then
   # executables unless they are named in WSLENV. This is local probe wiring;
   # Linux CI continues to use its native cargo and inherited environment.
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
+fi
+if [[ "${MARTY_TEST_JWT_VC_WALLET_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked --offline -j1 -p marty-oid4vci --no-default-features \
+    --features kms-only,wallet,jwt_vc_json --lib wallet_jwt_vc::tests -- --include-ignored
+  exit 0
 fi
 if [[ "${MARTY_TEST_DID_JWK_ONLY:-0}" == '1' ]]; then
   "$cargo" test --locked --offline -j2 -p marty-crypto --no-default-features \
@@ -213,6 +228,10 @@ fi
   --no-default-features --features "$features" \
   jose::tests \
   -- --ignored
+"$cargo" test --locked -p marty-oid4vci --lib \
+  --no-default-features --features "$features" \
+  wallet_jwt_vc::tests \
+  -- --include-ignored
 "$cargo" test --locked -p marty-test-wallet --lib holder_probe -- --include-ignored
 "$cargo" test --locked -p marty-test-wallet --test holder_signing_binaries -- --include-ignored
 "$cargo" test --locked -p marty-oid4vci --lib \

@@ -61,6 +61,7 @@ struct StoredCredential {
     credential_types: Vec<String>,
     claim_names: Vec<String>,
     received_at: String,
+    open_badge_evidence: Option<marty_oid4vci::VerifiedOpenBadgeJwt>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,6 +76,8 @@ struct CredentialSummary {
     credential_types: Vec<String>,
     claim_names: Vec<String>,
     received_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    open_badge_evidence: Option<marty_oid4vci::VerifiedOpenBadgeJwt>,
 }
 
 impl From<&StoredCredential> for CredentialSummary {
@@ -88,6 +91,7 @@ impl From<&StoredCredential> for CredentialSummary {
             credential_types: credential.credential_types.clone(),
             claim_names: credential.claim_names.clone(),
             received_at: credential.received_at.clone(),
+            open_badge_evidence: credential.open_badge_evidence.clone(),
         }
     }
 }
@@ -604,6 +608,24 @@ async fn receive_credential(
     })?;
     let payload = decode_credential_payload(&raw, &format)?;
     let identity = credential_identity(&payload, &format);
+    let open_badge_evidence = if matches!(format, CredentialFormat::JwtVcJson)
+        && identity
+            .credential_types
+            .iter()
+            .any(|kind| kind == "OpenBadgeCredential")
+    {
+        Some(
+            marty_oid4vci::verify_open_badge_jwt(
+                &raw,
+                state.issuer_resolver.as_ref(),
+                chrono::Utc::now().timestamp(),
+            )
+            .map_err(|error| AppError::unprocessable(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+
     let claim_names = credential_claim_names(&raw, &format, &payload);
     let credential = StoredCredential {
         id: uuid::Uuid::new_v4().to_string(),
@@ -615,6 +637,7 @@ async fn receive_credential(
         claim_names,
         raw,
         received_at: chrono::Utc::now().to_rfc3339(),
+        open_badge_evidence,
     };
     let summary = CredentialSummary::from(&credential);
     wallet.write().await.credentials.push(credential);
@@ -686,7 +709,20 @@ async fn present_credential(
                     .complete(&signature)
                     .map_err(|error| AppError::bad_request(error.to_string()))?
             }
-            CredentialFormat::JwtVcJson => credential.raw.clone(),
+            CredentialFormat::JwtVcJson => {
+                let prepared = marty_oid4vci::prepare_verified_jwt_vc_presentation(
+                    &credential.raw,
+                    state.issuer_resolver.as_ref(),
+                    &presentation_request.nonce,
+                    &presentation_request.client_id,
+                    &state.holder_signer.public_jwk_json,
+                )
+                .map_err(|error| AppError::bad_request(error.to_string()))?;
+                let signature = state.holder_signer.sign(prepared.signing_input()).await?;
+                prepared
+                    .complete(&signature)
+                    .map_err(|error| AppError::bad_request(error.to_string()))?
+            }
             _ => unreachable!("unsupported formats are rejected before selection"),
         };
         presentations.insert(query.id.clone(), presentation);
@@ -1104,6 +1140,7 @@ mod tests {
             credential_types: vec![],
             claim_names: vec![],
             received_at: "2026-01-01T00:00:00Z".into(),
+            open_badge_evidence: None,
         };
         state
             .wallet
@@ -1249,6 +1286,7 @@ mod tests {
             credential_types: vec![],
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
+            open_badge_evidence: None,
         };
         let serialized = serde_json::to_string(&CredentialSummary::from(&stored)).unwrap();
         assert!(!serialized.contains("sensitive.raw.credential"));
@@ -1309,6 +1347,7 @@ mod tests {
             credential_types: identity.credential_types,
             claim_names: vec!["achievement".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
+            open_badge_evidence: None,
         };
         let summary = serde_json::to_value(CredentialSummary::from(&stored)).unwrap();
         assert_eq!(
@@ -1352,6 +1391,7 @@ mod tests {
             credential_types: vec![],
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
+            open_badge_evidence: None,
         };
         let matching = DcqlCredentialQuery {
             id: "badge".into(),
@@ -1392,6 +1432,7 @@ mod tests {
             credential_types: vec![],
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
+            open_badge_evidence: None,
         };
         let matching = DcqlCredentialQuery {
             id: "member".into(),
