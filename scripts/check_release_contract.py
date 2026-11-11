@@ -288,7 +288,7 @@ def _cargo_test_commands(step: str) -> list[str]:
 
 PRIVATE_FORKS_PYTHON_STEP = r"""      - name: Set up private fork access helper
         if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'"""
 
@@ -325,14 +325,14 @@ WASM_SECURITY_TEST_COMMANDS = {
     ),
 }
 WASM_BINDGEN_INSTALLER_ACTION = (
-    "taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12"
+    "taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b"
 )
 WASM_BINDGEN_TOOL = "wasm-bindgen-cli@0.2.126"
 WASM_TEST_RUNNER_ENV = "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER"
 WASM_TEST_RUNNER = "wasm-bindgen-test-runner"
 WASM_SECURITY_ACTIONS = (
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-    "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
+    "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
     "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4",
     "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba",
     WASM_BINDGEN_INSTALLER_ACTION,
@@ -352,7 +352,7 @@ WASM_SECURITY_ACTION_STEPS = (
         with:
           version: v0.16.0""",
     """      - name: Install wasm-bindgen test runner
-        uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b
         with:
           tool: wasm-bindgen-cli@0.2.126""",
 )
@@ -399,7 +399,7 @@ WASM_SECURITY_TEST_STEPS = {
 }
 CI_GATE_SHA256 = "1c8a43312aa7cc5040d2345bf15ce10354cc184272f9a777a804971f3c4a01fd"
 ZKP_NATIVE_SECURITY_JOB_SHA256 = (
-    "6492d548afcdcd9627ea01e2f6771a2a90c52c22288ac29777f8d999babbb32f"
+    "4c0eb2ce8fd91d7a27ffb80e48bd0f102d4ca8f22e5e1bc81290fc212cf10a49"
 )
 WASM_SECURITY_WORKFLOW_ENV = """env:
   CARGO_TERM_COLOR: always
