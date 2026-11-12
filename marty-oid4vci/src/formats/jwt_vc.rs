@@ -54,6 +54,14 @@ fn contains_string(value: Option<&serde_json::Value>, predicate: fn(&str) -> boo
     }
 }
 
+pub(crate) fn has_retired_open_badges_profile(credential: &serde_json::Value) -> bool {
+    ["@context", "context"].iter().any(|name| {
+        contains_string(credential.get(*name), |context| {
+            context == OPEN_BADGES_V2_CONTEXT
+        })
+    }) || contains_string(credential.get("type"), retired_ob2_type)
+}
+
 #[cfg(any(test, feature = "issuer"))]
 /// Compute an optional JWT VC expiration without overflowing the time range.
 pub fn checked_jwt_vc_expiration(
@@ -541,6 +549,52 @@ pub fn prepare_jwt_vc_with_options(
     claims: &CredentialClaims,
     options: JwtVcPreparationOptions,
 ) -> Oid4vciResult<PreparedJwtVc> {
+    prepare_jwt_vc_internal(signer, claims, options, None)
+}
+
+/// Prepare an explicitly selected profile without changing historical callers.
+/// Direct VC2 JOSE requires independent time intervals and a VCDM2 payload.
+/// Its content may be an Open Badge, but this does not claim the distinct
+/// Open Badges 3.0 document 1.4.5 JWT proof profile.
+#[cfg(any(test, feature = "issuer"))]
+pub fn prepare_jwt_vc_with_profile(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: JwtVcPreparationOptions,
+    profile: crate::JwtVcPreparationProfile,
+) -> Oid4vciResult<crate::jwt_vc_profile::PreparedProfiledJwtVc> {
+    use crate::jwt_vc_profile::{profile_error, JwtVcPreparationProfile, JwtVcProfileBinding};
+    if claims.credential_payload_format != CredentialPayloadFormat::W3cVcdmV2JwtVc {
+        return Err(profile_error(
+            "selected securing profile requires VCDM2 content",
+        ));
+    }
+    let timing = match profile {
+        JwtVcPreparationProfile::HistoricalNested => None,
+        JwtVcPreparationProfile::DirectVc2Jose(timing) => {
+            timing.validate()?;
+            if claims.expiration_seconds.is_some() || options.include_nbf {
+                return Err(profile_error(
+                    "direct JOSE uses explicit time intervals, not legacy expiration_seconds or nbf",
+                ));
+            }
+            Some(timing)
+        }
+    };
+    let prepared = prepare_jwt_vc_internal(signer, claims, options, timing)?;
+    Ok(crate::jwt_vc_profile::PreparedProfiledJwtVc {
+        prepared,
+        binding: JwtVcProfileBinding::new(profile.securing_profile()),
+    })
+}
+
+#[cfg(any(test, feature = "issuer"))]
+fn prepare_jwt_vc_internal(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: JwtVcPreparationOptions,
+    timing: Option<crate::JwtVcProfileTiming>,
+) -> Oid4vciResult<PreparedJwtVc> {
     if claims
         .w3c_context
         .iter()
@@ -554,8 +608,22 @@ pub fn prepare_jwt_vc_with_options(
         .credential_id
         .clone()
         .unwrap_or_else(|| format!("urn:uuid:{}", uuid::Uuid::new_v4()));
-    let now = chrono::Utc::now();
-    let expires_at = checked_jwt_vc_expiration(now, claims.expiration_seconds)?;
+    let now = match timing {
+        Some(timing) => chrono::DateTime::from_timestamp(timing.signature_issued_at(), 0)
+            .ok_or_else(|| {
+                crate::jwt_vc_profile::profile_error("invalid signature issuance time")
+            })?,
+        None => chrono::Utc::now(),
+    };
+    let expires_at = match timing {
+        Some(timing) => Some(
+            chrono::DateTime::from_timestamp(timing.signature_expires_at(), 0)
+                .ok_or_else(|| crate::jwt_vc_profile::profile_error("invalid signature expiry"))?,
+        ),
+        None => checked_jwt_vc_expiration(now, claims.expiration_seconds)?,
+    };
+    let valid_from = timing.map_or(now, |timing| timing.credential_valid_from());
+    let valid_until = timing.map_or(expires_at, |timing| timing.credential_valid_until());
 
     let credential_subject = if let Some(ref explicit) = options.credential_subject {
         explicit.clone()
@@ -578,7 +646,11 @@ pub fn prepare_jwt_vc_with_options(
     vc_types.extend(claims.w3c_types.iter().cloned());
 
     let vc = if use_vcdm_v2 {
-        let valid_from = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let valid_from = if timing.is_some() {
+            valid_from.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+        } else {
+            valid_from.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+        };
         let mut context = vec!["https://www.w3.org/ns/credentials/v2".to_string()];
         context.extend(claims.w3c_context.iter().cloned());
         let mut v = serde_json::json!({
@@ -588,11 +660,15 @@ pub fn prepare_jwt_vc_with_options(
             "validFrom": valid_from,
             "credentialSubject": credential_subject,
         });
-        if options.include_vc_id {
+        if options.include_vc_id || timing.is_some() {
             v["id"] = serde_json::json!(credential_id);
         }
-        if let Some(expires_at) = expires_at.as_ref() {
-            let valid_until = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        if let Some(valid_until) = valid_until.as_ref() {
+            let valid_until = if timing.is_some() {
+                valid_until.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            } else {
+                valid_until.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+            };
             v["validUntil"] = serde_json::json!(valid_until);
         }
         v
@@ -624,6 +700,9 @@ pub fn prepare_jwt_vc_with_options(
     if let Some(ref credential_status) = options.credential_status {
         vc["credentialStatus"] = credential_status.clone();
     }
+    if timing.is_some() {
+        crate::jwt_vc_profile::validate_direct_credential_shape(&vc)?;
+    }
     // Direct formatter callers must not bypass the profile builder and sign
     // an incomplete Open Badge through the generic JWT-VC route.
     if contains_string(vc.get("type"), |kind| {
@@ -634,14 +713,29 @@ pub fn prepare_jwt_vc_with_options(
         validate_open_badge_v3_profile(&vc)?;
     }
 
-    let mut payload = serde_json::json!({
-        "iss": signer.issuer_id(),
-        "iat": now.timestamp(),
-        "jti": credential_id,
-        "vc": vc,
-    });
+    let mut payload = if timing.is_some() {
+        let mut direct = vc;
+        direct["iss"] = serde_json::json!(signer.issuer_id());
+        direct["iat"] = serde_json::json!(now.timestamp());
+        direct["jti"] = serde_json::json!(credential_id);
+        direct
+    } else {
+        serde_json::json!({
+            "iss": signer.issuer_id(),
+            "iat": now.timestamp(),
+            "jti": credential_id,
+            "vc": vc,
+        })
+    };
     if options.include_subject_claim {
         if let Some(ref subject_id) = claims.subject_id {
+            if timing.is_some()
+                && payload["credentialSubject"]["id"].as_str() != Some(subject_id.as_str())
+            {
+                return Err(crate::jwt_vc_profile::profile_error(
+                    "JWT subject conflicts with credentialSubject id",
+                ));
+            }
             payload["sub"] = serde_json::json!(subject_id);
         }
     }
@@ -653,11 +747,14 @@ pub fn prepare_jwt_vc_with_options(
     }
 
     let alg_str = signer.algorithm().as_str();
-    let header = serde_json::json!({
+    let mut header = serde_json::json!({
         "alg": alg_str,
         "typ": "vc+jwt",
         "kid": signer.kid_url()
     });
+    if timing.is_some() {
+        header["cty"] = serde_json::json!("vc");
+    }
 
     let header_str = serde_json::to_string(&header)
         .map_err(|e| Oid4vciError::SigningError(format!("Header serialization failed: {}", e)))?;

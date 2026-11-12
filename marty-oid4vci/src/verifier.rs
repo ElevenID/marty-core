@@ -719,7 +719,7 @@ impl VerificationEngine {
     /// * `vp_token`         — compact JWT VP token from the wallet
     /// * `expected_nonce`   — nonce from the original authorization request
     pub fn verify_vp_token(&self, vp_token: &str, expected_nonce: &str) -> VerificationResult {
-        self.verify_vp_token_internal(vp_token, expected_nonce, None)
+        self.verify_vp_token_internal(vp_token, expected_nonce, None, None)
     }
 
     /// Return authenticated VP claims and the public key that verified them.
@@ -733,7 +733,27 @@ impl VerificationEngine {
         expected_nonce: &str,
     ) -> Result<VerifiedVpTokenProof, VerificationResult> {
         let mut proof = None;
-        let result = self.verify_vp_token_internal(vp_token, expected_nonce, Some(&mut proof));
+        let result =
+            self.verify_vp_token_internal(vp_token, expected_nonce, Some(&mut proof), None);
+        proof.ok_or(result)
+    }
+
+    /// Authenticate a holder proof at the same caller-selected instant used by
+    /// the composed credential verifier. This still establishes proof scope
+    /// only; issuer, subject/holder, profile, trust and status checks are separate.
+    pub fn verify_authenticated_vp_proof_at(
+        &self,
+        vp_token: &str,
+        expected_nonce: &str,
+        evaluated_at: i64,
+    ) -> Result<VerifiedVpTokenProof, VerificationResult> {
+        let mut proof = None;
+        let result = self.verify_vp_token_internal(
+            vp_token,
+            expected_nonce,
+            Some(&mut proof),
+            Some(evaluated_at),
+        );
         proof.ok_or(result)
     }
 
@@ -742,6 +762,7 @@ impl VerificationEngine {
         vp_token: &str,
         expected_nonce: &str,
         authenticated: Option<&mut Option<VerifiedVpTokenProof>>,
+        evaluated_at: Option<i64>,
     ) -> VerificationResult {
         let failed = |message: String,
                       presentation_proof: VerificationCheckStatus,
@@ -758,6 +779,17 @@ impl VerificationEngine {
                 vec![message],
             )
         };
+
+        let now = evaluated_at.unwrap_or_else(|| chrono::Utc::now().timestamp());
+        if evaluated_at.is_some()
+            && (now <= 0 || chrono::DateTime::from_timestamp(now, 0).is_none())
+        {
+            return failed(
+                "Invalid presentation evaluation instant".into(),
+                VerificationCheckStatus::NotChecked,
+                VerificationCheckStatus::Failed,
+            );
+        }
 
         if expected_nonce.is_empty()
             || !expected_nonce.chars().all(|character| {
@@ -852,7 +884,6 @@ impl VerificationEngine {
                 VerificationCheckStatus::Failed,
             );
         };
-        let now = chrono::Utc::now().timestamp();
         if now > exp.saturating_add(60) {
             return failed(
                 "VP token has expired".into(),

@@ -11,7 +11,7 @@ use jsonwebtoken::{
 use jsonwebtoken::{jwk::Jwk, Algorithm};
 use serde_json::Value;
 
-use crate::bounded_jwt::{decode_segment, split_compact_jwt, CompactJwtLimits};
+use crate::bounded_jwt::JOSE_JWT_LIMITS;
 use crate::error::{Oid4vciError, Oid4vciResult};
 
 /// Construct an ES256 compact JWS with a scoped, non-exportable test KMS key.
@@ -33,18 +33,11 @@ pub(crate) fn sign_test_compact_es256(
 const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
 const PRIVATE_JWK_FIELDS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 /// Maximum compact JWT accepted by the direct JOSE verification boundary.
-pub const MAX_COMPACT_JWT_BYTES: usize = 256 * 1024;
+pub const MAX_COMPACT_JWT_BYTES: usize = JOSE_JWT_LIMITS.total;
 /// Maximum public JWK JSON accepted by direct JOSE verification helpers.
 pub const MAX_PUBLIC_JWK_BYTES: usize = 16 * 1024;
-const MAX_JWT_HEADER_BYTES: usize = 144 * 1024;
-pub(crate) const MAX_JWT_CLAIMS_BYTES: usize = 64 * 1024;
-const MAX_JWT_SIGNATURE_BYTES: usize = crate::bounded_jwt::MAX_RSA_SIGNATURE_BYTES;
-const JWT_LIMITS: CompactJwtLimits = CompactJwtLimits {
-    total: MAX_COMPACT_JWT_BYTES,
-    header: MAX_JWT_HEADER_BYTES,
-    claims: MAX_JWT_CLAIMS_BYTES,
-    signature: MAX_JWT_SIGNATURE_BYTES,
-};
+#[cfg(feature = "wallet")]
+pub(crate) const MAX_JWT_CLAIMS_BYTES: usize = JOSE_JWT_LIMITS.claims;
 
 /// A compact JWT whose signature has been verified with the supplied public JWK.
 #[derive(Debug, Clone)]
@@ -56,14 +49,7 @@ pub struct VerifiedCompactJwt {
 }
 
 pub(crate) fn parse_unique_object(bytes: &[u8], field: &str) -> Oid4vciResult<Value> {
-    let value = marty_crypto::strict_json::parse_unique_json(bytes)
-        .map_err(|error| Oid4vciError::JwtError(format!("Invalid {field} JSON: {error}")))?;
-    if !value.is_object() {
-        return Err(Oid4vciError::JwtError(format!(
-            "Invalid {field} JSON: expected an object"
-        )));
-    }
-    Ok(value)
+    crate::bounded_jwt::parse_unique_object(bytes, field)
 }
 
 /// Decode the protected header of a compact JWT without treating its claims as trusted.
@@ -81,33 +67,7 @@ pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vci
 /// The values remain untrusted until a protocol validator selects an allowed key
 /// and calls `verify_compact_jwt_with_public_jwk`.
 pub(crate) fn decode_unverified_compact_jwt(compact_jwt: &str) -> Oid4vciResult<(Value, Value)> {
-    let parts = split_compact_jwt(compact_jwt, JWT_LIMITS)
-        .map_err(|message| Oid4vciError::JwtError(message.into()))?;
-    let header_bytes = decode_segment(
-        parts.header,
-        MAX_JWT_HEADER_BYTES,
-        "compact JWT header is not base64url",
-        "compact JWT header exceeds its size limit",
-    )
-    .map_err(|message| Oid4vciError::JwtError(message.into()))?;
-    let claims_bytes = decode_segment(
-        parts.claims,
-        MAX_JWT_CLAIMS_BYTES,
-        "compact JWT claims are not base64url",
-        "compact JWT claims exceed their size limit",
-    )
-    .map_err(|message| Oid4vciError::JwtError(message.into()))?;
-    decode_segment(
-        parts.signature,
-        MAX_JWT_SIGNATURE_BYTES,
-        "compact JWT signature is not base64url",
-        "compact JWT signature exceeds its size limit",
-    )
-    .map_err(|message| Oid4vciError::JwtError(message.into()))?;
-    Ok((
-        parse_unique_object(&header_bytes, "JWT header")?,
-        parse_unique_object(&claims_bytes, "JWT claims")?,
-    ))
+    crate::bounded_jwt::decode_unverified_compact_jwt(compact_jwt)
 }
 
 fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {

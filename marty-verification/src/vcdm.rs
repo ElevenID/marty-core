@@ -1239,6 +1239,186 @@ pub fn verify_open_badge_v3_jwt_json(request_json: &str) -> String {
     futures::executor::block_on(verify_open_badge_v3_jwt_json_async(request_json))
 }
 
+/// Explicit trust-input tuple for the new versioned API. Existing JSON request
+/// structs and historical entrypoints are unchanged. The supplied tuple is
+/// independently selected by the caller; token hints never authorize a key.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifyProfiledJwtRequest {
+    token: String,
+    expected_issuer: String,
+    expected_verification_method: Option<String>,
+    expected_algorithm: marty_oid4vci::types::SigningAlgorithm,
+    issuer_public_jwk: Value,
+    expected_securing_profile: marty_oid4vci::JwtVcSecuringProfile,
+    evaluated_at: i64,
+}
+
+/// Verify one explicitly selected credential securing profile at one caller
+/// instant. Success is issuer-signature/profile evidence only, not issuer trust,
+/// status, holder possession, official schema certification or policy approval.
+pub async fn verify_vcdm_jwt_with_profile_json_async(request_json: &str) -> String {
+    verify_profiled_jwt(request_json, false)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn verify_vcdm_jwt_with_profile_json(request_json: &str) -> String {
+    verify_profiled_jwt(request_json, false)
+}
+
+/// Apply the bounded OB3 content checks to authenticated claims under the
+/// explicitly selected securing profile. This does not assert conformance to
+/// the separate OB3 document 1.4.5 JWT proof rules.
+pub async fn verify_open_badge_v3_jwt_with_profile_json_async(request_json: &str) -> String {
+    verify_profiled_jwt(request_json, true)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn verify_open_badge_v3_jwt_with_profile_json(request_json: &str) -> String {
+    verify_profiled_jwt(request_json, true)
+}
+
+fn verify_profiled_jwt(request_json: &str, require_open_badge: bool) -> String {
+    let result = (|| -> Result<Value, String> {
+        use marty_oid4vci::jwt_vc_profile::{
+            decode_unverified_jwt_vc, validate_unsigned_jwt_vc_profile_claims,
+        };
+        // Reuse the existing verification-only SSI backend. This API does not
+        // enable OID4VCI issuer, wallet or verifier role features in this crate.
+        if request_json.len() > 512 * 1024 {
+            return Err("Profiled JWT request exceeds its size limit".into());
+        }
+        let input = marty_crypto::strict_json::parse_unique_json(request_json.as_bytes())
+            .map_err(|_| "Invalid profiled JWT request JSON".to_owned())?;
+        let request: VerifyProfiledJwtRequest = serde_json::from_value(input)
+            .map_err(|error| format!("Invalid profiled JWT request: {error}"))?;
+        let (header, hints) =
+            decode_unverified_jwt_vc(&request.token, request.expected_securing_profile)
+                .map_err(|error| error.to_string())?;
+        let algorithm = request.expected_algorithm.as_str();
+        // This wrapper retains the existing SSI backend's supported algorithms.
+        if !matches!(algorithm, "ES256" | "EdDSA")
+            || header.get("alg").and_then(Value::as_str) != Some(algorithm)
+            || hints.get("iss").and_then(Value::as_str) != Some(request.expected_issuer.as_str())
+            || request.expected_issuer.is_empty()
+            || request.expected_issuer.trim() != request.expected_issuer
+        {
+            return Err("JWT does not match the expected issuer/algorithm tuple".into());
+        }
+        let key_id = match header.get("kid") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .filter(|id| !id.is_empty() && id.trim() == *id)
+                    .ok_or_else(|| "Invalid issuer verification method".to_owned())?,
+            ),
+        };
+        if key_id != request.expected_verification_method.as_deref() {
+            return Err("JWT does not match the expected issuer verification method".into());
+        }
+        let public_json = serde_json::to_string(&request.issuer_public_jwk)
+            .map_err(|_| "Invalid issuer public JWK".to_owned())?;
+        let public = marty_crypto::public_jwk::PublicJwk::from_json(&public_json)
+            .map_err(|_| "Invalid or non-public issuer JWK".to_owned())?;
+        if public
+            .alg
+            .as_deref()
+            .is_some_and(|value| value != algorithm)
+            || public.use_.as_deref().is_some_and(|value| value != "sig")
+            || public
+                .key_ops
+                .as_ref()
+                .is_some_and(|values| values.as_slice() != ["verify"])
+            || public
+                .kid
+                .as_deref()
+                .is_some_and(|value| Some(value) != key_id)
+        {
+            return Err("Issuer JWK metadata conflicts with the expected key tuple".into());
+        }
+        let supported_key = match algorithm {
+            "ES256" => public.kty == "EC" && public.crv.as_deref() == Some("P-256"),
+            "EdDSA" => public.kty == "OKP" && public.crv.as_deref() == Some("Ed25519"),
+            _ => false,
+        };
+        let coordinate = |value: Option<&str>| -> bool {
+            value
+                .and_then(|encoded| {
+                    URL_SAFE_NO_PAD.decode(encoded).ok().filter(|bytes| {
+                        bytes.len() == 32 && URL_SAFE_NO_PAD.encode(bytes) == encoded
+                    })
+                })
+                .is_some()
+        };
+        if !supported_key
+            || !coordinate(public.x.as_deref())
+            || (algorithm == "ES256" && !coordinate(public.y.as_deref()))
+        {
+            return Err("Issuer public key does not match the expected algorithm".into());
+        }
+        let verification_jwk = parse_public_jwk(request.issuer_public_jwk)?;
+        let (verified_header, verified_payload) =
+            ssi_jws::decode_verify(&request.token, &verification_jwk)
+                .map_err(|_| "JWT issuer signature is invalid".to_owned())?;
+        if verified_header.algorithm.as_str() != algorithm
+            || verified_header.key_id.as_deref() != key_id
+        {
+            return Err("Authenticated JWT key tuple changed during verification".into());
+        }
+        let claims = marty_crypto::strict_json::parse_unique_json(&verified_payload)
+            .map_err(|_| "Invalid authenticated JWT claims".to_owned())?;
+        let checked = validate_unsigned_jwt_vc_profile_claims(
+            &claims,
+            request.evaluated_at,
+            request.expected_securing_profile,
+        )
+        .map_err(|error| error.to_string())?;
+        if checked.issuer != request.expected_issuer {
+            return Err("Authenticated issuer does not match the selected issuer".into());
+        }
+        if require_open_badge {
+            marty_oid4vci::formats::jwt_vc::validate_open_badge_v3_profile(checked.credential)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(serde_json::json!({
+            "valid": true,
+            "scope": "issuer_signature_and_securing_profile",
+            "binding": marty_oid4vci::JwtVcProfileBinding::new(request.expected_securing_profile),
+            "credential_sha256": format!("{:x}", Sha256::digest(request.token.as_bytes())),
+            "algorithm": algorithm,
+            "issuer": checked.issuer,
+            "credential": checked.credential,
+            "claims": claims,
+            "evaluated_at": request.evaluated_at,
+            "signature_issued_at": checked.signature_issued_at,
+            "signature_expires_at": checked.signature_expires_at,
+            "credential_valid_from": checked.credential_valid_from,
+            "credential_valid_until": checked.credential_valid_until,
+            "credential_validity_checked": true,
+            "open_badges_content_checked": require_open_badge,
+            "issuer_trust": "not_checked",
+            "credential_status": "not_checked",
+            "holder_binding": "not_checked",
+            "errors": [],
+        }))
+    })();
+    let output = match result {
+        Ok(value) => value,
+        Err(error) => serde_json::json!({
+            "valid": false,
+            "scope": "issuer_signature_and_securing_profile",
+            "credential": null,
+            "claims": null,
+            "issuer_trust": "not_checked",
+            "credential_status": "not_checked",
+            "holder_binding": "not_checked",
+            "errors": [error],
+        }),
+    };
+    output.to_string()
+}
+
 fn parse_public_jwk(value: Value) -> Result<JWK, String> {
     let object = value
         .as_object()
@@ -1684,6 +1864,131 @@ mod tests {
             _ => panic!("unsupported remote VC-JWT test algorithm"),
         };
         format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+    }
+
+    #[test]
+    fn versioned_jose_json_request_requires_an_explicit_unique_profile() {
+        for input in [
+            "{}",
+            r#"{"expected_securing_profile":"w3c_vc2_jose_2026_v1","expected_securing_profile":"marty_nested_vc2_jwt_v1"}"#,
+            r#"{"expected_securing_profile":"jwt_vc_json"}"#,
+            r#"{"expected_securing_profile":"w3c_vc2_jose_2027_v1"}"#,
+        ] {
+            let result: Value =
+                serde_json::from_str(&verify_vcdm_jwt_with_profile_json(input)).unwrap();
+            assert_eq!(result["valid"], false);
+            assert!(result["credential"].is_null());
+            assert!(result["claims"].is_null());
+            assert_eq!(result["issuer_trust"], "not_checked");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped signer"]
+    fn versioned_jose_json_authenticates_exact_content_without_granting_trust() {
+        assert_versioned_jose_json_profile(remote_es256_jwk().0, "ES256");
+        assert_versioned_jose_json_profile(remote_ed25519_jwk().0, "EdDSA");
+    }
+
+    fn assert_versioned_jose_json_profile(signer: ScopedTransitSigner, algorithm: &str) {
+        const NOW: i64 = 1_700_000_000;
+        const ISSUER: &str = "did:web:issuer.example";
+        const KID: &str = "did:web:issuer.example#key-1";
+        let date = |timestamp| {
+            chrono::DateTime::from_timestamp(timestamp, 0)
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
+        let mut credential: Value = serde_json::from_str(COMPLETE_OPEN_BADGE).unwrap();
+        credential["issuer"] = json!(ISSUER);
+        credential["credentialSubject"]["id"] = json!("did:example:holder");
+        credential["validFrom"] = json!(date(NOW - 3600));
+        credential["validUntil"] = json!(date(NOW + 86_400));
+        credential["iss"] = json!(ISSUER);
+        credential["sub"] = json!("did:example:holder");
+        credential["jti"] = credential["id"].clone();
+        credential["iat"] = json!(NOW - 60);
+        credential["exp"] = json!(NOW + 3600);
+        let sign = |claims: &Value| {
+            let header = URL_SAFE_NO_PAD.encode(
+                json!({
+                    "alg":algorithm, "kid":KID, "typ":"vc+jwt", "cty":"vc"
+                })
+                .to_string(),
+            );
+            let signing_input = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
+            let signature = match algorithm {
+                "ES256" => signer.sign_es256(signing_input.as_bytes()).unwrap(),
+                "EdDSA" => signer.sign_ed25519(signing_input.as_bytes()).unwrap(),
+                _ => unreachable!(),
+            };
+            format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+        };
+        let token = sign(&credential);
+        let request = json!({
+            "token":token, "expected_issuer":ISSUER,
+            "expected_verification_method":KID, "expected_algorithm":algorithm,
+            "issuer_public_jwk":serde_json::from_str::<Value>(signer.public_jwk()).unwrap(),
+            "expected_securing_profile":"w3c_vc2_jose_2026_v1", "evaluated_at":NOW,
+        });
+        let verify = |request: &Value| -> Value {
+            serde_json::from_str(&verify_open_badge_v3_jwt_with_profile_json(
+                &request.to_string(),
+            ))
+            .unwrap()
+        };
+        let result = verify(&request);
+        assert_eq!(result["valid"], true, "{}", result["errors"]);
+        assert_eq!(result["credential"], credential);
+        assert_eq!(result["claims"], credential);
+        assert_eq!(
+            result["binding"]["securing_profile"],
+            "w3c_vc2_jose_2026_v1"
+        );
+        assert_eq!(result["binding"]["credential_format"], "application/vc+jwt");
+        assert_eq!(result["scope"], "issuer_signature_and_securing_profile");
+        assert_eq!(result["credential_validity_checked"], true);
+        assert_eq!(result["open_badges_content_checked"], true);
+        for separate in ["issuer_trust", "credential_status", "holder_binding"] {
+            assert_eq!(result[separate], "not_checked");
+        }
+        for (name, value) in [
+            (
+                "expected_securing_profile",
+                json!("marty_nested_vc2_jwt_v1"),
+            ),
+            ("expected_securing_profile", json!("w3c_vc2_jose_2027_v1")),
+            ("expected_issuer", json!("did:web:foreign.example")),
+            (
+                "expected_verification_method",
+                json!("did:web:issuer.example#other"),
+            ),
+            ("expected_algorithm", json!("ES384")),
+            ("evaluated_at", json!(NOW + 3600)),
+            ("unrecognized_option", json!(true)),
+        ] {
+            let mut changed = request.clone();
+            changed[name] = value;
+            let result = verify(&changed);
+            assert_eq!(result["valid"], false, "request field {name}");
+            assert!(result["credential"].is_null());
+            assert!(result["claims"].is_null());
+        }
+        for (name, value) in [
+            ("validUntil", json!(date(NOW))),
+            ("validFrom", json!(date(NOW + 1))),
+            ("issuer", json!("did:web:other.example")),
+            ("id", json!("urn:uuid:other")),
+        ] {
+            let mut changed = credential.clone();
+            changed[name] = value;
+            let mut request = request.clone();
+            request["token"] = json!(sign(&changed));
+            let result = verify(&request);
+            assert_eq!(result["valid"], false, "issuer-signed field {name}");
+            assert!(result["credential"].is_null());
+            assert!(result["claims"].is_null());
+        }
     }
 
     #[test]
