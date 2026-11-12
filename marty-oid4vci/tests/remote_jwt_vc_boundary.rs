@@ -93,6 +93,186 @@ fn remote_open_badge_preserves_required_id_and_criteria_in_signed_credential() {
 }
 
 #[test]
+fn direct_profile_preparation_preserves_complete_content_and_independent_times() {
+    use marty_oid4vci::{JwtVcPreparationProfile, JwtVcProfileTiming, JwtVcSecuringProfile};
+    let from = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00.125Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let until = chrono::DateTime::parse_from_rfc3339("2040-01-01T00:00:00.125Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let timing = JwtVcProfileTiming::new(1_700_000_000, 1_700_003_600, from, Some(until)).unwrap();
+    let mut request = open_badge_request();
+    request.expiration_seconds = None;
+    let prepared = marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(
+        request,
+        JwtVcPreparationProfile::DirectVc2Jose(timing),
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.binding().securing_profile(),
+        JwtVcSecuringProfile::W3cVc2Jose2026V1
+    );
+    assert_eq!(prepared.binding().credential_format(), "application/vc+jwt");
+    let header = segment(prepared.signing_input(), 0);
+    let payload = segment(prepared.signing_input(), 1);
+    assert_eq!(header["typ"], "vc+jwt");
+    assert_eq!(header["cty"], "vc");
+    for absent in ["vc", "vp", "nbf", "issuanceDate", "expirationDate"] {
+        assert!(payload.get(absent).is_none(), "{absent}");
+    }
+    assert_eq!(payload["id"], CREDENTIAL_ID);
+    assert_eq!(payload["jti"], payload["id"]);
+    assert_eq!(payload["iss"], payload["issuer"]);
+    assert_eq!(payload["sub"], payload["credentialSubject"]["id"]);
+    assert_eq!(payload["iat"], timing.signature_issued_at());
+    assert_eq!(payload["exp"], timing.signature_expires_at());
+    assert_eq!(payload["validFrom"], "2020-01-01T00:00:00.125Z");
+    assert_eq!(payload["validUntil"], "2040-01-01T00:00:00.125Z");
+    marty_oid4vci::formats::jwt_vc::validate_open_badge_v3_profile(&payload).unwrap();
+    assert!(!format!("{prepared:?}").contains("Workplace Safety"));
+    assert!(prepared.complete(&[0; 64]).is_err());
+}
+
+#[test]
+fn direct_profile_refuses_ambiguous_time_options_and_invalid_content_before_signing() {
+    use marty_oid4vci::{JwtVcPreparationProfile, JwtVcProfileTiming};
+    let from = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let profile = JwtVcPreparationProfile::DirectVc2Jose(
+        JwtVcProfileTiming::new(1_700_000_000, 1_700_003_600, from, None).unwrap(),
+    );
+    // Existing expiration_seconds must not silently mean two different things.
+    assert!(
+        marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(
+            open_badge_request(),
+            profile
+        )
+        .is_err()
+    );
+    let mut invalid = open_badge_request();
+    invalid.expiration_seconds = None;
+    invalid.claims.remove("achievement_criteria");
+    assert!(
+        marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(invalid, profile)
+            .is_err()
+    );
+    for subject in [
+        "not-an-absolute-identifier",
+        "did:exam\nple:holder",
+        "https://issuer.example/a\tb",
+        "urn:credential:has space",
+        "https://issuer.example/a\\b",
+        "https://issuer.example/a\"b",
+        "urn:credential:<bad>",
+        "urn:credential:%zz",
+        "urn:credential:trailing%",
+        "urn:credential:short%2",
+        "urn:credential:[bad]",
+        "urn:credential:caf\u{e9}",
+    ] {
+        let mut invalid = request();
+        invalid.expiration_seconds = None;
+        invalid.subject_id = Some(subject.into());
+        assert!(
+            marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(invalid, profile)
+                .is_err()
+        );
+    }
+    for subject in [
+        "did:example:Holder",
+        "https://Issuer.Example/CaseSensitive",
+        "https://issuer.example/a%20b",
+        "urn:credential:escaped%3Cvalue%3E",
+    ] {
+        let mut valid = request();
+        valid.expiration_seconds = None;
+        valid.subject_id = Some(subject.into());
+        let prepared =
+            marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(valid, profile)
+                .unwrap();
+        let payload = segment(prepared.signing_input(), 1);
+        assert_eq!(payload["sub"], subject);
+        assert_eq!(payload["credentialSubject"]["id"], subject);
+    }
+}
+
+#[test]
+fn direct_formatter_rejects_conflicting_subject_alias_before_signing() {
+    use marty_oid4vci::formats::jwt_vc::{prepare_jwt_vc_with_profile, JwtVcPreparationOptions};
+    use marty_oid4vci::{JwtVcPreparationProfile, JwtVcProfileTiming};
+    let request = request();
+    let signer = RemoteSignerMetadata::new(
+        &request.issuer_id,
+        &request.verification_method_id,
+        &request.algorithm,
+        request.issuer_public_jwk,
+    )
+    .unwrap();
+    let claims = CredentialClaims {
+        subject_id: request.subject_id,
+        credential_type: request.credential_type,
+        claims: HashMap::new(),
+        expiration_seconds: None,
+        selective_disclosure_claims: vec![],
+        mdoc_namespace: None,
+        mdoc_doctype: None,
+        zk_predicate_claims: vec![],
+        credential_payload_format: CredentialPayloadFormat::W3cVcdmV2JwtVc,
+        w3c_context: vec![],
+        w3c_types: vec![],
+    };
+    // A future credential start is valid preparation input; admission checks
+    // its aliases without conflating issuance with verifier evaluation time.
+    let timing = JwtVcProfileTiming::new(
+        1_700_000_000,
+        1_700_003_600,
+        chrono::DateTime::from_timestamp(1_700_000_100, 0).unwrap(),
+        None,
+    )
+    .unwrap();
+    let profile = JwtVcPreparationProfile::DirectVc2Jose(timing);
+    let options = JwtVcPreparationOptions {
+        credential_subject: Some(json!({"id":"did:example:other"})),
+        ..Default::default()
+    };
+    let error = prepare_jwt_vc_with_profile(&signer, &claims, options, profile).unwrap_err();
+    assert!(error.to_string().contains("subject conflicts"));
+
+    let options = JwtVcPreparationOptions {
+        credential_subject: Some(json!({"id":"did:example:holder"})),
+        ..Default::default()
+    };
+    let prepared = prepare_jwt_vc_with_profile(&signer, &claims, options, profile).unwrap();
+    let payload = segment(prepared.signing_input(), 1);
+    assert_eq!(payload["sub"], payload["credentialSubject"]["id"]);
+}
+
+#[test]
+fn explicit_historical_profile_retains_nested_remote_wire_contract() {
+    use marty_oid4vci::{JwtVcPreparationProfile, JwtVcSecuringProfile};
+    let prepared = marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(
+        request(),
+        JwtVcPreparationProfile::HistoricalNested,
+    )
+    .unwrap();
+    let payload = segment(prepared.signing_input(), 1);
+    assert_eq!(
+        prepared.binding().securing_profile(),
+        JwtVcSecuringProfile::MartyNestedVc2JwtV1
+    );
+    assert_eq!(prepared.binding().credential_format(), "jwt_vc_json");
+    assert!(payload["vc"].is_object());
+    assert!(payload["vc"].get("id").is_none());
+    assert!(payload.get("@context").is_none());
+    assert_eq!(
+        payload["exp"].as_i64().unwrap() - payload["iat"].as_i64().unwrap(),
+        3600
+    );
+    assert!(payload["nbf"].is_number());
+    assert!(segment(prepared.signing_input(), 0).get("cty").is_none());
+}
+
+#[test]
 fn remote_open_badge_rejects_missing_or_non_object_criteria_before_signing() {
     for criteria in [
         None,

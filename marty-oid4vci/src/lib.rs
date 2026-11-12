@@ -62,6 +62,7 @@ pub mod issuance_input;
 pub mod issuer;
 #[cfg(any(test, feature = "jose-verification"))]
 pub mod jose;
+pub mod jwt_vc_profile;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
@@ -105,15 +106,23 @@ pub use issuer_key::{ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver, TrustedSdJw
 #[cfg(any(feature = "wallet", feature = "verifier"))]
 mod wallet_jwt_vc;
 #[cfg(feature = "wallet")]
-pub use wallet_jwt_vc::prepare_verified_jwt_vc_presentation;
+pub use wallet_jwt_vc::{
+    prepare_verified_jwt_vc_presentation, prepare_verified_jwt_vc_presentation_with_profile,
+    PreparedProfiledJwtVcPresentation, SignedProfiledJwtVcPresentation,
+};
 #[cfg(any(feature = "wallet", feature = "verifier"))]
 pub use wallet_jwt_vc::{
-    presented_jwt_vc, verify_jwt_vc_presentation, verify_open_badge_jwt,
-    verify_open_badge_presentation, VerifiedJwtVcPresentation, VerifiedOpenBadgeJwt,
-    VerifiedOpenBadgePresentation,
+    presented_jwt_vc, presented_jwt_vc_with_profile, verify_jwt_vc_presentation,
+    verify_jwt_vc_presentation_with_profile, verify_jwt_vc_with_profile, verify_open_badge_jwt,
+    verify_open_badge_jwt_with_profile, verify_open_badge_presentation,
+    verify_open_badge_presentation_with_profile, AuthenticatedJwtVc, VerifiedJwtVcPresentation,
+    VerifiedOpenBadgeJwt, VerifiedOpenBadgePresentation, VerifiedProfiledJwtVcPresentation,
 };
 
 pub use error::{Oid4vciError, Oid4vciResult, RequestObjectEndpointError};
+pub use jwt_vc_profile::{
+    JwtVcPreparationProfile, JwtVcProfileBinding, JwtVcProfileTiming, JwtVcSecuringProfile,
+};
 
 /// The default issuer surface cannot construct or use an in-process issuer key.
 ///

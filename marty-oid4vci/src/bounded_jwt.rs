@@ -11,6 +11,61 @@ pub(crate) struct CompactJwtLimits {
     pub signature: usize,
 }
 
+/// Shared JOSE admission limits, independent of any crypto/role feature.
+pub(crate) const JOSE_JWT_LIMITS: CompactJwtLimits = CompactJwtLimits {
+    total: 256 * 1024,
+    header: 144 * 1024,
+    claims: 64 * 1024,
+    signature: MAX_RSA_SIGNATURE_BYTES,
+};
+
+pub(crate) fn parse_unique_object(
+    bytes: &[u8],
+    field: &str,
+) -> crate::Oid4vciResult<serde_json::Value> {
+    let value = marty_crypto::strict_json::parse_unique_json(bytes)
+        .map_err(|error| crate::Oid4vciError::JwtError(format!("Invalid {field} JSON: {error}")))?;
+    if !value.is_object() {
+        return Err(crate::Oid4vciError::JwtError(format!(
+            "Invalid {field} JSON: expected an object"
+        )));
+    }
+    Ok(value)
+}
+
+pub(crate) fn decode_unverified_compact_jwt(
+    compact_jwt: &str,
+) -> crate::Oid4vciResult<(serde_json::Value, serde_json::Value)> {
+    let limits = JOSE_JWT_LIMITS;
+    let parts = split_compact_jwt(compact_jwt, limits)
+        .map_err(|message| crate::Oid4vciError::JwtError(message.into()))?;
+    let header_bytes = decode_segment(
+        parts.header,
+        limits.header,
+        "compact JWT header is not base64url",
+        "compact JWT header exceeds its size limit",
+    )
+    .map_err(|message| crate::Oid4vciError::JwtError(message.into()))?;
+    let claims_bytes = decode_segment(
+        parts.claims,
+        limits.claims,
+        "compact JWT claims are not base64url",
+        "compact JWT claims exceed their size limit",
+    )
+    .map_err(|message| crate::Oid4vciError::JwtError(message.into()))?;
+    decode_segment(
+        parts.signature,
+        limits.signature,
+        "compact JWT signature is not base64url",
+        "compact JWT signature exceeds its size limit",
+    )
+    .map_err(|message| crate::Oid4vciError::JwtError(message.into()))?;
+    Ok((
+        parse_unique_object(&header_bytes, "JWT header")?,
+        parse_unique_object(&claims_bytes, "JWT claims")?,
+    ))
+}
+
 pub(crate) struct CompactJwtSegments<'a> {
     pub header: &'a str,
     pub claims: &'a str,

@@ -380,6 +380,30 @@ impl fmt::Debug for RemoteJwtVcRequest {
 }
 
 pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<PreparedJwtVc> {
+    let (signer, claims, options) = remote_jwt_vc_parts(request)?;
+    prepare_jwt_vc_with_options(&signer, &claims, options)
+}
+
+/// Opt into a versioned securing profile while keeping the historical public
+/// request and entrypoint source-compatible. The issuer key stays in the KMS.
+pub fn prepare_remote_jwt_vc_with_profile(
+    request: RemoteJwtVcRequest,
+    profile: crate::JwtVcPreparationProfile,
+) -> Oid4vciResult<crate::jwt_vc_profile::PreparedProfiledJwtVc> {
+    let (signer, claims, mut options) = remote_jwt_vc_parts(request)?;
+    if matches!(profile, crate::JwtVcPreparationProfile::DirectVc2Jose(_)) {
+        options.include_nbf = false;
+    }
+    crate::formats::jwt_vc::prepare_jwt_vc_with_profile(&signer, &claims, options, profile)
+}
+
+fn remote_jwt_vc_parts(
+    request: RemoteJwtVcRequest,
+) -> Oid4vciResult<(
+    RemoteSignerMetadata,
+    CredentialClaims,
+    JwtVcPreparationOptions,
+)> {
     validate_credential_id(request.credential_id.as_deref())?;
     let signer = RemoteSignerMetadata::new(
         &request.issuer_id,
@@ -440,7 +464,7 @@ pub fn prepare_remote_jwt_vc(request: RemoteJwtVcRequest) -> Oid4vciResult<Prepa
         }
         None => {}
     }
-    prepare_jwt_vc_with_options(&signer, &claims, options)
+    Ok((signer, claims, options))
 }
 
 #[derive(Clone)]

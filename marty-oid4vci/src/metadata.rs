@@ -63,6 +63,82 @@ pub struct CredentialConfiguration {
     pub zk_predicates: Option<Vec<ZkPredicateMetadata>>,
 }
 
+/// An explicitly advertised JWT configuration. Consumers store both the
+/// configuration ID and binding; they must not infer a profile from JWT shape.
+#[derive(Clone, Debug)]
+pub struct ProfiledJwtVcConfiguration {
+    id: String,
+    binding: crate::JwtVcProfileBinding,
+    metadata: serde_json::Value,
+}
+
+impl ProfiledJwtVcConfiguration {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub const fn binding(&self) -> crate::JwtVcProfileBinding {
+        self.binding
+    }
+    pub fn metadata(&self) -> &serde_json::Value {
+        &self.metadata
+    }
+}
+
+/// Opt into a versioned configuration using the existing JWT metadata shape.
+/// `marty_securing_profile` is a deployment extension, not an OpenID registry
+/// claim. Unsupported wallets must decline this distinct configuration.
+pub fn profile_jwt_vc_configuration(
+    historical_id: &str,
+    profile: crate::JwtVcSecuringProfile,
+    configuration: &CredentialConfiguration,
+) -> crate::Oid4vciResult<ProfiledJwtVcConfiguration> {
+    if configuration.format != "jwt_vc_json" || configuration.credential_definition.is_none() {
+        return Err(crate::jwt_vc_profile::profile_error(
+            "expected JWT credential-definition metadata",
+        ));
+    }
+    let mut metadata = serde_json::to_value(configuration).map_err(|_| {
+        crate::jwt_vc_profile::profile_error("cannot serialize credential configuration")
+    })?;
+    metadata["format"] = serde_json::json!(profile.credential_format());
+    metadata["marty_securing_profile"] = serde_json::json!(profile.as_str());
+    Ok(ProfiledJwtVcConfiguration {
+        id: profile.configuration_id(historical_id)?,
+        binding: crate::JwtVcProfileBinding::new(profile),
+        metadata,
+    })
+}
+
+/// Admit only an explicit, internally consistent configuration. The direct
+/// format cannot reuse the historical configuration ID or omit its profile.
+pub fn admit_profiled_jwt_vc_configuration(
+    configuration_id: &str,
+    metadata: &serde_json::Value,
+) -> crate::Oid4vciResult<crate::JwtVcProfileBinding> {
+    let invalid =
+        || crate::jwt_vc_profile::profile_error("incomplete profiled credential configuration");
+    let binding = crate::JwtVcProfileBinding::negotiate(
+        metadata
+            .get("marty_securing_profile")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(invalid)?,
+        metadata
+            .get("format")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(invalid)?,
+    )?;
+    let base = match binding.securing_profile() {
+        crate::JwtVcSecuringProfile::MartyNestedVc2JwtV1 => configuration_id,
+        crate::JwtVcSecuringProfile::W3cVc2Jose2026V1 => configuration_id
+            .strip_suffix("#vc2-jose-2026-v1")
+            .ok_or_else(invalid)?,
+    };
+    if binding.securing_profile().configuration_id(base)? != configuration_id {
+        return Err(invalid());
+    }
+    Ok(binding)
+}
+
 /// Metadata entry describing a supported ZK predicate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZkPredicateMetadata {

@@ -10,6 +10,64 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+/// Build one DCQL credential query for an explicitly selected JWT profile.
+/// The marker is a documented deployment extension; an unsupported consumer
+/// must reject it instead of selecting the historical `jwt_vc_json` family.
+pub fn build_profiled_jwt_vc_query(
+    id: &str,
+    binding: crate::JwtVcProfileBinding,
+    type_values: Vec<Vec<String>>,
+    require_holder_binding: bool,
+) -> crate::Oid4vciResult<Value> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+        || type_values.is_empty()
+        || type_values.iter().any(|types| {
+            types.is_empty()
+                || types.iter().any(|kind| {
+                    kind.is_empty()
+                        || kind.len() > 2048
+                        || kind.trim() != kind
+                        || kind.chars().any(char::is_control)
+                })
+        })
+    {
+        return Err(crate::jwt_vc_profile::profile_error(
+            "invalid profiled DCQL credential query",
+        ));
+    }
+    Ok(json!({
+        "id": id,
+        "format": binding.credential_format(),
+        "meta": {
+            "type_values": type_values,
+            "marty_securing_profile": binding.securing_profile().as_str(),
+        },
+        "require_cryptographic_holder_binding": require_holder_binding,
+    }))
+}
+
+/// Read a selected profile from DCQL without format aliases or missing-marker
+/// fallback. This is negotiation metadata, never credential verification.
+pub fn profiled_jwt_vc_query_binding(
+    query: &Value,
+) -> crate::Oid4vciResult<crate::JwtVcProfileBinding> {
+    let invalid = || crate::jwt_vc_profile::profile_error("missing explicit DCQL securing profile");
+    crate::JwtVcProfileBinding::negotiate(
+        query
+            .pointer("/meta/marty_securing_profile")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?,
+        query
+            .get("format")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?,
+    )
+}
+
 use crate::error::{Oid4vciError, Oid4vciResult};
 use crate::formats::credential_profile_presentation_metadata;
 
