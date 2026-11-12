@@ -767,7 +767,7 @@ impl WalletEngine {
             _ => {
                 return Err(Oid4vciError::KeyError(
                     "Holder public JWK must be P-256 or Ed25519".into(),
-                ))
+                ));
             }
         };
         let header_jwk = crate::jose::validate_public_jwk(&public_jwk, algorithm.as_str())?;
@@ -1255,6 +1255,41 @@ impl WalletEngine {
         .await
     }
 
+    /// Send an explicit holder decline for a caller-bound parsed request.
+    /// Parsing is not request-signature authentication; the caller owns governed
+    /// request provenance. This operation never creates a VP or signs anything.
+    /// HTTP success acknowledges delivery, not verifier state or a login session.
+    pub async fn decline_presentation_for_request(
+        &self,
+        request: &ParsedPresentationRequest,
+    ) -> Oid4vciResult<PresentationResponse> {
+        let params = Self::decline_parameters(request)?;
+        self.submit_presentation_parameters(&request.response_uri, params)
+            .await
+    }
+
+    fn decline_parameters(
+        request: &ParsedPresentationRequest,
+    ) -> Oid4vciResult<Vec<(String, String)>> {
+        if request.response_mode.as_deref() != Some("direct_post") {
+            return Err(Oid4vciError::InvalidRequest(
+                "Holder decline requires direct_post".into(),
+            ));
+        }
+        let state = request
+            .state
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Oid4vciError::InvalidRequest("Holder decline requires request state".into())
+            })?;
+        Self::validate_endpoint_url(&request.response_uri, "presentation response")?;
+        Ok(vec![
+            ("error".into(), "access_denied".into()),
+            ("state".into(), state.into()),
+        ])
+    }
+
     async fn submit_presentation_form(
         &self,
         response_uri: &str,
@@ -1277,6 +1312,15 @@ impl WalletEngine {
             params.push(("state".to_string(), state.to_string()));
         }
 
+        self.submit_presentation_parameters(response_uri, params)
+            .await
+    }
+
+    async fn submit_presentation_parameters(
+        &self,
+        response_uri: &str,
+        params: Vec<(String, String)>,
+    ) -> Oid4vciResult<PresentationResponse> {
         let resp = self
             .client
             .post(response_uri)
@@ -1606,6 +1650,53 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
+
+    fn decline_request() -> ParsedPresentationRequest {
+        ParsedPresentationRequest {
+            client_id: "https://verifier.example".into(),
+            nonce: "nonce".into(),
+            response_uri: "https://verifier.example/response".into(),
+            response_mode: Some("direct_post".into()),
+            state: Some("exact-state&value".into()),
+            query_type: PresentationRequestQueryType::DcqlQuery,
+            presentation_definition: None,
+            dcql_query: None,
+        }
+    }
+
+    #[test]
+    fn holder_decline_contains_only_error_and_exact_state() {
+        assert_eq!(
+            WalletEngine::decline_parameters(&decline_request()).unwrap(),
+            vec![
+                ("error".to_owned(), "access_denied".to_owned()),
+                ("state".to_owned(), "exact-state&value".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn holder_decline_refuses_unsupported_mode_missing_state_and_unsafe_url() {
+        for mode in [None, Some("direct_post.jwt"), Some("query")] {
+            let mut request = decline_request();
+            request.response_mode = mode.map(str::to_owned);
+            assert!(WalletEngine::decline_parameters(&request).is_err());
+        }
+        for state in [None, Some("")] {
+            let mut request = decline_request();
+            request.state = state.map(str::to_owned);
+            assert!(WalletEngine::decline_parameters(&request).is_err());
+        }
+        for uri in [
+            "https://user@verifier.example/response",
+            "https://verifier.example/response#fragment",
+            "file:///response",
+        ] {
+            let mut request = decline_request();
+            request.response_uri = uri.into();
+            assert!(WalletEngine::decline_parameters(&request).is_err());
+        }
+    }
 
     fn remote_p256_holder() -> (crate::openbao_transit::ScopedTransitSigner, String) {
         let signer = crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
