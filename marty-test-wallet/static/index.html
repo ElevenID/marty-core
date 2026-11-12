@@ -55,6 +55,12 @@
       <ul id="credentials"><li class="empty">No credentials</li></ul>
     </section>
   </main>
+  <dialog id="presentation-consent" aria-labelledby="consent-title">
+    <h2 id="consent-title">Share a credential?</h2>
+    <p>Approve sends a presentation for the entered request. Cancel sends your decision to decline.</p>
+    <button id="presentation-approve" type="button">Approve</button>
+    <button id="presentation-cancel" class="secondary" type="button">Cancel</button>
+  </dialog>
   <script>
     const statusNode = document.querySelector('#status');
     const credentialsNode = document.querySelector('#credentials');
@@ -108,12 +114,31 @@
         method: 'POST', body: JSON.stringify({ offer_uri: document.querySelector('#offer-uri').value })
       }), 'Credential received');
     });
+    const consent = document.querySelector('#presentation-consent');
+    let pendingPresentation = null;
     document.querySelector('#present-form').addEventListener('submit', (event) => {
       event.preventDefault();
-      runForm(event.currentTarget, () => request('/api/present', {
-        method: 'POST', body: JSON.stringify({ request_uri: document.querySelector('#request-uri').value })
-      }), 'Presentation accepted');
+      if (pendingPresentation !== null) return;
+      // Capture the entered request; this dialog makes no authenticated identity claim.
+      pendingPresentation = document.querySelector('#request-uri').value;
+      consent.showModal();
     });
+    const decidePresentation = (approve) => {
+      if (pendingPresentation === null) return;
+      const requestUri = pendingPresentation;
+      pendingPresentation = null;
+      consent.close();
+      return runForm(document.querySelector('#present-form'), async () => {
+        const result = await request(approve ? '/api/present' : '/api/presentation-decline', {
+          method: 'POST', body: JSON.stringify({ request_uri: requestUri })
+        });
+        if (!approve && result?.acknowledged !== true) throw new Error('Holder decline was not acknowledged');
+      }, approve ? 'Presentation accepted' : 'Decline sent');
+    };
+    document.querySelector('#presentation-approve').addEventListener('click', () => decidePresentation(true));
+    document.querySelector('#presentation-cancel').addEventListener('click', () => decidePresentation(false));
+    // Dismissing the dialog is not a submitted decline.
+    consent.addEventListener('close', () => { pendingPresentation = null; });
     document.querySelector('#reset').addEventListener('click', async () => {
       try { await request('/api/reset', { method: 'POST', body: '{}' }); setStatus('Wallet reset'); await refresh(); }
       catch (error) { setStatus(error.message, true); }

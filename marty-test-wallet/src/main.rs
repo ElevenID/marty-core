@@ -458,6 +458,7 @@ fn wallet_router(state: AppState) -> Router {
         .route("/api/credentials", get(list_credentials))
         .route("/api/receive", post(receive_credential))
         .route("/api/present", post(present_credential))
+        .route("/api/presentation-decline", post(decline_presentation))
         .route("/api/reset", post(reset_wallet))
         .with_state(state)
 }
@@ -739,6 +740,47 @@ async fn present_credential(
     Ok(presentation_response(response))
 }
 
+async fn decline_presentation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PresentRequest>,
+) -> Result<axum::response::Response, AppError> {
+    // Apply the existing owned-session check before parsing or outbound HTTP.
+    let _wallet = state.wallet_for(&headers).await?;
+    let parsed = state
+        .engine
+        .parse_presentation_request(request.request_uri.trim())
+        .await
+        .map_err(AppError::presentation_request)?;
+    let response = state
+        .engine
+        .decline_presentation_for_request(&parsed)
+        .await
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    Ok(decline_response(response))
+}
+
+fn decline_response(response: marty_oid4vci::PresentationResponse) -> axum::response::Response {
+    // Actual cancellation and absence of a login require separate observations.
+    let acknowledged = response.ok && response.http_status == Some(200);
+    let mut body = serde_json::json!({
+        "acknowledged": acknowledged,
+        "submission": {"submitted": true, "verifier_http_status": response.http_status},
+    });
+    if !acknowledged {
+        body["error"] = Value::String("Verifier did not acknowledge holder decline".into());
+    }
+    (
+        if acknowledged {
+            StatusCode::OK
+        } else {
+            StatusCode::BAD_REQUEST
+        },
+        Json(body),
+    )
+        .into_response()
+}
+
 fn presentation_response(
     response: marty_oid4vci::PresentationResponse,
 ) -> axum::response::Response {
@@ -798,7 +840,7 @@ fn decode_credential_payload(raw: &str, format: &CredentialFormat) -> Result<Val
         _ => {
             return Err(AppError::unprocessable(
                 "Unsupported credential payload format",
-            ))
+            ));
         }
     };
     let payload = jwt
@@ -952,6 +994,36 @@ fn disclosed_claim_names(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn holder_decline_acknowledgment_is_not_cancellation_or_login_proof() {
+        for (ok, status, acknowledged) in
+            [(true, 200, true), (true, 201, false), (false, 409, false)]
+        {
+            let response = decline_response(marty_oid4vci::PresentationResponse {
+                ok,
+                http_status: Some(status),
+                redirect_uri: None,
+                error: None,
+                error_description: None,
+            });
+            assert_eq!(
+                response.status(),
+                if acknowledged {
+                    StatusCode::OK
+                } else {
+                    StatusCode::BAD_REQUEST
+                }
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["acknowledged"], acknowledged);
+            assert_eq!(body["submission"]["verifier_http_status"], status);
+            assert!(body.get("authenticated").is_none() && body.get("cancelled").is_none());
+        }
+    }
 
     #[tokio::test]
     async fn request_object_error_projects_sanitized_fields_without_submission_or_claims() {
