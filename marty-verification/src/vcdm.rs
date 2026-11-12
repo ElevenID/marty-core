@@ -850,7 +850,39 @@ fn validate_data_integrity_identity(
     {
         return Err("Credential must use the W3C VCDM v2 context".to_string());
     }
+    // Generic Data Integrity preparation must not provide a signing input for
+    // an identified Open Badge that the dedicated profile verifier rejects.
+    // Completion repeats this check for caller-supplied prepared state. Other
+    // VCDM credentials keep their existing generic issuance contract.
+    if is_open_badge_v3_credential(credential) {
+        marty_oid4vci::formats::jwt_vc::validate_open_badge_v3_criteria(
+            credential.pointer("/credentialSubject/achievement/criteria"),
+        )
+        .map_err(|error| error.to_string())?;
+    }
     Ok(())
+}
+
+fn is_open_badge_v3_credential(credential: &Value) -> bool {
+    if has_type(credential, "OpenBadgeCredential") {
+        return true;
+    }
+    // These are the same OB3 contexts admitted by the dedicated verifier.
+    let is_ob3_context = |value: &Value| {
+        matches!(
+            value.as_str(),
+            Some(
+                "https://purl.imsglobal.org/spec/ob/v3p0/context.json"
+                    | "https://w3id.org/openbadges/v3"
+                    | "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json"
+            )
+        )
+    };
+    match credential.get("@context") {
+        Some(Value::Array(contexts)) => contexts.iter().any(is_ob3_context),
+        Some(context) => is_ob3_context(context),
+        None => false,
+    }
 }
 
 fn validate_data_integrity_issuance_dates(credential: &Value) -> Result<(), String> {
@@ -1611,6 +1643,8 @@ mod tests {
     const OFFICIAL_SUITE_PRESENTATION: &str =
         include_str!("../tests/fixtures/w3c_vcdm_v2_official_suite_presentation.json");
     const ISSUANCE_BEHAVIOR: &str = include_str!("../tests/fixtures/vcdm_issuance_behavior.json");
+    const COMPLETE_OPEN_BADGE: &str =
+        include_str!("../tests/fixtures/open_badges/ob3_complete_unsigned.json");
 
     fn public_ed25519_jwk() -> JWK {
         serde_json::from_value(json!({
@@ -1751,6 +1785,14 @@ mod tests {
         })
     }
 
+    fn remote_open_badge_prepare_request(key: &JWK) -> Value {
+        let mut request = remote_data_integrity_prepare_request(key);
+        let mut credential: Value = serde_json::from_str(COMPLETE_OPEN_BADGE).unwrap();
+        credential["issuer"]["id"] = request["issuer_did"].clone();
+        request["credential"] = credential;
+        request
+    }
+
     fn remotely_sign_prepared_credential(
         signer: &ScopedTransitSigner,
         prepared: &Value,
@@ -1802,6 +1844,162 @@ mod tests {
         .unwrap();
         assert_eq!(verification["valid"], true, "{verification}");
         assert_eq!(verification["verified_credentials"], 1);
+    }
+
+    #[test]
+    fn open_badge_data_integrity_rejects_invalid_criteria_before_preparation() {
+        let key = public_ed25519_jwk();
+        for criteria in [
+            None,
+            Some(Value::Null),
+            Some(json!(false)),
+            Some(json!(42)),
+            Some(json!("Complete the course")),
+            Some(json!([])),
+            Some(json!([{"narrative": "Complete the course"}])),
+        ] {
+            let mut request = remote_open_badge_prepare_request(&key);
+            let achievement = request["credential"]["credentialSubject"]["achievement"]
+                .as_object_mut()
+                .unwrap();
+            match criteria {
+                Some(value) => achievement.insert("criteria".into(), value),
+                None => achievement.remove("criteria"),
+            };
+            let error = prepare_vcdm_data_integrity_credential_json(&request.to_string())
+                .expect_err("invalid OB3 criteria must not produce a signing input");
+            assert!(error.contains("achievement criteria"), "{error}");
+        }
+    }
+
+    #[test]
+    fn open_badge_data_integrity_detection_covers_type_and_supported_contexts() {
+        let key = public_ed25519_jwk();
+        let mut type_only = remote_open_badge_prepare_request(&key);
+        type_only["credential"]["@context"] = json!([VCDM_V2_BASE_CONTEXT]);
+        let mut requests = vec![type_only];
+        for context in [
+            "https://purl.imsglobal.org/spec/ob/v3p0/context.json",
+            "https://w3id.org/openbadges/v3",
+            "https://purl.imsglobal.org/spec/ob/v3p0/context-3.0.3.json",
+        ] {
+            let mut request = remote_open_badge_prepare_request(&key);
+            request["credential"]["type"] = json!(["VerifiableCredential"]);
+            request["credential"]["@context"] = json!([VCDM_V2_BASE_CONTEXT, context]);
+            requests.push(request);
+        }
+        for mut request in requests {
+            request["credential"]["credentialSubject"]["achievement"]
+                .as_object_mut()
+                .unwrap()
+                .remove("criteria");
+            let error = prepare_vcdm_data_integrity_credential_json(&request.to_string())
+                .expect_err("an OB3 marker must select the criteria guard");
+            assert!(error.contains("achievement criteria"), "{error}");
+        }
+        let generic = remote_data_integrity_prepare_request(&key);
+        let prepared = prepare_vcdm_data_integrity_credential_json(&generic.to_string())
+            .expect("ordinary VCDM credentials do not require achievement criteria");
+        let prepared: Value = serde_json::from_str(&prepared).unwrap();
+        assert!(prepared["signing_input_b64"].is_string());
+    }
+
+    #[test]
+    fn open_badge_data_integrity_preserves_valid_criteria_object_forms() {
+        let key = public_ed25519_jwk();
+        for criteria in [
+            json!({}),
+            json!({"id":"https://issuer.example/criteria"}),
+            json!({"narrative":"Complete the synthetic exercise"}),
+        ] {
+            let mut request = remote_open_badge_prepare_request(&key);
+            request["credential"]["credentialSubject"]["achievement"]["criteria"] =
+                criteria.clone();
+            let prepared = prepare_vcdm_data_integrity_credential_json(&request.to_string())
+                .expect("Criteria.id and Criteria.narrative are optional");
+            let prepared: Value = serde_json::from_str(&prepared).unwrap();
+            assert_eq!(
+                prepared["credential"]["credentialSubject"]["achievement"]["criteria"],
+                criteria
+            );
+        }
+    }
+
+    #[test]
+    fn open_badge_data_integrity_completion_rechecks_prepared_criteria() {
+        let key = public_ed25519_jwk();
+        let request = remote_open_badge_prepare_request(&key);
+        let prepared = prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
+        let mut prepared: Value = serde_json::from_str(&prepared).unwrap();
+        prepared["credential"]["credentialSubject"]["achievement"]["criteria"] = Value::Null;
+        let error = complete_vcdm_data_integrity_credential_json(
+            &json!({
+                "prepared": prepared,
+                "signature_b64": URL_SAFE_NO_PAD.encode([0_u8; ED25519_SIGNATURE_BYTES])
+            })
+            .to_string(),
+        )
+        .expect_err("caller-supplied prepared state must not bypass the OB3 guard");
+        assert!(error.contains("achievement criteria"), "{error}");
+    }
+
+    #[test]
+    #[ignore = "requires marked disposable OpenBao Transit and scoped Data Integrity signer"]
+    fn prepares_completes_and_verifies_complete_remote_open_badge() {
+        let (signer, key) = remote_ed25519_jwk();
+        let request = remote_open_badge_prepare_request(&key);
+        let expected = request["credential"].clone();
+        let prepared = prepare_vcdm_data_integrity_credential_json(&request.to_string()).unwrap();
+        let prepared: Value = serde_json::from_str(&prepared).unwrap();
+        let completed = remotely_sign_prepared_credential(&signer, &prepared).unwrap();
+        let credential: Value = serde_json::from_str(&completed).unwrap();
+        let mut unsigned = credential.clone();
+        unsigned.as_object_mut().unwrap().remove("proof");
+        assert_eq!(
+            unsigned, expected,
+            "remote signing must preserve the complete payload"
+        );
+        assert!(credential["validFrom"].is_string());
+        assert!(credential["credentialSubject"]["achievement"]["criteria"].is_object());
+
+        let generic: Value = serde_json::from_str(&verify_vcdm_data_integrity_json(
+            &json!({"document": credential}).to_string(),
+        ))
+        .unwrap();
+        assert_eq!(generic["valid"], true, "{generic}");
+        assert_eq!(generic["verified_credentials"], 1);
+
+        let issuer = request["issuer_did"].as_str().unwrap();
+        let method_id = request["verification_method_id"].as_str().unwrap();
+        let method = ed25519_multikey(&key, issuer, method_id).unwrap();
+        let verification_request = json!({
+            "credential": credential,
+            "document_store": {
+                issuer: {
+                    "id": issuer,
+                    "verificationMethod": [method],
+                    "assertionMethod": [method_id]
+                }
+            }
+        });
+        let result =
+            crate::open_badges::verify_ob3_json(&verification_request.to_string()).unwrap();
+        let result: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(result["valid"], true, "{result}");
+
+        let mut tampered = verification_request;
+        tampered["credential"]["credentialSubject"]["achievement"]["criteria"]["narrative"] =
+            json!("A different signed criterion");
+        let result = crate::open_badges::verify_ob3_json(&tampered.to_string()).unwrap();
+        let result: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            result["valid"], false,
+            "criteria must remain signature-bound"
+        );
+        assert!(result["error_codes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(crate::error::codes::OPEN_BADGES_PROOF_INVALID)));
     }
 
     #[test]

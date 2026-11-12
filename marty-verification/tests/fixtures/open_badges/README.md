@@ -1,5 +1,13 @@
 # Open Badges interoperability and retirement fixtures
 
+`ob3_complete_unsigned.json` is the complete unsigned input for the existing
+marked-disposable OpenBao remote-signing test. It includes `validFrom` and
+achievement criteria. The test substitutes only the disposable issuer DID,
+then prepares, remotely signs, completes, and verifies the resulting credential
+through both generic VCDM and dedicated OB3 APIs. This input is not a signed
+headless sample or a claim of complete verifier/schema certification. The test
+uses the existing KMS gate and exports no private material or generated fixture.
+
 `ob3_verify_request.json` reuses an existing signature-valid public vector and
 its public verification method as an interoperability request. It exercises the
 bounded proof, issuer, and criteria checks; it omits OB3-required `validFrom`
