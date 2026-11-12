@@ -24,9 +24,17 @@ class PrivateForkAccessTests(unittest.TestCase):
         spec.loader.exec_module(sync)
         raw = HELPER.read_bytes().replace(b"\r\n", b"\n")
         policy = {"consumers": ["ElevenID/marty-authenticator", "ElevenID/Marty"], "denial": "Explicit test policy"}
+        self.assertEqual(sync.render(raw, {
+            "consumers": sorted(private_forks.CONSUMERS),
+            "denial": "Private fork access is limited to the four ElevenID consumer workflows",
+        }, "a" * 40), raw)
         generated = sync.render(raw, policy, "a" * 40)
         def functions(source):
-            return [ast.dump(node) for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)]
+            tree = ast.parse(source)
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef) and node.name == "validate_context":
+                    node.body[1].value.args[1].value = "consumer-specific denial"
+            return [ast.dump(node) for node in tree.body if isinstance(node, ast.FunctionDef)]
         self.assertEqual(functions(raw), functions(generated))
         namespace = {"__name__": "contract_test", "__file__": str(HELPER)}
         exec(compile(generated, str(HELPER), "exec"), namespace)
@@ -52,7 +60,7 @@ class PrivateForkAccessTests(unittest.TestCase):
             revision = git("rev-parse", "HEAD")
             manifest = consumer / ".github/scripts/private-forks.source.json"
             manifest.write_text(json.dumps({"repository": sync.REPOSITORY, "path": sync.SOURCE,
-                "policy": {"consumers": sorted(private_forks.CONSUMERS), "denial": private_forks.CONSUMER_DENIAL}}))
+                "policy": {"consumers": sorted(private_forks.CONSUMERS), "denial": "Private fork access is limited to the four ElevenID consumer workflows"}}))
             sync.synchronize(root, consumer, revision, False)
             (root / sync.SOURCE).write_text("dirty unreviewed content")
             sync.synchronize(root, consumer, None, True)

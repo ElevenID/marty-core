@@ -34,25 +34,30 @@ def render(raw: bytes, policy: dict, revision: str) -> bytes:
             or not isinstance(denial, str) or not denial or "\n" in denial):
         raise ValueError("Invalid explicit consumer policy")
     source = raw.decode("utf-8")
+    tree = ast.parse(source)
+    assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
+                      and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "CONSUMERS")
+    original_consumers = ast.literal_eval(assignment.value)
+    validate = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "validate_context")
+    denial_node = validate.body[1].value.args[1]
+    if not isinstance(denial_node, ast.Constant) or not isinstance(denial_node.value, str):
+        raise ValueError("Canonical denial must remain a literal")
+    # Keep independently reviewed helper digests unchanged. In particular, no
+    # provenance header or generic runtime configuration is added to the helper.
     lines = source.splitlines(keepends=True)
-    replacements = []
-    for node in ast.parse(source).body:
-        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
-            name = node.targets[0].id
-            if name == "CONSUMERS":
-                replacement = (
-                    "CONSUMERS = {\n" + "".join(f"    {value!r},\n" for value in sorted(consumers)) + "}")
-            elif name == "CONSUMER_DENIAL":
-                replacement = "CONSUMER_DENIAL = " + repr(denial)
-            else:
-                continue
-            replacements.append((node.lineno - 1, node.end_lineno, replacement + "\n"))
-    if len(replacements) != 2:
-        raise ValueError("Canonical source must define both policy fields")
-    for start, end, replacement in reversed(replacements):
-        lines[start:end] = [replacement]
-    header = f"# Generated from {REPOSITORY}@{revision}; edit the canonical source, not this artifact.\n"
-    lines.insert(1, header)
+    old_literal = ast.get_source_segment(source, denial_node)
+    if denial_node.value != denial:
+        line = lines[denial_node.lineno - 1]
+        lines[denial_node.lineno - 1] = line.replace(old_literal, json.dumps(denial))
+    if set(consumers) != original_consumers:
+        if original_consumers <= set(consumers):
+            extra = sorted(set(consumers) - original_consumers)
+            lines.insert(assignment.end_lineno - 1,
+                         "    " + ", ".join(json.dumps(value) for value in extra) + ",\n")
+        else:
+            lines[assignment.lineno - 1:assignment.end_lineno] = [
+                "CONSUMERS = {\n" + "".join(f"    {json.dumps(value)},\n" for value in sorted(consumers)) + "}\n"]
     return "".join(lines).encode("utf-8")
 
 
