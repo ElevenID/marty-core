@@ -179,8 +179,9 @@ impl Default for JwtVcPreparationOptions {
 /// This keeps the credential shape in the Rust protocol owner while allowing
 /// callers to retain their application-level configuration identifiers. Flat
 /// application claims are preserved on the `AchievementSubject`; only the
-/// legacy `achievement_name` and `achievement_description` aliases are moved
-/// into the required OB3 `achievement` object.
+/// legacy `achievement_name`, `achievement_description`, and
+/// `achievement_criteria` aliases are moved into the required OB3
+/// `achievement` object.
 #[cfg(any(test, feature = "issuer"))]
 pub fn apply_open_badge_v3_profile(
     claims: &mut CredentialClaims,
@@ -281,6 +282,7 @@ pub fn apply_open_badge_v3_profile(
             ));
         }
     }
+    validate_open_badge_v3_criteria(achievement_object.get("criteria"))?;
 
     claims.credential_type = OPEN_BADGES_V3_CREDENTIAL_TYPE.into();
     claims
@@ -297,7 +299,26 @@ pub fn apply_open_badge_v3_profile(
     options.credential_subject = Some(subject);
     options.credential_name = Some(credential_name);
     options.credential_description = Some(credential_description);
+    // OB3 requires an identifier on the credential itself. A JWT `jti`
+    // outside the credential cannot replace that required signed property.
+    options.include_vc_id = true;
     Ok(())
+}
+
+/// Check the required OB3 Criteria object, shared by issuance and verification.
+///
+/// The OB3 schema requires `Achievement.criteria`, but both `Criteria.id` and
+/// `Criteria.narrative` are optional and extension properties are allowed.
+/// Requiring a narrative or dereferenceable URL here would reject valid OB3
+/// shapes. This bounded check is not full JSON Schema validation.
+pub fn validate_open_badge_v3_criteria(criteria: Option<&serde_json::Value>) -> Oid4vciResult<()> {
+    if criteria.is_some_and(serde_json::Value::is_object) {
+        Ok(())
+    } else {
+        Err(Oid4vciError::InvalidRequest(
+            "Open Badges achievement criteria is required and must be an object".into(),
+        ))
+    }
 }
 
 /// Validate the canonical Open Badges 3.0 shape used by Marty's VC-JWT profile.
@@ -317,6 +338,12 @@ pub fn validate_open_badge_v3_profile(credential: &serde_json::Value) -> Oid4vci
     }
     let credential = credential.as_object().ok_or_else(|| {
         Oid4vciError::InvalidRequest("Open Badges credential must be one JSON object".into())
+    })?;
+    let credential_id = require_non_empty_string(credential.get("id"), "credential id")?;
+    url::Url::parse(credential_id).map_err(|error| {
+        Oid4vciError::InvalidRequest(format!(
+            "Open Badges credential id must be an absolute URI: {error}"
+        ))
     })?;
 
     require_string_array_member(
@@ -370,6 +397,7 @@ pub fn validate_open_badge_v3_profile(credential: &serde_json::Value) -> Oid4vci
     })?;
     require_non_empty_string(achievement.get("name"), "achievement name")?;
     require_non_empty_string(achievement.get("description"), "achievement description")?;
+    validate_open_badge_v3_criteria(achievement.get("criteria"))?;
     Ok(())
 }
 
@@ -595,6 +623,15 @@ pub fn prepare_jwt_vc_with_options(
     }
     if let Some(ref credential_status) = options.credential_status {
         vc["credentialStatus"] = credential_status.clone();
+    }
+    // Direct formatter callers must not bypass the profile builder and sign
+    // an incomplete Open Badge through the generic JWT-VC route.
+    if contains_string(vc.get("type"), |kind| {
+        kind == OPEN_BADGES_V3_CREDENTIAL_TYPE
+    }) || contains_string(vc.get("@context"), |context| {
+        context == OPEN_BADGES_V3_CONTEXT
+    }) {
+        validate_open_badge_v3_profile(&vc)?;
     }
 
     let mut payload = serde_json::json!({
@@ -916,6 +953,10 @@ mod tests {
                     "achievement_description".into(),
                     serde_json::json!("Membership verified by Marty"),
                 ),
+                (
+                    "achievement_criteria".into(),
+                    serde_json::json!({"narrative": "Complete membership verification"}),
+                ),
                 ("email".into(), serde_json::json!("holder@example.test")),
                 ("member_id".into(), serde_json::json!("member-1")),
             ]
@@ -983,6 +1024,14 @@ mod tests {
         assert_eq!(vc["credentialSubject"]["email"], "holder@example.test");
         assert_eq!(vc["credentialSubject"]["member_id"], "member-1");
         assert!(vc["credentialSubject"].get("achievement_name").is_none());
+        assert!(vc["credentialSubject"]
+            .get("achievement_criteria")
+            .is_none());
+        assert_eq!(
+            vc["credentialSubject"]["achievement"]["criteria"],
+            serde_json::json!({"narrative": "Complete membership verification"})
+        );
+        assert_eq!(vc["id"], payload["jti"]);
     }
 
     #[test]
@@ -1054,6 +1103,7 @@ mod tests {
                     "achievement_description".into(),
                     serde_json::json!("Description"),
                 ),
+                ("achievement_criteria".into(), serde_json::json!({})),
             ]
             .into(),
             expiration_seconds: None,
@@ -1098,7 +1148,8 @@ mod tests {
                     "id": "https://issuer.example/achievements/member",
                     "type": ["Achievement"],
                     "name": "Verified Member",
-                    "description": "Membership achievement"
+                    "description": "Membership achievement",
+                    "criteria": {"narrative": "Complete membership verification"}
                 }
             }
         });
@@ -1132,9 +1183,11 @@ mod tests {
         }
 
         for pointer in [
+            "/id",
             "/credentialSubject/id",
             "/credentialSubject/achievement/name",
             "/credentialSubject/achievement/description",
+            "/credentialSubject/achievement/criteria",
         ] {
             let mut malformed = credential.clone();
             *malformed.pointer_mut(pointer).unwrap() = serde_json::Value::Null;
@@ -1148,5 +1201,52 @@ mod tests {
         relative_achievement["credentialSubject"]["achievement"]["id"] =
             serde_json::json!("achievements/member");
         assert!(validate_open_badge_v3_profile(&relative_achievement).is_err());
+    }
+
+    #[test]
+    fn open_badge_criteria_is_required_but_optional_members_remain_optional() {
+        for criteria in [
+            None,
+            Some(serde_json::json!(null)),
+            Some(serde_json::json!("Complete the course")),
+            Some(serde_json::json!([])),
+            Some(serde_json::json!(42)),
+        ] {
+            let error = validate_open_badge_v3_criteria(criteria.as_ref()).unwrap_err();
+            assert!(error.to_string().contains("achievement criteria"));
+        }
+        // OB3's Criteria schema requires neither id nor narrative. Keep its
+        // empty, localized, and extension shapes rather than inventing a rule.
+        for criteria in [
+            serde_json::json!({}),
+            serde_json::json!({"id": "https://issuer.example/course/criteria"}),
+            serde_json::json!({"narrative": "Complete the course and pass the assessment"}),
+            serde_json::json!({"narrative": {"en": "Pass the assessment", "fr": "Réussir l’évaluation"}}),
+            serde_json::json!({"https://issuer.example/criteria": "completion"}),
+        ] {
+            validate_open_badge_v3_criteria(Some(&criteria)).unwrap();
+        }
+    }
+
+    #[test]
+    fn generic_formatter_cannot_sign_an_incomplete_open_badge() {
+        let mut claims = claims_with_expiration(CredentialPayloadFormat::W3cVcdmV2JwtVc, 3600);
+        claims.credential_type = OPEN_BADGES_V3_CREDENTIAL_TYPE.into();
+        claims.w3c_context = vec![OPEN_BADGES_V3_CONTEXT.into()];
+        let subject = serde_json::json!({
+            "id": "did:example:holder", "type": "AchievementSubject",
+            "achievement": {
+                "id": "https://issuer.example/course", "type": "Achievement",
+                "name": "Course", "description": "Course completion"
+            }
+        });
+        let options = JwtVcPreparationOptions {
+            credential_subject: Some(subject),
+            ..Default::default()
+        };
+        let error = prepare_jwt_vc_with_options(&test_p256_signer(), &claims, options)
+            .err()
+            .expect("invalid Open Badge must not produce signing input");
+        assert!(error.to_string().contains("achievement criteria"));
     }
 }

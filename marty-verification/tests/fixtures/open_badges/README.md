@@ -11,5 +11,8 @@ The retirement tests require raw, wrapped, mixed-context, and JWT-contained lega
 assertions to remain unsupported. Migration requires a newly issued OB3 credential.
 
 `ob3_jwt_verify_request.json` retains the public-only signed ES256 OB3 JWT vector
-also used by the presentation-policy issuer-key regression suite. It checks that
-direct JWT verification continues accepting OB3 while rejecting retired markers.
+also used by the presentation-policy issuer-key regression suite. Its original
+signed credential omits required `achievement.criteria`, so it is retained as
+negative profile evidence: generic signature/VCDM verification succeeds, while
+Open Badges verification must reject the profile and withhold its claims. Do not
+repair the signed payload or treat this vector as a valid OB3 credential.

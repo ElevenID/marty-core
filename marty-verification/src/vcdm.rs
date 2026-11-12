@@ -2191,7 +2191,8 @@ mod tests {
                         "id": "https://issuer.example/achievements/member",
                         "type": ["Achievement"],
                         "name": "Verified Member",
-                        "description": "Membership achievement"
+                        "description": "Membership achievement",
+                        "criteria": {"narrative": "Complete membership verification"}
                     }
                 }
             }

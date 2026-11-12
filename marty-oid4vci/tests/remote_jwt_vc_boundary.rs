@@ -50,6 +50,87 @@ fn segment(signing_input: &str, index: usize) -> Value {
     .unwrap()
 }
 
+fn open_badge_request() -> RemoteJwtVcRequest {
+    let mut request = request();
+    request.credential_type = "OpenBadgeCredential".into();
+    request.credential_profile = Some("open_badge_v3".into());
+    request.achievement_id = Some("https://issuer.example/achievements/course".into());
+    request.claims = HashMap::from([
+        (
+            "achievement_name".into(),
+            json!("Workplace Safety Foundations"),
+        ),
+        (
+            "achievement_description".into(),
+            json!("Completed the workplace safety workshop"),
+        ),
+        (
+            "achievement_criteria".into(),
+            json!({"narrative": "Complete the workshop and score at least 80%"}),
+        ),
+    ]);
+    request
+}
+
+#[test]
+fn remote_open_badge_preserves_required_id_and_criteria_in_signed_credential() {
+    let prepared = prepare_remote_jwt_vc(open_badge_request()).unwrap();
+    let payload = segment(prepared.signing_input(), 1);
+    assert_eq!(payload["vc"]["id"], CREDENTIAL_ID);
+    assert_eq!(payload["vc"]["id"], payload["jti"]);
+    assert_eq!(
+        payload["vc"]["credentialSubject"]["achievement"]["criteria"],
+        json!({"narrative": "Complete the workshop and score at least 80%"})
+    );
+    marty_oid4vci::formats::jwt_vc::validate_open_badge_v3_profile(&payload["vc"]).unwrap();
+
+    // The OB3 profile owns this requirement; generic remote JWT-VC callers
+    // retain their existing representation contract.
+    let generic = prepare_remote_jwt_vc(request()).unwrap();
+    assert!(segment(generic.signing_input(), 1)["vc"]
+        .get("id")
+        .is_none());
+}
+
+#[test]
+fn remote_open_badge_rejects_missing_or_non_object_criteria_before_signing() {
+    for criteria in [
+        None,
+        Some(json!(null)),
+        Some(json!("Complete the course")),
+        Some(json!([])),
+        Some(json!(42)),
+    ] {
+        for explicit_subject in [false, true] {
+            let mut request = open_badge_request();
+            request.claims.remove("achievement_criteria");
+            if explicit_subject {
+                request.claims.clear();
+                let mut achievement = json!({
+                    "name": "Workplace Safety Foundations",
+                    "description": "Completed the workplace safety workshop"
+                });
+                if let Some(criteria) = criteria.as_ref() {
+                    achievement["criteria"] = criteria.clone();
+                }
+                request.credential_subject = Some(json!({"achievement": achievement}));
+            } else if let Some(criteria) = criteria.as_ref() {
+                request
+                    .claims
+                    .insert("achievement_criteria".into(), criteria.clone());
+            }
+            let error = prepare_remote_jwt_vc(request)
+                .err()
+                .expect("invalid criteria must not produce signing input");
+            assert!(matches!(error, Oid4vciError::InvalidRequest(_)));
+            assert!(
+                error.to_string().contains("achievement criteria"),
+                "{error}"
+            );
+        }
+    }
+}
+
 #[test]
 fn remote_preparation_exposes_exact_public_jwt_signing_input() {
     let prepared = prepare_remote_jwt_vc(request()).unwrap();

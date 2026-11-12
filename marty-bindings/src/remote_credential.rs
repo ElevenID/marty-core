@@ -628,7 +628,7 @@ mod tests {
             &issuer_public_jwk(),
             Some("did:key:holder"),
             "open_badge",
-            r#"{"achievement_name":"Member Badge","achievement_description":"Verified member","email":"holder@example.test"}"#,
+            r#"{"achievement_name":"Member Badge","achievement_description":"Verified member","achievement_criteria":{"narrative":"Complete membership verification"},"email":"holder@example.test"}"#,
             Some(3600),
             Some("urn:uuid:00000000-0000-0000-0000-000000000789"),
             None,
@@ -639,6 +639,7 @@ mod tests {
             panic!("expected JWT-VC state")
         };
         let payload = decode_segment(state.signing_input().split('.').nth(1).expect("payload"));
+        assert_eq!(payload["vc"]["id"], payload["jti"]);
         assert_eq!(
             payload["vc"]["type"],
             serde_json::json!(["VerifiableCredential", "OpenBadgeCredential"])
@@ -651,6 +652,29 @@ mod tests {
             payload["vc"]["credentialSubject"]["email"],
             "holder@example.test"
         );
+        assert_eq!(
+            payload["vc"]["credentialSubject"]["achievement"]["criteria"]["narrative"],
+            "Complete membership verification"
+        );
+
+        let missing_criteria = oid4vci_prepare_open_badge_v3_jwt_vc(
+            "did:web:issuer.example",
+            "did:web:issuer.example#key-1",
+            "ES256",
+            &issuer_public_jwk(),
+            Some("did:key:holder"),
+            "open_badge",
+            r#"{"achievement_name":"Member Badge","achievement_description":"Verified member"}"#,
+            Some(3600),
+            None,
+            None,
+            "https://issuer.example/credentials/member-badge",
+        )
+        .err()
+        .expect("incomplete badge must not cross the native signing boundary");
+        assert!(missing_criteria
+            .to_string()
+            .contains("achievement criteria"));
 
         assert!(oid4vci_prepare_jwt_vc(
             "did:web:issuer.example",
