@@ -245,6 +245,8 @@ jobs:
           version: v0.16.0
       - name: Run clippy
         run: cargo clippy --locked --workspace --features test-fixtures -- -D warnings
+      - name: Check full biometric inference stack
+        run: cargo check --locked -p marty-biometrics --no-default-features --features full
       - name: Check OID4VCI WASM serial fallback contract
         shell: bash
         run: bash scripts/test_oid4vci_wasm_serial_fallback.sh
