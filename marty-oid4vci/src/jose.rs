@@ -36,6 +36,7 @@ const PRIVATE_JWK_FIELDS: &[&str] = &["d", "rsa_d", "p", "q", "dp", "dq", "qi", 
 pub const MAX_COMPACT_JWT_BYTES: usize = JOSE_JWT_LIMITS.total;
 /// Maximum public JWK JSON accepted by direct JOSE verification helpers.
 pub const MAX_PUBLIC_JWK_BYTES: usize = 16 * 1024;
+#[cfg(feature = "wallet")]
 pub(crate) const MAX_JWT_CLAIMS_BYTES: usize = JOSE_JWT_LIMITS.claims;
 
 /// A compact JWT whose signature has been verified with the supplied public JWK.
