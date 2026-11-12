@@ -1,0 +1,64 @@
+{
+  "credential": {
+    "@context": [
+      "https://www.w3.org/ns/credentials/v2",
+      "https://purl.imsglobal.org/spec/ob/v3p0/context.json"
+    ],
+    "credentialSubject": {
+      "achievement": {
+        "criteria": {
+          "narrative": "Complete the synthetic governed-issuer verification exercise."
+        },
+        "description": "Example achievement description",
+        "id": "urn:uuid:achievement-1",
+        "name": "Example Badge",
+        "type": "Achievement"
+      },
+      "id": "did:example:subject",
+      "type": "AchievementSubject"
+    },
+    "id": "urn:uuid:ob3-credential-1",
+    "issuer": {
+      "id": "did:example:issuer",
+      "name": "Synthetic Governed Issuer",
+      "type": [
+        "Profile"
+      ]
+    },
+    "proof": {
+      "@context": "https://w3id.org/security/suites/jws-2020/v1",
+      "created": "2026-01-01T00:00:01Z",
+      "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..9AnUKlgiUhvQyMYnyDbTLwDIyBdHL04aUN3tmKQE70qc_ZmFMUnScxqxU-cELTsqOMrTFIm5Pg7jndHA95m0AA",
+      "proofPurpose": "assertionMethod",
+      "type": "JsonWebSignature2020",
+      "verificationMethod": "did:example:issuer#key-1"
+    },
+    "type": [
+      "VerifiableCredential",
+      "OpenBadgeCredential",
+      "AchievementCredential"
+    ],
+    "validFrom": "2026-01-01T00:00:00Z"
+  },
+  "document_store": {
+    "did:example:issuer#key-1": {
+      "controller": "did:example:issuer",
+      "id": "did:example:issuer#key-1",
+      "publicKeyJwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "4oqJcHUzMr1y_vQT5rCy7xtKrdp6osFB8jNxKmh2s1E"
+      },
+      "type": "JsonWebKey2020"
+    }
+  },
+  "governed_method": {
+    "controller": "did:example:issuer",
+    "id": "did:example:issuer#key-1",
+    "public_jwk": {
+      "crv": "Ed25519",
+      "kty": "OKP",
+      "x": "4oqJcHUzMr1y_vQT5rCy7xtKrdp6osFB8jNxKmh2s1E"
+    }
+  }
+}
