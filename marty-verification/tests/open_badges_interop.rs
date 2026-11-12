@@ -69,8 +69,24 @@ fn ob3_verify_external_fixture() {
 fn bundled_fixtures_reject_mismatched_issuer_key() {
     let mut ob3: Value =
         serde_json::from_str(include_str!("fixtures/open_badges/ob3_verify_request.json")).unwrap();
-    ob3["document_store"]["did:example:issuer#key-1"]["publicKeyJwk"]["x"] =
-        Value::from(OTHER_ED25519_PUBLIC_KEY);
+    for method in ob3["document_store"].as_object_mut().unwrap().values_mut() {
+        method["publicKeyJwk"]["x"] = Value::from(OTHER_ED25519_PUBLIC_KEY);
+    }
     let result = verify_ob3_json(&ob3.to_string()).expect("OB3 wrong-key request failed");
     assert_invalid("OB3 wrong-key fixture", &result);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn signed_badge_missing_criteria_is_rejected_after_proof_verification() {
+    let request = include_str!("fixtures/open_badges/ob3_missing_criteria_verify_request.json");
+    let result: Value = serde_json::from_str(&verify_ob3_json(request).unwrap()).unwrap();
+    assert_eq!(result["valid"], false, "{result}");
+    // A proof/key failure would add another code. This exact signed historical
+    // fixture is rejected solely for the missing required OB3 property.
+    assert_eq!(result["error_codes"], serde_json::json!(["E701"]));
+    assert!(result["errors"][0]
+        .as_str()
+        .unwrap()
+        .contains("achievement criteria"));
 }

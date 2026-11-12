@@ -134,21 +134,33 @@ fn method_request(source: &Value) -> Value {
 }
 
 #[test]
-fn signed_ob3_ed25519_2020_method_verifies() {
+fn signed_ob3_ed25519_2020_method_authenticates_but_missing_criteria_is_rejected() {
     let source = method_vector("2020");
     assert_eq!(source["method"]["type"], "Ed25519VerificationKey2020");
     assert!(source["method"]["publicKeyMultibase"].is_string());
     let result = verify_ob3_json(&method_request(&source).to_string()).unwrap();
-    assert_valid("OB3 Ed25519 2020 method", &result);
+    assert_authenticated_but_missing_criteria("OB3 Ed25519 2020 method", &result);
 }
 
 #[test]
-fn signed_ob3_ed25519_2018_method_verifies() {
+fn signed_ob3_ed25519_2018_method_authenticates_but_missing_criteria_is_rejected() {
     let source = method_vector("2018");
     assert_eq!(source["method"]["type"], "Ed25519VerificationKey2018");
     assert!(source["method"]["publicKeyBase58"].is_string());
     let result = verify_ob3_json(&method_request(&source).to_string()).unwrap();
-    assert_valid("OB3 Ed25519 2018 method", &result);
+    assert_authenticated_but_missing_criteria("OB3 Ed25519 2018 method", &result);
+}
+
+fn assert_authenticated_but_missing_criteria(label: &str, result_json: &str) {
+    let result: Value = serde_json::from_str(result_json).unwrap();
+    // Keep these signed method-compatibility vectors intact. Proof failures
+    // must not hide behind the newly enforced profile requirement.
+    assert_eq!(result["valid"], false, "{label}: {result}");
+    assert_eq!(result["error_codes"], json!(["E701"]), "{label}: {result}");
+    assert!(result["errors"][0]
+        .as_str()
+        .unwrap()
+        .contains("achievement criteria"));
 }
 
 #[test]

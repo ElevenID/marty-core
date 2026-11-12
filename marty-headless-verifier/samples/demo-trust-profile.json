@@ -1,16 +1,16 @@
 {
   "allow_credentials_without_status": true,
   "document_store": {
-    "did:example:issuer#key-1": {
-      "controller": "did:example:issuer",
-      "id": "did:example:issuer#key-1",
+    "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0": {
+      "id": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0",
+      "type": "JsonWebKey2020",
+      "controller": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ",
       "publicKeyJwk": {
         "crv": "Ed25519",
         "kty": "OKP",
-        "x": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ"
-      },
-      "type": "JsonWebKey2020"
+        "x": "B7M5x6qZpJuOBhplKERpaAY2FsI1muhSJw5yAWTJc9A"
+      }
     }
   },
-  "trusted_issuer": "did:example:issuer"
+  "trusted_issuer": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0"
 }

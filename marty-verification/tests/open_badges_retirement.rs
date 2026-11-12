@@ -212,7 +212,7 @@ fn direct_vcdm_boundaries_reject_mixed_legacy_profiles_before_proof_processing()
 }
 
 #[test]
-fn existing_public_ob3_jwt_remains_valid() {
+fn existing_signed_ob3_jwt_without_criteria_fails_profile_validation() {
     use marty_verification::vcdm::{
         verify_open_badge_v3_jwt_json_async, verify_vcdm_jwt_json_async,
     };
@@ -222,13 +222,27 @@ fn existing_public_ob3_jwt_remains_valid() {
     .unwrap();
     let request =
         json!({"token": fixture["token"], "issuer_public_jwk": fixture["public_jwk"]}).to_string();
-    for raw in [
-        futures::executor::block_on(verify_vcdm_jwt_json_async(&request)),
-        futures::executor::block_on(verify_open_badge_v3_jwt_json_async(&request)),
-    ] {
-        let result: Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(result["valid"], true, "{result}");
-        assert_eq!(result["issuer"], fixture["issuer"]);
-        assert!(result["claims"].is_object());
-    }
+    // Preserve the original public-only signed bytes. The signature and
+    // generic VCDM bindings remain valid; the missing OB3 property is the
+    // reason this previously accepted credential must now be rejected.
+    let generic: Value = serde_json::from_str(&futures::executor::block_on(
+        verify_vcdm_jwt_json_async(&request),
+    ))
+    .unwrap();
+    assert_eq!(generic["valid"], true, "{generic}");
+    assert_eq!(generic["issuer"], fixture["issuer"]);
+    assert!(generic["claims"]["vc"]["credentialSubject"]["achievement"]
+        .get("criteria")
+        .is_none());
+
+    let profile: Value = serde_json::from_str(&futures::executor::block_on(
+        verify_open_badge_v3_jwt_json_async(&request),
+    ))
+    .unwrap();
+    assert_eq!(profile["valid"], false, "{profile}");
+    assert!(profile["claims"].is_null());
+    assert!(profile["errors"][0]
+        .as_str()
+        .unwrap()
+        .contains("achievement criteria"));
 }

@@ -47,7 +47,7 @@ cd "marty-headless-verify-$version-linux-amd64"
 ./bin/marty-headless-verify verify \
   --credential samples/ob3-valid.json \
   --trust-profile samples/demo-trust-profile.json \
-  --trust-sha256 8a0fd4579fbf239f54598ea06b986e1bd70bae1549b7e3942ac2c4a05b95980e
+  --trust-sha256 d41ebe5e8e346c591b9bcadcba4af3bb38a6a2aa3a2e6e3d7a06f55c70a1746d
 ```
 
 Alternatively, build from the matching
@@ -62,7 +62,7 @@ sha256sum marty-headless-verifier/samples/demo-trust-profile.json
 ./target/release/marty-headless-verify verify \
   --credential marty-headless-verifier/samples/ob3-valid.json \
   --trust-profile marty-headless-verifier/samples/demo-trust-profile.json \
-  --trust-sha256 8a0fd4579fbf239f54598ea06b986e1bd70bae1549b7e3942ac2c4a05b95980e
+  --trust-sha256 d41ebe5e8e346c591b9bcadcba4af3bb38a6a2aa3a2e6e3d7a06f55c70a1746d
 ```
 
 The sample trust digest above is for the checked-in synthetic profile only.
@@ -71,7 +71,10 @@ operator through their own approval process. A positive result has exit code
 0, a denial has exit code 2, and input or configuration errors use exit code
 1. The JSON result includes the shared kernel decision and reason codes.
 
-The signed example and trust profile are synthetic public test material. Edit
+The signed example and trust profile are synthetic public test material for
+this preview's bounded proof, issuer, and criteria checks. The example omits
+the OB3-required `validFrom` field; acceptance is not full JSON Schema or
+Open Badges conformance evidence. Edit
 the credential's achievement name to see a proof failure. Change
 `trusted_issuer` to see a trust denial; recompute and pass the resulting
 profile digest for that negative test. Add a `credentialStatus` reference to

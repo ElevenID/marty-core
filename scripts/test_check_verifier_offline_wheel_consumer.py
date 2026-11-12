@@ -68,12 +68,13 @@ class OfflineWheelConsumerTests(unittest.TestCase):
                 probe.verify_fixture(self._recording_verifier(seen), fixture)
                 self.assertEqual(len(seen), 3)
                 self.assertNotEqual(seen[0], seen[1])
-                self.assertEqual(
-                    seen[0]["document_store"][probe.ISSUER_KEY_ID]["publicKeyJwk"]["x"],
-                    "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+                key_id = seen[0]["credential"]["proof"]["verificationMethod"]
+                self.assertNotEqual(
+                    seen[0]["document_store"][key_id]["publicKeyJwk"]["x"],
+                    probe.OTHER_ED25519_PUBLIC_KEY,
                 )
                 self.assertEqual(
-                    seen[2]["document_store"][probe.ISSUER_KEY_ID]["publicKeyJwk"]["x"],
+                    seen[2]["document_store"][key_id]["publicKeyJwk"]["x"],
                     probe.OTHER_ED25519_PUBLIC_KEY,
                 )
                 self.assertEqual(
@@ -135,7 +136,7 @@ class OfflineWheelConsumerTests(unittest.TestCase):
         probe.verify_ob3_at_caller_time(fake_verify)
         self.assertEqual(len(seen), 2)
         self.assertEqual(seen[0][0], seen[1][0])
-        self.assertEqual(seen[0][1], "2026-01-01T00:00:00Z")
+        self.assertEqual(seen[0][1], "2026-11-12T00:00:00Z")
         self.assertEqual(seen[1][1], "2026-01-01T00:00:00")
         self.assertIn("proof", seen[0][0]["credential"])
 

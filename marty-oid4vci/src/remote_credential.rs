@@ -1468,6 +1468,10 @@ mod tests {
                     "achievement_description".to_owned(),
                     serde_json::json!("Membership badge"),
                 ),
+                (
+                    "achievement_criteria".to_owned(),
+                    serde_json::json!({"narrative": "Complete membership verification"}),
+                ),
             ]),
             expiration_seconds: Some(3600),
             credential_id: Some("urn:uuid:00000000-0000-0000-0000-000000000457".to_owned()),
@@ -1478,6 +1482,11 @@ mod tests {
         .expect("Open Badge JWT-VC preparation");
         let payload = segment(prepared.signing_input(), 1);
         let vc = &payload["vc"];
+        assert_eq!(vc["id"], payload["jti"]);
+        assert_eq!(
+            vc["credentialSubject"]["achievement"]["criteria"],
+            serde_json::json!({"narrative": "Complete membership verification"})
+        );
         assert_eq!(vc["name"], vc["credentialSubject"]["achievement"]["name"]);
         assert_eq!(
             vc["description"],

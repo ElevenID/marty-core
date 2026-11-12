@@ -431,7 +431,7 @@ mod tests {
         json!({"iss":ISSUER,"iat":NOW-60,"exp":NOW+3600,"sub":"did:example:holder","jti":"urn:uuid:badge",
         "vc":{"@context":["https://www.w3.org/ns/credentials/v2",crate::formats::jwt_vc::OPEN_BADGES_V3_CONTEXT],
         "type":["VerifiableCredential","OpenBadgeCredential"],"id":"urn:uuid:badge","issuer":ISSUER,
-        "credentialSubject":{"id":"did:example:holder","type":["AchievementSubject"],"achievement":{"id":"https://issuer.example/member","type":["Achievement"],"name":"Member","description":"Governed membership"}}}})
+        "credentialSubject":{"id":"did:example:holder","type":["AchievementSubject"],"achievement":{"id":"https://issuer.example/member","type":["Achievement"],"name":"Member","description":"Governed membership","criteria":{"narrative":"Complete membership verification"}}}}})
     }
     struct NeverResolve;
     impl SdJwtIssuerKeyResolver for NeverResolve {

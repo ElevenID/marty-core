@@ -5,27 +5,29 @@
   ],
   "credentialSubject": {
     "achievement": {
-      "description": "Example achievement description",
-      "id": "urn:uuid:achievement-1",
-      "name": "Example Badge",
+      "criteria": {
+        "narrative": "Must pass all OB3 conformance scenarios."
+      },
+      "description": "Awarded for passing the conformance test suite.",
+      "id": "urn:uuid:achievement-public-vector",
+      "name": "Conformance Test Badge",
       "type": "Achievement"
     },
-    "id": "did:example:subject",
+    "id": "did:example:recipient",
     "type": "AchievementSubject"
   },
-  "id": "urn:uuid:ob3-credential-1",
-  "issuer": "did:example:issuer",
+  "id": "urn:uuid:ob3-conformance-credential-1",
+  "issuer": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0",
   "proof": {
     "@context": "https://w3id.org/security/suites/jws-2020/v1",
-    "created": "2025-12-28T09:42:14.187Z",
-    "jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsiYjY0Il0sImI2NCI6ZmFsc2V9..EYctzg4JZJX7-uhkRCvQxsVyMmNL7TPKBqfgIqCTc6jXsFJ5KV1keykiSse6nWn_RlNdZm37upFmLjuQbEahCg",
+    "created": "2026-10-07T18:54:46.597Z",
+    "jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsiYjY0Il0sImI2NCI6ZmFsc2V9..jf2POFfglVNTvUe4ukJ-ofDQjzYKK2QaUzd4oq2FGJAJv86G6P5gbJ9JlS-QzXOGLfXuolC0X3mFPgtfq-dUCQ",
     "proofPurpose": "assertionMethod",
     "type": "JsonWebSignature2020",
-    "verificationMethod": "did:example:issuer#key-1"
+    "verificationMethod": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IkI3TTV4NnFacEp1T0JocGxLRVJwYUFZMkZzSTFtdWhTSnc1eUFXVEpjOUEifQ#0"
   },
   "type": [
     "VerifiableCredential",
-    "OpenBadgeCredential",
-    "AchievementCredential"
+    "OpenBadgeCredential"
   ]
 }

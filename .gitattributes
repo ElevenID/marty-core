@@ -1,2 +1,3 @@
 marty-verification/src/open_badges/contexts/bitstring-status-v1.jsonld text eol=lf
 marty-verification/tests/fixtures/ssi_canonicalization_consumer.nq text eol=lf
+marty-headless-verifier/samples/demo-trust-profile.json text eol=lf

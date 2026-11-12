@@ -1,0 +1,27 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://purl.imsglobal.org/spec/ob/v3p0/context.json"
+  ],
+  "id": "urn:uuid:2f2e1a96-3f33-4be7-90d9-fca583d23a8b",
+  "type": ["VerifiableCredential", "OpenBadgeCredential"],
+  "issuer": {
+    "id": "did:example:disposable-issuer",
+    "type": ["Profile"],
+    "name": "Marty Core Disposable Test Issuer"
+  },
+  "validFrom": "2026-01-01T00:00:00Z",
+  "credentialSubject": {
+    "id": "did:example:synthetic-recipient",
+    "type": ["AchievementSubject"],
+    "achievement": {
+      "id": "urn:uuid:3645e792-dd06-4ac5-a6a5-08c406244b45",
+      "type": ["Achievement"],
+      "name": "Synthetic remote-signing badge",
+      "description": "Test-only credential for the marked disposable remote-signing contract; no real learner attainment.",
+      "criteria": {
+        "narrative": "The marked disposable signer issued this synthetic test credential."
+      }
+    }
+  }
+}
