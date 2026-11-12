@@ -191,15 +191,23 @@ mod tests {
 
     fn input() -> (Value, Vec<u8>) {
         let request: Value = serde_json::from_str(FIXTURE).unwrap();
-        let profile = json!({
-            "trusted_issuer": "did:example:issuer",
-            "document_store": request["document_store"],
-            "allow_credentials_without_status": true,
-        });
-        (
-            request["credential"].clone(),
-            serde_json::to_vec(&profile).unwrap(),
-        )
+        let credential: Value =
+            serde_json::from_str(include_str!("../samples/ob3-valid.json")).unwrap();
+        let profile_bytes = include_bytes!("../samples/demo-trust-profile.json").to_vec();
+        let profile: Value = serde_json::from_slice(&profile_bytes).unwrap();
+        assert_eq!(credential, request["credential"]);
+        assert_eq!(profile["trusted_issuer"], credential["issuer"]);
+        assert_eq!(profile["document_store"], request["document_store"]);
+        (credential, profile_bytes)
+    }
+
+    #[test]
+    fn documented_sample_trust_pin_matches_the_packaged_profile() {
+        let (_, profile) = input();
+        let digest = format!("{:x}", Sha256::digest(&profile));
+        assert!(include_str!("../README.md").contains(&format!("--trust-sha256 {digest}")));
+        assert!(include_str!("../scripts/acceptance.sh")
+            .contains(&format!("test \"$digest\" = {digest}")));
     }
 
     fn evaluate(credential: &Value, profile: &[u8]) -> Decision {

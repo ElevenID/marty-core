@@ -176,6 +176,23 @@ async fn verify_ob3_with_status_lists_internal_async(
         ),
     }
 
+    // Proof verification authenticates the issuer's statements, but does not
+    // establish the required OB3 achievement shape. Apply the same Criteria
+    // boundary as JWT issuance and verification to the authenticated document.
+    if errors.is_empty() {
+        if let Err(error) = marty_oid4vci::formats::jwt_vc::validate_open_badge_v3_criteria(
+            req.credential
+                .pointer("/credentialSubject/achievement/criteria"),
+        ) {
+            push_error(
+                &mut errors,
+                &mut error_codes_out,
+                error_codes::OPEN_BADGES_INVALID,
+                error.to_string(),
+            );
+        }
+    }
+
     let status_checks = check_credential_status(
         &req.credential,
         authenticated_status_lists,

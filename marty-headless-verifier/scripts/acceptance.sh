@@ -6,7 +6,7 @@ test -x "$bundle/bin/marty-headless-verify"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 digest="$(sha256sum "$bundle/samples/demo-trust-profile.json" | cut -d ' ' -f 1)"
-test "$digest" = 8a0fd4579fbf239f54598ea06b986e1bd70bae1549b7e3942ac2c4a05b95980e
+test "$digest" = d41ebe5e8e346c591b9bcadcba4af3bb38a6a2aa3a2e6e3d7a06f55c70a1746d
 
 "$bundle/bin/marty-headless-verify" verify \
   --credential "$bundle/samples/ob3-valid.json" \

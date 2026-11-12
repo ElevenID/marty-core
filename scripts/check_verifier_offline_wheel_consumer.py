@@ -20,8 +20,9 @@ FIXTURES = (
     / "marty-verification/tests/fixtures/open_badges"
 )
 OTHER_ED25519_PUBLIC_KEY = "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
-ISSUER_KEY_ID = "did:example:issuer#key-1"
-OB3_EVALUATION_TIME = "2026-01-01T00:00:00Z"
+# Evaluate after the bundled public proof's creation time, without altering
+# its signed bytes or coupling the probe to the current wall clock.
+OB3_EVALUATION_TIME = "2026-11-12T00:00:00Z"
 
 
 def deny_network(event: str, _args: tuple[object, ...]) -> None:
@@ -51,7 +52,8 @@ def verify_fixture(
 
     # Mismatched but well-formed caller-supplied key material must not verify
     # the fixture's signature. This does not authenticate a trust store.
-    key = wrong_key["document_store"][ISSUER_KEY_ID]["publicKeyJwk"]
+    issuer_key_id = wrong_key["credential"]["proof"]["verificationMethod"]
+    key = wrong_key["document_store"][issuer_key_id]["publicKeyJwk"]
     if (
         key.get("kty") != "OKP"
         or key.get("crv") != "Ed25519"
