@@ -15,8 +15,8 @@ axum = { workspace = true }
 aws-lc-rs = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
-marty-oid4vci = { workspace = true, features = ["default", "wallet", "jwt_vc_json", "sd_jwt"] }
-marty-crypto.workspace = true
+marty-oid4vci = { workspace = true, features = ["default", "wallet", "jwt_vc_json", "sd_jwt", "kms-only"] }
+marty-crypto = { workspace = true, features = ["kms-only"] }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
