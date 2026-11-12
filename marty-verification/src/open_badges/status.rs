@@ -726,7 +726,10 @@ mod tests {
                         "id": "https://issuer.example/achievements/1",
                         "type": "Achievement",
                         "name": "Status authority test",
-                        "description": "Marty-owned status verification regression"
+                        "description": "Marty-owned status verification regression",
+                        "criteria": {
+                            "narrative": "Complete the synthetic status-authority regression."
+                        }
                     }
                 },
                 "credentialStatus": status_entry
@@ -738,6 +741,10 @@ mod tests {
                 &credential_method,
             )
             .await;
+            assert_eq!(
+                credential["credentialSubject"]["achievement"]["criteria"],
+                json!({"narrative": "Complete the synthetic status-authority regression."})
+            );
 
             let encoded_list = encode_status_list(status_size, STATUS_INDEX, status_value);
             let status_list = json!({
