@@ -22,6 +22,7 @@ CONSUMERS = {
     "ElevenID/marty-core", "ElevenID/marty-ui",
     "ElevenID/marty-verifier", "ElevenID/marty-credentials",
 }
+CONSUMER_DENIAL = "Private fork access is limited to the four ElevenID consumer workflows"
 PRIVATE_FORKS = {
     "elevenid/isomdl-elevenid", "elevenid/ssi-elevenid", "elevenid/sd-jwt-rust",
 }
@@ -40,7 +41,7 @@ def require(condition: bool, message: str) -> None:
 def validate_context(env: dict[str, str], event: dict) -> None:
     repository = env.get("GITHUB_REPOSITORY", "")
     require(env.get("GITHUB_ACTIONS") == "true" and repository in CONSUMERS,
-            "Private fork access is limited to the four ElevenID consumer workflows")
+            CONSUMER_DENIAL)
     require(event.get("repository", {}).get("full_name") == repository,
             "The event repository does not match this consumer")
     require(env.get("GITHUB_ACTOR", "").lower() != "dependabot[bot]"

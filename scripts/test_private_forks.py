@@ -1,6 +1,7 @@
 """Security contracts for the fetch-only private dependency credential."""
 
 import argparse
+import ast
 import importlib.util
 import json
 import os
@@ -17,6 +18,51 @@ SPEC.loader.exec_module(private_forks)
 
 
 class PrivateForkAccessTests(unittest.TestCase):
+    def test_generated_policy_preserves_all_canonical_function_bodies(self):
+        spec = importlib.util.spec_from_file_location("sync_private_forks", Path(__file__).with_name("sync_private_forks.py"))
+        sync = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sync)
+        raw = HELPER.read_bytes().replace(b"\r\n", b"\n")
+        policy = {"consumers": ["ElevenID/marty-authenticator", "ElevenID/Marty"], "denial": "Explicit test policy"}
+        generated = sync.render(raw, policy, "a" * 40)
+        def functions(source):
+            return [ast.dump(node) for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)]
+        self.assertEqual(functions(raw), functions(generated))
+        namespace = {"__name__": "contract_test", "__file__": str(HELPER)}
+        exec(compile(generated, str(HELPER), "exec"), namespace)
+        self.assertEqual(namespace["CONSUMERS"], set(policy["consumers"]))
+        with self.assertRaisesRegex(ValueError, "Explicit test policy"):
+            namespace["validate_context"](*self.context())
+
+    def test_pin_generation_ignores_dirty_source_and_detects_consumer_tampering(self):
+        spec = importlib.util.spec_from_file_location("sync_private_forks", Path(__file__).with_name("sync_private_forks.py"))
+        sync = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sync)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "source"
+            consumer = Path(directory) / "consumer"
+            (root / ".github/scripts").mkdir(parents=True)
+            (consumer / ".github/scripts").mkdir(parents=True)
+            def git(*args):
+                return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+            git("init")
+            (root / sync.SOURCE).write_bytes(HELPER.read_bytes().replace(b"\r\n", b"\n"))
+            git("add", ".")
+            git("-c", "user.name=Contract test", "-c", "user.email=contract@example.invalid", "commit", "-m", "fixture")
+            revision = git("rev-parse", "HEAD")
+            manifest = consumer / ".github/scripts/private-forks.source.json"
+            manifest.write_text(json.dumps({"repository": sync.REPOSITORY, "path": sync.SOURCE,
+                "policy": {"consumers": sorted(private_forks.CONSUMERS), "denial": private_forks.CONSUMER_DENIAL}}))
+            sync.synchronize(root, consumer, revision, False)
+            (root / sync.SOURCE).write_text("dirty unreviewed content")
+            sync.synchronize(root, consumer, None, True)
+            with (consumer / sync.SOURCE).open("a") as changed:
+                changed.write("# unauthorized drift\n")
+            with self.assertRaisesRegex(ValueError, "differs"):
+                sync.synchronize(root, consumer, None, True)
+            with self.assertRaisesRegex(ValueError, "immutable"):
+                sync.source_bytes(root, "main")
+
     def context(self, name="pull_request"):
         env = {
             "GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "ElevenID/marty-core",
