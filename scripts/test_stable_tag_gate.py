@@ -158,6 +158,49 @@ class ReleaseProofTests(unittest.TestCase):
                 self.evidence(),
             )
 
+    def test_every_release_identity_binding_is_enforced(self) -> None:
+        for field in self.prep_run():
+            with self.subTest(run_field=field):
+                run = self.prep_run()
+                run[field] = None
+                with self.assertRaises(stable_tag_gate.StableTagGateError):
+                    stable_tag_gate.validate_release_proof(
+                        "ElevenID/marty-core", "v1.2.3", COMMIT, "tag", TAG_OBJECT,
+                        self.message(), run, self.evidence(),
+                    )
+        for field in self.evidence():
+            with self.subTest(evidence_field=field):
+                evidence = self.evidence()
+                evidence[field] = None
+                with self.assertRaises(stable_tag_gate.StableTagGateError):
+                    stable_tag_gate.validate_release_proof(
+                        "ElevenID/marty-core", "v1.2.3", COMMIT, "tag", TAG_OBJECT,
+                        self.message(), self.prep_run(), evidence,
+                    )
+
+    def test_duplicate_tag_markers_are_rejected(self) -> None:
+        for marker, value in (
+            ("Stable-Tag-Gate", stable_tag_gate.SCHEMA),
+            ("Preparation-Run", "42"),
+            ("Source-SHA", COMMIT),
+        ):
+            with self.subTest(marker=marker):
+                with self.assertRaisesRegex(stable_tag_gate.StableTagGateError, "duplicate"):
+                    stable_tag_gate.parse_tag_message(self.message() + f"{marker}: {value}\n")
+
+    def test_record_tag_preserves_input_and_requires_exact_peel(self) -> None:
+        evidence = stable_tag_gate.preparation_evidence(
+            "ElevenID/marty-core", "v1.2.3", COMMIT, 42, [{"run_id": 10}]
+        )
+        recorded = stable_tag_gate.record_tag(evidence, TAG_OBJECT, COMMIT)
+        self.assertNotIn("tag_object_sha", evidence)
+        self.assertEqual(recorded["tag_object_sha"], TAG_OBJECT)
+        self.assertEqual(recorded["peeled_source_sha"], COMMIT)
+        for tag_object, peel in (("invalid", COMMIT), (TAG_OBJECT, "c" * 40)):
+            with self.subTest(tag_object=tag_object, peel=peel):
+                with self.assertRaises(stable_tag_gate.StableTagGateError):
+                    stable_tag_gate.record_tag(evidence, tag_object, peel)
+
 
 if __name__ == "__main__":
     unittest.main()
