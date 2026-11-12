@@ -15,7 +15,9 @@
     h2 { margin: 0 0 14px; font-size: 16px; letter-spacing: 0; }
     form { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
     label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
-    input { width: 100%; min-width: 0; height: 42px; border: 1px solid #8b9992; border-radius: 4px; padding: 0 12px; background: white; font: inherit; }
+    input, select { width: 100%; min-width: 0; height: 42px; border: 1px solid #8b9992; border-radius: 4px; padding: 0 12px; background: white; font: inherit; }
+    .profile-selection { grid-column: 1 / -1; }
+    [hidden] { display: none !important; }
     button { height: 42px; border: 0; border-radius: 4px; padding: 0 16px; font: inherit; font-weight: 650; cursor: pointer; color: white; background: #16775e; }
     button.secondary { background: #dfe5e2; color: #183b32; }
     button:disabled { opacity: .55; cursor: wait; }
@@ -39,6 +41,16 @@
     <section>
       <h2>Receive credential</h2>
       <form id="receive-form">
+        <label class="profile-selection">JWT profile
+          <select id="securing-profile" name="expected_securing_profile">
+            <option value="">Existing offer (default)</option>
+            <option value="marty_nested_vc2_jwt_v1">Explicit historical nested VC2 JWT</option>
+            <option value="w3c_vc2_jose_2026_v1">Direct VC2 JOSE (2026)</option>
+          </select>
+        </label>
+        <label id="configuration-selection" class="profile-selection" hidden>Exact offered configuration ID
+          <input id="configuration-id" name="credential_configuration_id" autocomplete="off">
+        </label>
         <label>Credential offer URI<input id="offer-uri" name="offer_uri" autocomplete="off" required></label>
         <button type="submit">Receive</button>
       </form>
@@ -108,10 +120,25 @@
       catch (error) { setStatus(error.message, true); }
       finally { button.disabled = false; }
     };
+    const profileNode = document.querySelector('#securing-profile');
+    const configurationNode = document.querySelector('#configuration-id');
+    profileNode.addEventListener('change', () => {
+      const selected = profileNode.value !== '';
+      document.querySelector('#configuration-selection').hidden = !selected;
+      configurationNode.required = selected;
+    });
+    const receivePayload = () => {
+      const body = { offer_uri: document.querySelector('#offer-uri').value };
+      if (profileNode.value !== '') {
+        body.expected_securing_profile = profileNode.value;
+        body.credential_configuration_id = configurationNode.value;
+      }
+      return body;
+    };
     document.querySelector('#receive-form').addEventListener('submit', (event) => {
       event.preventDefault();
       runForm(event.currentTarget, () => request('/api/receive', {
-        method: 'POST', body: JSON.stringify({ offer_uri: document.querySelector('#offer-uri').value })
+        method: 'POST', body: JSON.stringify(receivePayload())
       }), 'Credential received');
     });
     const consent = document.querySelector('#presentation-consent');

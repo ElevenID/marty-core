@@ -8,6 +8,7 @@ cryptographic operations and supports:
 - signed OpenID4VP request objects with DCQL
 - SD-JWT selective disclosure with nonce/audience key binding
 - W3C VC-JWT presentation for `jwt_vc_json` DCQL queries
+- explicit opt-in to Core's versioned historical and direct VC2 JOSE profiles
 
 Credential material remains in the local wallet process, but private keys do
 not. The test wallet requires an opaque ES256 signer agent and an explicit
@@ -77,6 +78,66 @@ cargo run -p marty-test-wallet --bin marty-test-signer-agent
 ```
 
 The default browser URL is `http://127.0.0.1:8787`.
+
+## Explicit JWT securing profiles
+
+The Receive control defaults to the existing offer behavior. For a versioned
+configuration, select the expected JWT profile and enter its exact offered
+configuration ID. The API equivalent adds both fields to `POST /api/receive`:
+
+```json
+{
+  "offer_uri": "<credential-offer URI>",
+  "credential_configuration_id": "Badge#vc2-jose-2026-v1",
+  "expected_securing_profile": "w3c_vc2_jose_2026_v1"
+}
+```
+
+| Selected profile | Exact metadata/DCQL format | Configuration ID |
+| --- | --- | --- |
+| `marty_nested_vc2_jwt_v1` | `jwt_vc_json` | Existing base ID |
+| `w3c_vc2_jose_2026_v1` | `application/vc+jwt` | Base ID plus `#vc2-jose-2026-v1` |
+
+The selected ID must occur exactly once in the offer, and issuer metadata must
+advertise the matching `marty_securing_profile` and format. Missing, null,
+unknown or conflicting profile metadata fails before the holder signer probe
+or pre-authorized token exchange. An omitted request profile preserves the old
+path for unmarked configurations; marked configurations require explicit opt-in.
+There is no retry using another profile or payload-shape detection.
+
+For opted-in receipt, Core authenticates the issuer signature, profile and
+credential validity before the wallet derives display fields. The wallet keeps
+the exact compact JWT and its negotiated binding in its existing process/session
+storage. The optional `profiled_jwt_evidence` summary contains the binding,
+credential digest and evaluation time, with trust, status and holder binding
+reported as `not_checked`. It contains no raw credential. Historical summary
+records omit this field and retain their existing serialized shape.
+
+A signed DCQL request for an opted-in credential must carry the same exact
+profile/format pair and supported `type_values` metadata, as emitted by Core's
+`build_profiled_jwt_vc_query`. Profiled credentials cannot satisfy unmarked
+queries, and unmarked historical credentials cannot satisfy marked queries.
+Marked queries with nonempty `claims` are rejected; this opt-in supports type
+selection only and does not silently ignore requested claim constraints.
+Core checks the raw marked DCQL shape before typed parsing: unsupported
+`trusted_authorities`, `claim_sets`, `multiple`, `credential_sets` and other
+credential/envelope fields are rejected, including top-level constraints on a
+mixed marked/legacy request. Query IDs must be unique in such a request. The
+producer's optional holder-binding flag must be boolean; either boolean value
+still results in a cryptographic holder proof from this wallet. Unmarked legacy
+request parsing retains its existing behavior.
+The wallet always prepares a cryptographic holder proof, reauthenticates the
+retained JWT at presentation time, and delegates signing to the same opaque
+holder signer. Direct-profile presentations preserve the exact JWT in a VC2
+envelope. Existing presentation consent and session ownership checks apply.
+
+This is a first-party, non-production consumer of the bounded profiles described
+in [Core's VC2 JOSE profile contract](../docs/vc2-jose-profiles.md). The direct
+profile does not claim the distinct Open Badges 3 document 1.4.5 JWT-proof profile
+or independent-wallet conformance. UI issuer template/transaction persistence,
+frozen verifier query negotiation, signed public test vectors and independent
+wallet/verifier qualification remain separate work; this wallet opt-in does not
+change their defaults or release evidence.
 
 ## Isolated demo sessions
 

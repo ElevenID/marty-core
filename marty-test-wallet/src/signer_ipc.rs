@@ -795,7 +795,7 @@ mod tests {
         let directory = cleanup.expect("Unix endpoint must own a private directory");
         assert!(std::path::Path::new(&endpoint).is_absolute());
         assert!(
-            endpoint.as_bytes().len() <= 90,
+            endpoint.len() <= 90,
             "Unix socket fixture path exceeds the conservative portable budget: {endpoint}"
         );
         assert_eq!(
@@ -982,9 +982,11 @@ mod tests {
     #[tokio::test]
     async fn authenticated_local_ipc_round_trip_has_no_skipped_transport() {
         let (endpoint, cleanup) = endpoint();
-        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        let listener = LocalListener::bind(&endpoint).unwrap();
         let server_key = SignerAuthenticationKey::from_bytes([0x5a; 32]);
         let server = tokio::spawn(async move {
+            #[cfg(windows)]
+            let mut listener = listener;
             #[cfg(windows)]
             let mut stream = listener.accept().await.unwrap();
             #[cfg(unix)]
@@ -1018,9 +1020,11 @@ mod tests {
     #[tokio::test]
     async fn local_ipc_rejects_wrong_authentication_key_end_to_end() {
         let (endpoint, cleanup) = endpoint();
-        let mut listener = LocalListener::bind(&endpoint).unwrap();
+        let listener = LocalListener::bind(&endpoint).unwrap();
         let server_key = SignerAuthenticationKey::from_bytes([0x5a; 32]);
         let server = tokio::spawn(async move {
+            #[cfg(windows)]
+            let mut listener = listener;
             #[cfg(windows)]
             let mut stream = listener.accept().await.unwrap();
             #[cfg(unix)]

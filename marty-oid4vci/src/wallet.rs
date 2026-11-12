@@ -1527,6 +1527,89 @@ impl WalletEngine {
         })
     }
 
+    /// Versioned JWT consumers support the bounded type-only query producer.
+    /// Inspect the raw shape before typed deserialization can discard unknown
+    /// constraints. Historical, unmarked DCQL retains its existing parser.
+    fn validate_profiled_dcql_shape(dcql: &serde_json::Value) -> Oid4vciResult<()> {
+        use serde_json::Value;
+        let Some(credentials) = dcql.get("credentials").and_then(Value::as_array) else {
+            return Ok(()); // Ordinary typed parsing still rejects malformed DCQL.
+        };
+        fn marked(credential: &Value) -> bool {
+            credential.pointer("/meta/marty_securing_profile").is_some()
+                || credential.get("format").and_then(Value::as_str) == Some("application/vc+jwt")
+        }
+        if !credentials.iter().any(marked) {
+            return Ok(());
+        }
+        let invalid = || {
+            Oid4vciError::InvalidRequest(
+                "Profiled JWT DCQL supports only explicit profile and credential type selection"
+                    .into(),
+            )
+        };
+        if dcql.as_object().is_none_or(|object| object.len() != 1) {
+            return Err(invalid());
+        }
+        let mut ids = std::collections::HashSet::new();
+        if credentials
+            .iter()
+            .filter_map(|credential| credential.get("id").and_then(Value::as_str))
+            .any(|id| !ids.insert(id))
+        {
+            return Err(invalid());
+        }
+        for credential in credentials.iter().filter(|credential| marked(credential)) {
+            let object = credential.as_object().ok_or_else(invalid)?;
+            if object.keys().any(|key| {
+                ![
+                    "id",
+                    "format",
+                    "meta",
+                    "claims",
+                    "require_cryptographic_holder_binding",
+                ]
+                .contains(&key.as_str())
+            }) {
+                return Err(invalid());
+            }
+            if credential
+                .get("claims")
+                .is_some_and(|claims| claims.as_array().is_none_or(|claims| !claims.is_empty()))
+            {
+                return Err(invalid());
+            }
+            let holder_binding = match credential.get("require_cryptographic_holder_binding") {
+                None => true,
+                Some(value) => value.as_bool().ok_or_else(invalid)?,
+            };
+            let meta = credential
+                .get("meta")
+                .and_then(Value::as_object)
+                .ok_or_else(invalid)?;
+            if meta.len() != 2
+                || !meta.contains_key("type_values")
+                || !meta.contains_key("marty_securing_profile")
+            {
+                return Err(invalid());
+            }
+            let binding = crate::presentation_request::profiled_jwt_vc_query_binding(credential)?;
+            let types =
+                serde_json::from_value(meta["type_values"].clone()).map_err(|_| invalid())?;
+            let id = credential
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            crate::presentation_request::build_profiled_jwt_vc_query(
+                id,
+                binding,
+                types,
+                holder_binding,
+            )?;
+        }
+        Ok(())
+    }
+
     fn parsed_request_from_value(
         value: serde_json::Value,
     ) -> Oid4vciResult<ParsedPresentationRequest> {
@@ -1535,6 +1618,10 @@ impl WalletEngine {
                 "Presentation request object must be a JSON object".into(),
             ));
         };
+
+        if let Some(dcql) = request.get("dcql_query") {
+            Self::validate_profiled_dcql_shape(dcql)?;
+        }
 
         let presentation_definition = match request.get("presentation_definition") {
             Some(pd_value) => Some(serde_json::from_value(pd_value.clone()).map_err(|e| {
@@ -2137,6 +2224,169 @@ mod tests {
         assert_eq!(dcql_query.credentials.len(), 1);
         assert_eq!(dcql_query.credentials[0].id, "member_credential");
         assert_eq!(dcql_query.credentials[0].format, "dc+sd-jwt");
+    }
+
+    fn profiled_dcql_uri(dcql: &serde_json::Value) -> String {
+        format!(
+            "openid4vp://authorize?client_id={}&nonce=nonce-123&response_uri={}&dcql_query={}",
+            encode_query_json("https://verifier.example"),
+            encode_query_json("https://verifier.example/submit"),
+            encode_query_json(&dcql.to_string()),
+        )
+    }
+
+    #[tokio::test]
+    async fn profiled_dcql_parser_admits_canonical_profiles_and_keeps_unmarked_legacy_behavior() {
+        use crate::{JwtVcProfileBinding, JwtVcSecuringProfile};
+        use serde_json::json;
+        let engine = WalletEngine::new();
+        for profile in [
+            JwtVcSecuringProfile::MartyNestedVc2JwtV1,
+            JwtVcSecuringProfile::W3cVc2Jose2026V1,
+        ] {
+            for holder_binding in [true, false] {
+                let credential = crate::presentation_request::build_profiled_jwt_vc_query(
+                    "badge",
+                    JwtVcProfileBinding::new(profile),
+                    vec![vec![
+                        "VerifiableCredential".into(),
+                        "OpenBadgeCredential".into(),
+                    ]],
+                    holder_binding,
+                )
+                .unwrap();
+                let raw = json!({"credentials":[credential]});
+                let parsed = engine
+                    .parse_presentation_request(&profiled_dcql_uri(&raw))
+                    .await
+                    .unwrap();
+                let admitted = &parsed.dcql_query.unwrap().credentials[0];
+                assert_eq!(admitted.format, profile.credential_format());
+                assert_eq!(
+                    admitted.meta.as_ref().unwrap()["marty_securing_profile"],
+                    profile.as_str()
+                );
+                let mut empty_claims = raw.clone();
+                empty_claims["credentials"][0]["claims"] = json!([]);
+                empty_claims["credentials"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("require_cryptographic_holder_binding");
+                assert!(engine
+                    .parse_presentation_request(&profiled_dcql_uri(&empty_claims))
+                    .await
+                    .is_ok());
+            }
+        }
+        // New marked-query admission does not reinterpret historical callers'
+        // existing typed-parser treatment of unmodelled DCQL extensions.
+        let unmarked = json!({"credentials":[{
+            "id":"legacy", "format":"jwt_vc_json", "meta":{"type_values":[["VerifiableCredential"]]},
+            "trusted_authorities":[{"type":"aki", "values":["legacy"]}],
+            "claim_sets":[["email"]], "multiple":true,
+            "claims":[{"id":"email", "path":["email"]}]
+        }], "credential_sets":[{"options":[["legacy"]]}]});
+        let parsed = engine
+            .parse_presentation_request(&profiled_dcql_uri(&unmarked))
+            .await
+            .unwrap();
+        let legacy = &parsed.dcql_query.unwrap().credentials[0];
+        assert_eq!(legacy.id, "legacy");
+        assert_eq!(legacy.claims[0].id, "email");
+    }
+
+    #[tokio::test]
+    async fn profiled_dcql_parser_rejects_raw_constraints_before_typed_projection() {
+        use crate::{JwtVcProfileBinding, JwtVcSecuringProfile};
+        use serde_json::json;
+        let engine = WalletEngine::new();
+        for profile in [
+            JwtVcSecuringProfile::MartyNestedVc2JwtV1,
+            JwtVcSecuringProfile::W3cVc2Jose2026V1,
+        ] {
+            let credential = crate::presentation_request::build_profiled_jwt_vc_query(
+                "badge",
+                JwtVcProfileBinding::new(profile),
+                vec![vec![
+                    "VerifiableCredential".into(),
+                    "OpenBadgeCredential".into(),
+                ]],
+                true,
+            )
+            .unwrap();
+            let original = json!({"credentials":[credential]});
+            for (field, value) in [
+                (
+                    "trusted_authorities",
+                    json!([{"type":"aki", "values":["authority"]}]),
+                ),
+                ("claim_sets", json!([["email"]])),
+                ("multiple", json!(true)),
+                ("unknown_constraint", json!(null)),
+                ("claims", json!([{"id":"email", "path":["email"]}])),
+                ("claims", json!(null)),
+                ("require_cryptographic_holder_binding", json!(null)),
+                ("require_cryptographic_holder_binding", json!("true")),
+            ] {
+                let mut changed = original.clone();
+                changed["credentials"][0][field] = value;
+                assert!(
+                    engine
+                        .parse_presentation_request(&profiled_dcql_uri(&changed))
+                        .await
+                        .is_err(),
+                    "{field}"
+                );
+            }
+            for marker in [json!(null), json!("unknown"), json!("jwt_vc_json")] {
+                let mut changed = original.clone();
+                changed["credentials"][0]["meta"]["marty_securing_profile"] = marker;
+                assert!(engine
+                    .parse_presentation_request(&profiled_dcql_uri(&changed))
+                    .await
+                    .is_err());
+            }
+            let mut mixed = original.clone();
+            mixed["credentials"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"id":"legacy", "format":"dc+sd-jwt"}));
+            assert!(engine
+                .parse_presentation_request(&profiled_dcql_uri(&mixed))
+                .await
+                .is_ok());
+            mixed["credential_sets"] = json!([{"options":[["badge", "legacy"]]}]);
+            assert!(engine
+                .parse_presentation_request(&profiled_dcql_uri(&mixed))
+                .await
+                .is_err());
+            let mut duplicate = original.clone();
+            duplicate["credentials"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"id":"badge", "format":"dc+sd-jwt"}));
+            assert!(engine
+                .parse_presentation_request(&profiled_dcql_uri(&duplicate))
+                .await
+                .is_err());
+            let mut extra_meta = original.clone();
+            extra_meta["credentials"][0]["meta"]["vct_values"] = json!(["unknown"]);
+            assert!(engine
+                .parse_presentation_request(&profiled_dcql_uri(&extra_meta))
+                .await
+                .is_err());
+            if profile == JwtVcSecuringProfile::W3cVc2Jose2026V1 {
+                let mut missing = original;
+                missing["credentials"][0]["meta"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("marty_securing_profile");
+                assert!(engine
+                    .parse_presentation_request(&profiled_dcql_uri(&missing))
+                    .await
+                    .is_err());
+            }
+        }
     }
 
     #[test]

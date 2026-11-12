@@ -20,6 +20,8 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
+mod jwt_vc_profiles;
+
 #[derive(Clone)]
 struct AppState {
     engine: Arc<WalletEngine>,
@@ -62,6 +64,7 @@ struct StoredCredential {
     claim_names: Vec<String>,
     received_at: String,
     open_badge_evidence: Option<marty_oid4vci::VerifiedOpenBadgeJwt>,
+    profiled_jwt: Option<jwt_vc_profiles::ProfiledJwtEvidence>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,6 +81,8 @@ struct CredentialSummary {
     received_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     open_badge_evidence: Option<marty_oid4vci::VerifiedOpenBadgeJwt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profiled_jwt_evidence: Option<jwt_vc_profiles::ProfiledJwtEvidence>,
 }
 
 impl From<&StoredCredential> for CredentialSummary {
@@ -85,13 +90,17 @@ impl From<&StoredCredential> for CredentialSummary {
         Self {
             id: credential.id.clone(),
             credential_configuration_id: credential.credential_configuration_id.clone(),
-            format: credential.format.as_str().to_string(),
+            format: credential.profiled_jwt.as_ref().map_or_else(
+                || credential.format.as_str().to_string(),
+                |evidence| evidence.binding().credential_format().to_string(),
+            ),
             vct: credential.vct.clone(),
             achievement_id: credential.achievement_id.clone(),
             credential_types: credential.credential_types.clone(),
             claim_names: credential.claim_names.clone(),
             received_at: credential.received_at.clone(),
             open_badge_evidence: credential.open_badge_evidence.clone(),
+            profiled_jwt_evidence: credential.profiled_jwt.clone(),
         }
     }
 }
@@ -220,6 +229,9 @@ fn trusted_issuer_keys_from_env() -> Result<TrustedSdJwtIssuerKeys, String> {
 struct ReceiveRequest {
     offer_uri: String,
     tx_code: Option<String>,
+    credential_configuration_id: Option<String>,
+    #[serde(default, deserialize_with = "jwt_vc_profiles::optional_profile")]
+    expected_securing_profile: Option<marty_oid4vci::JwtVcSecuringProfile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,11 +531,17 @@ async fn receive_credential(
             "This credential offer requires a transaction code",
         ));
     }
-    let configuration_id = offer
-        .credential_configuration_ids
-        .first()
-        .cloned()
-        .ok_or_else(|| AppError::bad_request("Credential offer contains no configuration"))?;
+    if offer.credential_configuration_ids.is_empty() {
+        return Err(AppError::bad_request(
+            "Credential offer contains no configuration",
+        ));
+    }
+    let configuration_id = jwt_vc_profiles::select_configuration(
+        &offer.credential_configuration_ids,
+        request.credential_configuration_id.as_deref(),
+        request.expected_securing_profile,
+    )
+    .map_err(AppError::unprocessable)?;
     let metadata = state
         .engine
         .fetch_issuer_metadata(&offer.credential_issuer)
@@ -541,9 +559,21 @@ async fn receive_credential(
         .get("format")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::unprocessable("Credential configuration has no format"))?;
-    let format = CredentialFormat::from_str_loose(format_name).ok_or_else(|| {
-        AppError::unprocessable(format!("Unsupported credential format {format_name}"))
-    })?;
+    let profile_binding = jwt_vc_profiles::receipt_binding(
+        request.expected_securing_profile,
+        &configuration_id,
+        configuration,
+    )
+    .map_err(AppError::unprocessable)?;
+    let format = if profile_binding.is_some() {
+        // This enum is the internal JWT family; the retained binding owns the
+        // exact wire format and selects every profiled operation below.
+        CredentialFormat::JwtVcJson
+    } else {
+        CredentialFormat::from_str_loose(format_name).ok_or_else(|| {
+            AppError::unprocessable(format!("Unsupported credential format {format_name}"))
+        })?
+    };
     if !matches!(
         format,
         CredentialFormat::SdJwt | CredentialFormat::JwtVcJson
@@ -607,27 +637,52 @@ async fn receive_credential(
     let raw = extract_credential(&response).ok_or_else(|| {
         AppError::unprocessable("Credential response contained no credential value")
     })?;
-    let payload = decode_credential_payload(&raw, &format)?;
-    let identity = credential_identity(&payload, &format);
-    let open_badge_evidence = if matches!(format, CredentialFormat::JwtVcJson)
-        && identity
-            .credential_types
-            .iter()
-            .any(|kind| kind == "OpenBadgeCredential")
-    {
-        Some(
-            marty_oid4vci::verify_open_badge_jwt(
+    let (identity, claim_names, open_badge_evidence, profiled_jwt) =
+        if let Some(binding) = profile_binding {
+            let authenticated = jwt_vc_profiles::authenticate_receipt(
                 &raw,
+                binding,
                 state.issuer_resolver.as_ref(),
                 chrono::Utc::now().timestamp(),
             )
-            .map_err(|error| AppError::unprocessable(error.to_string()))?,
-        )
-    } else {
-        None
-    };
-
-    let claim_names = credential_claim_names(&raw, &format, &payload);
+            .map_err(AppError::unprocessable)?;
+            (
+                CredentialIdentity {
+                    vct: authenticated.vct,
+                    achievement_id: authenticated.achievement_id,
+                    credential_types: authenticated.credential_types,
+                },
+                authenticated.claim_names,
+                None,
+                Some(authenticated.evidence),
+            )
+        } else {
+            let payload = decode_credential_payload(&raw, &format)?;
+            let identity = credential_identity(&payload, &format);
+            let open_badge_evidence = if matches!(format, CredentialFormat::JwtVcJson)
+                && identity
+                    .credential_types
+                    .iter()
+                    .any(|kind| kind == "OpenBadgeCredential")
+            {
+                Some(
+                    marty_oid4vci::verify_open_badge_jwt(
+                        &raw,
+                        state.issuer_resolver.as_ref(),
+                        chrono::Utc::now().timestamp(),
+                    )
+                    .map_err(|error| AppError::unprocessable(error.to_string()))?,
+                )
+            } else {
+                None
+            };
+            (
+                identity,
+                credential_claim_names(&raw, &format, &payload),
+                open_badge_evidence,
+                None,
+            )
+        };
     let credential = StoredCredential {
         id: uuid::Uuid::new_v4().to_string(),
         credential_configuration_id: configuration_id,
@@ -639,6 +694,7 @@ async fn receive_credential(
         raw,
         received_at: chrono::Utc::now().to_rfc3339(),
         open_badge_evidence,
+        profiled_jwt,
     };
     let summary = CredentialSummary::from(&credential);
     wallet.write().await.credentials.push(credential);
@@ -662,13 +718,18 @@ async fn present_credential(
     let credentials = wallet.read().await.credentials.clone();
     let mut presentations = HashMap::new();
     for query in &dcql.credentials {
-        let requested_format =
+        let query_binding =
+            jwt_vc_profiles::query_binding(query).map_err(AppError::unprocessable)?;
+        let requested_format = if query_binding.is_some() {
+            CredentialFormat::JwtVcJson
+        } else {
             CredentialFormat::from_str_loose(&query.format).ok_or_else(|| {
                 AppError::unprocessable(format!(
                     "Unsupported DCQL credential format {}",
                     query.format
                 ))
-            })?;
+            })?
+        };
         if !matches!(
             requested_format,
             CredentialFormat::SdJwt | CredentialFormat::JwtVcJson
@@ -711,18 +772,40 @@ async fn present_credential(
                     .map_err(|error| AppError::bad_request(error.to_string()))?
             }
             CredentialFormat::JwtVcJson => {
-                let prepared = marty_oid4vci::prepare_verified_jwt_vc_presentation(
-                    &credential.raw,
-                    state.issuer_resolver.as_ref(),
-                    &presentation_request.nonce,
-                    &presentation_request.client_id,
-                    &state.holder_signer.public_jwk_json,
-                )
-                .map_err(|error| AppError::bad_request(error.to_string()))?;
-                let signature = state.holder_signer.sign(prepared.signing_input()).await?;
-                prepared
-                    .complete(&signature)
-                    .map_err(|error| AppError::bad_request(error.to_string()))?
+                if let Some(stored) = credential.profiled_jwt.as_ref() {
+                    let prepared = jwt_vc_profiles::prepare_presentation(
+                        &credential.raw,
+                        stored,
+                        query,
+                        jwt_vc_profiles::PresentationContext {
+                            resolver: state.issuer_resolver.as_ref(),
+                            nonce: &presentation_request.nonce,
+                            audience: &presentation_request.client_id,
+                            holder_public_jwk: &state.holder_signer.public_jwk_json,
+                            evaluated_at: chrono::Utc::now().timestamp(),
+                        },
+                    )
+                    .map_err(AppError::unprocessable)?;
+                    let signature = state.holder_signer.sign(prepared.signing_input()).await?;
+                    prepared
+                        .complete(&signature)
+                        .map_err(|error| AppError::bad_request(error.to_string()))?
+                        .vp_token()
+                        .to_owned()
+                } else {
+                    let prepared = marty_oid4vci::prepare_verified_jwt_vc_presentation(
+                        &credential.raw,
+                        state.issuer_resolver.as_ref(),
+                        &presentation_request.nonce,
+                        &presentation_request.client_id,
+                        &state.holder_signer.public_jwk_json,
+                    )
+                    .map_err(|error| AppError::bad_request(error.to_string()))?;
+                    let signature = state.holder_signer.sign(prepared.signing_input()).await?;
+                    prepared
+                        .complete(&signature)
+                        .map_err(|error| AppError::bad_request(error.to_string()))?
+                }
             }
             _ => unreachable!("unsupported formats are rejected before selection"),
         };
@@ -920,6 +1003,12 @@ fn credential_matches_query(
     requested_format: &CredentialFormat,
 ) -> bool {
     if &credential.format != requested_format {
+        return false;
+    }
+    if let Some(stored) = &credential.profiled_jwt {
+        return jwt_vc_profiles::matches_query(stored, &credential.credential_types, query);
+    }
+    if !matches!(jwt_vc_profiles::query_binding(query), Ok(None)) {
         return false;
     }
     match requested_format {
@@ -1200,6 +1289,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn profiled_receipt_rejects_unselected_or_conflicting_metadata_before_signer_and_token() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let token_requests = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
+        let metadata = serde_json::json!({
+            "credential_issuer": issuer, "token_endpoint": format!("{issuer}/token"),
+            "credential_endpoint": format!("{issuer}/credential"),
+            "credential_configurations_supported": {
+                "badge#vc2-jose-2026-v1": {"format":"application/vc+jwt", "marty_securing_profile":"w3c_vc2_jose_2026_v1"},
+                "historical": {"format":"jwt_vc_json", "marty_securing_profile":"marty_nested_vc2_jwt_v1"},
+                "crossed#vc2-jose-2026-v1": {"format":"jwt_vc_json", "marty_securing_profile":"w3c_vc2_jose_2026_v1"},
+                "null": {"format":"jwt_vc_json", "marty_securing_profile":null}
+            }
+        });
+        let counter = token_requests.clone();
+        let issuer_app = Router::new()
+            .route(
+                "/.well-known/openid-credential-issuer",
+                get(move || {
+                    let metadata = metadata.clone();
+                    async { Json(metadata) }
+                }),
+            )
+            .route(
+                "/token",
+                post(move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    async { StatusCode::INTERNAL_SERVER_ERROR }
+                }),
+            );
+        let issuer_server = tokio::spawn(async move {
+            axum::serve(listener, issuer_app).await.unwrap();
+        });
+        // The unreachable signer is a control: anything that reaches it returns
+        // 503, whereas profile admission must reject these requests with 422.
+        let state = test_state();
+        let wallet_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let wallet = format!("http://{}", wallet_listener.local_addr().unwrap());
+        let app = wallet_router(state.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(wallet_listener, app).await.unwrap();
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let offer = serde_json::json!({"credential_issuer":issuer,
+            "credential_configuration_ids":["badge#vc2-jose-2026-v1", "historical", "crossed#vc2-jose-2026-v1", "null"],
+            "grants":{"urn:ietf:params:oauth:grant-type:pre-authorized_code":{"pre-authorized_code":uuid::Uuid::new_v4().to_string()}}});
+        let mut offer_uri = reqwest::Url::parse("https://offer.invalid/").unwrap();
+        offer_uri
+            .query_pairs_mut()
+            .append_pair("credential_offer", &offer.to_string());
+        for selection in [
+            serde_json::json!({}),
+            serde_json::json!({"expected_securing_profile":"w3c_vc2_jose_2026_v1"}),
+            serde_json::json!({"expected_securing_profile":"w3c_vc2_jose_2026_v1", "credential_configuration_id":"missing"}),
+            serde_json::json!({"expected_securing_profile":"w3c_vc2_jose_2026_v1", "credential_configuration_id":"historical"}),
+            serde_json::json!({"expected_securing_profile":"w3c_vc2_jose_2026_v1", "credential_configuration_id":"crossed#vc2-jose-2026-v1"}),
+            serde_json::json!({"credential_configuration_id":"historical"}),
+            serde_json::json!({"credential_configuration_id":"null"}),
+            serde_json::json!({"expected_securing_profile":null, "credential_configuration_id":"historical"}),
+        ] {
+            let expected_status =
+                if selection.get("expected_securing_profile") == Some(&Value::Null) {
+                    StatusCode::BAD_REQUEST // malformed enum input is rejected by the JSON extractor
+                } else {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                };
+            let mut body = selection;
+            body["offer_uri"] = serde_json::json!(offer_uri.as_str());
+            let response = client
+                .post(format!("{wallet}/api/receive"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let diagnostic = response.text().await.unwrap();
+            assert_eq!(status, expected_status, "{diagnostic}");
+        }
+        let admitted = client
+            .post(format!("{wallet}/api/receive"))
+            .json(&serde_json::json!({
+                "offer_uri":offer_uri.as_str(), "expected_securing_profile":"w3c_vc2_jose_2026_v1",
+                "credential_configuration_id":"badge#vc2-jose-2026-v1"
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(admitted.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let mut empty_offer = offer.clone();
+        empty_offer["credential_configuration_ids"] = serde_json::json!([]);
+        let mut empty_uri = reqwest::Url::parse("https://offer.invalid/").unwrap();
+        empty_uri
+            .query_pairs_mut()
+            .append_pair("credential_offer", &empty_offer.to_string());
+        let empty = client
+            .post(format!("{wallet}/api/receive"))
+            .json(&serde_json::json!({"offer_uri":empty_uri.as_str()}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            empty.json::<Value>().await.unwrap(),
+            serde_json::json!({"error":"Credential offer contains no configuration"})
+        );
+        assert_eq!(token_requests.load(Ordering::SeqCst), 0);
+        assert!(state.wallet.read().await.credentials.is_empty());
+        server.abort();
+        let _ = server.await;
+        issuer_server.abort();
+        let _ = issuer_server.await;
+    }
+
+    #[tokio::test]
     async fn wallet_sessions_http_bind_run_ownership_and_preserve_other_wallets() {
         let state = test_state();
         let record = |id: &str| StoredCredential {
@@ -1213,6 +1421,7 @@ mod tests {
             claim_names: vec![],
             received_at: "2026-01-01T00:00:00Z".into(),
             open_badge_evidence: None,
+            profiled_jwt: None,
         };
         state
             .wallet
@@ -1359,9 +1568,18 @@ mod tests {
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
             open_badge_evidence: None,
+            profiled_jwt: None,
         };
         let serialized = serde_json::to_string(&CredentialSummary::from(&stored)).unwrap();
         assert!(!serialized.contains("sensitive.raw.credential"));
+        assert_eq!(
+            serde_json::from_str::<Value>(&serialized).unwrap(),
+            serde_json::json!({
+                "id":"id-1", "credential_configuration_id":"member", "format":"dc+sd-jwt",
+                "vct":"https://issuer.example/member", "claim_names":["email"],
+                "received_at":"2026-01-01T00:00:00Z"
+            })
+        );
     }
 
     fn jwt(payload: Value) -> String {
@@ -1420,6 +1638,7 @@ mod tests {
             claim_names: vec!["achievement".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
             open_badge_evidence: None,
+            profiled_jwt: None,
         };
         let summary = serde_json::to_value(CredentialSummary::from(&stored)).unwrap();
         assert_eq!(
@@ -1464,6 +1683,7 @@ mod tests {
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
             open_badge_evidence: None,
+            profiled_jwt: None,
         };
         let matching = DcqlCredentialQuery {
             id: "badge".into(),
@@ -1505,6 +1725,7 @@ mod tests {
             claim_names: vec!["email".into()],
             received_at: "2026-01-01T00:00:00Z".into(),
             open_badge_evidence: None,
+            profiled_jwt: None,
         };
         let matching = DcqlCredentialQuery {
             id: "member".into(),
