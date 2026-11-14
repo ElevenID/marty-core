@@ -5,14 +5,14 @@ from pathlib import Path
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
-EUDI_TEST = "cargo test --locked -p marty-verification --features eudi-client --lib"
+TRUST_LIST_TEST = "cargo test --locked -p marty-verification --features aamva-client,eudi-client --lib"
 
 
 class PreflightPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        cls.preflight = workflow.split("  preflight:\n", 1)[1].split(
+        cls.lint_compat = workflow.split("  rust-lint-compat:\n", 1)[1].split(
             "  affected-tests:\n", 1
         )[0]
         cls.affected = workflow.split("  affected-tests:\n", 1)[1].split(
@@ -21,15 +21,17 @@ class PreflightPolicyTests(unittest.TestCase):
         cls.gate = workflow.split("  ci-gate:\n", 1)[1]
         cls.workflow = workflow
 
-    def test_eudi_client_runs_once_in_required_preflight(self) -> None:
-        self.assertEqual(self.workflow.count(EUDI_TEST), 1)
-        self.assertIn(EUDI_TEST, self.preflight)
-        self.assertNotIn(EUDI_TEST, self.affected)
-        self.assertIn("name: Fast Rust Preflight", self.preflight)
+    def test_trust_list_clients_run_once_in_required_lint_job(self) -> None:
+        self.assertEqual(self.workflow.count(TRUST_LIST_TEST), 1)
+        self.assertIn(TRUST_LIST_TEST, self.lint_compat)
+        self.assertNotIn(TRUST_LIST_TEST, self.affected)
+        self.assertIn("name: Rust Lint and Compatibility", self.lint_compat)
         self.assertIn(
-            "cargo clippy --locked -p marty-verification --features eudi-client --all-targets -- -D warnings",
-            self.preflight,
+            "cargo clippy --locked -p marty-verification --features aamva-client,eudi-client --all-targets -- -D warnings",
+            self.lint_compat,
         )
+        self.assertIn("      - rust-lint-compat\n", self.gate)
+        self.assertIn('test "$RUST_LINT_COMPAT" = success', self.gate)
 
     def test_root_change_still_runs_workspace_bindings_and_zkp(self) -> None:
         root_step = self.affected.split(
