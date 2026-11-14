@@ -8,10 +8,22 @@ use std::time::{Duration, Instant};
 use x509_cert::Certificate;
 
 use crate::error::{VerificationError, VerificationResult};
-use crate::trust_anchor::{IacaRegistry, TrustAnchor, TrustPurpose, TrustRegistry};
+use crate::trust_anchor::IacaRegistry;
 
 const DEFAULT_DTS_BASE_URL: &str = "https://dts.aamva.org/api/v1";
 const DEFAULT_DTS_TOKEN_ENDPOINT: &str = "https://dts.aamva.org/oauth/token";
+const DTS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DTS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn http_client_builder(
+    connect_timeout: Duration,
+    request_timeout: Duration,
+) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(connect_timeout)
+        .timeout(request_timeout)
+}
 
 /// AAMVA DTS client configuration.
 #[derive(Clone)]
@@ -139,17 +151,34 @@ impl CachedAccessToken {
 
 impl AamvaDtsClient {
     /// Create a new AAMVA DTS client.
+    ///
+    /// Panics if the HTTP client cannot initialize, matching the existing
+    /// infallible constructor contract. Use [`Self::try_new`] to handle errors.
     pub fn new(config: AamvaDtsConfig) -> Self {
-        Self {
+        Self::try_new(config).expect("Failed to initialize AAMVA DTS HTTP client")
+    }
+
+    /// Create a bounded client without panicking on HTTP initialization errors.
+    /// OAuth and VICAL redirects are rejected rather than forwarding requests
+    /// to an endpoint that was not configured by the caller.
+    pub fn try_new(config: AamvaDtsConfig) -> VerificationResult<Self> {
+        let http_client = http_client_builder(DTS_CONNECT_TIMEOUT, DTS_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|error| {
+                VerificationError::pkd_auth(format!(
+                    "Failed to initialize AAMVA DTS HTTP client: {error}"
+                ))
+            })?;
+        Ok(Self {
             config,
-            http_client: reqwest::Client::new(),
+            http_client,
             access_token: None,
-        }
+        })
     }
 
     /// Create a client from environment variables.
     pub fn from_env() -> VerificationResult<Self> {
-        Ok(Self::new(AamvaDtsConfig::from_env()?))
+        Self::try_new(AamvaDtsConfig::from_env()?)
     }
 
     /// Authenticate with the DTS OAuth endpoint.
@@ -331,60 +360,286 @@ impl AamvaDtsClient {
 
     /// Sync an IACA registry with the latest VICAL.
     ///
-    /// Returns the number of certificates added/updated.
+    /// Each record updates an exact certificate and jurisdiction. Non-active
+    /// records withdraw that identity; overlapping certificates are retained.
+    /// The batch and its version are committed together after validation.
+    /// Returns the number of active certificate records added/updated.
     pub async fn sync_registry(
         &mut self,
         registry: &mut IacaRegistry,
     ) -> VerificationResult<usize> {
-        use der::DecodePem;
-
         let vical = if let Some(version) = registry.vical_version() {
             self.fetch_vical_delta(version).await?
         } else {
             self.fetch_vical().await?
         };
 
-        let mut count = 0;
-        for cert_info in vical.certificates {
-            if cert_info.status != "active" {
-                continue;
-            }
-
-            match Certificate::from_pem(&cert_info.certificate_pem) {
-                Ok(cert) => {
-                    let anchor = TrustAnchor {
-                        certificate: cert,
-                        purpose: TrustPurpose::Iaca,
-                        jurisdiction: Some(cert_info.jurisdiction.clone()),
-                    };
-
-                    // Remove existing anchor for this jurisdiction first
-                    let _ = registry.remove_anchor(&cert_info.jurisdiction);
-
-                    registry.add_anchor(anchor)?;
-                    count += 1;
-
-                    tracing::info!(
-                        "Added/updated IACA for jurisdiction: {}",
-                        cert_info.jurisdiction
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse IACA for {}: {}", cert_info.jurisdiction, e);
-                }
-            }
-        }
-
-        registry.set_vical_version(vical.version);
-        Ok(count)
+        apply_vical(registry, vical)
     }
+}
+
+fn apply_vical(registry: &mut IacaRegistry, vical: VicalResponse) -> VerificationResult<usize> {
+    use der::DecodePem;
+
+    if vical.version.trim().is_empty() {
+        return Err(VerificationError::trust_anchor_load(
+            "VICAL version must not be empty",
+        ));
+    }
+
+    // Parse and apply into a private copy so a bad record cannot leave a
+    // partially updated trust set or advance the caller's delta cursor.
+    let mut updated = registry.clone();
+    let mut active_count = 0;
+    for record in vical.certificates {
+        if record.jurisdiction.trim().is_empty() || record.status.trim().is_empty() {
+            return Err(VerificationError::trust_anchor_load(
+                "VICAL records require a jurisdiction and explicit status",
+            ));
+        }
+        let certificate = Certificate::from_pem(&record.certificate_pem).map_err(|error| {
+            VerificationError::trust_anchor_load(format!(
+                "Invalid VICAL certificate for {}: {error}",
+                record.jurisdiction
+            ))
+        })?;
+        let active = record.status == "active";
+        updated.update_certificate_status(record.jurisdiction, certificate, active)?;
+        active_count += usize::from(active);
+    }
+    updated.set_vical_version(vical.version);
+    *registry = updated;
+    Ok(active_count)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trust_anchor::{Jurisdiction, TrustAnchor, TrustPurpose, TrustRegistry};
+    use der::DecodePem;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    fn record(jurisdiction: &str, fixture: &str, status: &str) -> VicalCertificate {
+        VicalCertificate {
+            jurisdiction: jurisdiction.into(),
+            certificate_pem: match fixture {
+                "first" => include_str!("../../tests/fixtures/trust_lifecycle/first.pem"),
+                "renewed" => include_str!("../../tests/fixtures/trust_lifecycle/renewed.pem"),
+                "other" => include_str!("../../tests/fixtures/trust_lifecycle/other.pem"),
+                "invalid" => "not a certificate",
+                _ => unreachable!(),
+            }
+            .into(),
+            status: status.into(),
+            valid_from: None,
+            valid_until: None,
+        }
+    }
+
+    fn update(version: &str, certificates: Vec<VicalCertificate>) -> VicalResponse {
+        VicalResponse {
+            version: version.into(),
+            certificates,
+        }
+    }
+
+    #[test]
+    fn vical_rollover_replay_and_withdrawal_use_exact_certificate_identity() {
+        let mut registry = IacaRegistry::new();
+        apply_vical(
+            &mut registry,
+            update("1", vec![record("US-CA", "first", "active")]),
+        )
+        .unwrap();
+        apply_vical(
+            &mut registry,
+            update("2", vec![record("US-CA", "renewed", "active")]),
+        )
+        .unwrap();
+        assert_eq!(registry.len(), 2, "rollover certificates can overlap");
+        assert_eq!(
+            registry.get_anchors()[0]
+                .certificate
+                .tbs_certificate
+                .subject,
+            registry.get_anchors()[1]
+                .certificate
+                .tbs_certificate
+                .subject
+        );
+        apply_vical(
+            &mut registry,
+            update("2", vec![record("US-CA", "renewed", "active")]),
+        )
+        .unwrap();
+        assert_eq!(
+            registry.len(),
+            2,
+            "replaying a record must not duplicate it"
+        );
+        let count = apply_vical(
+            &mut registry,
+            update("3", vec![record("US-CA", "first", "withdrawn")]),
+        )
+        .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.vical_version(), Some("3"));
+        assert_eq!(
+            registry
+                .get_jurisdiction_iaca(Jurisdiction::California)
+                .unwrap()
+                .certificate,
+            Certificate::from_pem(&record("US-CA", "renewed", "active").certificate_pem).unwrap()
+        );
+    }
+
+    #[test]
+    fn vical_withdrawal_preserves_other_trust_assignments() {
+        let certificate =
+            Certificate::from_pem(&record("US-CA", "first", "active").certificate_pem).unwrap();
+        let mut registry = IacaRegistry::new();
+        for (jurisdiction, purpose) in [
+            ("US-CA", TrustPurpose::Iaca),
+            ("US-NY", TrustPurpose::Iaca),
+            ("US-CA", TrustPurpose::ReaderCa),
+        ] {
+            registry
+                .add_anchor(TrustAnchor {
+                    certificate: certificate.clone(),
+                    purpose,
+                    jurisdiction: Some(jurisdiction.into()),
+                })
+                .unwrap();
+        }
+        apply_vical(
+            &mut registry,
+            update("1", vec![record("US-CA", "first", "revoked")]),
+        )
+        .unwrap();
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get_anchors().iter().all(|anchor| {
+            anchor.purpose != TrustPurpose::Iaca || anchor.jurisdiction.as_deref() != Some("US-CA")
+        }));
+        assert_eq!(registry.get_anchors_by_jurisdiction("US-NY").len(), 1);
+        assert_eq!(
+            registry
+                .get_anchors_by_purpose(TrustPurpose::ReaderCa)
+                .len(),
+            1
+        );
+        assert!(registry
+            .get_jurisdiction_iaca(Jurisdiction::California)
+            .is_none());
+        assert!(registry
+            .get_jurisdiction_iaca(Jurisdiction::NewYork)
+            .is_some());
+    }
+
+    #[test]
+    fn vical_validation_failure_preserves_anchors_and_delta_version() {
+        let mut registry = IacaRegistry::new();
+        apply_vical(
+            &mut registry,
+            update("1", vec![record("US-CA", "first", "active")]),
+        )
+        .unwrap();
+        let before = serde_json::to_value(registry.get_anchors()).unwrap();
+        for records in [
+            vec![
+                record("US-TX", "other", "active"),
+                record("US-CA", "invalid", "active"),
+            ],
+            vec![
+                record("US-CA", "first", "withdrawn"),
+                record("", "other", "active"),
+            ],
+            vec![
+                record("US-CA", "first", "withdrawn"),
+                record("US-TX", "other", ""),
+            ],
+        ] {
+            assert!(apply_vical(&mut registry, update("2", records)).is_err());
+            assert_eq!(
+                serde_json::to_value(registry.get_anchors()).unwrap(),
+                before
+            );
+            assert_eq!(registry.vical_version(), Some("1"));
+        }
+        assert!(apply_vical(&mut registry, update(" ", vec![])).is_err());
+        assert_eq!(registry.vical_version(), Some("1"));
+    }
+
+    #[tokio::test]
+    async fn dts_http_policy_returns_redirects_without_following_them() {
+        let client = http_client_builder(DTS_CONNECT_TIMEOUT, DTS_REQUEST_TIMEOUT)
+            .no_proxy()
+            .build()
+            .unwrap();
+        for status in [301, 302, 303, 307, 308] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let location = format!("{base}/unconfigured-destination");
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 1024];
+                assert!(stream.read(&mut request).await.unwrap() > 0);
+                let response = format!(
+                    "HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            });
+            let response = client
+                .post(base)
+                .body("synthetic-client-secret")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            server.await.unwrap();
+        }
+    }
+
+    async fn assert_dts_timeout(stall_body: bool) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            if stall_body {
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nx")
+                    .await
+                    .unwrap();
+            }
+            std::future::pending::<()>().await;
+        });
+        let client = http_client_builder(Duration::from_millis(50), Duration::from_millis(100))
+            .no_proxy()
+            .build()
+            .unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(2), async {
+            let response = client.get(base).send().await?;
+            response.bytes().await
+        })
+        .await
+        .expect("DTS request must finish within its total timeout")
+        .unwrap_err();
+        server.abort();
+        assert!(error.is_timeout(), "{error}");
+    }
+
+    #[tokio::test]
+    async fn dts_total_timeout_bounds_stalled_response_headers() {
+        assert_dts_timeout(false).await;
+    }
+
+    #[tokio::test]
+    async fn dts_total_timeout_bounds_stalled_response_body() {
+        assert_dts_timeout(true).await;
+    }
 
     #[test]
     fn test_default_config() {

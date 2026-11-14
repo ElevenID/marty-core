@@ -186,6 +186,39 @@ impl EudiLotlClient {
             *VerificationError::der_error(format!("Failed to parse LoTL XML: {}", e))
         })?;
 
+        // Validate list metadata once, even when every pointer is filtered out.
+        // Inventing a recent timestamp would conceal malformed freshness data.
+        let issue_date = DateTime::parse_from_rfc3339(&tsl.scheme_information.issue_date)
+            .map_err(|error| {
+                VerificationError::pkd_fetch(
+                    &self.lotl_url,
+                    format!("Invalid LoTL ListIssueDateTime: {error}"),
+                )
+            })?
+            .with_timezone(&Utc);
+        let next_update = tsl
+            .scheme_information
+            .next_update
+            .as_ref()
+            .and_then(|next| next.date_time.as_deref())
+            .ok_or_else(|| {
+                VerificationError::pkd_fetch(&self.lotl_url, "LoTL NextUpdate is required")
+            })?;
+        let next_update = DateTime::parse_from_rfc3339(next_update)
+            .map_err(|error| {
+                VerificationError::pkd_fetch(
+                    &self.lotl_url,
+                    format!("Invalid LoTL NextUpdate: {error}"),
+                )
+            })?
+            .with_timezone(&Utc);
+        if next_update <= issue_date {
+            return Err(VerificationError::pkd_fetch(
+                &self.lotl_url,
+                "LoTL NextUpdate must be later than ListIssueDateTime",
+            ));
+        }
+
         let mut results = Vec::new();
 
         if let Some(pointers) = tsl.pointers {
@@ -206,22 +239,6 @@ impl EudiLotlClient {
                         continue; // Skip unknown territories
                     }
                 }
-
-                // Parse dates from scheme information
-                let issue_date =
-                    chrono::DateTime::parse_from_rfc3339(&tsl.scheme_information.issue_date)
-                        .ok()
-                        .map(|dt| dt.with_timezone(&Utc))
-                        .unwrap_or_else(Utc::now);
-
-                let next_update = tsl
-                    .scheme_information
-                    .next_update
-                    .as_ref()
-                    .and_then(|nu| nu.date_time.as_ref())
-                    .and_then(|dt| chrono::DateTime::parse_from_rfc3339(dt).ok())
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|| Utc::now() + chrono::Duration::days(7));
 
                 results.push(TrustedListInfo {
                     scheme_territory: territory,
@@ -585,6 +602,7 @@ mod tests {
         <TSLSequenceNumber>377</TSLSequenceNumber>
         <SchemeTerritory>EU</SchemeTerritory>
         <ListIssueDateTime>2024-01-15T10:00:00Z</ListIssueDateTime>
+        <NextUpdate><dateTime>2024-02-15T10:00:00Z</dateTime></NextUpdate>
         <TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUlistofthelists</TSLType>
     </SchemeInformation>
     <PointersToOtherTSL>
@@ -675,6 +693,49 @@ mod tests {
         assert_eq!(tl_infos[0].scheme_territory, "DE");
         assert_eq!(tl_infos[1].scheme_territory, "FR");
         assert!(tl_infos[0].url.contains("tsl-de.xml"));
+        assert_eq!(
+            tl_infos[0].list_issue_date.to_rfc3339(),
+            "2024-01-15T10:00:00+00:00"
+        );
+        assert_eq!(
+            tl_infos[0].next_update.to_rfc3339(),
+            "2024-02-15T10:00:00+00:00"
+        );
+    }
+
+    #[cfg(feature = "eudi-client")]
+    #[test]
+    fn malformed_or_missing_lotl_dates_are_rejected_before_pointer_filtering() {
+        let client = EudiLotlClient::new().with_member_states(vec![EuMemberState::SE]);
+        for (original, replacement, expected) in [
+            ("2024-01-15T10:00:00Z", "invalid", "ListIssueDateTime"),
+            ("2024-02-15T10:00:00Z", "invalid", "NextUpdate"),
+            (
+                "<NextUpdate><dateTime>2024-02-15T10:00:00Z</dateTime></NextUpdate>",
+                "",
+                "NextUpdate is required",
+            ),
+            (
+                "<dateTime>2024-02-15T10:00:00Z</dateTime>",
+                "",
+                "NextUpdate is required",
+            ),
+        ] {
+            let xml = SAMPLE_LOTL_XML.replace(original, replacement);
+            let error = client.parse_lotl_xml(&xml).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[cfg(feature = "eudi-client")]
+    #[test]
+    fn lotl_update_interval_must_be_positive() {
+        let client = EudiLotlClient::new();
+        for next_update in ["2024-01-15T10:00:00Z", "2024-01-14T10:00:00Z"] {
+            let xml = SAMPLE_LOTL_XML.replace("2024-02-15T10:00:00Z", next_update);
+            let error = client.parse_lotl_xml(&xml).unwrap_err();
+            assert!(error.to_string().contains("must be later"), "{error}");
+        }
     }
 
     #[cfg(feature = "eudi-client")]
