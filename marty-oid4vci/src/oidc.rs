@@ -350,8 +350,8 @@ fn audiences(value: Option<&Value>) -> OidcValidationResult<Vec<&str>> {
 fn access_token_hash(access_token: &str, algorithm: &str) -> OidcValidationResult<String> {
     let digest = match algorithm {
         "ES256" | "RS256" | "PS256" => Sha256::digest(access_token.as_bytes()).to_vec(),
-        "ES384" => Sha384::digest(access_token.as_bytes()).to_vec(),
-        "EdDSA" => Sha512::digest(access_token.as_bytes()).to_vec(),
+        "ES384" | "RS384" | "PS384" => Sha384::digest(access_token.as_bytes()).to_vec(),
+        "EdDSA" | "RS512" | "PS512" => Sha512::digest(access_token.as_bytes()).to_vec(),
         other => {
             return Err(OidcValidationError::UnsupportedAlgorithm(format!(
                 "at_hash is not supported for {other}"
@@ -404,6 +404,107 @@ mod tests {
             access_token,
             allowed_algorithms: &["ES256"],
             leeway_seconds: 30,
+        }
+    }
+
+    // OIDC Core 1.0 §3.1.3.6 uses the left half of the JWS algorithm's digest,
+    // base64url encoded without padding. These fixed answers were calculated
+    // independently with Python hashlib for the specification's example token.
+    const ACCESS_TOKEN: &str = "SlAV32hkKG";
+    const SHA256_AT_HASH: &str = "rXH7QWVTZnXYCou_6Vdpfg";
+    const SHA384_AT_HASH: &str = "VIA58s_ekAohY5Wl9vIMJ_R_t_FV36t2";
+    const SHA512_AT_HASH: &str = "z0cYnONBc9TdhgRUdlJ3DO6ArL2M-v_70iPj9lnAlnQ";
+
+    #[test]
+    fn access_token_hash_matches_fixed_vectors_for_supported_algorithms() {
+        for (algorithm, expected) in [
+            ("ES256", SHA256_AT_HASH),
+            ("RS256", SHA256_AT_HASH),
+            ("PS256", SHA256_AT_HASH),
+            ("ES384", SHA384_AT_HASH),
+            ("RS384", SHA384_AT_HASH),
+            ("PS384", SHA384_AT_HASH),
+            ("RS512", SHA512_AT_HASH),
+            ("PS512", SHA512_AT_HASH),
+            ("EdDSA", SHA512_AT_HASH),
+        ] {
+            assert_eq!(
+                access_token_hash(ACCESS_TOKEN, algorithm).expect(algorithm),
+                expected,
+                "wrong at_hash for {algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn rsa_at_hash_claims_bind_the_access_token_and_digest_algorithm() {
+        for (algorithm, expected, other_digest) in [
+            ("RS384", SHA384_AT_HASH, SHA512_AT_HASH),
+            ("PS384", SHA384_AT_HASH, SHA512_AT_HASH),
+            ("RS512", SHA512_AT_HASH, SHA384_AT_HASH),
+            ("PS512", SHA512_AT_HASH, SHA384_AT_HASH),
+        ] {
+            let allowed_algorithms = [algorithm];
+            let policy = OidcIdTokenPolicy {
+                allowed_algorithms: &allowed_algorithms,
+                ..policy(Some(ACCESS_TOKEN))
+            };
+            let mut claims = json!({
+                "iss":policy.expected_issuer,
+                "sub":"user-1",
+                "aud":policy.expected_audience,
+                "exp":NOW + 300,
+                "iat":NOW - 10,
+                "nonce":"nonce-1",
+                "at_hash":expected
+            });
+            validate_claims(&claims, algorithm, &policy, NOW).expect(algorithm);
+
+            for access_token in [None, Some("different-access-token")] {
+                let wrong_token_policy = OidcIdTokenPolicy {
+                    access_token,
+                    ..policy.clone()
+                };
+                assert!(matches!(
+                    validate_claims(&claims, algorithm, &wrong_token_policy, NOW),
+                    Err(OidcValidationError::InvalidAccessTokenHash(_))
+                ));
+            }
+
+            for invalid_hash in [
+                json!(SHA256_AT_HASH),
+                json!(other_digest),
+                json!(format!("{expected}=")),
+                json!(expected.to_lowercase()),
+                json!(expected.replace('_', "/")),
+                json!(""),
+                json!(null),
+                json!(123),
+            ] {
+                claims["at_hash"] = invalid_hash;
+                assert!(matches!(
+                    validate_claims(&claims, algorithm, &policy, NOW),
+                    Err(OidcValidationError::InvalidAccessTokenHash(_))
+                ));
+            }
+
+            // at_hash remains optional in the authorization-code flow.
+            claims.as_object_mut().expect("claims").remove("at_hash");
+            let no_access_token = OidcIdTokenPolicy {
+                access_token: None,
+                ..policy
+            };
+            validate_claims(&claims, algorithm, &no_access_token, NOW).expect(algorithm);
+        }
+    }
+
+    #[test]
+    fn access_token_hash_keeps_unsupported_algorithms_rejected() {
+        for algorithm in ["none", "HS256", "HS384", "HS512", "ES512", "rs384", ""] {
+            assert!(matches!(
+                access_token_hash(ACCESS_TOKEN, algorithm),
+                Err(OidcValidationError::UnsupportedAlgorithm(_))
+            ));
         }
     }
 
