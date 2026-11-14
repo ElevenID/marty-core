@@ -250,10 +250,10 @@ jobs:
       - name: Check OID4VCI WASM serial fallback contract
         shell: bash
         run: bash scripts/test_oid4vci_wasm_serial_fallback.sh
-      - name: Exercise the EUDI trusted-list client
+      - name: Exercise the trust-list clients
         run: |
-          cargo clippy --locked -p marty-verification --features eudi-client --all-targets -- -D warnings
-          cargo test --locked -p marty-verification --features eudi-client --lib
+          cargo clippy --locked -p marty-verification --features aamva-client,eudi-client --all-targets -- -D warnings
+          cargo test --locked -p marty-verification --features aamva-client,eudi-client --lib
       - name: Qualify the isolated headless verifier consumer
         shell: bash
         run: |
