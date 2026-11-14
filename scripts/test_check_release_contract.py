@@ -1245,7 +1245,7 @@ class CorePreflightSplitContractTests(unittest.TestCase):
         for step in (
             "Run clippy",
             "Check OID4VCI WASM serial fallback contract",
-            "Exercise the EUDI trusted-list client",
+            "Exercise the trust-list clients",
         ):
             self.assertEqual(workflow.count(f"      - name: {step}"), 1)
             self.assertIn(f"      - name: {step}", lint)
@@ -1269,7 +1269,7 @@ class CorePreflightSplitContractTests(unittest.TestCase):
         for required_step in (
             "Run clippy",
             "Check OID4VCI WASM serial fallback contract",
-            "Exercise the EUDI trusted-list client",
+            "Exercise the trust-list clients",
         ):
             step = lint.split(f"      - name: {required_step}\n", 1)[1].split(
                 "\n      - name:", 1

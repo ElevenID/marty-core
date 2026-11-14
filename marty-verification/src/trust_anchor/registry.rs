@@ -180,6 +180,23 @@ impl BasicTrustRegistry {
         }
     }
 
+    /// Remove only the IACA identity described by a DTS record.
+    ///
+    /// Subjects are not certificate identifiers: a rollover can reuse the
+    /// subject, and one certificate can have distinct trust assignments.
+    #[cfg(feature = "aamva-client")]
+    pub(crate) fn remove_iaca_certificate(
+        &mut self,
+        jurisdiction: &str,
+        certificate: &Certificate,
+    ) {
+        self.anchors.retain(|anchor| {
+            anchor.purpose != TrustPurpose::Iaca
+                || anchor.jurisdiction.as_deref() != Some(jurisdiction)
+                || anchor.certificate != *certificate
+        });
+    }
+
     /// Build a trust anchor registry from PEM certificates.
     pub fn from_pem_certificates(certs: Vec<PemTrustAnchor>) -> VerificationResult<Self> {
         let anchors = certs

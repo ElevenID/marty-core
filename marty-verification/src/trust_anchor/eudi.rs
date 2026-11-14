@@ -25,8 +25,6 @@ use crate::error::VerificationResult;
 pub struct EudiRegistry {
     /// Inner registry storing all trust anchors.
     inner: BasicTrustRegistry,
-    /// Index by member state code for fast lookups.
-    member_state_index: HashMap<String, Vec<usize>>,
     /// LoTL version for delta sync.
     lotl_version: Option<String>,
     /// QTSP metadata cache.
@@ -245,7 +243,6 @@ impl EudiRegistry {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             inner: BasicTrustRegistry::with_capacity(capacity),
-            member_state_index: HashMap::with_capacity(27),
             lotl_version: None,
             qtsp_cache: HashMap::new(),
         }
@@ -264,31 +261,25 @@ impl EudiRegistry {
             jurisdiction: Some(member_state.code().to_string()),
         };
 
-        let index = self.inner.get_anchors().len();
         self.inner.add_anchor(anchor).ok();
-
-        self.member_state_index
-            .entry(member_state.code().to_string())
-            .or_default()
-            .push(index);
     }
 
     /// Get all trust anchors for a specific member state.
     pub fn get_member_state_anchors(&self, member_state: EuMemberState) -> Vec<&TrustAnchor> {
-        self.member_state_index
-            .get(member_state.code())
-            .map(|indices| {
-                indices
-                    .iter()
-                    .filter_map(|&idx| self.inner.get_anchors().get(idx))
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.inner.get_anchors_by_jurisdiction(member_state.code())
     }
 
     /// Get supported member states (those with registered anchors).
     pub fn supported_member_states(&self) -> Vec<&str> {
-        self.member_state_index.keys().map(|s| s.as_str()).collect()
+        let mut states: Vec<_> = self
+            .inner
+            .get_anchors()
+            .iter()
+            .filter_map(|anchor| anchor.jurisdiction.as_deref())
+            .collect();
+        states.sort_unstable();
+        states.dedup();
+        states
     }
 
     /// Set the LoTL version for delta sync.
@@ -330,7 +321,6 @@ impl EudiRegistry {
     /// Clear all anchors and reset the registry.
     pub fn clear(&mut self) {
         self.inner = BasicTrustRegistry::default();
-        self.member_state_index.clear();
         self.qtsp_cache.clear();
         self.lotl_version = None;
     }
@@ -354,20 +344,10 @@ impl TrustRegistry for EudiRegistry {
     }
 
     fn add_anchor(&mut self, anchor: TrustAnchor) -> VerificationResult<()> {
-        // Update jurisdiction index if applicable
-        if let Some(ref jurisdiction) = anchor.jurisdiction {
-            let index = self.inner.get_anchors().len();
-            self.member_state_index
-                .entry(jurisdiction.clone())
-                .or_default()
-                .push(index);
-        }
         self.inner.add_anchor(anchor)
     }
 
     fn remove_anchor(&mut self, subject: &str) -> VerificationResult<bool> {
-        // Note: This doesn't update the jurisdiction index
-        // Would need to rebuild the index after removal
         self.inner.remove_anchor(subject)
     }
 
@@ -379,6 +359,67 @@ impl TrustRegistry for EudiRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use der::DecodePem;
+
+    fn certificate(name: &str) -> Certificate {
+        Certificate::from_pem(match name {
+            "first" => include_str!("../../tests/fixtures/trust_lifecycle/first.pem"),
+            "other" => include_str!("../../tests/fixtures/trust_lifecycle/other.pem"),
+            _ => unreachable!(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn removing_an_anchor_preserves_other_member_state_views() {
+        let first = certificate("first");
+        let other = certificate("other");
+        let mut registry = EudiRegistry::new();
+        registry.add_member_state_anchor(
+            EuMemberState::DE,
+            first.clone(),
+            TrustPurpose::EudiIssuer,
+        );
+        registry.add_member_state_anchor(
+            EuMemberState::FR,
+            other.clone(),
+            TrustPurpose::EudiIssuer,
+        );
+        assert!(registry
+            .remove_anchor(&first.tbs_certificate.subject.to_string())
+            .unwrap());
+        assert!(registry
+            .get_member_state_anchors(EuMemberState::DE)
+            .is_empty());
+        let french = registry.get_member_state_anchors(EuMemberState::FR);
+        assert_eq!(french.len(), 1);
+        assert_eq!(french[0].certificate, other);
+        assert_eq!(registry.supported_member_states(), vec!["FR"]);
+    }
+
+    #[test]
+    fn generic_additions_and_clear_share_the_same_member_state_view() {
+        let mut registry = EudiRegistry::new();
+        for purpose in [TrustPurpose::EudiIssuer, TrustPurpose::EudiQtsp] {
+            registry
+                .add_anchor(TrustAnchor {
+                    certificate: certificate("first"),
+                    purpose,
+                    jurisdiction: Some("DE".into()),
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            registry.get_member_state_anchors(EuMemberState::DE).len(),
+            2
+        );
+        assert_eq!(registry.supported_member_states(), vec!["DE"]);
+        registry.clear();
+        assert!(registry
+            .get_member_state_anchors(EuMemberState::DE)
+            .is_empty());
+        assert!(registry.supported_member_states().is_empty());
+    }
 
     #[test]
     fn test_member_state_codes() {

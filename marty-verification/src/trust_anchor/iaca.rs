@@ -323,10 +323,35 @@ impl IacaRegistry {
         self.vical_version = Some(version);
     }
 
+    /// Apply one explicit DTS certificate status without replacing other
+    /// certificates that happen to share its jurisdiction or subject.
+    #[cfg(feature = "aamva-client")]
+    pub(crate) fn update_certificate_status(
+        &mut self,
+        jurisdiction: String,
+        certificate: Certificate,
+        active: bool,
+    ) -> VerificationResult<()> {
+        self.inner
+            .remove_iaca_certificate(&jurisdiction, &certificate);
+        self.rebuild_index();
+        if active {
+            self.add_anchor(TrustAnchor {
+                certificate,
+                purpose: TrustPurpose::Iaca,
+                jurisdiction: Some(jurisdiction),
+            })?;
+        }
+        Ok(())
+    }
+
     /// Rebuild the jurisdiction index after modifications.
     fn rebuild_index(&mut self) {
         self.jurisdiction_index.clear();
         for (idx, anchor) in self.inner.get_anchors().iter().enumerate() {
+            if anchor.purpose != TrustPurpose::Iaca {
+                continue;
+            }
             if let Some(jurisdiction) = &anchor.jurisdiction {
                 self.jurisdiction_index.insert(jurisdiction.clone(), idx);
             }
@@ -347,7 +372,9 @@ impl TrustRegistry for IacaRegistry {
     }
 
     fn add_anchor(&mut self, anchor: TrustAnchor) -> VerificationResult<()> {
-        let jurisdiction = anchor.jurisdiction.clone();
+        let jurisdiction = (anchor.purpose == TrustPurpose::Iaca)
+            .then(|| anchor.jurisdiction.clone())
+            .flatten();
         let index = self.inner.get_anchors().len();
         self.inner.add_anchor(anchor)?;
 
