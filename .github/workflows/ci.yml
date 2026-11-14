@@ -68,7 +68,7 @@ jobs:
           PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
         run: python .github/scripts/private-forks.py fetch --manifest-path Cargo.toml --manifest-path examples/offline-chain-headless/Cargo.toml
       - name: Install cargo-deny
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: cargo-deny@0.20.2
       - name: Cache Cargo inputs
@@ -491,7 +491,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: cargo-nextest@0.9.143
       - name: Require reproducible release sources
@@ -988,7 +988,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install wasm-bindgen test runner
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: wasm-bindgen-cli@0.2.126
       - name: Test browser cryptographic provider policy
@@ -1037,7 +1037,7 @@ jobs:
         with:
           version: v0.16.0
       - name: Install wasm-bindgen test runner
-        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: wasm-bindgen-cli@0.2.126
       - name: Test browser key derivation and cleanup
