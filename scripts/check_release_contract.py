@@ -416,6 +416,8 @@ WASM_SECURITY_WORKFLOW_PREFIX = (
     """name: CI
 
 on:
+  push:
+    branches: ["reviewed/**"]
   pull_request:
     branches: [main]
   merge_group:

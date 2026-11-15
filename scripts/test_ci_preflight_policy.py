@@ -1,5 +1,9 @@
 """Guard the required Core preflight against test duplication and gate drift."""
 
+import os
+import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -53,6 +57,35 @@ class PreflightPolicyTests(unittest.TestCase):
         self.assertIn("AFFECTED_TESTS: ${{ needs.affected-tests.result }}", self.gate)
         self.assertIn('test "$PREFLIGHT" = success', self.gate)
         self.assertIn('test "$AFFECTED_TESTS" = success', self.gate)
+
+    def test_push_gate_requires_every_full_matrix_result(self) -> None:
+        step = self.gate.split(
+            "      - name: Require every applicable quality lane\n", 1
+        )[1].split("      - name: Summarize CI performance\n", 1)[0]
+        command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        bindings = dict(re.findall(
+            r"^      ([A-Z0-9_]+): \$\{\{ needs\.([a-z0-9-]+)\.result \}\}$",
+            self.gate, re.MULTILINE,
+        ))
+        self.assertEqual(len(bindings), 14)
+        successes = {name: "success" for name in bindings}
+        successes["AFFECTED_TESTS"] = "skipped"
+
+        def run(results: dict[str, str]) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["bash", "--noprofile", "--norc", "-c", command],
+                env={"PATH": os.environ["PATH"], "EVENT_NAME": "push", **results},
+                capture_output=True, text=True, timeout=5,
+            )
+
+        self.assertEqual(run(successes).returncode, 0)
+        for name in bindings:
+            rejected = ("success", "failure", "cancelled") if name == "AFFECTED_TESTS" else (
+                "failure", "cancelled", "skipped",
+            )
+            for result in rejected:
+                with self.subTest(job=bindings[name], result=result):
+                    self.assertNotEqual(run(successes | {name: result}).returncode, 0)
 
 
 if __name__ == "__main__":
