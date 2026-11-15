@@ -36,6 +36,14 @@ credential-free check. An owner can review and import a contribution into an
 internal branch before running native validation. Source-only checks remain
 available to outside contributions.
 
+For a reviewed contribution, an owner with access to the private forks may push
+the exact reviewed PR head to an internal `reviewed/...` branch. The CI workflow
+admits push events only under `reviewed/**` and runs the full non-PR matrix with
+the existing private-source authorization and CI Gate. Confirm that the resulting
+run is a genuine `push` event at that exact commit; a manual run alone does not
+establish push-check eligibility. The original PR and normal merge queue remain
+subject to GitHub accepting the required checks, reviews, and queue admission.
+
 Merge-group runs must match GitHub's generated queue ref, exact group SHA, and
 default-branch base. The existing required reviews, native checks, and queue
 admission policy remain in force. Scheduled and repository-dispatch runs use
