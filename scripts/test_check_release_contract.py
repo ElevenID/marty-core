@@ -887,6 +887,8 @@ class NativeBuildCacheContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         original = """on:
+  push:
+    branches: ["reviewed/**"]
   pull_request:
     branches: [main]
   merge_group:
@@ -897,6 +899,30 @@ class NativeBuildCacheContractTests(unittest.TestCase):
         mutated = workflow.replace(original, "on: workflow_dispatch\n", 1)
         errors = check_release_contract.check_wasm_security_cache_setup(mutated)
         self.assertTrue(any("exact approved workflow preamble" in error for error in errors))
+
+    def test_reviewed_push_scope_cannot_be_removed_or_broadened(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        approved = '  push:\n    branches: ["reviewed/**"]\n'
+        self.assertEqual(workflow.count(approved), 1)
+        self.assertEqual(check_release_contract.check_wasm_security_cache_setup(workflow), [])
+        for replacement in (
+            "",
+            "  push:\n",
+            '  push:\n    branches: ["**"]\n',
+            '  push:\n    branches: ["reviewed/**", main]\n',
+            '  push:\n    tags: ["**"]\n',
+            approved + '    tags: ["**"]\n',
+            approved + '    paths-ignore: ["**"]\n',
+        ):
+            with self.subTest(replacement=replacement):
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow.replace(approved, replacement, 1)
+                )
+                self.assertTrue(
+                    any("exact approved workflow preamble" in error for error in errors)
+                )
 
     def test_rejects_pr_path_exclusions(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
