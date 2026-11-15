@@ -158,6 +158,8 @@ pub enum ServiceConstraintType {
     NotInSet,
     Presence,
     Regex,
+    /// Minimum age in whole years: an integral JSON number or a base-10 integer
+    /// string. Decimal and exponent syntax in strings are rejected.
     AgeOver,
 }
 
@@ -1096,8 +1098,7 @@ fn evaluate_constraint(
             let Some(date_text) = actual.and_then(value_text) else {
                 return false;
             };
-            let Some(required_age) = expected.and_then(value_number).map(|value| value as i32)
-            else {
+            let Some(required_age) = expected.and_then(age_threshold) else {
                 return false;
             };
             let Some(evaluation_date) = DateTime::from_timestamp(evaluation_time as i64, 0)
@@ -1152,6 +1153,21 @@ fn value_number(value: &Value) -> Option<f64> {
     value
         .as_f64()
         .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+}
+
+fn age_threshold(value: &Value) -> Option<i32> {
+    if let Some(text) = value.as_str() {
+        // Parse strings exactly: floating-point conversion can round a
+        // fractional threshold to an integer or underflow it to zero.
+        return text.parse::<i32>().ok().filter(|age| *age >= 0);
+    }
+    let age = value.as_f64()?;
+    // JSON numbers such as 10.0 remain supported without truncating fractions
+    // or saturating values outside the supported whole-year range.
+    if !age.is_finite() || age < 0.0 || age.fract() != 0.0 || age > f64::from(i32::MAX) {
+        return None;
+    }
+    Some(age as i32)
 }
 
 fn value_text(value: &Value) -> Option<String> {
@@ -1371,6 +1387,11 @@ pub fn validate_service_policy(
                 }
                 if let Some(value) = &constraint.value {
                     validate_value("constraint value", value)?;
+                }
+                if constraint.constraint_type == ServiceConstraintType::AgeOver
+                    && constraint.value.as_ref().and_then(age_threshold).is_none()
+                {
+                    return invalid("age_over requires a nonnegative whole-year number or integer string within the supported range");
                 }
             }
         }
@@ -2189,6 +2210,78 @@ mod tests {
                 wanted,
                 "constraint {constraint_type:?}"
             );
+        }
+    }
+
+    fn age_request(threshold: Value, birth_date: &str) -> ServicePolicyEvaluationRequest {
+        let mut request = request();
+        let mut requirement = requirement("age", "member", "birth_date");
+        requirement.requested_claims[0].constraints[0] = ServiceClaimConstraint {
+            claim_name: "birth_date".to_string(),
+            constraint_type: ServiceConstraintType::AgeOver,
+            value: Some(threshold),
+        };
+        request.policy.credential_requirements = vec![requirement];
+        request.credentials[0]
+            .claims
+            .insert("birth_date".to_string(), json!(birth_date));
+        request
+    }
+
+    #[test]
+    fn malformed_age_thresholds_fail_before_activation_and_evaluation() {
+        for threshold in [
+            json!("NaN"),
+            json!("inf"),
+            json!("-inf"),
+            json!("1e-9999"),
+            json!("-1e-9999"),
+            json!("10.0000000000000001"),
+            json!("10.0"),
+            json!("1e1"),
+            json!(-1),
+            json!(10.9),
+            json!("10.9"),
+            json!(2_147_483_648_u64),
+            json!("not an age"),
+            json!(""),
+            json!(null),
+            json!(false),
+            json!([]),
+            json!({}),
+        ] {
+            let request = age_request(threshold.clone(), "1960-01-01");
+            let result = evaluate_service_policy(request.clone());
+            assert!(
+                result.is_err(),
+                "invalid age threshold {threshold}: {result:?}"
+            );
+            assert!(validate_service_policy(&request.policy).is_err());
+        }
+    }
+
+    #[test]
+    fn age_thresholds_preserve_inclusive_birthdays_and_numeric_strings() {
+        // The existing request evaluates at 1970-01-01T00:16:40Z.
+        for threshold in [json!(10), json!(10.0), json!("10"), json!("010")] {
+            for (birth_date, expected) in [
+                ("1959-12-31", ServiceDecision::Allow),
+                ("1960-01-01", ServiceDecision::Allow),
+                ("1960-01-02", ServiceDecision::Deny),
+                ("1970-01-02", ServiceDecision::Deny),
+            ] {
+                let request = age_request(threshold.clone(), birth_date);
+                validate_service_policy(&request.policy).unwrap();
+                assert_eq!(evaluate_service_policy(request).unwrap().decision, expected);
+            }
+        }
+        for (threshold, expected) in [
+            (json!(0), ServiceDecision::Allow),
+            (json!(i32::MAX), ServiceDecision::Deny),
+        ] {
+            let request = age_request(threshold, "1970-01-01");
+            validate_service_policy(&request.policy).unwrap();
+            assert_eq!(evaluate_service_policy(request).unwrap().decision, expected);
         }
     }
 
