@@ -131,6 +131,19 @@ class PrivateForkAccessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             private_forks.validate_context(env, event)
 
+    def test_reviewed_branch_push_retains_actor_and_repository_boundaries(self):
+        env, event = self.context("push")
+        env["GITHUB_REF"] = "refs/heads/reviewed/pr-432-" + env["GITHUB_SHA"]
+        event.pop("pull_request")
+        private_forks.validate_context(env, event)
+        for key in ("GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                private_forks.validate_context(env | {key: "dependabot[bot]"}, event)
+        with self.assertRaises(ValueError):
+            private_forks.validate_context(
+                env, {"repository": {"full_name": "outside/marty-core"}}
+            )
+
     def test_real_git_credential_protocol_scopes_all_three_forks(self):
         with patch.dict(os.environ, {"PRIVATE_FORKS_READ_TOKEN": "test-reader-value"}):
             env = private_forks.fetch_environment()
