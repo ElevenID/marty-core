@@ -207,15 +207,22 @@ pub fn get_key_size(public_key_der: &[u8]) -> CryptoResult<usize> {
                 .as_bytes()
                 .ok_or_else(|| CryptoError::key_error("Invalid RSA public key"))?;
 
-            // RSA public key is a SEQUENCE of INTEGER (n) and INTEGER (e)
-            // The modulus is the first integer
-            if key_bytes.len() > 4 {
-                // Rough estimate: key_bytes contains the DER-encoded RSA structure
-                // For a proper implementation, we'd parse the SEQUENCE
-                Ok((key_bytes.len() - 10) * 8) // Approximate
-            } else {
-                Ok(0)
+            #[derive(der::Sequence)]
+            struct RsaPublicKey<'a> {
+                modulus: der::asn1::UintRef<'a>,
+                public_exponent: der::asn1::UintRef<'a>,
             }
+
+            let key = RsaPublicKey::from_der(key_bytes).map_err(|error| {
+                CryptoError::key_error(format!("Invalid RSA public key: {error}"))
+            })?;
+            // UintRef removes DER's optional sign padding. Only the modulus
+            // determines key size; sequence lengths and exponent bytes do not.
+            let modulus = key.modulus.as_bytes();
+            let leading_zero_bits = modulus
+                .first()
+                .map_or(0, |byte| byte.leading_zeros() as usize);
+            Ok(modulus.len() * 8 - leading_zero_bits)
         }
         _ => Ok(0),
     }
@@ -224,6 +231,72 @@ pub fn get_key_size(public_key_der: &[u8]) -> CryptoResult<usize> {
 #[cfg(test)]
 mod tests {
     use der::{Decode, Encode};
+
+    fn rsa_spki(pkcs1: &[u8]) -> Vec<u8> {
+        spki::SubjectPublicKeyInfoOwned {
+            algorithm: spki::AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5912::RSA_ENCRYPTION,
+                parameters: None,
+            },
+            subject_public_key: der::asn1::BitString::from_bytes(pkcs1).unwrap(),
+        }
+        .to_der()
+        .unwrap()
+    }
+
+    #[test]
+    fn rsa_size_counts_the_public_modulus_not_der_overhead() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/rsa_verification_public.json"
+        ))
+        .unwrap();
+        for field in ["public_key_spki_der_hex", "other_public_key_spki_der_hex"] {
+            let public_key = hex::decode(vectors[field].as_str().unwrap()).unwrap();
+            assert_eq!(super::get_key_size(&public_key).unwrap(), 2048);
+        }
+    }
+
+    #[test]
+    fn rsa_size_handles_der_sign_padding_and_non_byte_aligned_moduli() {
+        // Small public integers characterize the codec only; they are not
+        // cryptographic key fixtures. Changing the exponent must not change
+        // the reported modulus size.
+        for (pkcs1, bits) in [
+            (
+                &[0x30, 0x07, 0x02, 0x02, 0x00, 0x80, 0x02, 0x01, 0x03][..],
+                8,
+            ),
+            (
+                &[0x30, 0x07, 0x02, 0x02, 0x01, 0x01, 0x02, 0x01, 0x03][..],
+                9,
+            ),
+            (
+                &[
+                    0x30, 0x09, 0x02, 0x02, 0x01, 0x01, 0x02, 0x03, 0x01, 0x00, 0x01,
+                ][..],
+                9,
+            ),
+        ] {
+            assert_eq!(super::get_key_size(&rsa_spki(pkcs1)).unwrap(), bits);
+        }
+    }
+
+    #[test]
+    fn malformed_rsa_payloads_return_errors_without_panicking() {
+        for pkcs1 in [
+            &[][..],
+            &[0; 5][..],
+            &[0; 9][..],
+            // Missing exponent, negative modulus, wrong integer tag, and
+            // trailing data after an otherwise complete public-key sequence.
+            &[0x30, 0x03, 0x02, 0x01, 0x01][..],
+            &[0x30, 0x06, 0x02, 0x01, 0x80, 0x02, 0x01, 0x03][..],
+            &[0x30, 0x06, 0x04, 0x01, 0x01, 0x02, 0x01, 0x03][..],
+            &[0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x03, 0x00][..],
+        ] {
+            assert!(super::get_key_size(&rsa_spki(pkcs1)).is_err());
+        }
+    }
 
     #[test]
     fn detects_public_key_type_and_size_from_certificate() {
