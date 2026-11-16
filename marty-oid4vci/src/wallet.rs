@@ -170,6 +170,8 @@ pub enum PresentationRequestQueryType {
 /// A requested DCQL claim path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DcqlClaimQuery {
+    /// Optional in DCQL when no claim_sets reference is used.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
     pub path: Vec<String>,
 }
@@ -1610,7 +1612,7 @@ impl WalletEngine {
         Ok(())
     }
 
-    fn parsed_request_from_value(
+    pub(crate) fn parsed_request_from_value(
         value: serde_json::Value,
     ) -> Oid4vciResult<ParsedPresentationRequest> {
         let Some(request) = value.as_object() else {
