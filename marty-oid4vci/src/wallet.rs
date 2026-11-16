@@ -48,6 +48,82 @@ const MAX_CREDENTIAL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PRESENTATION_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_OBJECT_BYTES: usize = 512 * 1024;
 
+fn registered_request_endpoint(input: &str, client_id: &str) -> Oid4vciResult<String> {
+    let invalid = || Oid4vciError::InvalidRequest("Invalid registered request locator".into());
+    if input.len() > 16 * 1024 {
+        return Err(invalid());
+    }
+    let endpoint = if let Some(query) = input.strip_prefix("openid4vp://?") {
+        let url =
+            url::Url::parse(&format!("https://vp.invalid/?{query}")).map_err(|_| invalid())?;
+        if url.fragment().is_some() {
+            return Err(invalid());
+        }
+        let mut params = HashMap::new();
+        for (key, value) in url.query_pairs() {
+            if !["client_id", "request_uri", "request_uri_method"].contains(&key.as_ref())
+                || params
+                    .insert(key.into_owned(), value.into_owned())
+                    .is_some()
+            {
+                return Err(invalid());
+            }
+        }
+        if params.get("client_id").map(String::as_str) != Some(client_id)
+            || params
+                .get("request_uri_method")
+                .is_some_and(|method| method != "get")
+        {
+            return Err(invalid());
+        }
+        params.remove("request_uri").ok_or_else(invalid)?
+    } else {
+        input.to_owned()
+    };
+    let url = url::Url::parse(&endpoint).map_err(|_| invalid())?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(endpoint)
+}
+
+pub(crate) async fn authenticate_registered_request_with_transport<F, Fut, C>(
+    input: &str,
+    authority: &crate::wallet_request_auth::RegisteredVerifierAuthority,
+    mut clock: C,
+    fetch: F,
+) -> Oid4vciResult<crate::wallet_request_auth::AuthenticatedPresentationRequest>
+where
+    C: FnMut() -> i64,
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Oid4vciResult<(String, String)>>,
+{
+    crate::wallet_request_auth::validate_registered_authority(authority, clock())?;
+    let endpoint = registered_request_endpoint(input, &authority.client_id)?;
+    let (body, content_type) = fetch(endpoint).await?;
+    let media_type = content_type.split(';').next().unwrap_or("").trim();
+    if !["application/oauth-authz-req+jwt", "application/jwt"]
+        .iter()
+        .any(|expected| media_type.eq_ignore_ascii_case(expected))
+    {
+        return Err(Oid4vciError::InvalidRequest(
+            "Registered verifier request must be a signed JWT".into(),
+        ));
+    }
+    // A bounded fetch still consumes time. Authenticate at completion, never
+    // with a timestamp captured before the await.
+    crate::wallet_request_auth::authenticate_registered_presentation_request(
+        &body,
+        authority,
+        clock(),
+    )
+}
+
 async fn bounded_response_body(
     mut response: reqwest::Response,
     label: &str,
@@ -170,6 +246,8 @@ pub enum PresentationRequestQueryType {
 /// A requested DCQL claim path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DcqlClaimQuery {
+    /// Optional in DCQL when no claim_sets reference is used.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub id: String,
     pub path: Vec<String>,
 }
@@ -966,10 +1044,30 @@ impl WalletEngine {
     // OID4VP — parse incoming presentation request (§5)
     // ──────────────────────────────────────────────────────────────────────
 
-    /// Parse an `openid4vp://` request URI into a full request object.
+    /// Fetch and authenticate a signed request using fresh pre-registered authority.
+    /// Outer parameters can only locate the request and repeat its registered
+    /// client ID. They never augment the signed authorization request.
+    pub async fn authenticate_registered_presentation_request(
+        &self,
+        input: &str,
+        authority: &crate::wallet_request_auth::RegisteredVerifierAuthority,
+    ) -> Oid4vciResult<crate::wallet_request_auth::AuthenticatedPresentationRequest> {
+        authenticate_registered_request_with_transport(
+            input,
+            authority,
+            || chrono::Utc::now().timestamp(),
+            |endpoint| async move { self.fetch_request_object_body(&endpoint).await },
+        )
+        .await
+    }
+
+    /// Decode an `openid4vp://` request URI into a full request object.
     ///
     /// Handles inline JSON, `request_uri`, `presentation_definition_uri`, and
-    /// request objects returned as signed JWT payloads.
+    /// request objects returned as JWT payloads. This does not authenticate the
+    /// sender or the signature and must not supply consent/signing authority.
+    /// Use `authenticate_registered_presentation_request` for its supported
+    /// authenticated profile.
     pub async fn parse_presentation_request(
         &self,
         input: &str,
@@ -1443,6 +1541,11 @@ impl WalletEngine {
     }
 
     async fn fetch_request_object_value(&self, uri: &str) -> Oid4vciResult<serde_json::Value> {
+        let (body, content_type) = self.fetch_request_object_body(uri).await?;
+        Self::decode_request_object_body(&body, Some(&content_type))
+    }
+
+    async fn fetch_request_object_body(&self, uri: &str) -> Oid4vciResult<(String, String)> {
         let (client, endpoint) = crate::network::public_request_client(uri).await?;
         let resp = client
             .get(endpoint)
@@ -1474,10 +1577,10 @@ impl WalletEngine {
             .unwrap_or("")
             .to_string();
         let body = bounded_response_body(resp, "Request object", MAX_REQUEST_OBJECT_BYTES).await?;
-        let body = std::str::from_utf8(&body)
+        let body = String::from_utf8(body)
             .map_err(|_| Oid4vciError::InvalidRequest("Request object is not UTF-8".into()))?;
 
-        Self::decode_request_object_body(body, Some(content_type.as_str()))
+        Ok((body, content_type))
     }
 
     fn decode_request_object_body(
@@ -1610,7 +1713,7 @@ impl WalletEngine {
         Ok(())
     }
 
-    fn parsed_request_from_value(
+    pub(crate) fn parsed_request_from_value(
         value: serde_json::Value,
     ) -> Oid4vciResult<ParsedPresentationRequest> {
         let Some(request) = value.as_object() else {
@@ -1676,6 +1779,43 @@ impl WalletEngine {
             presentation_definition,
             dcql_query,
         })
+    }
+}
+
+#[cfg(test)]
+mod registered_request_locator_tests {
+    use super::registered_request_endpoint;
+
+    #[test]
+    fn locator_cannot_supply_unsigned_fallback_or_change_registered_identity() {
+        let good = "openid4vp://?client_id=registered&request_uri=https%3A%2F%2Fverifier.example%2Frequest";
+        assert_eq!(
+            registered_request_endpoint(good, "registered").unwrap(),
+            "https://verifier.example/request"
+        );
+        assert_eq!(
+            registered_request_endpoint("https://verifier.example/request", "registered").unwrap(),
+            "https://verifier.example/request"
+        );
+        for suffix in [
+            "&nonce=unsigned",
+            "&response_uri=https://attacker.example",
+            "&client_id=registered",
+            "&client%5Fid=registered",
+            "&request_uri_method=post",
+            "#fragment",
+        ] {
+            assert!(registered_request_endpoint(&format!("{good}{suffix}"), "registered").is_err());
+        }
+        assert!(registered_request_endpoint(good, "another-client").is_err());
+        for input in [
+            "http://verifier.example/request",
+            "https://user:password@verifier.example/request",
+            "https://verifier.example/request#fragment",
+            "openid4vp://?client_id=registered&request=%7B%7D",
+        ] {
+            assert!(registered_request_endpoint(input, "registered").is_err());
+        }
     }
 }
 

@@ -34,7 +34,7 @@ cleanup() {
 trap cleanup EXIT
 
 local_limits=()
-if [[ "${MARTY_TEST_JWT_VC_WALLET_ONLY:-0}" == '1' ]]; then
+if [[ "${MARTY_TEST_JWT_VC_WALLET_ONLY:-0}" == '1' || "${MARTY_TEST_WALLET_REQUEST_AUTH_ONLY:-0}" == '1' ]]; then
   local_limits=(--pull=never --memory 256m --memory-swap 256m --pids-limit 32)
 fi
 if [[ -n "${MARTY_TEST_OPENBAO_CID_FILE:-}" ]]; then
@@ -131,6 +131,11 @@ elif [[ "$cargo" == *.exe ]]; then
   # executables unless they are named in WSLENV. This is local probe wiring;
   # Linux CI continues to use its native cargo and inherited environment.
   export WSLENV="${WSLENV:+$WSLENV:}MARTY_TEST_OPENBAO_URL/w:MARTY_TEST_OPENBAO_TOKEN/w:MARTY_TEST_OPENBAO_DISPOSABLE_NONCE/w:MARTY_TEST_OPENBAO_CA_CERT/p"
+fi
+if [[ "${MARTY_TEST_WALLET_REQUEST_AUTH_ONLY:-0}" == '1' ]]; then
+  "$cargo" test --locked --offline -j1 -p marty-oid4vci --no-default-features \
+    --features kms-only,wallet --lib wallet_request_auth::tests -- --include-ignored
+  exit 0
 fi
 if [[ "${MARTY_TEST_JWT_VC_WALLET_ONLY:-0}" == '1' ]]; then
   "$cargo" test --locked --offline -j1 -p marty-oid4vci --no-default-features \
@@ -281,6 +286,9 @@ fi
   --no-default-features --features "$features" \
   proof::tests \
   -- --ignored
+"$cargo" test --locked -p marty-oid4vci --lib \
+  --no-default-features --features "$features" \
+  wallet_request_auth::tests -- --include-ignored
 "$cargo" test --locked -p marty-oid4vci --lib \
   --no-default-features --features "$features" \
   lti::tests \
