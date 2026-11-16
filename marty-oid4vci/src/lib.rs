@@ -100,6 +100,8 @@ mod issuer_key;
 #[cfg(feature = "wallet")]
 pub mod wallet;
 #[cfg(feature = "wallet")]
+mod wallet_did;
+#[cfg(feature = "wallet")]
 pub mod wallet_request_auth;
 #[cfg(feature = "wallet")]
 mod wallet_sd_jwt;
