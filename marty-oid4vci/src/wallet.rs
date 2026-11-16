@@ -92,6 +92,38 @@ fn registered_request_endpoint(input: &str, client_id: &str) -> Oid4vciResult<St
     Ok(endpoint)
 }
 
+pub(crate) async fn authenticate_registered_request_with_transport<F, Fut, C>(
+    input: &str,
+    authority: &crate::wallet_request_auth::RegisteredVerifierAuthority,
+    mut clock: C,
+    fetch: F,
+) -> Oid4vciResult<crate::wallet_request_auth::AuthenticatedPresentationRequest>
+where
+    C: FnMut() -> i64,
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Oid4vciResult<(String, String)>>,
+{
+    crate::wallet_request_auth::validate_registered_authority(authority, clock())?;
+    let endpoint = registered_request_endpoint(input, &authority.client_id)?;
+    let (body, content_type) = fetch(endpoint).await?;
+    let media_type = content_type.split(';').next().unwrap_or("").trim();
+    if !["application/oauth-authz-req+jwt", "application/jwt"]
+        .iter()
+        .any(|expected| media_type.eq_ignore_ascii_case(expected))
+    {
+        return Err(Oid4vciError::InvalidRequest(
+            "Registered verifier request must be a signed JWT".into(),
+        ));
+    }
+    // A bounded fetch still consumes time. Authenticate at completion, never
+    // with a timestamp captured before the await.
+    crate::wallet_request_auth::authenticate_registered_presentation_request(
+        &body,
+        authority,
+        clock(),
+    )
+}
+
 async fn bounded_response_body(
     mut response: reqwest::Response,
     label: &str,
@@ -1019,22 +1051,14 @@ impl WalletEngine {
         &self,
         input: &str,
         authority: &crate::wallet_request_auth::RegisteredVerifierAuthority,
-        now: i64,
     ) -> Oid4vciResult<crate::wallet_request_auth::AuthenticatedPresentationRequest> {
-        crate::wallet_request_auth::validate_registered_authority(authority, now)?;
-        let endpoint = registered_request_endpoint(input, &authority.client_id)?;
-        let (body, content_type) = self.fetch_request_object_body(&endpoint).await?;
-        if !matches!(
-            content_type.split(';').next().unwrap_or("").trim(),
-            "application/oauth-authz-req+jwt" | "application/jwt"
-        ) {
-            return Err(Oid4vciError::InvalidRequest(
-                "Registered verifier request must be a signed JWT".into(),
-            ));
-        }
-        crate::wallet_request_auth::authenticate_registered_presentation_request(
-            &body, authority, now,
+        authenticate_registered_request_with_transport(
+            input,
+            authority,
+            || chrono::Utc::now().timestamp(),
+            |endpoint| async move { self.fetch_request_object_body(&endpoint).await },
         )
+        .await
     }
 
     /// Decode an `openid4vp://` request URI into a full request object.

@@ -325,6 +325,42 @@ mod tests {
         );
         assert_eq!(authenticated.authority_revision(), "revision-7");
         assert_eq!(authenticated.expires_at(), now + 300);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        for finish in [now, now + 301, now + 601] {
+            let mut calls = 0;
+            let result = runtime.block_on(
+                crate::wallet::authenticate_registered_request_with_transport(
+                    "https://verifier.example/request",
+                    &authority,
+                    || {
+                        calls += 1;
+                        if calls == 1 {
+                            now
+                        } else {
+                            finish
+                        }
+                    },
+                    |endpoint| {
+                        assert_eq!(endpoint, "https://verifier.example/request");
+                        let body = token.clone();
+                        async move {
+                            Ok((
+                                body,
+                                "Application/OAuth-Authz-Req+JWT; charset=utf-8".into(),
+                            ))
+                        }
+                    },
+                ),
+            );
+            assert_eq!(calls, 2);
+            assert_eq!(
+                result.is_ok(),
+                finish == now,
+                "fetch completion time {finish}"
+            );
+        }
         for (field, value) in [
             ("client_id", json!("attacker")),
             ("iss", json!("attacker")),
