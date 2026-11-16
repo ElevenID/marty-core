@@ -48,7 +48,7 @@ const MAX_CREDENTIAL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PRESENTATION_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_OBJECT_BYTES: usize = 512 * 1024;
 
-fn registered_request_endpoint(input: &str, client_id: &str) -> Oid4vciResult<String> {
+pub(crate) fn registered_request_endpoint(input: &str, client_id: &str) -> Oid4vciResult<String> {
     let invalid = || Oid4vciError::InvalidRequest("Invalid registered request locator".into());
     if input.len() > 16 * 1024 {
         return Err(invalid());
@@ -124,7 +124,7 @@ where
     )
 }
 
-async fn bounded_response_body(
+pub(crate) async fn bounded_response_body(
     mut response: reqwest::Response,
     label: &str,
     limit: usize,
@@ -1545,7 +1545,10 @@ impl WalletEngine {
         Self::decode_request_object_body(&body, Some(&content_type))
     }
 
-    async fn fetch_request_object_body(&self, uri: &str) -> Oid4vciResult<(String, String)> {
+    pub(crate) async fn fetch_request_object_body(
+        &self,
+        uri: &str,
+    ) -> Oid4vciResult<(String, String)> {
         let (client, endpoint) = crate::network::public_request_client(uri).await?;
         let resp = client
             .get(endpoint)
