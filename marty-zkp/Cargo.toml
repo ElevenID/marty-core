@@ -21,6 +21,12 @@ bindgen = "0.72" # In a real scenario, we'd use this to generate bindings
 [dev-dependencies]
 sha2.workspace = true
 
+# Android has no system OpenSSL/zstd development installation. Build the same
+# native C libraries for the selected target and consume their Cargo metadata.
+[target.'cfg(target_os = "android")'.dependencies]
+openssl-sys = { version = "0.9.118", features = ["vendored"] }
+zstd-sys = { version = "=2.1.3", features = ["vendored"] }
+
 [features]
 default = ["verifier"]
 verifier = []
