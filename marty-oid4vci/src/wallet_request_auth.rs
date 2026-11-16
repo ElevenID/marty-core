@@ -152,17 +152,11 @@ fn plain_sd_jwt_query(value: &Value) -> bool {
     })
 }
 
-/// Authenticate a bounded compact ES256 JWS before deriving consent fields.
-///
-/// Supports only OID4VP Final's pre-registered client profile, direct_post and
-/// DCQL. Unknown authorization semantics fail closed before typed parsing can
-/// discard them. The caller must obtain fresh authority again at preparation;
-/// this value is neither a persistent trust grant nor signing authorization.
-pub fn authenticate_registered_presentation_request(
-    compact_jws: &str,
+/// Refuse stale or unsupported authority before any request network fetch.
+pub(crate) fn validate_registered_authority(
     authority: &RegisteredVerifierAuthority,
     now: i64,
-) -> Oid4vciResult<AuthenticatedPresentationRequest> {
+) -> Oid4vciResult<()> {
     if !text(&authority.authority_id)
         || !text(&authority.revision)
         || !text(&authority.client_id)
@@ -177,6 +171,21 @@ pub fn authenticate_registered_presentation_request(
     {
         return Err(invalid());
     }
+    Ok(())
+}
+
+/// Authenticate a bounded compact ES256 JWS before deriving consent fields.
+///
+/// Supports only OID4VP Final's pre-registered client profile, direct_post and
+/// flat SD-JWT DCQL. Unknown authorization semantics fail closed before typed
+/// parsing can discard them. Obtain fresh authority again at preparation;
+/// this value is neither a persistent trust grant nor signing authorization.
+pub fn authenticate_registered_presentation_request(
+    compact_jws: &str,
+    authority: &RegisteredVerifierAuthority,
+    now: i64,
+) -> Oid4vciResult<AuthenticatedPresentationRequest> {
+    validate_registered_authority(authority, now)?;
     let verified =
         jose::verify_compact_jwt_with_public_jwk(compact_jws, &authority.public_jwk_json, "ES256")?;
     let header = verified.header.as_object().ok_or_else(invalid)?;
@@ -362,6 +371,29 @@ mod tests {
         let mut stale = authority.clone();
         stale.valid_until = now;
         assert!(authenticate_registered_presentation_request(&token, &stale, now).is_err());
+        assert!(
+            authenticate_registered_presentation_request(&token, &authority, now + 301).is_err()
+        );
+        assert!(
+            authenticate_registered_presentation_request(&token, &authority, now + 601).is_err()
+        );
+        let other = crate::openbao_transit::DisposableOpenBao::from_marked_env().create_es256();
+        let mut wrong_key = authority.clone();
+        wrong_key.public_jwk_json = other.public_jwk().into();
+        assert!(authenticate_registered_presentation_request(&token, &wrong_key, now).is_err());
+        for query in [
+            json!({"credentials":[{"id":"identity","format":"dc+sd-jwt","meta":{"vct_values":["Identity"]},"claims":[{"path":["age"]}]}]}),
+            json!({"credentials":[{"id":"identity","format":"dc+sd-jwt","claims":[{"path":["age"],"values":[18]}]}]}),
+        ] {
+            let mut changed = claims.clone();
+            changed["dcql_query"] = query;
+            assert!(authenticate_registered_presentation_request(
+                &sign(&header, &changed),
+                &authority,
+                now
+            )
+            .is_err());
+        }
         let mut wrong = authority.clone();
         wrong.response_uris = vec!["https://verifier.example/response/other".into()];
         assert!(authenticate_registered_presentation_request(&token, &wrong, now).is_err());
