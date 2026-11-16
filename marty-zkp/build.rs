@@ -75,6 +75,27 @@ fn compile_libzk(lib_dir: &std::path::Path) {
     let mut build = cc::Build::new();
     build.cpp(true).include(&lib_src).include("src/cpp");
 
+    if target_os == "android" {
+        let openssl = PathBuf::from(
+            env::var_os("DEP_OPENSSL_INCLUDE")
+                .expect("Android Longfellow requires target OpenSSL include metadata"),
+        );
+        assert!(openssl.join("openssl/sha.h").is_file());
+        build.include(openssl);
+        let zstd = env::var("DEP_ZSTD_INCLUDE")
+            .expect("Android Longfellow requires target zstd include metadata");
+        for directory in zstd.split(';') {
+            let directory = PathBuf::from(directory);
+            assert!(directory.join("zstd.h").is_file());
+            build.include(directory);
+        }
+        // One Rust bridge owns the C++ objects; no C++ object crosses its FFI.
+        // Use the NDK's versioned static libc++.a linker script, which also
+        // selects its ABI support libraries. Do not bundle that linker script
+        // as if it were an archive or require libc++_shared.so at startup.
+        build.cpp_link_stdlib("static:-bundle=c++");
+    }
+
     if is_msvc {
         build
             .flag("/std:c++17")
@@ -131,10 +152,12 @@ fn compile_libzk(lib_dir: &std::path::Path) {
     if target_os == "macos" {
         println!("cargo:rustc-link-search=/opt/homebrew/lib");
         println!("cargo:rustc-link-lib=c++");
-    } else if target_os != "windows" {
+    } else if target_os != "windows" && target_os != "android" {
         println!("cargo:rustc-link-lib=stdc++");
     }
 
-    println!("cargo:rustc-link-lib=crypto");
-    println!("cargo:rustc-link-lib=zstd");
+    if target_os != "android" {
+        println!("cargo:rustc-link-lib=crypto");
+        println!("cargo:rustc-link-lib=zstd");
+    }
 }

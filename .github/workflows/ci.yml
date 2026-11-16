@@ -438,6 +438,20 @@ jobs:
         run: |
           cargo test --locked -p marty-zkp --no-default-features --features prover --test conformance round_trip_age_over_18
           cargo test --locked -p marty-zkp --no-default-features --features prover --test conformance prove_rejects_wrong_birth_date_witness
+      - name: Fetch public target inputs for offline Android cross-link
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
+        run: cargo fetch --locked
+      - name: Cross-link the real prover for all packaged Android ABIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?Android SDK unavailable}}"
+          ndk_root="$sdk_root/ndk/28.2.13676358"
+          if [[ ! -f "$ndk_root/source.properties" ]]; then
+            "$sdk_root/cmdline-tools/latest/bin/sdkmanager" "ndk;28.2.13676358"
+          fi
+          rustup target add --toolchain 1.97.1 armv7-linux-androideabi aarch64-linux-android x86_64-linux-android
+          python3 scripts/check_zkp_android_crosslink.py --ndk-root "$ndk_root"
       - name: Reject mock cryptography in release builds
         shell: bash
         run: |
