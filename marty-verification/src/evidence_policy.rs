@@ -399,6 +399,24 @@ fn validate_requirements(requirements: &[Value]) -> Result<(), String> {
                 return Err("Unsupported evidence requirement field".into());
             }
         }
+        for key in [
+            "requirement_id",
+            "provider",
+            "source",
+            "fact_type",
+            "evidence_type",
+            "type",
+            "verification_method",
+        ] {
+            if fields.get(key).is_some_and(|value| !value.is_string()) {
+                return Err("Evidence requirement selectors must be strings".into());
+            }
+        }
+        for key in ["required", "auto_issue_on_permit"] {
+            if fields.get(key).is_some_and(|value| !value.is_boolean()) {
+                return Err("Evidence requirement flags must be booleans".into());
+            }
+        }
         if fields.get("scope").is_some_and(|scope| !scope.is_object()) {
             return Err("Evidence requirement scope must be an object".into());
         }
@@ -1036,5 +1054,40 @@ mod tests {
         let result = decision(&with_policy(empty_request(), "this is not a Cedar policy"));
         assert_eq!(result["allowed"], false);
         assert!(!result["errors"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn malformed_selector_and_flag_types_cannot_weaken_constraints() {
+        for key in [
+            "requirement_id",
+            "provider",
+            "source",
+            "fact_type",
+            "evidence_type",
+            "type",
+            "verification_method",
+        ] {
+            for invalid in [json!(42), json!(false), Value::Null, json!([]), json!({})] {
+                let mut request =
+                    with_policy(empty_request(), "permit(principal, action, resource);");
+                request["requirements"] = json!([{"fact_type":"result"}]);
+                request["requirements"][0][key] = invalid;
+                assert!(
+                    evaluate_application_evidence_policy_json(&request.to_string()).is_err(),
+                    "{key}"
+                );
+            }
+        }
+        for key in ["required", "auto_issue_on_permit"] {
+            for invalid in [json!("false"), json!(0), Value::Null, json!([]), json!({})] {
+                let mut request =
+                    with_policy(empty_request(), "permit(principal, action, resource);");
+                request["requirements"] = json!([{"fact_type":"result"}]);
+                request["requirements"][0][key] = invalid;
+                assert!(
+                    evaluate_application_evidence_policy_json(&request.to_string()).is_err(),
+                    "{key}"
+                );
+            }
+        }
     }
 }

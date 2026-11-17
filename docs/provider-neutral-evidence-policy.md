@@ -39,7 +39,9 @@ Requirements are nonempty fact-type strings or objects with these keys:
 `requirement_id`, `provider`, `source`, `fact_type`, `evidence_type`, `type`,
 `verification_method`, `scope`, `pass_rule`, `required`, `auto_issue_on_permit`.
 Unknown keys reject before policy evaluation, including if an explicit policy
-would otherwise permit. Supplied `scope` and `pass_rule` values must be objects.
+would otherwise permit. Supplied `scope` and `pass_rule` values must be objects. Selectors must be
+strings; `required` and `auto_issue_on_permit` must be booleans. Invalid types
+reject instead of coercing a constraint to a wildcard or a truthy flag.
 Use only the generic `scope` field; obsolete constraint aliases are rejected
 instead of becoming unconstrained matches. Existing provider/fact strings are
 not rewritten or assigned new meanings by the kernel.
