@@ -10,8 +10,8 @@ dependencies:
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-core/issues/361
-    review-after: 2026-11-16
-    rationale: "Re-reviewed 2026-11-09 against the primary crates.io metadata for rsa, cms, x509-cert, der, signature and elliptic-curve and cms 0.3.0-rc.2 dependencies. Stable RSA 0.10.0 is now published and RUSTSEC-2023-0071 lists >=0.10.0 as patched; stable x509-cert 0.3.0, der 0.8.3, signature 3.0.0 and elliptic-curve 0.14.3 are available. CMS remains stable 0.2.3 with newest 0.3.0-rc.2 requiring der/spki 0.8, x509-cert 0.3 and RSA 0.10. Cargo.lock retains CMS 0.2.3, x509-cert 0.2.5 and RSA 0.9.10 alongside both der/signature/elliptic-curve generations. Retain the existing public-verification-only RSA boundary while issue 361 qualifies a coordinated certificate/CMS/RSA candidate across JOSE, passport, mdoc, Python and wheels; do not claim no fixed RSA exists or introduce prerelease CMS automatically. Review in seven days; no dependency/signing capability or advisory scope is broadened."
+    review-after: 2026-11-24
+    rationale: Re-reviewed 2026-11-17 against primary crates.io metadata for rsa, cms, x509-cert, der, signature and elliptic-curve, published CMS 0.3.0-rc.2 dependencies, and the RustSec RSA advisory. Stable RSA 0.10.0 is published and RUSTSEC-2023-0071 marks >=0.10.0 patched; x509-cert 0.3.0, der 0.8.3, signature 3.0.0 and elliptic-curve 0.14.3 remain available. Stable CMS remains 0.2.3; candidate 0.3.0-rc.2 is prerelease and uses der/spki 0.8 and x509-cert 0.3, with optional RSA 0.10 support. The unchanged lock retains CMS 0.2.3, x509-cert 0.2.5 and RSA 0.9.10 alongside both der/signature/elliptic-curve generations. Retain the public-verification-only RSA boundary while issue 361 qualifies the coordinated certificate/CMS/RSA candidate across JOSE, passport, mdoc, Python and wheels. Do not claim a fixed RSA is unavailable or introduce prerelease CMS automatically. Review again in seven days; no dependency revision, private-key capability or advisory scope changes.
   - package: affinidi-messaging-didcomm
     ecosystem: rust
     owner: ElevenID
@@ -58,8 +58,8 @@ dependencies:
     decision: fork
     advisories: [RUSTSEC-2023-0126, RUSTSEC-2026-0255]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-11-16
-    rationale: "Re-reviewed 2026-11-09 against the primary crates.io linked-data metadata and published 0.2.0 dependencies. Stable remains 0.2.0 and requires rdf-syntax 2 and xsd-types 0.12; it is not a compatible patch for the locked SSI/JSON-LD 0.1.2 consumers. Cargo.lock still binds exact existing ElevenID fork 6f86efc1579033e14ff2ad7d115ca0857e16a67f, unchanged by this review; im, sized-chunks and owning_ref remain absent from the graph. Retain that reviewed fork and existing advisory list while issue 26 qualifies the coordinated upstream consumer migration, including shared-node expansion, cycle termination, visitor-error cleanup, public API, default features and MSRV 1.71.1. Recheck in seven days; no source revision, parser/proof behavior or security exception is broadened."
+    review-after: 2026-11-24
+    rationale: Re-reviewed 2026-11-17 against primary crates.io linked-data metadata and published 0.2.0 dependencies. Stable remains 0.2.0 and requires rdf-syntax 2 and xsd-types 0.12, so it is not a compatible patch for the locked SSI/JSON-LD 0.1.2 consumers. The exact existing ElevenID fork remains 6f86efc1579033e14ff2ad7d115ca0857e16a67f in the unchanged Cargo.lock; im, sized-chunks and owning_ref remain absent. Retain the reviewed fork and existing advisory list while issue 26 qualifies coordinated upstream consumers, including shared-node expansion, cycle termination, visitor-error cleanup, public API, default features and MSRV. Review again in seven days; no source revision, parser/proof behavior or security exception changes.
   - package: sd-jwt-rs
     ecosystem: rust
     owner: ElevenID
@@ -118,8 +118,8 @@ dependencies:
     decision: retain
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/26
-    review-after: 2026-11-16
-    rationale: "Re-reviewed 2026-11-09 against https://raw.githubusercontent.com/RustSec/advisory-db/main/crates/rsa/RUSTSEC-2023-0071.md and primary crates.io RSA/CMS metadata. Stable RSA 0.10.0 is now available and the advisory explicitly marks >=0.10.0 patched. Cargo.lock retains 0.9.10 on the existing public-verification-only marty-crypto boundary for passport/certificate/CMS/CRL/JOSE; production local key generation/signing remains absent. Upgrade is required through the coordinated certificate/CMS qualification in issue 361: current stable CMS remains 0.2.3, while its new-family 0.3.0-rc.2 is prerelease and requires RSA 0.10/der 0.8/x509-cert 0.3. Keep the existing explicit advisory/watch without claiming the fix is unavailable or widening private-key capability. Recheck in seven days, with the same security/role gates and emrtd-compat boundary for legacy SHA-1/ISO 9796."
+    review-after: 2026-11-24
+    rationale: Re-reviewed 2026-11-17 against https://raw.githubusercontent.com/RustSec/advisory-db/main/crates/rsa/RUSTSEC-2023-0071.md and primary crates.io RSA/CMS metadata and dependencies. RSA 0.10.0 is stable and explicitly patched by the advisory. The unchanged lock retains 0.9.10 for the existing public-verification-only marty-crypto passport/certificate/CMS/CRL/JOSE boundary; this branch introduces no production local RSA key generation/signing APIs. Upgrade remains required through coordinated certificate/CMS qualification in issue 361. Stable CMS remains 0.2.3; prerelease CMS 0.3.0-rc.2 moves to der/spki 0.8 and x509-cert 0.3, with optional RSA 0.10 support. Retain the explicit advisory/watch without claiming the fix is unavailable or widening private-key capability. Review again in seven days with the same security/role gates and emrtd-compat boundary for legacy SHA-1/ISO 9796.
   - package: rusqlite and bundled SQLCipher
     ecosystem: rust
     owner: ElevenID
