@@ -209,6 +209,284 @@ pub fn verify_mdoc_presentation_at(
     }
 }
 
+/// Opaque authority for one exact MSO status reference. Only full issuer,
+/// governed certificate trust and holder authentication can construct this.
+/// This is not a revocation verdict or permission to fetch the reference URL.
+pub struct AuthenticatedMdocStatusRequest {
+    reference: MdocStatusReference,
+    status_authority_certificate_der: Vec<u8>,
+    document_index: usize,
+    prepared_at: OffsetDateTime,
+    valid_until: OffsetDateTime,
+    presentation: std::sync::Arc<[u8]>,
+    transcript: std::sync::Arc<[u8]>,
+    roots: std::sync::Arc<[String]>,
+    pins: std::sync::Arc<[String]>,
+}
+
+impl std::fmt::Debug for AuthenticatedMdocStatusRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthenticatedMdocStatusRequest")
+            .finish_non_exhaustive()
+    }
+}
+
+impl AuthenticatedMdocStatusRequest {
+    #[must_use]
+    pub fn reference(&self) -> &MdocStatusReference {
+        &self.reference
+    }
+
+    /// Exact signed delegation, or the uniquely selected governed IACA.
+    /// These public bytes alone are not a reusable authority capability.
+    #[must_use]
+    pub fn status_authority_certificate_der(&self) -> &[u8] {
+        &self.status_authority_certificate_der
+    }
+
+    #[must_use]
+    pub fn document_index(&self) -> usize {
+        self.document_index
+    }
+
+    #[must_use]
+    pub fn valid_until(&self) -> OffsetDateTime {
+        self.valid_until
+    }
+
+    /// Recheck the original complete presentation after awaited status work.
+    /// The caller must also recheck token, signer-chain and CRL deadlines and
+    /// obtain current owner/governance authorization. Frozen roots/pins do not
+    /// detect subsequent owner removal or policy revision.
+    pub fn revalidate_at(&self, now: OffsetDateTime) -> Result<(), String> {
+        if now < self.prepared_at || now >= self.valid_until {
+            return Err("mdoc status authority is outside its validity window".into());
+        }
+        let verified = verify_mdoc_presentation_at(
+            &self.presentation,
+            &self.transcript,
+            &self.roots,
+            &self.pins,
+            now,
+        );
+        if !verified.issuer_signature_valid
+            || !verified.issuer_trusted
+            || !verified.device_authentication_valid
+        {
+            return Err("mdoc status authority no longer authenticates".into());
+        }
+        Ok(())
+    }
+}
+
+/// Prepare references from the original fully authenticated presentation.
+/// Public/JSON evidence cannot be promoted into this non-deserializable type.
+/// No network I/O is performed, and no revocation verdict is manufactured.
+pub fn prepare_mdoc_status_requests_at(
+    presentation: &[u8],
+    transcript: &[u8],
+    roots: &[String],
+    pins: &[String],
+    now: OffsetDateTime,
+) -> Result<Vec<AuthenticatedMdocStatusRequest>, String> {
+    if presentation.len() > 2 * 1024 * 1024
+        || transcript.len() > 64 * 1024
+        || roots.len() > 32
+        || pins.len() > 32
+        || roots.iter().chain(pins).any(|pem| pem.len() > 128 * 1024)
+    {
+        return Err("mdoc status preparation exceeds resource limits".into());
+    }
+    // Bound certificate/profile work before cryptographic verification. This
+    // preflight parses no authority; every admitted reference is authenticated
+    // again below from the complete original response.
+    let parsed: DeviceResponse = isomdl::cbor::from_slice(presentation)
+        .map_err(|_| "Malformed mdoc status presentation".to_owned())?;
+    let documents = parsed
+        .documents
+        .ok_or_else(|| "No mdoc documents".to_owned())?
+        .into_inner();
+    if documents.len() > 8 {
+        return Err("Too many mdoc status documents".into());
+    }
+    for document in documents {
+        let auth = &document.issuer_signed.issuer_auth;
+        let chains: Vec<_> = auth
+            .protected
+            .header
+            .rest
+            .iter()
+            .chain(auth.unprotected.rest.iter())
+            .filter(|(label, _)| label == &Label::Int(X5CHAIN_COSE_HEADER_LABEL))
+            .collect();
+        if chains.len() != 1 {
+            return Err("mdoc issuer chain is ambiguous".into());
+        }
+        let chain = certificate_chain_der(&chains[0].1).map_err(str::to_owned)?;
+        if chain.len() > 8 || chain.iter().any(|der| der.len() > 64 * 1024) {
+            return Err("mdoc status issuer chain exceeds resource limits".into());
+        }
+    }
+    let verified = verify_mdoc_presentation_at(presentation, transcript, roots, pins, now);
+    if !verified.issuer_signature_valid
+        || !verified.issuer_trusted
+        || !verified.device_authentication_valid
+    {
+        return Err("mdoc status requires complete authenticated presentation".into());
+    }
+    let authenticated = verify_issuer_authentication(presentation, roots, pins, now);
+    if !authenticated.signature_valid || !authenticated.issuer_trusted {
+        return Err("mdoc status issuer authentication failed".into());
+    }
+    let presentation = std::sync::Arc::<[u8]>::from(presentation);
+    let transcript = std::sync::Arc::<[u8]>::from(transcript);
+    let roots_snapshot = std::sync::Arc::<[String]>::from(roots);
+    let pins_snapshot = std::sync::Arc::<[String]>::from(pins);
+    let mut requests = Vec::new();
+    for (document_index, document) in authenticated.authenticated_documents.iter().enumerate() {
+        let references = authenticated_status_references(&document.mso)?;
+        if references.is_empty() {
+            continue;
+        }
+        let auth = &document.document.issuer_signed.issuer_auth;
+        let chains: Vec<_> = auth
+            .protected
+            .header
+            .rest
+            .iter()
+            .chain(auth.unprotected.rest.iter())
+            .filter(|(label, _)| label == &Label::Int(X5CHAIN_COSE_HEADER_LABEL))
+            .collect();
+        if chains.len() != 1 {
+            return Err("mdoc issuer chain is ambiguous".into());
+        }
+        let chain = certificate_chain_der(&chains[0].1).map_err(str::to_owned)?;
+        let mut document_deadline = document.mso.validity_info.valid_until;
+        for certificate in &chain {
+            document_deadline = document_deadline.min(certificate_deadline(certificate, now)?);
+        }
+        let mut selected_iaca = None;
+        for reference in references {
+            let delegated = match &reference {
+                MdocStatusReference::StatusList {
+                    certificate_der, ..
+                }
+                | MdocStatusReference::IdentifierList {
+                    certificate_der, ..
+                } => certificate_der,
+            };
+            let authority = if let Some(certificate) = delegated {
+                certificate.clone()
+            } else {
+                if selected_iaca.is_none() {
+                    selected_iaca = Some(select_mdoc_iaca(&chain, roots, now)?);
+                }
+                selected_iaca.as_ref().expect("selected above").clone()
+            };
+            let valid_until = document_deadline.min(certificate_deadline(&authority, now)?);
+            if now >= valid_until {
+                return Err("mdoc status authority expired".into());
+            }
+            requests.push(AuthenticatedMdocStatusRequest {
+                reference,
+                status_authority_certificate_der: authority,
+                document_index,
+                prepared_at: now,
+                valid_until,
+                presentation: presentation.clone(),
+                transcript: transcript.clone(),
+                roots: roots_snapshot.clone(),
+                pins: pins_snapshot.clone(),
+            });
+        }
+    }
+    Ok(requests)
+}
+
+fn certificate_deadline(der: &[u8], now: OffsetDateTime) -> Result<OffsetDateTime, String> {
+    let certificate = x509_cert::Certificate::from_der(der)
+        .map_err(|_| "Invalid mdoc status authority certificate".to_owned())?;
+    let validity = certificate.tbs_certificate.validity;
+    let from = OffsetDateTime::from_unix_timestamp(
+        validity.not_before.to_unix_duration().as_secs() as i64,
+    )
+    .map_err(|_| "Invalid certificate validity".to_owned())?;
+    let until =
+        OffsetDateTime::from_unix_timestamp(validity.not_after.to_unix_duration().as_secs() as i64)
+            .map_err(|_| "Invalid certificate validity".to_owned())?;
+    if now < from || now >= until {
+        return Err("mdoc status authority certificate is not current".into());
+    }
+    Ok(until)
+}
+
+fn select_mdoc_iaca(
+    chain: &[Vec<u8>],
+    roots: &[String],
+    now: OffsetDateTime,
+) -> Result<Vec<u8>, String> {
+    let mut candidates = std::collections::BTreeSet::new();
+    for pem in roots {
+        let der = certificate_der_from_pem(pem)?;
+        if !candidates.insert(der) {
+            continue;
+        }
+    }
+    let mut matched = Vec::new();
+    for der in candidates {
+        // A directly pinned DSC, even if also listed as a general trust anchor,
+        // cannot silently acquire IACA status-list delegation authority.
+        use const_oid::AssociatedOid;
+        use x509_cert::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
+        let certificate = x509_cert::Certificate::from_der(&der)
+            .map_err(|_| "Invalid governed mdoc IACA".to_owned())?;
+        let extensions = certificate
+            .tbs_certificate
+            .extensions
+            .as_deref()
+            .unwrap_or_default();
+        let constraints: Vec<_> = extensions
+            .iter()
+            .filter(|ext| ext.extn_id == BasicConstraints::OID)
+            .collect();
+        let usages: Vec<_> = extensions
+            .iter()
+            .filter(|ext| ext.extn_id == KeyUsage::OID)
+            .collect();
+        if constraints.len() != 1 || usages.len() != 1 {
+            continue;
+        }
+        let ca = BasicConstraints::from_der(constraints[0].extn_value.as_bytes())
+            .map_err(|_| "Invalid governed mdoc IACA constraints".to_owned())?;
+        let usage = KeyUsage::from_der(usages[0].extn_value.as_bytes())
+            .map_err(|_| "Invalid governed mdoc IACA key usage".to_owned())?;
+        if !ca.ca || !usage.0.contains(KeyUsages::KeyCertSign) {
+            continue;
+        }
+        let mut validator = ChainValidator::with_config(certificate_validation_config(now)?);
+        validator
+            .add_trust_anchor_der(&der)
+            .map_err(|_| "Invalid governed mdoc IACA".to_owned())?;
+        // Include this exact configured candidate in constraint validation;
+        // the generic validator's omitted-anchor fast path otherwise checks
+        // only its subject/signature. Preserve every original chain byte.
+        let mut completed_chain = chain.to_vec();
+        if completed_chain.last() != Some(&der) {
+            completed_chain.push(der.clone());
+        }
+        if validator
+            .validate_chain_der(&completed_chain)
+            .is_ok_and(|result| result.valid)
+        {
+            matched.push(der);
+        }
+    }
+    if matched.len() != 1 {
+        return Err("mdoc status requires one unambiguous governed IACA".into());
+    }
+    Ok(matched.remove(0))
+}
+
 /// Extract disclosed fields only after the caller has authenticated the mdoc.
 pub fn disclosed_claims(mdoc_bytes: &[u8]) -> Result<serde_json::Value, String> {
     let response = parse_valid_device_response(mdoc_bytes)?;
@@ -1202,6 +1480,123 @@ mod tests {
     }
 
     #[test]
+    fn iaca_selection_checks_exact_completed_chain_and_deduplicates_governed_roots() {
+        use der::Encode;
+        let public: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/vectors/mdoc_status_authority_public_chain.json"
+        ))
+        .unwrap();
+        let root = general_purpose::STANDARD
+            .decode(public["root_der_base64"].as_str().unwrap())
+            .unwrap();
+        let leaf = general_purpose::STANDARD
+            .decode(public["leaf_der_base64"].as_str().unwrap())
+            .unwrap();
+        let cert = x509_cert::Certificate::from_der(&leaf).unwrap();
+        let start = cert
+            .tbs_certificate
+            .validity
+            .not_before
+            .to_unix_duration()
+            .as_secs() as i64;
+        let now = OffsetDateTime::from_unix_timestamp(start + 120).unwrap();
+        let pem =
+            pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &root).unwrap();
+        assert_eq!(
+            select_mdoc_iaca(
+                std::slice::from_ref(&leaf),
+                &[pem.clone(), pem.clone()],
+                now
+            )
+            .unwrap(),
+            root
+        );
+        assert_eq!(
+            select_mdoc_iaca(
+                &[leaf.clone(), root.clone()],
+                std::slice::from_ref(&pem),
+                now
+            )
+            .unwrap(),
+            root
+        );
+        let mut constrained = x509_cert::Certificate::from_der(&root).unwrap();
+        constrained
+            .tbs_certificate
+            .extensions
+            .as_mut()
+            .unwrap()
+            .push(x509_cert::ext::Extension {
+                extn_id: const_oid::ObjectIdentifier::new_unwrap("1.2.3.4.5.6.7"),
+                critical: true,
+                extn_value: der::asn1::OctetString::new(vec![0x05, 0x00]).unwrap(),
+            });
+        let constrained = constrained.to_der().unwrap();
+        let mut legacy = ChainValidator::with_config(certificate_validation_config(now).unwrap());
+        legacy.add_trust_anchor_der(&constrained).unwrap();
+        assert!(
+            legacy
+                .validate_chain_der(std::slice::from_ref(&leaf))
+                .unwrap()
+                .valid,
+            "test must expose the omitted-anchor constraint fast path"
+        );
+        let pem =
+            pem_rfc7468::encode_string("CERTIFICATE", pem_rfc7468::LineEnding::LF, &constrained)
+                .unwrap();
+        assert!(
+            select_mdoc_iaca(std::slice::from_ref(&leaf), std::slice::from_ref(&pem), now).is_err()
+        );
+        assert!(select_mdoc_iaca(&[leaf, constrained], &[pem], now).is_err());
+    }
+
+    #[test]
+    fn status_preparation_requires_full_authentication_and_does_not_infer_iaca_from_dsc() {
+        let (response, transcript, _, certificate, _) = authenticated_presentation_fixture();
+        let now = OffsetDateTime::now_utc();
+        let requests = prepare_mdoc_status_requests_at(
+            &response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&certificate),
+            now,
+        )
+        .unwrap();
+        assert!(
+            requests.is_empty(),
+            "absence of a declared reference must remain not-applicable"
+        );
+        assert!(prepare_mdoc_status_requests_at(&response, &transcript, &[], &[], now).is_err());
+        assert!(prepare_mdoc_status_requests_at(
+            &response,
+            b"wrong transcript",
+            &[],
+            std::slice::from_ref(&certificate),
+            now
+        )
+        .is_err());
+        let der = certificate_der_from_pem(&certificate).unwrap();
+        assert!(select_mdoc_iaca(std::slice::from_ref(&der), &[], now).is_err());
+        assert!(
+            select_mdoc_iaca(
+                std::slice::from_ref(&der),
+                &[certificate.clone(), certificate],
+                now
+            )
+            .is_err(),
+            "a DSC repeated in governed roots is still not an IACA"
+        );
+        assert!(prepare_mdoc_status_requests_at(
+            &vec![0; 2 * 1024 * 1024 + 1],
+            &transcript,
+            &[],
+            &[],
+            now
+        )
+        .is_err());
+    }
+
+    #[test]
     fn unsigned_mso_status_mutation_cannot_produce_authenticated_references() {
         use isomdl::definitions::{helpers::Tag24, StatusListInfo};
         let (response, transcript, _, certificate, _) = authenticated_presentation_fixture();
@@ -1223,11 +1618,24 @@ mod tests {
         issuer_auth.payload = Some(isomdl::cbor::to_vec(&Tag24::new(mso).unwrap()).unwrap());
         parsed.documents = Some(documents.try_into().unwrap());
         let tampered = isomdl::cbor::to_vec(&parsed).unwrap();
-        let result = verify_mdoc_presentation(&tampered, &transcript, &[], &[certificate]);
+        let result = verify_mdoc_presentation(
+            &tampered,
+            &transcript,
+            &[],
+            std::slice::from_ref(&certificate),
+        );
         assert!(!result.issuer_signature_valid);
         assert!(result.document_evidence.is_empty());
         assert!(!result.revocation_checked);
         assert_eq!(result.not_revoked, None);
+        assert!(prepare_mdoc_status_requests_at(
+            &tampered,
+            &transcript,
+            &[],
+            &[certificate],
+            OffsetDateTime::now_utc()
+        )
+        .is_err());
     }
 
     #[test]

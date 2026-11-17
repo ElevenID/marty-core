@@ -7,8 +7,9 @@ mod authentication;
 mod device_response;
 
 pub use authentication::{
-    disclosed_claims, parse_valid_device_response, verify_mdoc_issuer, verify_mdoc_issuer_at,
-    verify_mdoc_presentation, verify_mdoc_presentation_at, MdocCertificateTrustFailure,
+    disclosed_claims, parse_valid_device_response, prepare_mdoc_status_requests_at,
+    verify_mdoc_issuer, verify_mdoc_issuer_at, verify_mdoc_presentation,
+    verify_mdoc_presentation_at, AuthenticatedMdocStatusRequest, MdocCertificateTrustFailure,
     MdocDocumentVerificationEvidence, MdocIssuerVerificationResult,
     MdocPresentationVerificationResult, MdocStatusReference,
 };
