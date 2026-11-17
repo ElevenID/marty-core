@@ -22,6 +22,11 @@ unmaintained = "workspace"
 yanked = "deny"
 # A list of advisory IDs to ignore (useful for false positives)
 ignore = [
+    # Maintenance-only advisory: no patched Chrono version is listed. Keep the
+    # existing timestamp/expiry contracts until the coordinated Core/SSI migration
+    # is qualified under issue 26. Reviewed 2026-11-17; dependency-health.yml
+    # expires this maintenance disposition on 2026-11-24. Other advisories still deny.
+    { id = "RUSTSEC-2026-0543", reason = "time-boxed Chrono maintenance exception; preserve existing timestamp and expiry contracts pending Core/SSI replacement tracked in issue 26; review again by 2026-11-24 through required dependency-health policy" },
     # RSA is required by supported passport, certificate, and legacy badge profiles.
     # RSA >=0.10.0 is patched (RustSec review 2026-11-09); the locked 0.9.10
     # public-verification-only adapter remains affected pending coordinated CMS/
