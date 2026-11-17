@@ -943,19 +943,33 @@ mod tests {
         let bao = DisposableOpenBao::from_marked_env();
         let (root_a_params, root_a_key, root_a) = root("isolated mdoc status IACA A");
         let (root_b_params, root_b_key, root_b) = root("isolated signed status delegate B");
-        let url_a = "https://crl.fixture.invalid/a.crl";
-        let url_b = "https://crl.fixture.invalid/b.crl";
+        let https_origin = std::env::var("MARTY_TEST_MDOC_STATUS_HTTPS_ORIGIN").ok();
+        if let Some(origin) = &https_origin {
+            let parsed = url::Url::parse(origin).unwrap();
+            assert_eq!(parsed.scheme(), "https");
+            assert_eq!(parsed.host_str(), Some("localhost"));
+            assert!(parsed.port().is_some());
+            assert_eq!(parsed.origin().ascii_serialization(), *origin);
+        }
+        let url_a = https_origin
+            .as_ref()
+            .map(|origin| format!("{origin}/a.crl"))
+            .unwrap_or_else(|| "https://crl.fixture.invalid/a.crl".into());
+        let url_b = https_origin
+            .as_ref()
+            .map(|origin| format!("{origin}/b.crl"))
+            .unwrap_or_else(|| "https://crl.fixture.invalid/b.crl".into());
         let (document_key, document_certificate) = leaf(
             "isolated mdoc document signer A",
             &root_a_params,
             &root_a_key,
-            url_a,
+            &url_a,
         );
         let (delegate_key, delegate_certificate) = leaf(
             "isolated status signer B",
             &root_b_params,
             &root_b_key,
-            url_b,
+            &url_b,
         );
         let holder = bao.create_es256();
         let point = holder.verifying_key().to_sec1_point(false);
@@ -976,7 +990,11 @@ mod tests {
             .unwrap();
         let now = OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp())
             .unwrap();
-        let uri = "https://status.fixture.invalid/list";
+        let uri_owned = https_origin
+            .as_ref()
+            .map(|origin| format!("{origin}/list"))
+            .unwrap_or_else(|| "https://status.fixture.invalid/list".into());
+        let uri = uri_owned.as_str();
         let prepare = |identifier: bool| {
             let mut response: DeviceResponse = isomdl::cbor::from_slice(&original).unwrap();
             let mut documents = response.documents.take().unwrap().into_inner();
@@ -1072,10 +1090,10 @@ mod tests {
             )
             .unwrap();
             assert_eq!(requests.len(), 1);
-            requests.remove(0)
+            (requests.remove(0), encoded)
         };
-        let bit_request = prepare(false);
-        let identifier_request = prepare(true);
+        let (bit_request, bit_presentation) = prepare(false);
+        let (identifier_request, identifier_presentation) = prepare(true);
         let token = |identifier: bool,
                      revoked: bool,
                      key: &RemoteCertificateKey,
@@ -1174,7 +1192,7 @@ mod tests {
                      advance: i64| {
             let clock = Arc::new(AtomicI64::new(now.unix_timestamp()));
             let transport = CrlTransport {
-                crls: BTreeMap::from([(url_a.into(), a), (url_b.into(), b)]),
+                crls: BTreeMap::from([(url_a.clone(), a), (url_b.clone(), b)]),
                 fail,
                 clock: clock.clone(),
                 advance,
@@ -1300,6 +1318,51 @@ mod tests {
             0
         )
         .is_err());
-        assert!(check(&identifier_request, &bytes, good_a, good_b, false, 0).is_err());
+        assert!(check(
+            &identifier_request,
+            &bytes,
+            good_a.clone(),
+            good_b.clone(),
+            false,
+            0
+        )
+        .is_err());
+        if let Ok(directory) = std::env::var("MARTY_TEST_MDOC_STATUS_PUBLIC_FIXTURE_DIR") {
+            // Opt-in local test input, never a private-key/recovery export.
+            // Keep a strict public-only field list and exclusive file creation.
+            use std::io::Write;
+            let directory = std::path::Path::new(&directory);
+            assert!(directory.is_absolute());
+            let metadata = std::fs::symlink_metadata(directory).unwrap();
+            assert!(metadata.is_dir() && !metadata.file_type().is_symlink());
+            let public = serde_json::json!({
+                "scope":"Synthetic native HTTPS verification fixture; MSO/holder/CWT/CRL signing keys non-exportable in disposable Bao. No private key, token, recovery data or live product acceptance.",
+                "origin":https_origin.as_ref().expect("public HTTPS fixture requires explicit loopback origin"),
+                "now_epoch_seconds":now.unix_timestamp(),
+                "root_a_pem":root_a.pem(), "root_b_pem":root_b.pem(),
+                "bit_presentation_base64":STANDARD.encode(bit_presentation),
+                "identifier_presentation_base64":STANDARD.encode(identifier_presentation),
+                "transcript_base64":STANDARD.encode(transcript),
+                "bit_valid_base64":STANDARD.encode(token(false,false,&document_key,&document_certificate,&root_a,uri)),
+                "bit_revoked_base64":STANDARD.encode(token(false,true,&document_key,&document_certificate,&root_a,uri)),
+                "identifier_valid_base64":STANDARD.encode(token(true,false,&delegate_key,&delegate_certificate,&root_b,uri)),
+                "identifier_revoked_base64":STANDARD.encode(token(true,true,&delegate_key,&delegate_certificate,&root_b,uri)),
+                "crl_a_base64":STANDARD.encode(good_a.to_der().unwrap()),
+                "crl_b_base64":STANDARD.encode(good_b.to_der().unwrap()),
+            });
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut output = options
+                .open(directory.join("native-mdoc-public.json"))
+                .unwrap();
+            output
+                .write_all(serde_json::to_string(&public).unwrap().as_bytes())
+                .unwrap();
+        }
     }
 }
