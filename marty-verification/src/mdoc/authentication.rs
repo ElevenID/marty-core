@@ -314,7 +314,11 @@ fn verify_issuer_authentication(
         .map(|document| document.doc_type.clone())
         .collect::<Vec<_>>();
 
-    let mut root_validator = ChainValidator::new();
+    let validation_config = match certificate_validation_config(verification_time) {
+        Ok(config) => config,
+        Err(error) => return issuer_failure(error),
+    };
+    let mut root_validator = ChainValidator::with_config(validation_config);
     let mut trust_configuration_valid =
         !trusted_root_certs_pem.is_empty() || !pinned_issuer_certs_pem.is_empty();
     let mut errors = Vec::new();
@@ -415,6 +419,7 @@ fn verify_issuer_authentication(
                 &certificate_chain,
                 &root_validator,
                 &pinned_issuer_certs_der,
+                verification_time,
             ) {
                 issuer_trusted = false;
                 if !certificate_trust_failures
@@ -597,10 +602,25 @@ fn certificate_der_from_pem(pem: &str) -> Result<Vec<u8>, String> {
     Ok(der)
 }
 
+fn certificate_validation_config(
+    verification_time: OffsetDateTime,
+) -> Result<ChainValidatorConfig, String> {
+    let validation_moment = chrono::DateTime::from_timestamp(
+        verification_time.unix_timestamp(),
+        verification_time.nanosecond(),
+    )
+    .ok_or_else(|| "Certificate verification time is out of range".to_string())?;
+    Ok(ChainValidatorConfig {
+        validation_moment: Some(validation_moment),
+        ..Default::default()
+    })
+}
+
 fn verify_issuer_trust(
     certificate_chain: &[Vec<u8>],
     root_validator: &ChainValidator,
     pinned_issuer_certs_der: &[Vec<u8>],
+    verification_time: OffsetDateTime,
 ) -> Result<(), String> {
     let Some(leaf_certificate) = certificate_chain.first() else {
         return Err("issuer certificate chain is empty".to_string());
@@ -614,7 +634,7 @@ fn verify_issuer_trust(
     {
         let mut direct_pin_validator = ChainValidator::with_config(ChainValidatorConfig {
             required_key_usage: Vec::new(),
-            ..Default::default()
+            ..certificate_validation_config(verification_time)?
         });
         direct_pin_validator
             .add_trust_anchor_der(
@@ -964,8 +984,12 @@ mod tests {
             vec![KeyUsagePurpose::DigitalSignature],
         );
         let direct_pin = certificate_der_from_pem(&valid_pem).unwrap();
-        let valid =
-            verify_issuer_trust(std::slice::from_ref(&valid_der), &validator, &[direct_pin]);
+        let valid = verify_issuer_trust(
+            std::slice::from_ref(&valid_der),
+            &validator,
+            &[direct_pin],
+            OffsetDateTime::now_utc(),
+        );
         assert!(
             valid.is_ok(),
             "valid document signer was rejected: {valid:?}"
@@ -980,6 +1004,7 @@ mod tests {
             std::slice::from_ref(&ca_der),
             &validator,
             std::slice::from_ref(&ca_der),
+            OffsetDateTime::now_utc(),
         )
         .unwrap_err();
         assert!(error.contains("must not be a CA"));
@@ -993,6 +1018,7 @@ mod tests {
             std::slice::from_ref(&issuer_usage_der),
             &validator,
             std::slice::from_ref(&issuer_usage_der),
+            OffsetDateTime::now_utc(),
         )
         .unwrap_err();
         assert!(error.contains("DigitalSignature only"));
@@ -1006,6 +1032,7 @@ mod tests {
             std::slice::from_ref(&missing_usage_der),
             &validator,
             std::slice::from_ref(&missing_usage_der),
+            OffsetDateTime::now_utc(),
         )
         .unwrap_err();
         assert!(error.contains("Required extension 2.5.29.15 missing"));
@@ -1022,6 +1049,7 @@ mod tests {
             std::slice::from_ref(&incompatible_usage_der),
             &validator,
             std::slice::from_ref(&incompatible_usage_der),
+            OffsetDateTime::now_utc(),
         )
         .unwrap_err();
         assert!(error.contains("DigitalSignature only"));
@@ -1030,6 +1058,7 @@ mod tests {
             std::slice::from_ref(&valid_der),
             &validator,
             &[vec![1, 2, 3]],
+            OffsetDateTime::now_utc()
         )
         .is_err());
     }
@@ -1129,6 +1158,49 @@ mod tests {
             contract,
         )
     }
+    #[test]
+    fn direct_pin_certificate_validity_uses_the_explicit_verifier_clock() {
+        let (_, _, _, pem, _) = authenticated_presentation_fixture();
+        let der = certificate_der_from_pem(&pem).unwrap();
+        let certificate = x509_cert::Certificate::from_der(&der).unwrap();
+        let validity = certificate.tbs_certificate.validity;
+        let start = validity.not_before.to_unix_duration().as_secs() as i64;
+        let end = validity.not_after.to_unix_duration().as_secs() as i64;
+        let inside = OffsetDateTime::from_unix_timestamp(start + (end - start) / 2).unwrap();
+        let outside = OffsetDateTime::from_unix_timestamp(end + 60).unwrap();
+        let validator = ChainValidator::with_config(certificate_validation_config(inside).unwrap());
+        assert!(verify_issuer_trust(
+            std::slice::from_ref(&der),
+            &validator,
+            std::slice::from_ref(&der),
+            inside
+        )
+        .is_ok());
+        assert!(verify_issuer_trust(
+            std::slice::from_ref(&der),
+            &validator,
+            std::slice::from_ref(&der),
+            outside
+        )
+        .is_err());
+        let before = OffsetDateTime::from_unix_timestamp(start - 60).unwrap();
+        assert!(verify_issuer_trust(
+            std::slice::from_ref(&der),
+            &validator,
+            std::slice::from_ref(&der),
+            before
+        )
+        .is_err());
+        assert_eq!(
+            certificate_validation_config(inside)
+                .unwrap()
+                .validation_moment
+                .unwrap()
+                .timestamp(),
+            inside.unix_timestamp()
+        );
+    }
+
     #[test]
     fn unsigned_mso_status_mutation_cannot_produce_authenticated_references() {
         use isomdl::definitions::{helpers::Tag24, StatusListInfo};
