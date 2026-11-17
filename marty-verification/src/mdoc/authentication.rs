@@ -25,6 +25,23 @@ use crate::{
     },
 };
 
+/// References copied from the exact signature-authenticated MSO. These carry
+/// no fetched status, signer-trust decision, or permission to perform network I/O.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum MdocStatusReference {
+    StatusList {
+        uri: String,
+        index: u64,
+        certificate_der: Option<Vec<u8>>,
+    },
+    IdentifierList {
+        uri: String,
+        identifier: Vec<u8>,
+        certificate_der: Option<Vec<u8>>,
+    },
+}
+
 /// Signature-authenticated evidence for one mdoc document.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +53,9 @@ pub struct MdocDocumentVerificationEvidence {
     pub valid_from: String,
     pub valid_until: String,
     pub issuer_certificate_sha256: String,
+    /// Signed references only; offline verification still leaves revocation unchecked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_references: Vec<MdocStatusReference>,
     pub validity_checked: bool,
     pub valid_at_verification_time: bool,
     /// Offline verification does not invent revocation evidence.
@@ -509,6 +529,7 @@ fn validated_mso_evidence(
         .collect();
 
     Ok(MdocDocumentVerificationEvidence {
+        status_references: authenticated_status_references(mso)?,
         document_type: authenticated_document_type.to_string(),
         signature_algorithm: signature_algorithm.to_string(),
         digest_algorithm: digest_algorithm.to_string(),
@@ -521,6 +542,47 @@ fn validated_mso_evidence(
         revocation_checked: false,
         not_revoked: None,
     })
+}
+
+fn authenticated_status_references(mso: &Mso) -> Result<Vec<MdocStatusReference>, String> {
+    let Some(status) = &mso.status else {
+        return Ok(Vec::new());
+    };
+    // These are representation bounds, not authority or transport policy.
+    fn uri(value: &str) -> Result<String, String> {
+        if value.is_empty() || value.len() > 4096 {
+            return Err("MSO status URI exceeds the representation bound".into());
+        }
+        Ok(value.into())
+    }
+    fn certificate(value: Option<&[u8]>) -> Result<Option<Vec<u8>>, String> {
+        match value {
+            Some(bytes) if bytes.is_empty() || bytes.len() > 65536 => {
+                Err("MSO status certificate exceeds the representation bound".into())
+            }
+            value => Ok(value.map(<[u8]>::to_vec)),
+        }
+    }
+    let mut references = Vec::new();
+    if let Some(list) = &status.status_list {
+        references.push(MdocStatusReference::StatusList {
+            uri: uri(&list.uri)?,
+            index: list.idx,
+            certificate_der: certificate(list.certificate.as_ref().map(|v| v.as_ref()))?,
+        });
+    }
+    if let Some(list) = &status.identifier_list {
+        let identifier: &[u8] = list.id.as_ref();
+        if identifier.is_empty() || identifier.len() > 1024 {
+            return Err("MSO status identifier exceeds the representation bound".into());
+        }
+        references.push(MdocStatusReference::IdentifierList {
+            uri: uri(&list.uri)?,
+            identifier: identifier.to_vec(),
+            certificate_der: certificate(list.certificate.as_ref().map(|v| v.as_ref()))?,
+        });
+    }
+    Ok(references)
 }
 
 fn certificate_der_from_pem(pem: &str) -> Result<Vec<u8>, String> {
@@ -675,6 +737,82 @@ mod tests {
     }
 
     #[test]
+    fn signed_status_and_identifier_references_are_projected_without_status_verdicts() {
+        use isomdl::definitions::{IdentifierListInfo, StatusListInfo};
+        let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
+        let mut mso = mso_with_validity(
+            now - time::Duration::hours(1),
+            now + time::Duration::hours(1),
+        );
+        mso.status = Some(isomdl::definitions::Status {
+            status_list: Some(StatusListInfo {
+                idx: 17,
+                uri: "https://status.example/list".into(),
+                certificate: Some(vec![1, 2, 3].into()),
+            }),
+            identifier_list: Some(IdentifierListInfo {
+                id: vec![4, 5, 6].into(),
+                uri: "https://status.example/identifiers".into(),
+                certificate: None,
+            }),
+        });
+        let evidence = validated_mso_evidence(&mso, &mso.doc_type, "ES256", b"cert", now).unwrap();
+        assert_eq!(
+            evidence.status_references,
+            vec![
+                MdocStatusReference::StatusList {
+                    uri: "https://status.example/list".into(),
+                    index: 17,
+                    certificate_der: Some(vec![1, 2, 3])
+                },
+                MdocStatusReference::IdentifierList {
+                    uri: "https://status.example/identifiers".into(),
+                    identifier: vec![4, 5, 6],
+                    certificate_der: None
+                },
+            ]
+        );
+        assert!(!evidence.revocation_checked);
+        assert_eq!(evidence.not_revoked, None);
+        let restored: MdocDocumentVerificationEvidence =
+            serde_json::from_value(serde_json::to_value(&evidence).unwrap()).unwrap();
+        assert_eq!(restored, evidence);
+    }
+
+    #[test]
+    fn status_reference_projection_bounds_uri_identifier_and_certificate() {
+        use isomdl::definitions::IdentifierListInfo;
+        let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
+        let original = mso_with_validity(
+            now - time::Duration::hours(1),
+            now + time::Duration::hours(1),
+        );
+        for (uri, id, certificate) in [
+            ("".into(), vec![1], None),
+            ("x".repeat(4097), vec![1], None),
+            ("https://status.example/list".into(), vec![], None),
+            ("https://status.example/list".into(), vec![1; 1025], None),
+            ("https://status.example/list".into(), vec![1], Some(vec![])),
+            (
+                "https://status.example/list".into(),
+                vec![1],
+                Some(vec![1; 65537]),
+            ),
+        ] {
+            let mut mso = original.clone();
+            mso.status = Some(isomdl::definitions::Status {
+                status_list: None,
+                identifier_list: Some(IdentifierListInfo {
+                    uri,
+                    id: id.into(),
+                    certificate: certificate.map(Into::into),
+                }),
+            });
+            assert!(validated_mso_evidence(&mso, &mso.doc_type, "ES256", b"cert", now).is_err());
+        }
+    }
+
+    #[test]
     fn authenticated_mso_evidence_is_typed_without_inventing_revocation() {
         let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
         let mso = mso_with_validity(
@@ -706,6 +844,13 @@ mod tests {
         assert!(evidence.valid_at_verification_time);
         assert!(!evidence.revocation_checked);
         assert_eq!(evidence.not_revoked, None);
+        assert!(evidence.status_references.is_empty());
+        let value = serde_json::to_value(&evidence).unwrap();
+        assert!(value.get("status_references").is_none());
+        assert_eq!(
+            serde_json::from_value::<MdocDocumentVerificationEvidence>(value).unwrap(),
+            evidence
+        );
     }
 
     #[test]
@@ -984,6 +1129,35 @@ mod tests {
             contract,
         )
     }
+    #[test]
+    fn unsigned_mso_status_mutation_cannot_produce_authenticated_references() {
+        use isomdl::definitions::{helpers::Tag24, StatusListInfo};
+        let (response, transcript, _, certificate, _) = authenticated_presentation_fixture();
+        let mut parsed: DeviceResponse = isomdl::cbor::from_slice(&response).unwrap();
+        let mut documents = parsed.documents.take().unwrap().into_inner();
+        let issuer_auth = &mut documents[0].issuer_signed.issuer_auth;
+        let encoded_mso = issuer_auth.payload.as_ref().unwrap();
+        let mut mso = isomdl::cbor::from_slice::<Tag24<Mso>>(encoded_mso)
+            .unwrap()
+            .into_inner();
+        mso.status = Some(isomdl::definitions::Status {
+            status_list: Some(StatusListInfo {
+                idx: 0,
+                uri: "https://attacker.example/list".into(),
+                certificate: None,
+            }),
+            identifier_list: None,
+        });
+        issuer_auth.payload = Some(isomdl::cbor::to_vec(&Tag24::new(mso).unwrap()).unwrap());
+        parsed.documents = Some(documents.try_into().unwrap());
+        let tampered = isomdl::cbor::to_vec(&parsed).unwrap();
+        let result = verify_mdoc_presentation(&tampered, &transcript, &[], &[certificate]);
+        assert!(!result.issuer_signature_valid);
+        assert!(result.document_evidence.is_empty());
+        assert!(!result.revocation_checked);
+        assert_eq!(result.not_revoked, None);
+    }
+
     #[test]
     fn certificate_trust_diagnostics_preserve_old_json_defaults_and_trusted_shape() {
         let (response, transcript, _, certificate, _) = authenticated_presentation_fixture();

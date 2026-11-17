@@ -10,7 +10,7 @@ pub use authentication::{
     disclosed_claims, parse_valid_device_response, verify_mdoc_issuer, verify_mdoc_issuer_at,
     verify_mdoc_presentation, verify_mdoc_presentation_at, MdocCertificateTrustFailure,
     MdocDocumentVerificationEvidence, MdocIssuerVerificationResult,
-    MdocPresentationVerificationResult,
+    MdocPresentationVerificationResult, MdocStatusReference,
 };
 
 pub use device_response::{
