@@ -244,6 +244,46 @@ impl AuthenticatedMdocStatusRequest {
         &self.status_authority_certificate_der
     }
 
+    /// Bind downstream status to this exact presentation/document/reference and
+    /// frozen authority inputs. Current governance authorization is additional.
+    #[must_use]
+    pub fn source_binding_digest(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        fn part(hash: &mut Sha256, bytes: &[u8]) {
+            hash.update((bytes.len() as u64).to_be_bytes());
+            hash.update(bytes);
+        }
+        let mut hash = Sha256::new();
+        hash.update(b"marty:authenticated-mdoc-status-source:v1");
+        part(&mut hash, &self.presentation);
+        part(&mut hash, &self.transcript);
+        part(&mut hash, &(self.document_index as u64).to_be_bytes());
+        part(&mut hash, &self.status_authority_certificate_der);
+        match &self.reference {
+            MdocStatusReference::StatusList { uri, index, .. } => {
+                part(&mut hash, b"status_list");
+                part(&mut hash, uri.as_bytes());
+                part(&mut hash, &index.to_be_bytes());
+            }
+            MdocStatusReference::IdentifierList {
+                uri, identifier, ..
+            } => {
+                part(&mut hash, b"identifier_list");
+                part(&mut hash, uri.as_bytes());
+                part(&mut hash, identifier);
+            }
+        }
+        part(&mut hash, &(self.roots.len() as u64).to_be_bytes());
+        for root in self.roots.iter() {
+            part(&mut hash, root.as_bytes());
+        }
+        part(&mut hash, &(self.pins.len() as u64).to_be_bytes());
+        for pin in self.pins.iter() {
+            part(&mut hash, pin.as_bytes());
+        }
+        hash.finalize().into()
+    }
+
     #[must_use]
     pub fn document_index(&self) -> usize {
         self.document_index

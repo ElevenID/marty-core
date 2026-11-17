@@ -4283,6 +4283,7 @@ name = "marty-verification"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "bs58 0.4.0",
  "cedar-policy",

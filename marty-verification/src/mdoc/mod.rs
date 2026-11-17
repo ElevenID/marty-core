@@ -5,6 +5,12 @@
 
 mod authentication;
 mod device_response;
+#[cfg(feature = "mdoc-status-verification")]
+mod status_token;
+#[cfg(feature = "mdoc-status-verification")]
+pub use status_token::{
+    verify_mdoc_external_status, MdocExternalStatus, VerifiedMdocExternalStatus,
+};
 
 pub use authentication::{
     disclosed_claims, parse_valid_device_response, prepare_mdoc_status_requests_at,
