@@ -1147,22 +1147,11 @@ impl OcspClient {
 
     /// Calculate cache TTL from OCSP response nextUpdate field.
     fn calculate_ttl(&self, result: &OcspCheckResult) -> std::time::Duration {
-        use std::time::Duration;
-
-        if let Some(next_update) = &result.next_update {
-            // Try to parse nextUpdate as RFC 3339 datetime
-            if let Ok(next_update_dt) = chrono::DateTime::parse_from_rfc3339(next_update) {
-                let now = chrono::Utc::now();
-                let next_update_utc = next_update_dt.with_timezone(&chrono::Utc);
-                if next_update_utc > now {
-                    let duration = (next_update_utc - now).num_seconds() as u64;
-                    return Duration::from_secs(duration);
-                }
-            }
-        }
-
-        // Fall back to default TTL
-        Duration::from_secs(self.config.default_cache_ttl_secs)
+        cache_ttl_at(
+            result.next_update.as_deref(),
+            self.config.default_cache_ttl_secs,
+            time::OffsetDateTime::now_utc(),
+        )
     }
 
     /// Clear the cache.
@@ -1184,6 +1173,26 @@ impl Default for OcspClient {
     }
 }
 
+// The client feature is dormant unless an external composition supplies HTTP.
+// Keep TTL policy testable without enabling network or custody functionality.
+#[cfg(any(test, all(feature = "reqwest", feature = "ocsp-client")))]
+fn cache_ttl_at(
+    next_update: Option<&str>,
+    fallback_secs: u64,
+    now: time::OffsetDateTime,
+) -> std::time::Duration {
+    if let Some(next) = next_update.and_then(|value| {
+        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+    }) {
+        if next > now {
+            if let Ok(seconds) = u64::try_from((next - now).whole_seconds()) {
+                return std::time::Duration::from_secs(seconds);
+            }
+        }
+    }
+    std::time::Duration::from_secs(fallback_secs)
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1191,6 +1200,29 @@ impl Default for OcspClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_ttl_preserves_fractional_offsets_and_default_fallbacks() {
+        let now =
+            time::OffsetDateTime::from_unix_timestamp_nanos(1_700_000_000_500_000_000).unwrap();
+        for (next, seconds) in [
+            (Some("2023-11-14T22:13:21Z"), 0),
+            (Some("2023-11-14T22:13:20.500000001Z"), 0),
+            (Some("2023-11-14T22:13:23.750Z"), 3),
+            (Some("2023-11-15T03:43:24+05:30"), 3),
+            (Some("2023-11-14T22:13:20.500Z"), 77),
+            (Some("2023-11-14T22:13:20.499999999Z"), 77),
+            (Some("invalid"), 77),
+            (Some("2023-11-14T22:13:24+25:00"), 77),
+            (None, 77),
+        ] {
+            assert_eq!(
+                cache_ttl_at(next, 77, now),
+                std::time::Duration::from_secs(seconds),
+                "{next:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_ocsp_request_builder_basic() {
