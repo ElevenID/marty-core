@@ -629,24 +629,6 @@ fn validate_certificate_current_at(certificate: &Certificate, now: u64) -> Crypt
     Ok(())
 }
 
-#[cfg(test)]
-fn validate_ocsp_freshness(
-    produced_at: &OcspGeneralizedTime,
-    this_update: &OcspGeneralizedTime,
-    next_update: Option<&OcspGeneralizedTime>,
-    clock_skew_secs: u64,
-    max_age_without_next_update_secs: u64,
-) -> CryptoResult<()> {
-    validate_ocsp_freshness_at(
-        produced_at,
-        this_update,
-        next_update,
-        clock_skew_secs,
-        max_age_without_next_update_secs,
-        ocsp_unix_now()?,
-    )
-}
-
 fn validate_ocsp_freshness_at(
     produced_at: &OcspGeneralizedTime,
     this_update: &OcspGeneralizedTime,
@@ -1202,6 +1184,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stale_ocsp_freshness_is_rejected_without_session_features() {
+        use der::asn1::GeneralizedTime;
+        use std::time::Duration;
+
+        let now = 1_700_000_000;
+        let stale =
+            GeneralizedTime::from_unix_duration(Duration::from_secs(now - 48 * 60 * 60)).unwrap();
+        let produced =
+            GeneralizedTime::from_unix_duration(Duration::from_secs(now - 47 * 60 * 60)).unwrap();
+        assert!(validate_ocsp_freshness_at(
+            &OcspGeneralizedTime(produced),
+            &OcspGeneralizedTime(stale),
+            None,
+            300,
+            24 * 60 * 60,
+            now,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn cache_ttl_preserves_fractional_offsets_and_default_fallbacks() {
         let now =
             time::OffsetDateTime::from_unix_timestamp_nanos(1_700_000_000_500_000_000).unwrap();
@@ -1428,27 +1431,6 @@ mod tests_with_public_responses {
             &fixture.leaf,
             &fixture.issuer,
             fixture.valid_at + 8 * 24 * 60 * 60,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn stale_ocsp_freshness_is_rejected() {
-        use der::asn1::GeneralizedTime;
-        use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let stale =
-            GeneralizedTime::from_unix_duration(now - Duration::from_secs(48 * 60 * 60)).unwrap();
-        let produced =
-            GeneralizedTime::from_unix_duration(now - Duration::from_secs(47 * 60 * 60)).unwrap();
-
-        assert!(validate_ocsp_freshness(
-            &OcspGeneralizedTime(produced),
-            &OcspGeneralizedTime(stale),
-            None,
-            300,
-            24 * 60 * 60,
         )
         .is_err());
     }
