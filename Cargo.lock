@@ -4060,7 +4060,6 @@ dependencies = [
  "aes-kw",
  "base64 0.22.1",
  "bs58 0.5.1",
- "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "marty-crypto",
@@ -4070,6 +4069,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "url",
@@ -7600,6 +7600,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
+ "js-sys",
  "num-conv",
  "powerfmt",
  "serde_core",

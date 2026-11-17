@@ -43,7 +43,7 @@ pub fn pack_credential_for_holder(
 
     let media_type = format_to_media_type(format);
 
-    let created_time = chrono::Utc::now().timestamp() as u64;
+    let created_time = created_time_at(time::OffsetDateTime::now_utc())?;
 
     let message = DidcommMessage {
         id: msg_id,
@@ -73,6 +73,13 @@ pub fn pack_credential_for_holder(
     serde_json::to_string(&message).map_err(|e| DidcommError::PackError(e.to_string()))
 }
 
+// DIDComm's unsigned wire timestamp cannot represent a pre-epoch clock.
+// Reject that state rather than wrapping a negative timestamp into the future.
+fn created_time_at(now: time::OffsetDateTime) -> DidcommResult<u64> {
+    u64::try_from(now.unix_timestamp())
+        .map_err(|_| DidcommError::PackError("System clock precedes the Unix epoch".into()))
+}
+
 /// Unpack a DIDComm plaintext message (JSON string) into a `DidcommMessage`.
 pub fn unpack_didcomm_message(json: &str) -> DidcommResult<DidcommMessage> {
     serde_json::from_str(json).map_err(|e| DidcommError::UnpackError(e.to_string()))
@@ -91,6 +98,21 @@ fn format_to_media_type(format: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn created_time_preserves_whole_seconds_and_rejects_negative_instants() {
+        for (nanos, expected) in [(0, 0), (999_999_999, 0), (1_000_000_000, 1)] {
+            let now = time::OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
+            assert_eq!(created_time_at(now).unwrap(), expected);
+        }
+        for nanos in [-1, -999_999_999, -1_000_000_000] {
+            let now = time::OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
+            assert!(matches!(
+                created_time_at(now),
+                Err(DidcommError::PackError(_))
+            ));
+        }
+    }
 
     #[test]
     fn test_pack_credential() {
