@@ -66,7 +66,7 @@ pub mod jwt_vc_profile;
 #[cfg(feature = "lti")]
 pub mod lti;
 pub mod metadata;
-#[cfg(any(feature = "wallet", feature = "lti"))]
+#[cfg(feature = "wallet")]
 mod network;
 pub mod offer_uri;
 #[cfg(feature = "jose-verification")]
@@ -222,4 +222,4 @@ pub use wallet::{
 pub use wallet_sd_jwt::{PreparedSdJwtPresentation, VerifiedSdJwtCredential};
 
 #[cfg(feature = "lti")]
-pub use lti::{CanvasLtiPlatformProbe, VerifiedLtiLaunch};
+pub use lti::VerifiedLtiLaunch;

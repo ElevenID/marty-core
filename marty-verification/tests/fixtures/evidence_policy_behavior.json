@@ -2,48 +2,48 @@
   "schema": "marty.evidence-policy-behavior/v1",
   "cases": [
     {
-      "name": "verified assignment above threshold is permitted",
+      "name": "no implicit approval: verified assignment above threshold is permitted",
       "request": {
         "app": {"id": "app-1", "organization_id": "org-1", "status": "pending"},
         "binding": {"approval_policy_set_id": null, "auto_approve_on_evidence": true},
         "requirements": [{
           "requirement_id": "assignment-pass",
-          "source": "canvas_rest",
-          "fact_type": "canvas.assignment_score",
+          "source": "provider_api",
+          "fact_type": "assessment.assignment_score",
           "scope": {"course_id": "42", "activity_id": "7"},
           "pass_rule": {"min_score_percent": 80},
           "required": true
         }],
         "facts": [{
-          "id": "fact-pass", "logical_key": "assignment-pass", "provider": "canvas",
-          "fact_type": "canvas.assignment_score", "subject_id": "learner-1",
+          "id": "fact-pass", "logical_key": "assignment-pass", "provider": "external",
+          "fact_type": "assessment.assignment_score", "subject_id": "learner-1",
           "requirement_id": "assignment-pass", "scope": {"course_id": "42", "activity_id": "7"},
           "assertion": {"score_percent": 92},
-          "verification": {"status": "VERIFIED", "method": "canvas_api"},
-          "source": {"source": "canvas_rest"}, "effective_at": null,
+          "verification": {"status": "VERIFIED", "method": "authenticated_api"},
+          "source": {"source": "provider_api"}, "effective_at": null,
           "observed_at": "2026-08-01T12:00:00Z", "created_at": "2026-08-01T12:00:01Z"
         }],
         "policy_set": null
       },
-      "allowed": true, "engine": "cedar", "required_count": 1,
+      "allowed": false, "engine": "cedar", "required_count": 1,
       "satisfied_count": 1, "scope_matched": true
     },
     {
       "name": "newest failing revision supersedes old passing revision",
       "request": {
         "app": {"id": "app-2", "organization_id": "org-1", "status": "pending"},
-        "requirements": [{"fact_type": "canvas.assignment_score", "pass_rule": {"min_score_percent": 80}}],
+        "requirements": [{"fact_type": "assessment.assignment_score", "pass_rule": {"min_score_percent": 80}}],
         "facts": [
           {
-            "id": "fact-old", "logical_key": "score", "provider": "canvas",
-            "fact_type": "canvas.assignment_score", "subject_id": "learner-1", "requirement_id": "",
+            "id": "fact-old", "logical_key": "score", "provider": "external",
+            "fact_type": "assessment.assignment_score", "subject_id": "learner-1", "requirement_id": "",
             "scope": {}, "assertion": {"score_percent": 92}, "verification": {"status": "VERIFIED"},
             "source": {}, "effective_at": null, "observed_at": "2026-08-01T12:00:00Z",
             "created_at": "2026-08-01T12:00:01Z"
           },
           {
-            "id": "fact-new", "logical_key": "score", "provider": "canvas",
-            "fact_type": "canvas.assignment_score", "subject_id": "learner-1", "requirement_id": "",
+            "id": "fact-new", "logical_key": "score", "provider": "external",
+            "fact_type": "assessment.assignment_score", "subject_id": "learner-1", "requirement_id": "",
             "scope": {}, "assertion": {"score_percent": 65}, "verification": {"status": "VERIFIED"},
             "source": {}, "effective_at": null, "observed_at": "2026-08-01T12:01:00Z",
             "created_at": "2026-08-01T12:01:01Z"
@@ -57,10 +57,10 @@
       "name": "wrong scope is denied",
       "request": {
         "app": {"id": "app-3", "organization_id": "org-1", "status": "pending"},
-        "requirements": [{"fact_type": "canvas.course_completion", "scope": {"course_id": "42"}}],
+        "requirements": [{"fact_type": "assessment.course_completion", "scope": {"course_id": "42"}}],
         "facts": [{
-          "id": "fact-scope", "logical_key": "scope", "provider": "canvas",
-          "fact_type": "canvas.course_completion", "subject_id": "learner-1", "requirement_id": "",
+          "id": "fact-scope", "logical_key": "scope", "provider": "external",
+          "fact_type": "assessment.course_completion", "subject_id": "learner-1", "requirement_id": "",
           "scope": {"course_id": "99"}, "assertion": {"completed": true},
           "verification": {"status": "VERIFIED"}, "source": {}, "effective_at": null,
           "observed_at": "2026-08-01T12:00:00Z", "created_at": "2026-08-01T12:00:01Z"
@@ -70,32 +70,32 @@
       "satisfied_count": 0, "scope_matched": false
     },
     {
-      "name": "nested path membership rule is portable",
+      "name": "no implicit approval: nested path membership rule is portable",
       "request": {
         "app": {"id": "app-4", "organization_id": "org-1", "status": "pending"},
         "requirements": [{
-          "fact_type": "canvas.nrps_membership",
+          "fact_type": "assessment.nrps_membership",
           "pass_rule": {"all": [
             {"path": "assertion.membership_status", "op": "eq", "value": "Active"},
             {"path": "assertion.roles", "op": "contains", "value": "Learner"}
           ]}
         }],
         "facts": [{
-          "id": "fact-membership", "logical_key": "membership", "provider": "canvas",
-          "fact_type": "canvas.nrps_membership", "subject_id": "learner-1", "requirement_id": "",
+          "id": "fact-membership", "logical_key": "membership", "provider": "external",
+          "fact_type": "assessment.nrps_membership", "subject_id": "learner-1", "requirement_id": "",
           "scope": {}, "assertion": {"membership_status": "Active", "roles": ["Learner"]},
           "verification": {"status": "VERIFIED"}, "source": {}, "effective_at": null,
           "observed_at": "2026-08-01T12:00:00Z", "created_at": "2026-08-01T12:00:01Z"
         }]
       },
-      "allowed": true, "engine": "cedar", "required_count": 1,
+      "allowed": false, "engine": "cedar", "required_count": 1,
       "satisfied_count": 1, "scope_matched": true
     },
     {
       "name": "only optional requirements do not imply approval",
       "request": {
         "app": {"id": "app-5", "organization_id": "org-1", "status": "pending"},
-        "requirements": [{"fact_type": "canvas.course_completion", "required": false}],
+        "requirements": [{"fact_type": "assessment.course_completion", "required": false}],
         "facts": []
       },
       "allowed": false, "engine": "cedar", "required_count": 0,
@@ -109,10 +109,10 @@
         "requirements": [], "facts": [],
         "policy_set": {
           "id": "custom-1", "status": "active", "policy_type": "CUSTOM",
-          "cedar_policies": "@id(\"custom\") permit(principal is MIP::ServiceAccount, action == MIP::Action::\"applications:approve\", resource) when { context.required_evidence_count == 1 };"
+          "cedar_policies": "@id(\"custom\") permit(principal is MIP::ServiceAccount, action == MIP::Action::\"applications:approve\", resource) when { context.required_evidence_count == 0 };"
         }
       },
-      "allowed": true, "engine": "cedar", "required_count": 1,
+      "allowed": true, "engine": "cedar", "required_count": 0,
       "satisfied_count": 0, "scope_matched": true
     },
     {
@@ -121,7 +121,7 @@
         "app": {"id": "app-7", "organization_id": "org-1", "status": "pending"},
         "template": {"approval_policy_set_id": "missing"}, "requirements": [], "facts": []
       },
-      "allowed": false, "engine": "policy_set_unavailable", "required_count": 1,
+      "allowed": false, "engine": "policy_set_unavailable", "required_count": 0,
       "satisfied_count": 0, "scope_matched": true
     },
     {
@@ -131,7 +131,7 @@
         "template": {"approval_policy_set_id": "inactive"}, "requirements": [], "facts": [],
         "policy_set": {"id": "inactive", "status": "draft", "policy_type": "CUSTOM", "cedar_policies": "permit(principal, action, resource);"}
       },
-      "allowed": false, "engine": "policy_set_inactive", "required_count": 1,
+      "allowed": false, "engine": "policy_set_inactive", "required_count": 0,
       "satisfied_count": 0, "scope_matched": true
     },
     {
@@ -141,7 +141,7 @@
         "template": {"approval_policy_set_id": "access"}, "requirements": [], "facts": [],
         "policy_set": {"id": "access", "status": "active", "policy_type": "ACCESS_CONTROL", "cedar_policies": "permit(principal, action, resource);"}
       },
-      "allowed": false, "engine": "policy_set_wrong_type", "required_count": 1,
+      "allowed": false, "engine": "policy_set_wrong_type", "required_count": 0,
       "satisfied_count": 0, "scope_matched": true
     },
     {
@@ -151,24 +151,319 @@
         "template": {"approval_policy_set_id": "empty"}, "requirements": [], "facts": [],
         "policy_set": {"id": "empty", "status": "active", "policy_type": "APPROVAL_RULES", "cedar_policies": [{"enabled": false, "cedar_text": "permit(principal, action, resource);"}]}
       },
-      "allowed": false, "engine": "policy_set_empty", "required_count": 1,
+      "allowed": false, "engine": "policy_set_empty", "required_count": 0,
       "satisfied_count": 0, "scope_matched": true
+    },
+    {
+      "name": "explicit policy: verified assignment above threshold is permitted",
+      "request": {
+        "app": {
+          "id": "app-1",
+          "organization_id": "org-1",
+          "status": "pending"
+        },
+        "binding": {
+          "approval_policy_set_id": null,
+          "auto_approve_on_evidence": true
+        },
+        "requirements": [
+          {
+            "requirement_id": "assignment-pass",
+            "source": "provider_api",
+            "fact_type": "assessment.assignment_score",
+            "scope": {
+              "course_id": "42",
+              "activity_id": "7"
+            },
+            "pass_rule": {
+              "min_score_percent": 80
+            },
+            "required": true
+          }
+        ],
+        "facts": [
+          {
+            "id": "fact-pass",
+            "logical_key": "assignment-pass",
+            "provider": "external",
+            "fact_type": "assessment.assignment_score",
+            "subject_id": "learner-1",
+            "requirement_id": "assignment-pass",
+            "scope": {
+              "course_id": "42",
+              "activity_id": "7"
+            },
+            "assertion": {
+              "score_percent": 92
+            },
+            "verification": {
+              "status": "VERIFIED",
+              "method": "authenticated_api"
+            },
+            "source": {
+              "source": "provider_api"
+            },
+            "effective_at": null,
+            "observed_at": "2026-08-01T12:00:00Z",
+            "created_at": "2026-08-01T12:00:01Z"
+          }
+        ],
+        "policy_set": {
+          "id": "reviewed-1",
+          "status": "ACTIVE",
+          "policy_type": "APPROVAL_RULES",
+          "cedar_policies": "@id(\"verified-external-evidence\") permit (principal is MIP::ServiceAccount, action == MIP::Action::\"applications:approve\", resource) when { principal.service_name == \"platform-evidence-policy\" && context.evidence_verification_status == \"VERIFIED\" && context.evidence_scope_matched && context.all_required_evidence_satisfied && context.satisfied_requirement_count >= context.required_evidence_count };"
+        },
+        "template": {
+          "approval_policy_set_id": "reviewed-1"
+        }
+      },
+      "allowed": true,
+      "engine": "cedar",
+      "required_count": 1,
+      "satisfied_count": 1,
+      "scope_matched": true
+    },
+    {
+      "name": "explicit policy: newest failing revision supersedes old passing revision",
+      "request": {
+        "app": {
+          "id": "app-2",
+          "organization_id": "org-1",
+          "status": "pending"
+        },
+        "requirements": [
+          {
+            "fact_type": "assessment.assignment_score",
+            "pass_rule": {
+              "min_score_percent": 80
+            }
+          }
+        ],
+        "facts": [
+          {
+            "id": "fact-old",
+            "logical_key": "score",
+            "provider": "external",
+            "fact_type": "assessment.assignment_score",
+            "subject_id": "learner-1",
+            "requirement_id": "",
+            "scope": {},
+            "assertion": {
+              "score_percent": 92
+            },
+            "verification": {
+              "status": "VERIFIED"
+            },
+            "source": {},
+            "effective_at": null,
+            "observed_at": "2026-08-01T12:00:00Z",
+            "created_at": "2026-08-01T12:00:01Z"
+          },
+          {
+            "id": "fact-new",
+            "logical_key": "score",
+            "provider": "external",
+            "fact_type": "assessment.assignment_score",
+            "subject_id": "learner-1",
+            "requirement_id": "",
+            "scope": {},
+            "assertion": {
+              "score_percent": 65
+            },
+            "verification": {
+              "status": "VERIFIED"
+            },
+            "source": {},
+            "effective_at": null,
+            "observed_at": "2026-08-01T12:01:00Z",
+            "created_at": "2026-08-01T12:01:01Z"
+          }
+        ],
+        "template": {
+          "approval_policy_set_id": "reviewed-1"
+        },
+        "policy_set": {
+          "id": "reviewed-1",
+          "status": "ACTIVE",
+          "policy_type": "APPROVAL_RULES",
+          "cedar_policies": "@id(\"verified-external-evidence\") permit (principal is MIP::ServiceAccount, action == MIP::Action::\"applications:approve\", resource) when { principal.service_name == \"platform-evidence-policy\" && context.evidence_verification_status == \"VERIFIED\" && context.evidence_scope_matched && context.all_required_evidence_satisfied && context.satisfied_requirement_count >= context.required_evidence_count };"
+        }
+      },
+      "allowed": false,
+      "engine": "cedar",
+      "required_count": 1,
+      "satisfied_count": 0,
+      "scope_matched": true
+    },
+    {
+      "name": "explicit policy: wrong scope is denied",
+      "request": {
+        "app": {
+          "id": "app-3",
+          "organization_id": "org-1",
+          "status": "pending"
+        },
+        "requirements": [
+          {
+            "fact_type": "assessment.course_completion",
+            "scope": {
+              "course_id": "42"
+            }
+          }
+        ],
+        "facts": [
+          {
+            "id": "fact-scope",
+            "logical_key": "scope",
+            "provider": "external",
+            "fact_type": "assessment.course_completion",
+            "subject_id": "learner-1",
+            "requirement_id": "",
+            "scope": {
+              "course_id": "99"
+            },
+            "assertion": {
+              "completed": true
+            },
+            "verification": {
+              "status": "VERIFIED"
+            },
+            "source": {},
+            "effective_at": null,
+            "observed_at": "2026-08-01T12:00:00Z",
+            "created_at": "2026-08-01T12:00:01Z"
+          }
+        ],
+        "template": {
+          "approval_policy_set_id": "reviewed-1"
+        },
+        "policy_set": {
+          "id": "reviewed-1",
+          "status": "ACTIVE",
+          "policy_type": "APPROVAL_RULES",
+          "cedar_policies": "@id(\"verified-external-evidence\") permit (principal is MIP::ServiceAccount, action == MIP::Action::\"applications:approve\", resource) when { principal.service_name == \"platform-evidence-policy\" && context.evidence_verification_status == \"VERIFIED\" && context.evidence_scope_matched && context.all_required_evidence_satisfied && context.satisfied_requirement_count >= context.required_evidence_count };"
+        }
+      },
+      "allowed": false,
+      "engine": "cedar",
+      "required_count": 1,
+      "satisfied_count": 0,
+      "scope_matched": false
+    },
+    {
+      "name": "explicit policy: nested path membership rule is portable",
+      "request": {
+        "app": {
+          "id": "app-4",
+          "organization_id": "org-1",
+          "status": "pending"
+        },
+        "requirements": [
+          {
+            "fact_type": "assessment.nrps_membership",
+            "pass_rule": {
+              "all": [
+                {
+                  "path": "assertion.membership_status",
+                  "op": "eq",
+                  "value": "Active"
+                },
+                {
+                  "path": "assertion.roles",
+                  "op": "contains",
+                  "value": "Learner"
+                }
+              ]
+            }
+          }
+        ],
+        "facts": [
+          {
+            "id": "fact-membership",
+            "logical_key": "membership",
+            "provider": "external",
+            "fact_type": "assessment.nrps_membership",
+            "subject_id": "learner-1",
+            "requirement_id": "",
+            "scope": {},
+            "assertion": {
+              "membership_status": "Active",
+              "roles": [
+                "Learner"
+              ]
+            },
+            "verification": {
+              "status": "VERIFIED"
+            },
+            "source": {},
+            "effective_at": null,
+            "observed_at": "2026-08-01T12:00:00Z",
+            "created_at": "2026-08-01T12:00:01Z"
+          }
+        ],
+        "template": {
+          "approval_policy_set_id": "reviewed-1"
+        },
+        "policy_set": {
+          "id": "reviewed-1",
+          "status": "ACTIVE",
+          "policy_type": "APPROVAL_RULES",
+          "cedar_policies": "@id(\"verified-external-evidence\") permit (principal is MIP::ServiceAccount, action == MIP::Action::\"applications:approve\", resource) when { principal.service_name == \"platform-evidence-policy\" && context.evidence_verification_status == \"VERIFIED\" && context.evidence_scope_matched && context.all_required_evidence_satisfied && context.satisfied_requirement_count >= context.required_evidence_count };"
+        }
+      },
+      "allowed": true,
+      "engine": "cedar",
+      "required_count": 1,
+      "satisfied_count": 1,
+      "scope_matched": true
+    },
+    {
+      "name": "explicit policy: only optional requirements do not imply approval",
+      "request": {
+        "app": {
+          "id": "app-5",
+          "organization_id": "org-1",
+          "status": "pending"
+        },
+        "requirements": [
+          {
+            "fact_type": "assessment.course_completion",
+            "required": false
+          }
+        ],
+        "facts": [],
+        "template": {
+          "approval_policy_set_id": "reviewed-1"
+        },
+        "policy_set": {
+          "id": "reviewed-1",
+          "status": "ACTIVE",
+          "policy_type": "APPROVAL_RULES",
+          "cedar_policies": "@id(\"verified-external-evidence\") permit (principal is MIP::ServiceAccount, action == MIP::Action::\"applications:approve\", resource) when { principal.service_name == \"platform-evidence-policy\" && context.evidence_verification_status == \"VERIFIED\" && context.evidence_scope_matched && context.all_required_evidence_satisfied && context.satisfied_requirement_count >= context.required_evidence_count };"
+        }
+      },
+      "allowed": false,
+      "engine": "cedar",
+      "required_count": 0,
+      "satisfied_count": 0,
+      "scope_matched": true
     }
   ],
   "heads": {
     "facts": [
       {
-        "id": "b-old", "logical_key": "b", "provider": "canvas", "fact_type": "b", "subject_id": "s",
+        "id": "b-old", "logical_key": "b", "provider": "external", "fact_type": "b", "subject_id": "s",
         "requirement_id": "", "scope": {}, "assertion": {}, "verification": {}, "source": {},
         "effective_at": null, "observed_at": "2026-08-01T12:00:00Z", "created_at": "2026-08-01T12:00:01Z"
       },
       {
-        "id": "a-only", "logical_key": "a", "provider": "canvas", "fact_type": "a", "subject_id": "s",
+        "id": "a-only", "logical_key": "a", "provider": "external", "fact_type": "a", "subject_id": "s",
         "requirement_id": "", "scope": {}, "assertion": {}, "verification": {}, "source": {},
         "effective_at": null, "observed_at": "2026-08-01T12:02:00Z", "created_at": "2026-08-01T12:02:01Z"
       },
       {
-        "id": "b-new", "logical_key": "b", "provider": "canvas", "fact_type": "b", "subject_id": "s",
+        "id": "b-new", "logical_key": "b", "provider": "external", "fact_type": "b", "subject_id": "s",
         "requirement_id": "", "scope": {}, "assertion": {}, "verification": {}, "source": {},
         "effective_at": "2026-08-01T12:03:00Z", "observed_at": "2026-08-01T12:01:00Z", "created_at": "2026-08-01T12:01:01Z"
       }
