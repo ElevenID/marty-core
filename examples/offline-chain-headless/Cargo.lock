@@ -654,7 +654,6 @@ name = "marty-crypto"
 version = "0.2.2"
 dependencies = [
  "base64",
- "chrono",
  "const-oid 0.9.6",
  "der 0.7.10",
  "ecdsa",
@@ -672,6 +671,7 @@ dependencies = [
  "sha2 0.10.9",
  "spki",
  "thiserror",
+ "time",
  "x509-cert",
  "x509-ocsp",
 ]
@@ -1290,6 +1290,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
+ "js-sys",
  "num-conv",
  "powerfmt",
  "serde_core",
