@@ -35,8 +35,8 @@ ciborium = { workspace = true }
 base64 = { workspace = true }
 bs58 = "0.5"
 
-# DateTime for credential timestamps
-chrono.workspace = true
+# Calendar dates for VDS-NC temporal policy
+time.workspace = true
 
 # Error handling
 anyhow.workspace = true

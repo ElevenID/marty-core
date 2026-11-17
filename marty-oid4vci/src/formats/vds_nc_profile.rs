@@ -6,13 +6,24 @@
 //! profile in a service-language adapter.
 
 use crate::error::{Oid4vciError, Oid4vciResult};
-use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
+use time::{Date, Month};
 
 pub const MAX_VDS_NC_BARCODE_BYTES: usize = 64 * 1024;
 pub const MAX_VDS_NC_PAYLOAD_BYTES: usize = 48 * 1024;
+
+fn parse_profile_date(value: &str) -> Option<Date> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 8 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let year = value[..4].parse().ok()?;
+    let month = Month::try_from(value[4..6].parse::<u8>().ok()?).ok()?;
+    let day = value[6..8].parse().ok()?;
+    Date::from_calendar_date(year, month, day).ok()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -306,8 +317,9 @@ fn normalize_text(spec: FieldSpec, value: &Value) -> Oid4vciResult<String> {
                     spec.key
                 )));
             }
-            NaiveDate::parse_from_str(&normalized, "%Y%m%d")
-                .map_err(|_| profile_error(format!("field '{}' is not a valid date", spec.key)))?;
+            parse_profile_date(&normalized).ok_or_else(|| {
+                profile_error(format!("field '{}' is not a valid date", spec.key))
+            })?;
         }
         Pattern::Gender => {
             if !matches!(normalized.as_str(), "M" | "F" | "X") {
@@ -683,7 +695,7 @@ pub fn validate_fields(payload: &Value, printed_values: Option<&Value>) -> Vec<S
     errors
 }
 
-pub fn validate_temporal(payload: &Value, evaluation_date: NaiveDate) -> Vec<String> {
+pub fn validate_temporal(payload: &Value, evaluation_date: Date) -> Vec<String> {
     let Some(document) = payload.as_object() else {
         return vec!["VDS_NC.INVALID_PROFILE: payload must be an object".to_owned()];
     };
@@ -697,15 +709,15 @@ pub fn validate_temporal(payload: &Value, evaluation_date: NaiveDate) -> Vec<Str
         let Some(value) = document.get(field).and_then(Value::as_str) else {
             continue;
         };
-        match NaiveDate::parse_from_str(value, "%Y%m%d") {
-            Ok(date) if relation == "not_before" && evaluation_date < date => {
+        match parse_profile_date(value) {
+            Some(date) if relation == "not_before" && evaluation_date < date => {
                 errors.push(format!("{code}: before {field}"));
             }
-            Ok(date) if relation == "not_after" && evaluation_date > date => {
+            Some(date) if relation == "not_after" && evaluation_date > date => {
                 errors.push(format!("{code}: after {field}"));
             }
-            Ok(_) => {}
-            Err(_) => errors.push(format!("VDS_NC.INVALID_DATE: {field}")),
+            Some(_) => {}
+            None => errors.push(format!("VDS_NC.INVALID_DATE: {field}")),
         }
     }
     errors
@@ -760,6 +772,41 @@ pub fn select_barcode_format(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn profile_dates_accept_real_calendar_days_and_reject_malformed_values() {
+        assert_eq!(
+            parse_profile_date("20240229"),
+            Some(Date::from_calendar_date(2024, Month::February, 29).unwrap())
+        );
+        assert!(parse_profile_date("20000229").is_some());
+        for value in [
+            "19000229",
+            "20230229",
+            "20241301",
+            "20240100",
+            "2024-01-01",
+            "2024010",
+            "2024010x",
+        ] {
+            assert!(parse_profile_date(value).is_none(), "{value}");
+        }
+    }
+
+    #[test]
+    fn temporal_policy_includes_both_boundary_days() {
+        let payload = json!({"validFrom": "20240229", "validUntil": "20240229"});
+        let boundary = Date::from_calendar_date(2024, Month::February, 29).unwrap();
+        assert!(validate_temporal(&payload, boundary).is_empty());
+        assert!(
+            validate_temporal(&payload, boundary.previous_day().unwrap())
+                .iter()
+                .any(|error| error.contains("NOT_YET_VALID"))
+        );
+        assert!(validate_temporal(&payload, boundary.next_day().unwrap())
+            .iter()
+            .any(|error| error.contains("EXPIRED")));
+    }
 
     fn cmc() -> Map<String, Value> {
         json!({
@@ -862,12 +909,16 @@ mod tests {
             validate_fields(&payload, Some(&json!({"surname": "changed"}))),
             ["VDS_NC.FIELD_MISMATCH: surname"]
         );
-        assert!(
-            validate_temporal(&payload, NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()).is_empty()
-        );
-        assert!(
-            !validate_temporal(&payload, NaiveDate::from_ymd_opt(2031, 1, 1).unwrap()).is_empty()
-        );
+        assert!(validate_temporal(
+            &payload,
+            Date::from_calendar_date(2027, Month::January, 1).unwrap()
+        )
+        .is_empty());
+        assert!(!validate_temporal(
+            &payload,
+            Date::from_calendar_date(2031, Month::January, 1).unwrap()
+        )
+        .is_empty());
     }
 
     #[test]

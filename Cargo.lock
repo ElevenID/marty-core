@@ -3934,7 +3934,6 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bs58 0.5.1",
- "chrono",
  "ciborium",
  "hex",
  "marty-crypto",
@@ -3950,6 +3949,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "time",
  "tokio",
 ]
 
@@ -4178,6 +4178,7 @@ dependencies = [
  "sha2 0.10.9",
  "ssi-jwk",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "url",

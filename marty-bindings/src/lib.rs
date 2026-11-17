@@ -1495,6 +1495,26 @@ fn vds_nc_error(error: impl std::fmt::Display) -> PyErr {
     PyErr::new::<VdsNcOperationError, _>(error.to_string())
 }
 
+fn parse_vds_nc_evaluation_date(value: &str) -> PyResult<time::Date> {
+    let bytes = value.as_bytes();
+    let valid_shape = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit());
+    let invalid_date = || vds_nc_error("VDS_NC.INVALID_DATE: evaluation_date must use YYYY-MM-DD");
+    if !valid_shape {
+        return Err(invalid_date());
+    }
+    let year = value[..4].parse().map_err(|_| invalid_date())?;
+    let month = value[5..7].parse::<u8>().map_err(|_| invalid_date())?;
+    let month = time::Month::try_from(month).map_err(|_| invalid_date())?;
+    let day = value[8..10].parse().map_err(|_| invalid_date())?;
+    time::Date::from_calendar_date(year, month, day).map_err(|_| invalid_date())
+}
+
 /// Inspect canonical signer metadata without asserting authenticity.
 #[pyfunction]
 fn vds_nc_inspect(barcode: &str) -> PyResult<String> {
@@ -1511,8 +1531,7 @@ fn vds_nc_verify_profile(
     evaluation_date: &str,
     printed_values_json: Option<&str>,
 ) -> PyResult<String> {
-    let evaluation_date = chrono::NaiveDate::parse_from_str(evaluation_date, "%Y-%m-%d")
-        .map_err(|_| vds_nc_error("VDS_NC.INVALID_DATE: evaluation_date must use YYYY-MM-DD"))?;
+    let evaluation_date = parse_vds_nc_evaluation_date(evaluation_date)?;
     let printed_values = printed_values_json
         .map(serde_json::from_str::<serde_json::Value>)
         .transpose()
@@ -1549,8 +1568,7 @@ fn vds_nc_validate_profile(
         VdsNcDocumentType,
     };
 
-    let evaluation_date = chrono::NaiveDate::parse_from_str(evaluation_date, "%Y-%m-%d")
-        .map_err(|_| vds_nc_error("VDS_NC.INVALID_DATE: evaluation_date must use YYYY-MM-DD"))?;
+    let evaluation_date = parse_vds_nc_evaluation_date(evaluation_date)?;
     let printed_values = printed_values_json
         .map(serde_json::from_str::<serde_json::Value>)
         .transpose()
@@ -2009,6 +2027,24 @@ fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vds_nc_evaluation_date_requires_a_real_iso_calendar_day() {
+        assert_eq!(
+            parse_vds_nc_evaluation_date("2024-02-29").unwrap(),
+            time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap()
+        );
+        for value in [
+            "2023-02-29",
+            "2024-13-01",
+            "2024-01-00",
+            "20240101",
+            "2024-1-01",
+            "2024-01-0x",
+        ] {
+            assert!(parse_vds_nc_evaluation_date(value).is_err(), "{value}");
+        }
+    }
 
     #[test]
     fn open_badges_capability_is_ob3_only() {

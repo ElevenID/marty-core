@@ -29,12 +29,12 @@
 //! a JSON Web Key (`Jwk`).
 
 use base64::Engine;
-use chrono::NaiveDate;
 use marty_oid4vci::formats::vds_nc_profile::{
     parse_barcode, recommended_error_correction, select_barcode_format, validate_fields,
     validate_temporal, ParsedVdsNc,
 };
 use serde::{Deserialize, Serialize};
+use time::Date;
 
 use crate::error::{VerificationError, VerificationResult};
 use crate::jwk::Jwk;
@@ -321,7 +321,7 @@ pub fn verify_vds_nc_profile_pem(
     barcode: &str,
     public_key_pem: &str,
     printed_values: Option<&serde_json::Value>,
-    evaluation_date: NaiveDate,
+    evaluation_date: Date,
 ) -> VerificationResult<VdsNcProfileVerificationResult> {
     let parsed = inspect_vds_nc(barcode)?;
     let public_key_der = marty_crypto::serialization::load_public_key_pem(public_key_pem)
@@ -657,7 +657,7 @@ mod tests {
             &barcode,
             &public_key_pem,
             Some(&printed),
-            NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+            Date::from_calendar_date(2027, time::Month::January, 1).unwrap(),
         )
         .unwrap();
         assert!(result.is_valid);
@@ -672,7 +672,7 @@ mod tests {
             &barcode,
             &public_key_pem,
             Some(&changed),
-            NaiveDate::from_ymd_opt(2031, 1, 1).unwrap(),
+            Date::from_calendar_date(2031, time::Month::January, 1).unwrap(),
         )
         .unwrap();
         assert!(!result.is_valid);
