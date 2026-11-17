@@ -3958,7 +3958,6 @@ name = "marty-biometrics"
 version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
- "chrono",
  "console_error_panic_hook",
  "getrandom 0.4.3",
  "hmac 0.12.1",
@@ -3971,6 +3970,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "wasm-bindgen",
