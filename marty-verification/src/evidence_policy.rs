@@ -10,53 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::{collections::BTreeMap, str::FromStr};
 
-const BUNDLED_APPROVAL_POLICY: &str = r#"
-@id("auto-approve-verified-external-evidence")
-permit (
-    principal is MIP::ServiceAccount,
-    action == MIP::Action::"applications:approve",
-    resource
-)
-when {
-    principal.service_name == "canvas-evidence-policy" &&
-    context has evidence_provider &&
-    context has evidence_verification_status &&
-    context has evidence_scope_matched &&
-    context has all_required_evidence_satisfied &&
-    context has satisfied_requirement_count &&
-    context has required_evidence_count &&
-    context.evidence_verification_status == "VERIFIED" &&
-    context.evidence_scope_matched &&
-    context.all_required_evidence_satisfied &&
-    context.satisfied_requirement_count >= context.required_evidence_count
-};
-
-@id("deny-unverified-external-evidence")
-forbid (
-    principal is MIP::ServiceAccount,
-    action == MIP::Action::"applications:approve",
-    resource
-)
-when {
-    principal.service_name == "canvas-evidence-policy" &&
-    context has evidence_provider &&
-    context has evidence_verification_status &&
-    context.evidence_verification_status != "VERIFIED"
-};
-
-@id("deny-wrong-scope-external-evidence")
-forbid (
-    principal is MIP::ServiceAccount,
-    action == MIP::Action::"applications:approve",
-    resource
-)
-when {
-    principal.service_name == "canvas-evidence-policy" &&
-    context has evidence_provider &&
-    context has evidence_scope_matched &&
-    !context.evidence_scope_matched
-};
-"#;
+// No connector or provider identity receives implicit approval authority.
+// TODO(platform policy owner): configure reviewed Core-owned approval PolicySets.
+const BUNDLED_APPROVAL_POLICY: &str = "";
+const POLICY_PRINCIPAL: &str = "platform-evidence-policy";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,8 +83,7 @@ struct EvidenceFact {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ApprovalPolicySetInput {
-    #[serde(rename = "id")]
-    _id: String,
+    id: String,
     status: String,
     policy_type: String,
     cedar_policies: Value,
@@ -172,6 +128,7 @@ pub fn behavior_fixture_json() -> &'static str {
 }
 
 fn evaluate(request: EvaluationRequest) -> Result<EvidencePolicyDecision, String> {
+    validate_requirements(&request.requirements)?;
     let facts = current_heads(request.facts);
     let context = build_context(request.binding.as_ref(), &request.requirements, &facts);
     let policy_set_id = request
@@ -203,6 +160,15 @@ fn evaluate(request: EvaluationRequest) -> Result<EvidencePolicyDecision, String
                 context,
             ));
         };
+        if policy_set.id != id {
+            return Ok(policy_error(
+                "policy_set_mismatch",
+                policy_source,
+                policy_set_id.clone(),
+                "Approval PolicySet does not match the selected ID".into(),
+                context,
+            ));
+        }
         if normalize_policy_value(&policy_set.status) != "ACTIVE" {
             return Ok(policy_error(
                 "policy_set_inactive",
@@ -283,7 +249,7 @@ fn authorize(
     let cedar_context =
         Context::from_json_value(context.clone(), None).map_err(|error| error.to_string())?;
     let request = Request::new(
-        EntityUid::from_str(r#"MIP::ServiceAccount::"canvas-evidence-policy""#)
+        EntityUid::from_str(&format!(r#"MIP::ServiceAccount::"{POLICY_PRINCIPAL}""#))
             .map_err(|error| error.to_string())?,
         EntityUid::from_str(r#"MIP::Action::"applications:approve""#)
             .map_err(|error| error.to_string())?,
@@ -314,14 +280,14 @@ fn build_entities(app: &ApplicationInput, facts: &[EvidenceFact]) -> Value {
     let organization = json!({"type": "MIP::Organization", "id": app.organization_id});
     let mut entities = vec![
         json!({
-            "uid": {"type": "MIP::ServiceAccount", "id": "canvas-evidence-policy"},
-            "attrs": {"service_name": "canvas-evidence-policy"},
+            "uid": {"type": "MIP::ServiceAccount", "id": POLICY_PRINCIPAL},
+            "attrs": {"service_name": POLICY_PRINCIPAL},
             "parents": [organization]
         }),
         json!({"uid": organization, "attrs": {}, "parents": []}),
         json!({
             "uid": app_uid,
-            "attrs": {"risk_score": 0, "status": app.status},
+            "attrs": {"status": app.status},
             "parents": [organization]
         }),
     ];
@@ -384,12 +350,8 @@ fn build_context(
             .is_some_and(truthy)
     });
     json!({
-        "risk_score": 0,
-        "document_verification_passed": true,
-        "biometric_match_score": 100,
         "evidence_count": facts.len(),
-        "applicant_country": "US",
-        "evidence_provider": latest.map_or("canvas", |fact| fact.provider.as_str()),
+        "evidence_provider": latest.map_or("", |fact| fact.provider.as_str()),
         "evidence_fact_type": latest.map_or("", |fact| fact.fact_type.as_str()),
         "evidence_verification_status": latest.map_or_else(
             || "UNVERIFIED".to_string(),
@@ -410,6 +372,46 @@ fn build_context(
     })
 }
 
+// Closed keys prevent an obsolete constraint from being silently ignored.
+fn validate_requirements(requirements: &[Value]) -> Result<(), String> {
+    for requirement in requirements {
+        if requirement.as_str().is_some_and(|value| !value.is_empty()) {
+            continue;
+        }
+        let fields = requirement
+            .as_object()
+            .ok_or("Evidence requirement must be an object or a nonempty fact type")?;
+        for key in fields.keys() {
+            if !matches!(
+                key.as_str(),
+                "requirement_id"
+                    | "provider"
+                    | "source"
+                    | "fact_type"
+                    | "evidence_type"
+                    | "type"
+                    | "verification_method"
+                    | "scope"
+                    | "pass_rule"
+                    | "required"
+                    | "auto_issue_on_permit"
+            ) {
+                return Err("Unsupported evidence requirement field".into());
+            }
+        }
+        if fields.get("scope").is_some_and(|scope| !scope.is_object()) {
+            return Err("Evidence requirement scope must be an object".into());
+        }
+        if fields
+            .get("pass_rule")
+            .is_some_and(|rule| !rule.is_object())
+        {
+            return Err("Evidence requirement pass rule must be an object".into());
+        }
+    }
+    Ok(())
+}
+
 fn summarize_requirements(
     requirements: &[Value],
     facts: &[EvidenceFact],
@@ -421,15 +423,10 @@ fn summarize_requirements(
                 != Some(&Value::Bool(false))
         })
         .collect();
-    let defaults;
-    let effective: Vec<&Value> = if !required.is_empty() {
-        required
-    } else if !requirements.is_empty() {
+    if required.is_empty() {
         return (0, 0, false, true);
-    } else {
-        defaults = vec![Value::String("canvas.course_completion".into())];
-        defaults.iter().collect()
-    };
+    }
+    let effective = required;
 
     let mut satisfied = 0;
     let mut scope_matched = true;
@@ -748,7 +745,7 @@ fn requirement_type(requirement: &Value) -> String {
 fn requirement_scope(requirement: &Value) -> &Map<String, Value> {
     static EMPTY: std::sync::LazyLock<Map<String, Value>> = std::sync::LazyLock::new(Map::new);
     requirement_mapping(requirement)
-        .and_then(|mapping| mapping.get("scope").or_else(|| mapping.get("canvas_scope")))
+        .and_then(|mapping| mapping.get("scope"))
         .and_then(Value::as_object)
         .unwrap_or(&EMPTY)
 }
@@ -922,5 +919,122 @@ mod tests {
             serde_json::from_str::<Vec<String>>(&raw).unwrap(),
             case.expected_ids
         );
+    }
+    fn empty_request() -> Value {
+        json!({"app":{"id":"app-1","organization_id":"org-1","status":"pending"},
+            "requirements":[],"facts":[]})
+    }
+
+    fn with_policy(mut request: Value, text: &str) -> Value {
+        request["template"] = json!({"approval_policy_set_id":"selected"});
+        request["policy_set"] = json!({"id":"selected","status":"ACTIVE",
+            "policy_type":"APPROVAL_RULES","cedar_policies":text});
+        request
+    }
+
+    fn decision(request: &Value) -> Value {
+        serde_json::from_str(
+            &evaluate_application_evidence_policy_json(&request.to_string()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn empty_requirements_and_absent_observations_grant_no_authority() {
+        let mut request = empty_request();
+        request["binding"] = json!({"auto_approve_on_evidence":true});
+        let result = decision(&request);
+        assert_eq!(result["allowed"], false);
+        assert_eq!(result["context"]["required_evidence_count"], 0);
+        assert_eq!(result["context"]["satisfied_requirement_count"], 0);
+        assert_eq!(result["context"]["all_required_evidence_satisfied"], false);
+        assert_eq!(result["context"]["auto_issue_eligible"], false);
+        assert_eq!(result["context"]["evidence_provider"], "");
+        for field in [
+            "document_verification_passed",
+            "biometric_match_score",
+            "risk_score",
+            "applicant_country",
+        ] {
+            assert!(result["context"].get(field).is_none(), "{field}");
+            let policy = format!("permit(principal, action, resource) when {{ context.{field} == context.{field} }};");
+            let denial = decision(&with_policy(request.clone(), &policy));
+            assert_eq!(denial["allowed"], false, "{field}");
+            assert!(!denial["errors"].as_array().unwrap().is_empty(), "{field}");
+        }
+        let denial = decision(&with_policy(
+            request,
+            "permit(principal, action, resource) when { resource.risk_score == 0 };",
+        ));
+        assert_eq!(denial["allowed"], false);
+    }
+
+    #[test]
+    fn mismatched_policy_id_cannot_supply_authority() {
+        let mut request = with_policy(empty_request(), "permit(principal, action, resource);");
+        request["policy_set"]["id"] = json!("different-policy");
+        let result = decision(&request);
+        assert_eq!(result["allowed"], false);
+        assert_eq!(result["engine"], "policy_set_mismatch");
+    }
+
+    #[test]
+    fn invalid_constraints_fail_before_an_explicit_permit() {
+        let cases = [
+            json!({"fact_type":"result","canvas_scope":{"course_id":"foreign"}}),
+            json!({"fact_type":"result","scope":{},"canvas_scope":{"course_id":"foreign"}}),
+            json!({"fact_type":"result","provider_scope":{"tenant":"foreign"}}),
+            json!({"scope":null}),
+            json!({"scope":[]}),
+            json!({"scope":"foreign"}),
+            json!({"scope":false}),
+            json!({"scope":42}),
+            json!({"pass_rule":[]}),
+            json!(null),
+            json!(""),
+        ];
+        for requirement in cases {
+            let mut request = with_policy(empty_request(), "permit(principal, action, resource);");
+            request["requirements"] = json!([requirement]);
+            assert!(
+                evaluate_application_evidence_policy_json(&request.to_string()).is_err(),
+                "{requirement}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_principal_is_not_an_authority_alias() {
+        let request = with_policy(
+            empty_request(),
+            r#"permit(principal == MIP::ServiceAccount::"canvas-evidence-policy", action, resource);"#,
+        );
+        let result = decision(&request);
+        assert_eq!(result["allowed"], false);
+        assert!(result["errors"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn configured_provider_identifiers_remain_opaque_matching_data() {
+        let case = fixture()
+            .cases
+            .into_iter()
+            .find(|case| case.name.starts_with("explicit policy:") && case.allowed)
+            .unwrap();
+        let mut request = case.request;
+        for provider in ["external", "canvas", "another-provider"] {
+            request["requirements"][0]["provider"] = json!(provider);
+            request["facts"][0]["provider"] = json!(provider);
+            assert_eq!(decision(&request)["allowed"], true, "{provider}");
+            request["facts"][0]["provider"] = json!("wrong-provider");
+            assert_eq!(decision(&request)["allowed"], false, "{provider}");
+        }
+    }
+
+    #[test]
+    fn malformed_explicit_policy_denies() {
+        let result = decision(&with_policy(empty_request(), "this is not a Cedar policy"));
+        assert_eq!(result["allowed"], false);
+        assert!(!result["errors"].as_array().unwrap().is_empty());
     }
 }
