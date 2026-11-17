@@ -84,9 +84,17 @@ pub fn process_request(input: &[u8]) -> (Response, u8) {
         Err(error) => return (error, 2),
     };
 
-    let config = ChainValidatorConfig {
-        validation_moment: Some(moment),
-        ..Default::default()
+    let config = match ChainValidatorConfig::default().with_validation_unix_nanos(
+        i128::from(moment.timestamp()) * 1_000_000_000
+            + i128::from(moment.timestamp_subsec_nanos()),
+    ) {
+        Ok(config) => config,
+        Err(_) => {
+            return (
+                Response::input_error("validation_time is out of platform range"),
+                2,
+            )
+        }
     };
     let mut validator = ChainValidator::with_config(config);
     if validator.add_trust_anchor_der(&anchor).is_err() {

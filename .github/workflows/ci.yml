@@ -256,6 +256,7 @@ jobs:
         run: |
           cargo clippy --locked -p marty-verification --features aamva-client,eudi-client --all-targets -- -D warnings
           cargo test --locked -p marty-verification --features aamva-client,eudi-client --lib
+          cargo test --locked -p marty-verification --no-default-features --features kms-only,python --lib bindings::chain::clock_tests
       - name: Qualify the isolated headless verifier consumer
         shell: bash
         run: |

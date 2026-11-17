@@ -923,15 +923,9 @@ fn certificate_der_from_pem(pem: &str) -> Result<Vec<u8>, String> {
 fn certificate_validation_config(
     verification_time: OffsetDateTime,
 ) -> Result<ChainValidatorConfig, String> {
-    let validation_moment = chrono::DateTime::from_timestamp(
-        verification_time.unix_timestamp(),
-        verification_time.nanosecond(),
-    )
-    .ok_or_else(|| "Certificate verification time is out of range".to_string())?;
-    Ok(ChainValidatorConfig {
-        validation_moment: Some(validation_moment),
-        ..Default::default()
-    })
+    ChainValidatorConfig::default()
+        .with_validation_unix_nanos(verification_time.unix_timestamp_nanos())
+        .map_err(|_| "Certificate verification time is out of platform range".to_string())
 }
 
 fn verify_issuer_trust(

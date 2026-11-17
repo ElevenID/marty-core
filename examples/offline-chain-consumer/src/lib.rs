@@ -4,16 +4,16 @@
 //! moment. This is a certificate-chain kernel, not a complete mDL/eMRTD/OB3
 //! presentation verifier or a supported distribution.
 
-use chrono::{DateTime, Utc};
 use marty_x509_verification::chain::{ChainValidationResult, ChainValidator, ChainValidatorConfig};
 use marty_x509_verification::VerificationResult;
+use std::time::SystemTime;
 
 /// Verify an ordered leaf-to-root DER chain against one locally provisioned CA.
 /// This function performs no trust resolution, status fetch, or network I/O.
 pub fn verify_chain_offline(
     chain_der: &[Vec<u8>],
     approved_root_der: &[u8],
-    validation_moment: DateTime<Utc>,
+    validation_moment: SystemTime,
 ) -> VerificationResult<ChainValidationResult> {
     let config = ChainValidatorConfig {
         validation_moment: Some(validation_moment),

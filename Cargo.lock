@@ -4355,7 +4355,6 @@ dependencies = [
 name = "marty-x509-verification"
 version = "0.2.2"
 dependencies = [
- "chrono",
  "const-oid 0.9.6",
  "der 0.7.10",
  "marty-crypto",

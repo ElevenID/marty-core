@@ -7,6 +7,11 @@ publish = false
 # Keep this a genuine downstream crate, not a member inheriting Core features.
 [workspace]
 
+# Independent dependency roots must select the reviewed verification-only backend.
+# Keep this identical to the existing offline-chain-headless example.
+[patch.crates-io]
+ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
+
 [dependencies]
 marty-x509-verification = { path = "../../marty-x509-verification" }
 chrono = "0.4"

@@ -9,7 +9,7 @@ rust-version.workspace = true
 description = "Offline X.509 trust-chain verification kernel"
 
 [dependencies]
-chrono.workspace = true
+time.workspace = true
 const-oid.workspace = true
 der.workspace = true
 serde.workspace = true
@@ -27,3 +27,6 @@ x509-ocsp.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+time = { workspace = true, features = ["wasm-bindgen"] }
