@@ -1507,9 +1507,8 @@ mod tests {
             certificate_validation_config(inside)
                 .unwrap()
                 .validation_moment
-                .unwrap()
-                .timestamp(),
-            inside.unix_timestamp()
+                .unwrap(),
+            std::time::SystemTime::from(inside)
         );
     }
 
