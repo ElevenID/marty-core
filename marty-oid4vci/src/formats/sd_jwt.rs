@@ -14,16 +14,21 @@
 //! The legacy envelope is not an implementation of the W3C VC SD-JWT profile.
 //! A wire `typ` alone does not select or qualify a credential profile.
 
+#[path = "sd_jwt_digest.rs"]
+mod digest;
+
+pub(crate) use digest::admitted_digest_algorithm;
+pub use digest::SdJwtDigestAlgorithm;
+use digest::{digest_base64, DEFAULT_DIGEST_ALGORITHMS};
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 #[cfg(any(test, feature = "issuer"))]
-use isomdl::{
-    definitions::DigestAlgorithm,
-    digest_executor::{DigestExecutor, DigestJob, SerialDigestExecutor},
-};
+use isomdl::digest_executor::{DigestExecutor, DigestJob, SerialDigestExecutor};
 #[cfg(any(test, feature = "issuer"))]
 use rand::RngCore;
 #[cfg(any(test, feature = "verifier"))]
 use sd_jwt_rs::SDJWTSerializationFormat;
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 #[cfg(any(test, feature = "issuer"))]
 use ssi_jwk::Params;
@@ -283,6 +288,7 @@ pub struct PreparedSdJwt {
     /// The credential ID (urn:uuid:...) assigned during preparation.
     credential_id: String,
     algorithm: crate::types::SigningAlgorithm,
+    digest_algorithm: SdJwtDigestAlgorithm,
     issuer_public_jwk: String,
 }
 
@@ -307,6 +313,11 @@ impl PreparedSdJwt {
     /// Algorithm the remote signer must use.
     pub fn algorithm(&self) -> crate::types::SigningAlgorithm {
         self.algorithm
+    }
+
+    /// Disclosure and key-binding hash selected before remote signing.
+    pub fn digest_algorithm(&self) -> SdJwtDigestAlgorithm {
+        self.digest_algorithm
     }
 
     /// Check a remote signer's raw output without consuming prepared state.
@@ -394,11 +405,31 @@ pub fn prepare_sd_jwt_with_options(
     claims: &CredentialClaims,
     options: SdJwtPreparationOptions,
 ) -> Oid4vciResult<PreparedSdJwt> {
-    let mut rng = rand::rngs::OsRng;
-    prepare_sd_jwt_with_options_and_sources(
+    prepare_sd_jwt_with_options_and_digest_algorithm(
         signer,
         claims,
         options,
+        SdJwtDigestAlgorithm::default(),
+    )
+}
+
+/// Select the disclosure and key-binding digest for an admitted issuer profile.
+///
+/// The existing preparation APIs retain SHA-256. This explicit native boundary
+/// changes no JWS signature algorithm or product profile admission policy.
+#[cfg(any(test, feature = "issuer"))]
+pub fn prepare_sd_jwt_with_options_and_digest_algorithm(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: SdJwtPreparationOptions,
+    digest_algorithm: SdJwtDigestAlgorithm,
+) -> Oid4vciResult<PreparedSdJwt> {
+    let mut rng = rand::rngs::OsRng;
+    prepare_sd_jwt_with_digest_algorithm_and_sources(
+        signer,
+        claims,
+        options,
+        digest_algorithm,
         uuid::Uuid::new_v4,
         chrono::Utc::now,
         || {
@@ -444,6 +475,7 @@ struct PlannedSdJwtPreparation {
     payload: serde_json::Value,
     disclosure_target: SdJwtDisclosureTarget,
     options: SdJwtPreparationOptions,
+    digest_algorithm: SdJwtDigestAlgorithm,
 }
 
 #[cfg(any(test, feature = "issuer"))]
@@ -469,6 +501,7 @@ struct DigestedSdJwtDisclosure {
 
 #[cfg(any(test, feature = "issuer"))]
 struct SdJwtDisclosureStage<T> {
+    digest_algorithm: SdJwtDigestAlgorithm,
     expected_source_ordinals: Vec<usize>,
     items: Vec<T>,
 }
@@ -482,8 +515,9 @@ type DigestedSdJwtDisclosureBatch = SdJwtDisclosureStage<DigestedSdJwtDisclosure
 
 #[cfg(any(test, feature = "issuer"))]
 impl<T> SdJwtDisclosureStage<T> {
-    fn empty() -> Self {
+    fn empty(digest_algorithm: SdJwtDigestAlgorithm) -> Self {
         Self {
+            digest_algorithm,
             expected_source_ordinals: Vec::new(),
             items: Vec::new(),
         }
@@ -499,6 +533,7 @@ fn plan_sd_jwt_preparation(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
     options: SdJwtPreparationOptions,
+    digest_algorithm: SdJwtDigestAlgorithm,
     next_uuid: &mut impl FnMut() -> uuid::Uuid,
     next_now: &mut impl FnMut() -> chrono::DateTime<chrono::Utc>,
 ) -> Oid4vciResult<PlannedSdJwtPreparation> {
@@ -598,6 +633,7 @@ fn plan_sd_jwt_preparation(
     };
 
     Ok(PlannedSdJwtPreparation {
+        digest_algorithm,
         credential_id,
         issued_at: now,
         payload,
@@ -626,24 +662,56 @@ fn sd_jwt_disclosure_target_mut<'a>(
     }
 }
 
-#[cfg(any(test, feature = "issuer"))]
+#[cfg(test)]
 fn prepare_sd_jwt_with_options_and_sources(
     signer: &dyn CredentialSigner,
     claims: &CredentialClaims,
     options: SdJwtPreparationOptions,
+    next_uuid: impl FnMut() -> uuid::Uuid,
+    next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
+    next_salt: impl FnMut() -> [u8; 16],
+) -> Oid4vciResult<PreparedSdJwt> {
+    prepare_sd_jwt_with_digest_algorithm_and_sources(
+        signer,
+        claims,
+        options,
+        SdJwtDigestAlgorithm::default(),
+        next_uuid,
+        next_now,
+        next_salt,
+    )
+}
+
+#[cfg(any(test, feature = "issuer"))]
+fn prepare_sd_jwt_with_digest_algorithm_and_sources(
+    signer: &dyn CredentialSigner,
+    claims: &CredentialClaims,
+    options: SdJwtPreparationOptions,
+    digest_algorithm: SdJwtDigestAlgorithm,
     mut next_uuid: impl FnMut() -> uuid::Uuid,
     mut next_now: impl FnMut() -> chrono::DateTime<chrono::Utc>,
     next_salt: impl FnMut() -> [u8; 16],
 ) -> Oid4vciResult<PreparedSdJwt> {
-    let mut planned =
-        plan_sd_jwt_preparation(signer, claims, options, &mut next_uuid, &mut next_now)?;
+    let mut planned = plan_sd_jwt_preparation(
+        signer,
+        claims,
+        options,
+        digest_algorithm,
+        &mut next_uuid,
+        &mut next_now,
+    )?;
 
     let digested_disclosures = if claims.selective_disclosure_claims.is_empty() {
-        DigestedSdJwtDisclosureBatch::empty()
+        DigestedSdJwtDisclosureBatch::empty(digest_algorithm)
     } else {
         let target =
             sd_jwt_disclosure_target_mut(&mut planned.payload, &planned.disclosure_target)?;
-        prepare_sd_jwt_disclosures(target, &claims.selective_disclosure_claims, next_salt)?
+        prepare_sd_jwt_disclosures(
+            target,
+            &claims.selective_disclosure_claims,
+            digest_algorithm,
+            next_salt,
+        )?
     };
 
     assemble_sd_jwt_preparation(signer, planned, digested_disclosures)
@@ -661,7 +729,12 @@ fn assemble_sd_jwt_preparation(
         mut payload,
         disclosure_target,
         options,
+        digest_algorithm,
     } = planned;
+
+    if digested_disclosures.digest_algorithm != digest_algorithm {
+        return Err(sd_jwt_batch_digest_error());
+    }
 
     let disclosures = if digested_disclosures.is_empty() {
         Vec::new()
@@ -671,9 +744,14 @@ fn assemble_sd_jwt_preparation(
     };
 
     // Add _sd_alg at the top level (per SD-JWT spec, always top-level).
-    if !disclosures.is_empty() {
+    // Preserve default bytes without disclosures; a non-default digest still
+    // needs its signed selector so a future KB-JWT uses the same algorithm.
+    if !disclosures.is_empty() || digest_algorithm != SdJwtDigestAlgorithm::default() {
         if let Some(obj) = payload.as_object_mut() {
-            obj.insert("_sd_alg".to_string(), serde_json::json!("sha-256"));
+            obj.insert(
+                "_sd_alg".to_string(),
+                serde_json::json!(digest_algorithm.name()),
+            );
         }
     }
 
@@ -715,6 +793,7 @@ fn assemble_sd_jwt_preparation(
         disclosures_suffix,
         credential_id,
         algorithm: signer.algorithm(),
+        digest_algorithm,
         issuer_public_jwk: validate_signer_public_jwk(signer)?,
     })
 }
@@ -779,6 +858,7 @@ fn restore_sd_jwt_disclosures(
     let SdJwtDisclosureStage {
         expected_source_ordinals,
         items,
+        ..
     } = digested;
 
     if expected_source_ordinals.len() != items.len() {
@@ -836,6 +916,7 @@ fn assemble_sd_jwt_disclosures(
 fn plan_sd_jwt_disclosures(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
     sd_claims: &[String],
+    digest_algorithm: SdJwtDigestAlgorithm,
     mut next_salt: impl FnMut() -> [u8; 16],
 ) -> PlannedSdJwtDisclosureBatch {
     let mut expected_source_ordinals = Vec::with_capacity(sd_claims.len());
@@ -852,6 +933,7 @@ fn plan_sd_jwt_disclosures(
     }
 
     SdJwtDisclosureStage {
+        digest_algorithm,
         expected_source_ordinals,
         items,
     }
@@ -862,6 +944,7 @@ fn encode_sd_jwt_disclosures(
     planned: PlannedSdJwtDisclosureBatch,
 ) -> Oid4vciResult<EncodedSdJwtDisclosureBatch> {
     let SdJwtDisclosureStage {
+        digest_algorithm,
         expected_source_ordinals,
         items,
     } = planned;
@@ -871,6 +954,7 @@ fn encode_sd_jwt_disclosures(
         .collect::<Oid4vciResult<Vec<_>>>()?;
 
     Ok(SdJwtDisclosureStage {
+        digest_algorithm,
         expected_source_ordinals,
         items,
     })
@@ -907,7 +991,7 @@ fn digest_sd_jwt_disclosure_batches(
                 credential_id: *batch_id,
                 job_id,
                 ordinal: disclosure.source_ordinal,
-                algorithm: DigestAlgorithm::SHA256,
+                algorithm: digest::executor_algorithm(stage.digest_algorithm),
                 input: disclosure.disclosure.as_bytes().to_vec(),
             });
         }
@@ -920,10 +1004,9 @@ fn digest_sd_jwt_disclosure_batches(
     }
     let mut by_identity = std::collections::BTreeMap::new();
     for result in results {
-        if result.digest.len() != 32
-            || by_identity
-                .insert((result.credential_id, result.job_id), result)
-                .is_some()
+        if by_identity
+            .insert((result.credential_id, result.job_id), result)
+            .is_some()
         {
             return Err(sd_jwt_batch_digest_error());
         }
@@ -939,7 +1022,9 @@ fn digest_sd_jwt_disclosure_batches(
                 let result = by_identity
                     .remove(&(batch_id, job_id))
                     .ok_or_else(sd_jwt_batch_digest_error)?;
-                if result.ordinal != item.source_ordinal {
+                if result.ordinal != item.source_ordinal
+                    || result.digest.len() != digest::digest_length(stage.digest_algorithm)
+                {
                     return Err(sd_jwt_batch_digest_error());
                 }
                 Ok(DigestedSdJwtDisclosure {
@@ -952,6 +1037,7 @@ fn digest_sd_jwt_disclosure_batches(
         digested.push((
             batch_id,
             SdJwtDisclosureStage {
+                digest_algorithm: stage.digest_algorithm,
                 expected_source_ordinals: stage.expected_source_ordinals,
                 items,
             },
@@ -972,9 +1058,10 @@ fn digest_sd_jwt_disclosure_batches(
 fn prepare_sd_jwt_disclosures(
     target_object: &mut serde_json::Map<String, serde_json::Value>,
     sd_claims: &[String],
+    digest_algorithm: SdJwtDigestAlgorithm,
     next_salt: impl FnMut() -> [u8; 16],
 ) -> Oid4vciResult<DigestedSdJwtDisclosureBatch> {
-    let planned = plan_sd_jwt_disclosures(target_object, sd_claims, next_salt);
+    let planned = plan_sd_jwt_disclosures(target_object, sd_claims, digest_algorithm, next_salt);
     let encoded = encode_sd_jwt_disclosures(planned)?;
     digest_sd_jwt_disclosures(encoded)
 }
@@ -982,6 +1069,7 @@ fn prepare_sd_jwt_disclosures(
 /// A validated remote preparation with its final credential identity and time.
 #[cfg(feature = "issuer")]
 pub(crate) struct SdJwtBatchPreparationInput {
+    pub digest_algorithm: SdJwtDigestAlgorithm,
     pub(crate) batch_id: u64,
     pub(crate) signer: Box<dyn CredentialSigner>,
     pub(crate) claims: CredentialClaims,
@@ -1041,17 +1129,19 @@ pub(crate) fn prepare_sd_jwt_batch_with_digest_executor(
             item.signer.as_ref(),
             &item.claims,
             item.options,
+            item.digest_algorithm,
             &mut unused_uuid,
             &mut fixed_now,
         )?;
         let encoded = if item.claims.selective_disclosure_claims.is_empty() {
-            SdJwtDisclosureStage::empty()
+            SdJwtDisclosureStage::empty(item.digest_algorithm)
         } else {
             let target =
                 sd_jwt_disclosure_target_mut(&mut planned.payload, &planned.disclosure_target)?;
             encode_sd_jwt_disclosures(plan_sd_jwt_disclosures(
                 target,
                 &item.claims.selective_disclosure_claims,
+                item.digest_algorithm,
                 &mut next_salt,
             ))?
         };
@@ -1174,6 +1264,29 @@ pub fn verify_sd_jwt_with_policy(
     expected_aud: Option<String>,
     expected_nonce: Option<String>,
 ) -> Oid4vciResult<AuthenticatedSdJwt> {
+    verify_sd_jwt_with_policy_and_digest_algorithms(
+        sd_jwt_compact,
+        issuer_jwk_json,
+        policy,
+        expected_aud,
+        expected_nonce,
+        DEFAULT_DIGEST_ALGORITHMS,
+    )
+}
+
+/// Verify under explicit issuer, signature-role and digest admission policies.
+///
+/// SHA-384/SHA-512 support is opt-in at this native boundary. Existing verifier
+/// entrypoints retain SHA-256 admission, independently of library capabilities.
+#[cfg(any(test, feature = "verifier"))]
+pub fn verify_sd_jwt_with_policy_and_digest_algorithms(
+    sd_jwt_compact: &str,
+    issuer_jwk_json: &str,
+    policy: &SdJwtVerificationPolicy,
+    expected_aud: Option<String>,
+    expected_nonce: Option<String>,
+    admitted_digest_algorithms: &[SdJwtDigestAlgorithm],
+) -> Oid4vciResult<AuthenticatedSdJwt> {
     if policy.expected_issuer.trim().is_empty()
         || policy.expected_issuer.len() > 2048
         || policy.expected_issuer.chars().any(char::is_control)
@@ -1195,6 +1308,7 @@ pub fn verify_sd_jwt_with_policy(
         &holder_algorithms,
         expected_aud,
         expected_nonce,
+        admitted_digest_algorithms,
     )?;
     if claims.get("iss").and_then(serde_json::Value::as_str)
         != Some(policy.expected_issuer.as_str())
@@ -1257,10 +1371,12 @@ pub fn verify_sd_jwt(
         SUPPORTED_SD_JWT_SIGNATURE_ALGORITHMS,
         expected_aud,
         expected_nonce,
+        DEFAULT_DIGEST_ALGORITHMS,
     )
 }
 
 #[cfg(any(test, feature = "verifier"))]
+#[allow(clippy::too_many_arguments)]
 fn verify_sd_jwt_with_role_policy(
     sd_jwt_compact: &str,
     issuer_jwk_json: &str,
@@ -1269,8 +1385,12 @@ fn verify_sd_jwt_with_role_policy(
     holder_algorithms: &[&str],
     expected_aud: Option<String>,
     expected_nonce: Option<String>,
+    admitted_digest_algorithms: &[SdJwtDigestAlgorithm],
 ) -> Oid4vciResult<serde_json::Value> {
     validate_sd_jwt_presentation_input(sd_jwt_compact)?;
+    if admitted_digest_algorithms.is_empty() {
+        return Err(digest::digest_policy_error());
+    }
     if !SUPPORTED_SD_JWT_SIGNATURE_ALGORITHMS.contains(&issuer_algorithm)
         || holder_algorithms
             .iter()
@@ -1315,6 +1435,12 @@ fn verify_sd_jwt_with_role_policy(
     )
     .map_err(|e| Oid4vciError::SdJwtError(format!("SD-JWT verification failed: {:?}", e)))?;
 
+    // The selector is authoritative only after the fork authenticates the
+    // original issuer bytes. Library support never widens product admission.
+    let issuer_jwt = sd_jwt_compact.split('~').next().unwrap_or_default();
+    let (_, issuer_payload) = crate::jose::decode_unverified_compact_jwt(issuer_jwt)?;
+    let digest_algorithm = admitted_digest_algorithm(&issuer_payload, admitted_digest_algorithms)?;
+
     // `sd-jwt-rs` validates the issuer-signed SD-JWT and disclosed claims.
     // Key binding is verifier-context dependent, however, and older releases
     // did not reliably enforce all of the supplied context.  Enforce it at
@@ -1326,6 +1452,7 @@ fn verify_sd_jwt_with_role_policy(
             sd_jwt_compact,
             expected_aud.as_deref(),
             expected_nonce.as_deref(),
+            digest_algorithm,
         )?;
     }
 
@@ -1340,6 +1467,21 @@ fn verify_sd_jwt_with_role_policy(
 pub fn create_sd_jwt_presentation(
     sd_jwt_compact: &str,
     disclosed_fields: &[String],
+) -> Oid4vciResult<String> {
+    create_sd_jwt_presentation_with_digest_algorithms(
+        sd_jwt_compact,
+        disclosed_fields,
+        DEFAULT_DIGEST_ALGORITHMS,
+    )
+}
+
+/// Select disclosures under an explicit digest allowlist. This selection
+/// helper does not authenticate the issuer or create holder proof; callers
+/// must use authenticated verification and an opaque holder signer for those.
+pub fn create_sd_jwt_presentation_with_digest_algorithms(
+    sd_jwt_compact: &str,
+    disclosed_fields: &[String],
+    admitted_digest_algorithms: &[SdJwtDigestAlgorithm],
 ) -> Oid4vciResult<String> {
     use std::collections::{HashMap, HashSet};
 
@@ -1368,13 +1510,16 @@ pub fn create_sd_jwt_presentation(
     }
 
     let payload_segment = issuer_jwt.split('.').nth(1).expect("three JWS segments");
-    let payload: serde_json::Value =
-        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload_segment).map_err(|error| {
+    let payload = crate::jose::parse_unique_object(
+        &URL_SAFE_NO_PAD.decode(payload_segment).map_err(|error| {
             Oid4vciError::SdJwtError(format!("Issuer JWT payload decode failed: {error}"))
-        })?)
-        .map_err(|error| {
-            Oid4vciError::SdJwtError(format!("Issuer JWT payload is not JSON: {error}"))
-        })?;
+        })?,
+        "issuer JWT payload",
+    )
+    .map_err(|error| {
+        Oid4vciError::SdJwtError(format!("Issuer JWT payload is not JSON: {error}"))
+    })?;
+    let digest_algorithm = admitted_digest_algorithm(&payload, admitted_digest_algorithms)?;
 
     fn collect_hashes(value: &serde_json::Value, hashes: &mut HashSet<String>) {
         match value {
@@ -1419,7 +1564,7 @@ pub fn create_sd_jwt_presentation(
         let field = disclosure_array[1].as_str().ok_or_else(|| {
             Oid4vciError::SdJwtError("Disclosure claim name must be a string".into())
         })?;
-        let disclosure_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(disclosure.as_bytes()));
+        let disclosure_hash = digest_base64(digest_algorithm, disclosure.as_bytes());
         if !signed_hashes.contains(&disclosure_hash) {
             return Err(Oid4vciError::SdJwtError(format!(
                 "Disclosure for `{field}` is not bound by the issuer-signed payload"
@@ -1497,6 +1642,7 @@ fn validate_key_binding_jwt(
     sd_jwt_compact: &str,
     expected_aud: Option<&str>,
     expected_nonce: Option<&str>,
+    digest_algorithm: SdJwtDigestAlgorithm,
 ) -> Oid4vciResult<()> {
     use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 
@@ -1559,7 +1705,7 @@ fn validate_key_binding_jwt(
         .claims;
 
     let sd_jwt_without_kb = format!("{}~", parts.join("~"));
-    let actual_sd_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(sd_jwt_without_kb.as_bytes()));
+    let actual_sd_hash = digest_base64(digest_algorithm, sd_jwt_without_kb.as_bytes());
     if claims.get("sd_hash").and_then(|value| value.as_str()) != Some(actual_sd_hash.as_str()) {
         return Err(Oid4vciError::SdJwtError(
             "Key Binding JWT sd_hash does not bind this SD-JWT".into(),
@@ -1693,6 +1839,7 @@ mod tests {
             .unwrap();
             scalar.push(prepared);
             inputs.push(SdJwtBatchPreparationInput {
+                digest_algorithm: SdJwtDigestAlgorithm::default(),
                 batch_id: route,
                 signer: Box::new(signer.clone()),
                 claims: claims.clone(),
@@ -1733,6 +1880,182 @@ mod tests {
                 case["credential_id"].as_str().unwrap()
             );
         }
+    }
+
+    #[test]
+    fn explicit_digests_preserve_default_bytes_and_disclosure_commitments() {
+        use sha2::{Sha384, Sha512};
+
+        let now = chrono::DateTime::from_timestamp(1_735_787_045, 0).unwrap();
+        let options = SdJwtPreparationOptions {
+            credential_id: Some("urn:uuid:01234567-89ab-4def-8123-456789abcdef".into()),
+            ..SdJwtPreparationOptions::default()
+        };
+        for format in [
+            CredentialPayloadFormat::IetfSdJwt,
+            CredentialPayloadFormat::W3cVcdmV2SdJwt,
+        ] {
+            for selectors in [vec![], vec!["email".into(), "name".into()]] {
+                let claims = deterministic_preparation_claims(format.clone(), selectors);
+                let default = prepare_sd_jwt_with_options_and_sources(
+                    &FixedPreparationSigner,
+                    &claims,
+                    options.clone(),
+                    || panic!("fixed identity"),
+                    || now,
+                    || [7; 16],
+                )
+                .unwrap();
+                for algorithm in [
+                    SdJwtDigestAlgorithm::Sha256,
+                    SdJwtDigestAlgorithm::Sha384,
+                    SdJwtDigestAlgorithm::Sha512,
+                ] {
+                    let prepared = prepare_sd_jwt_with_digest_algorithm_and_sources(
+                        &FixedPreparationSigner,
+                        &claims,
+                        options.clone(),
+                        algorithm,
+                        || panic!("fixed identity"),
+                        || now,
+                        || [7; 16],
+                    )
+                    .unwrap();
+                    assert_eq!(prepared.digest_algorithm(), algorithm);
+                    assert_eq!(prepared.algorithm(), SigningAlgorithm::ES256);
+                    assert_eq!(prepared.disclosures_suffix(), default.disclosures_suffix());
+                    if algorithm == SdJwtDigestAlgorithm::Sha256 {
+                        assert_eq!(prepared.signing_input(), default.signing_input());
+                    }
+                    let payload: serde_json::Value = serde_json::from_slice(
+                        &B64.decode(prepared.signing_input().split('.').nth(1).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    if claims.selective_disclosure_claims.is_empty()
+                        && algorithm == SdJwtDigestAlgorithm::Sha256
+                    {
+                        assert!(payload.get("_sd_alg").is_none());
+                    } else {
+                        assert_eq!(payload["_sd_alg"], algorithm.name());
+                    }
+                    let subject = match format {
+                        CredentialPayloadFormat::IetfSdJwt => &payload,
+                        _ => &payload["credentialSubject"],
+                    };
+                    for disclosure in prepared
+                        .disclosures_suffix()
+                        .split('~')
+                        .filter(|part| !part.is_empty())
+                    {
+                        let expected = match algorithm {
+                            SdJwtDigestAlgorithm::Sha256 => {
+                                B64.encode(Sha256::digest(disclosure.as_bytes()))
+                            }
+                            SdJwtDigestAlgorithm::Sha384 => {
+                                B64.encode(Sha384::digest(disclosure.as_bytes()))
+                            }
+                            SdJwtDigestAlgorithm::Sha512 => {
+                                B64.encode(Sha512::digest(disclosure.as_bytes()))
+                            }
+                        };
+                        assert!(subject["_sd"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&serde_json::json!(expected)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "issuer")]
+    #[test]
+    fn mixed_digest_batch_restores_routes_and_rejects_cross_algorithm_lengths() {
+        use isomdl::digest_executor::{DigestExecutionError, DigestResult};
+
+        struct ReorderedExecutor {
+            corrupt: bool,
+        }
+        impl DigestExecutor for ReorderedExecutor {
+            fn execute(
+                &self,
+                jobs: &[DigestJob],
+            ) -> Result<Vec<DigestResult>, DigestExecutionError> {
+                let mut results = SerialDigestExecutor.execute(jobs)?;
+                results.reverse();
+                if self.corrupt {
+                    results
+                        .iter_mut()
+                        .find(|result| result.credential_id == 7)
+                        .unwrap()
+                        .digest = vec![0; 32];
+                }
+                Ok(results)
+            }
+        }
+
+        let cases = [
+            (91, SdJwtDigestAlgorithm::Sha256),
+            (7, SdJwtDigestAlgorithm::Sha384),
+            (44, SdJwtDigestAlgorithm::Sha512),
+        ];
+        let now = chrono::DateTime::from_timestamp(1_735_787_045, 0).unwrap();
+        let claims = deterministic_preparation_claims(
+            CredentialPayloadFormat::IetfSdJwt,
+            vec!["email".into()],
+        );
+        let inputs = || {
+            cases
+                .into_iter()
+                .map(|(batch_id, algorithm)| SdJwtBatchPreparationInput {
+                    batch_id,
+                    digest_algorithm: algorithm,
+                    signer: Box::new(FixedPreparationSigner),
+                    claims: claims.clone(),
+                    options: SdJwtPreparationOptions {
+                        credential_id: Some(format!(
+                            "urn:uuid:01234567-89ab-4def-8123-{batch_id:012}"
+                        )),
+                        ..SdJwtPreparationOptions::default()
+                    },
+                    issued_at: now,
+                })
+                .collect()
+        };
+        let prepared = prepare_sd_jwt_batch_with_digest_executor(
+            inputs(),
+            || [9; 16],
+            &ReorderedExecutor { corrupt: false },
+        )
+        .unwrap();
+        for ((route, batch), input) in prepared.into_iter().zip(inputs()) {
+            let scalar = prepare_sd_jwt_with_digest_algorithm_and_sources(
+                input.signer.as_ref(),
+                &input.claims,
+                input.options,
+                input.digest_algorithm,
+                || panic!("fixed identity"),
+                || now,
+                || [9; 16],
+            )
+            .unwrap();
+            assert_eq!(route, input.batch_id);
+            assert_eq!(batch.digest_algorithm(), input.digest_algorithm);
+            assert_eq!(batch.signing_input(), scalar.signing_input());
+            assert_eq!(batch.disclosures_suffix(), scalar.disclosures_suffix());
+        }
+        let error = prepare_sd_jwt_batch_with_digest_executor(
+            inputs(),
+            || [9; 16],
+            &ReorderedExecutor { corrupt: true },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            error.to_string(),
+            format!("SD-JWT error: {SD_JWT_BATCH_DIGEST_FAILURE}")
+        );
     }
 
     fn fixed_public_holder_jwk() -> JWK {
@@ -1938,11 +2261,16 @@ mod tests {
 
         let mut staged_target = source.as_object().unwrap().clone();
         let mut staged_tape = VecDeque::from(fixed_tape);
-        let mut staged_digests = prepare_sd_jwt_disclosures(&mut staged_target, &selectors, || {
-            staged_tape
-                .pop_front()
-                .expect("missing and duplicate selectors must not consume salt")
-        })
+        let mut staged_digests = prepare_sd_jwt_disclosures(
+            &mut staged_target,
+            &selectors,
+            SdJwtDigestAlgorithm::default(),
+            || {
+                staged_tape
+                    .pop_front()
+                    .expect("missing and duplicate selectors must not consume salt")
+            },
+        )
         .unwrap();
         staged_digests.items.reverse();
         assert_eq!(
@@ -1985,8 +2313,12 @@ mod tests {
         let selectors = vec!["name".into(), "missing".into(), "email".into()];
         let mut salts = VecDeque::from([[0x44; 16], [0x55; 16]]);
 
-        let planned =
-            plan_sd_jwt_disclosures(&mut target, &selectors, || salts.pop_front().unwrap());
+        let planned = plan_sd_jwt_disclosures(
+            &mut target,
+            &selectors,
+            SdJwtDigestAlgorithm::default(),
+            || salts.pop_front().unwrap(),
+        );
 
         assert!(salts.is_empty());
         assert_eq!(planned.expected_source_ordinals, vec![0, 2]);
@@ -2029,9 +2361,13 @@ mod tests {
             .clone();
             let selectors = vec!["name".into(), "email".into()];
             let mut salts = VecDeque::from([[0x44; 16], [0x55; 16]]);
-            let digested =
-                prepare_sd_jwt_disclosures(&mut target, &selectors, || salts.pop_front().unwrap())
-                    .unwrap();
+            let digested = prepare_sd_jwt_disclosures(
+                &mut target,
+                &selectors,
+                SdJwtDigestAlgorithm::default(),
+                || salts.pop_front().unwrap(),
+            )
+            .unwrap();
             (target, digested)
         }
 

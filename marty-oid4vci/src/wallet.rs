@@ -2243,7 +2243,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0_u8; 2048];
-            stream.read(&mut request).await.unwrap();
+            assert!(stream.read(&mut request).await.unwrap() > 0);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 MAX_PRESENTATION_RESPONSE_BYTES + 1
@@ -2267,7 +2267,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0_u8; 2048];
-            stream.read(&mut request).await.unwrap();
+            assert!(stream.read(&mut request).await.unwrap() > 0);
             let body = "x".repeat(MAX_NONCE_RESPONSE_BYTES + 1);
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n",

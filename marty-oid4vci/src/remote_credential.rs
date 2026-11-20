@@ -25,9 +25,10 @@ use crate::{
             ValidatedMdocBatchPlanItem,
         },
         sd_jwt::{
-            prepare_sd_jwt_batch_with_digest_executor, prepare_sd_jwt_with_options,
-            validate_sd_jwt_batch_claims, validate_sd_jwt_batch_time, PreparedSdJwt,
-            SdJwtBatchPreparationInput, SdJwtPreparationOptions,
+            prepare_sd_jwt_batch_with_digest_executor,
+            prepare_sd_jwt_with_options_and_digest_algorithm, validate_sd_jwt_batch_claims,
+            validate_sd_jwt_batch_time, PreparedSdJwt, SdJwtBatchPreparationInput,
+            SdJwtDigestAlgorithm, SdJwtPreparationOptions,
         },
     },
     signer::CredentialSigner,
@@ -126,6 +127,15 @@ impl fmt::Debug for RemoteSdJwtRequest {
 }
 
 pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<PreparedSdJwt> {
+    prepare_remote_sd_jwt_with_digest_algorithm(request, SdJwtDigestAlgorithm::default())
+}
+
+/// Explicit native digest selection for an admitted issuer profile. The
+/// historical request shape and preparation entrypoint continue to use SHA-256.
+pub fn prepare_remote_sd_jwt_with_digest_algorithm(
+    request: RemoteSdJwtRequest,
+    digest_algorithm: SdJwtDigestAlgorithm,
+) -> Oid4vciResult<PreparedSdJwt> {
     validate_credential_id(request.credential_id.as_deref())?;
     validate_certificate_chain(&request.issuer_certificate_chain)?;
     let signer = RemoteSignerMetadata::new(
@@ -148,7 +158,7 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
         .map(|holder| serde_json::json!({"jwk": holder}));
     crate::formats::sd_jwt::validate_sd_jwt_structural_markers(&claims, raw_confirmation.as_ref())?;
     let confirmation = holder_confirmation(request.subject_id.as_deref(), request.holder_jwk)?;
-    prepare_sd_jwt_with_options(
+    prepare_sd_jwt_with_options_and_digest_algorithm(
         &signer,
         &claims,
         SdJwtPreparationOptions {
@@ -165,6 +175,7 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
             x5c: request.issuer_certificate_chain,
             include_nbf: true,
         },
+        digest_algorithm,
     )
 }
 
@@ -173,11 +184,23 @@ pub fn prepare_remote_sd_jwt(request: RemoteSdJwtRequest) -> Oid4vciResult<Prepa
 pub struct RemoteSdJwtBatchItem {
     batch_id: u64,
     request: RemoteSdJwtRequest,
+    digest_algorithm: SdJwtDigestAlgorithm,
 }
 
 impl RemoteSdJwtBatchItem {
     pub fn new(batch_id: u64, request: RemoteSdJwtRequest) -> Self {
-        Self { batch_id, request }
+        Self {
+            batch_id,
+            request,
+            digest_algorithm: SdJwtDigestAlgorithm::default(),
+        }
+    }
+
+    /// Select a digest for this credential only; batch routing and JWS signing
+    /// algorithms are unchanged. Callers must admit the selected issuer profile.
+    pub fn with_digest_algorithm(mut self, digest_algorithm: SdJwtDigestAlgorithm) -> Self {
+        self.digest_algorithm = digest_algorithm;
+        self
     }
 
     pub fn batch_id(&self) -> u64 {
@@ -217,6 +240,7 @@ impl fmt::Debug for PreparedRemoteSdJwtBatchItem {
 
 struct ValidatedSdJwtBatchItem {
     batch_id: u64,
+    digest_algorithm: SdJwtDigestAlgorithm,
     signer: RemoteSignerMetadata,
     claims: CredentialClaims,
     options: SdJwtPreparationOptions,
@@ -312,6 +336,7 @@ fn prepare_remote_sd_jwt_batch_with_sources(
         validate_sd_jwt_batch_claims(&claims, &options)?;
         validated.push(ValidatedSdJwtBatchItem {
             batch_id: item.batch_id,
+            digest_algorithm: item.digest_algorithm,
             signer,
             claims,
             options,
@@ -340,6 +365,7 @@ fn prepare_remote_sd_jwt_batch_with_sources(
         }
         inputs.push(SdJwtBatchPreparationInput {
             batch_id: item.batch_id,
+            digest_algorithm: item.digest_algorithm,
             signer: Box::new(item.signer),
             claims: item.claims,
             options: item.options,

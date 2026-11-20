@@ -154,6 +154,7 @@ jobs:
           cargo test --locked -p marty-oid4vci --test signing_payload_semantics --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc
           cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt
           cargo test --locked -p marty-oid4vci --test sd_jwt_verifier_policy --no-default-features --features kms-only,verifier,sd_jwt
+          cargo test --locked -p marty-oid4vci --test sd_jwt_multi_digest --no-default-features --features kms-only,verifier,sd_jwt,serde_json/arbitrary_precision,serde_json/raw_value
           cargo test --locked -p marty-crypto --no-default-features --features serde_json/arbitrary_precision,serde_json/raw_value --lib strict_json::tests
           cargo test --locked -p marty-secure-storage --features serde_json/arbitrary_precision,serde_json/raw_value --lib database::tests
           cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings
@@ -1014,8 +1015,9 @@ jobs:
         run: >-
           cargo test --locked -p marty-oid4vci
           --target wasm32-unknown-unknown
-          --no-default-features --features verifier
+          --no-default-features --features verifier,sd_jwt
           --test wasm_crypto_provider
+          --test sd_jwt_multi_digest
           -- --nocapture
 
   crypto-wasm-security:

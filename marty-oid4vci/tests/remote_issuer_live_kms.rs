@@ -1538,6 +1538,245 @@ fn remote_eddsa_holder_proof_binds_ietf_sd_jwt() {
     assert_eq!(issuer.payloads.lock().unwrap().len(), 1);
 }
 
+#[test]
+#[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]
+fn explicit_sd_jwt_digests_bind_opaque_issuer_and_holder_signatures() {
+    use marty_oid4vci::formats::sd_jwt::{
+        create_sd_jwt_presentation_with_digest_algorithms,
+        prepare_sd_jwt_with_options_and_digest_algorithm,
+        verify_sd_jwt_with_policy_and_digest_algorithms, SdJwtDigestAlgorithm,
+    };
+    use sha2::Sha384;
+
+    let (client, base, root_token) = disposable_openbao();
+    let issuer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let holder_signer = create_signer(
+        &client,
+        &base,
+        &root_token,
+        "ecdsa-p256",
+        SigningAlgorithm::ES256,
+    );
+    let policy = SdJwtVerificationPolicy {
+        expected_issuer: ISSUER_DID.into(),
+        issuer_algorithm: SigningAlgorithm::ES256,
+        holder_algorithms: vec![SigningAlgorithm::ES256],
+    };
+    let resolver = PublicIssuerResolver {
+        key: ResolvedSdJwtIssuerKey::new(
+            ISSUER_DID,
+            Some(issuer.kid_url()),
+            SigningAlgorithm::ES256,
+            issuer.public_jwk.clone(),
+        ),
+    };
+    let holder_public: Value = serde_json::from_str(&holder_signer.public_jwk).unwrap();
+    let issuer_public: jsonwebtoken::jwk::Jwk = serde_json::from_str(&issuer.public_jwk).unwrap();
+    let decoding_key = jsonwebtoken::DecodingKey::from_jwk(&issuer_public).unwrap();
+    let audience = "https://verifier.example.test/multi-digest";
+    let mut public_vectors = Vec::new();
+    for algorithm in [
+        SdJwtDigestAlgorithm::Sha256,
+        SdJwtDigestAlgorithm::Sha384,
+        SdJwtDigestAlgorithm::Sha512,
+    ] {
+        for disclose in [false, true] {
+            let mut claims = claims(CredentialPayloadFormat::IetfSdJwt);
+            claims.selective_disclosure_claims = if disclose {
+                vec!["given_name".into()]
+            } else {
+                vec![]
+            };
+            let prepared = prepare_sd_jwt_with_options_and_digest_algorithm(
+                &issuer,
+                &claims,
+                SdJwtPreparationOptions {
+                    typ: Some("dc+sd-jwt".into()),
+                    confirmation: Some(json!({"jwk": holder_public})),
+                    ..SdJwtPreparationOptions::default()
+                },
+                algorithm,
+            )
+            .unwrap();
+            assert_eq!(prepared.digest_algorithm(), algorithm);
+            let signature = issuer.sign(prepared.signing_payload()).unwrap();
+            let SignedCredential::SdJwt { compact, .. } =
+                assemble_sd_jwt(prepared, &signature).unwrap()
+            else {
+                panic!("expected SD-JWT")
+            };
+            let defaults_admit = algorithm == SdJwtDigestAlgorithm::Sha256;
+            assert_eq!(
+                verify_sd_jwt(&compact, &issuer.public_jwk, None, None).is_ok(),
+                defaults_admit
+            );
+            assert_eq!(
+                verify_sd_jwt_with_policy(&compact, &issuer.public_jwk, &policy, None, None)
+                    .is_ok(),
+                defaults_admit
+            );
+            assert_eq!(
+                WalletEngine::new()
+                    .verify_received_sd_jwt_credential(
+                        &compact,
+                        &holder_signer.public_jwk,
+                        &resolver
+                    )
+                    .is_ok(),
+                defaults_admit
+            );
+            let names = if disclose {
+                vec!["given_name".into()]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                create_sd_jwt_presentation(&compact, &names).is_ok(),
+                defaults_admit
+            );
+            let selected =
+                create_sd_jwt_presentation_with_digest_algorithms(&compact, &names, &[algorithm])
+                    .unwrap();
+            let claims = verify_sd_jwt_with_policy_and_digest_algorithms(
+                &selected,
+                &issuer.public_jwk,
+                &policy,
+                None,
+                None,
+                &[algorithm],
+            )
+            .unwrap();
+            assert_eq!(claims.claims()["given_name"], "Alice");
+            assert!(verify_sd_jwt_with_policy_and_digest_algorithms(
+                &compact,
+                &issuer.public_jwk,
+                &policy,
+                None,
+                None,
+                &[]
+            )
+            .is_err());
+
+            let key = decoding_key.clone();
+            let kid = issuer.kid_url();
+            let mut holder = sd_jwt_rs::SDJWTHolder::new_with_policy(
+                compact.clone(),
+                sd_jwt_rs::SDJWTSerializationFormat::Compact,
+                Box::new(move |issuer, header| {
+                    if issuer == ISSUER_DID
+                        && header.kid.as_deref() == Some(kid.as_str())
+                        && header.alg == jsonwebtoken::Algorithm::ES256
+                    {
+                        Ok(key.clone())
+                    } else {
+                        Err(sd_jwt_rs::error::Error::InvalidInput(
+                            "fixture issuer changed".into(),
+                        ))
+                    }
+                }),
+                sd_jwt_rs::VerificationPolicy::default(),
+            )
+            .unwrap();
+            let nonce = uuid::Uuid::new_v4().to_string();
+            let disclosures = if disclose {
+                serde_json::from_value(json!({"given_name": true})).unwrap()
+            } else {
+                serde_json::Map::new()
+            };
+            let prepared = holder
+                .prepare_key_binding_presentation(
+                    disclosures,
+                    nonce.clone(),
+                    audience.into(),
+                    Some("ES256".into()),
+                )
+                .unwrap();
+            let kb_input = std::str::from_utf8(prepared.signing_input())
+                .unwrap()
+                .to_owned();
+            let holder_signature = holder_signer.sign(prepared.signing_input()).unwrap();
+            let presentation = prepared.complete(&holder_signature).unwrap();
+            let verified = verify_sd_jwt_with_policy_and_digest_algorithms(
+                &presentation,
+                &issuer.public_jwk,
+                &policy,
+                Some(audience.into()),
+                Some(nonce.clone()),
+                &[algorithm],
+            )
+            .unwrap();
+            assert_eq!(verified.claims()["given_name"], "Alice");
+            assert_eq!(
+                verify_sd_jwt_with_policy(
+                    &presentation,
+                    &issuer.public_jwk,
+                    &policy,
+                    Some(audience.into()),
+                    Some(nonce.clone())
+                )
+                .is_ok(),
+                defaults_admit
+            );
+
+            // An authentic holder signature over a hash from another digest
+            // must still fail. Neither signature authority nor a valid nonce
+            // permits changing the issuer-selected disclosure/hash binding.
+            let (base, _) = presentation.rsplit_once('~').unwrap();
+            let unbound = format!("{base}~");
+            let (header, payload) = kb_input.split_once('.').unwrap();
+            let mut payload: Value =
+                serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+            payload["sd_hash"] = json!(if algorithm == SdJwtDigestAlgorithm::Sha256 {
+                URL_SAFE_NO_PAD.encode(Sha384::digest(unbound.as_bytes()))
+            } else {
+                URL_SAFE_NO_PAD.encode(Sha256::digest(unbound.as_bytes()))
+            });
+            let wrong_input = format!(
+                "{header}.{}",
+                URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap())
+            );
+            let wrong_signature = holder_signer.sign(wrong_input.as_bytes()).unwrap();
+            let wrong = format!(
+                "{base}~{wrong_input}.{}",
+                URL_SAFE_NO_PAD.encode(wrong_signature)
+            );
+            assert!(verify_sd_jwt_with_policy_and_digest_algorithms(
+                &wrong,
+                &issuer.public_jwk,
+                &policy,
+                Some(audience.into()),
+                Some(nonce),
+                &[algorithm]
+            )
+            .is_err());
+
+            if disclose {
+                let vector = resign_sd_jwt_with_remote_issuer(&compact, &issuer, |_, payload| {
+                    payload["iat"] = json!(1_735_689_600i64);
+                    payload["exp"] = json!(4_102_444_800i64);
+                });
+                public_vectors
+                    .push(json!({"digest_algorithm": algorithm.name(), "credential": vector}));
+            }
+        }
+    }
+    if let Ok(path) = std::env::var("MARTY_TEST_SD_JWT_DIGEST_PUBLIC_FIXTURE") {
+        let fixture = json!({
+            "scope": "public synthetic SD-JWT multi-digest verification vectors; non-exportable disposable OpenBao keys",
+            "issuer": ISSUER_DID,
+            "issuer_public_jwk": serde_json::from_str::<Value>(&issuer.public_jwk).unwrap(),
+            "vectors": public_vectors,
+        });
+        std::fs::write(path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").unwrap();
+    }
+}
+
 #[cfg(feature = "zk_mdoc")]
 #[test]
 #[ignore = "requires a marked disposable loopback OpenBao with Transit mounted"]

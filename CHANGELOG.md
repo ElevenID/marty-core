@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add explicit native SHA-384 and SHA-512 selection for remote SD-JWT
+  preparation and mixed digest batches, using the accepted multi-digest fork.
+  Add matching verifier and disclosure-selection allowlists. Existing issuer,
+  verifier, wallet and language-binding entrypoints retain SHA-256 admission;
+  JWS signature policies and opaque KMS custody remain unchanged.
+
 ## [0.2.2] - 2026-10-11
 
 ### Added
