@@ -2,6 +2,7 @@ use marty_oid4vci::formats::sd_jwt::{
     verify_sd_jwt, verify_sd_jwt_with_policy, SdJwtVerificationPolicy,
 };
 use marty_oid4vci::types::SigningAlgorithm;
+use marty_oid4vci::{ResolvedSdJwtIssuerKey, TrustedSdJwtIssuerKeys};
 
 fn fixture() -> serde_json::Value {
     serde_json::from_str(include_str!("fixtures/remote_sd_jwt_wallet_public.json")).unwrap()
@@ -72,6 +73,26 @@ fn verification_rejects_private_or_incompatible_public_key_metadata() {
             verify_sd_jwt_with_policy(credential, &public_jwk.to_string(), &policy, None, None,)
                 .is_err(),
             "accepted invalid {name}"
+        );
+    }
+}
+
+#[test]
+fn trusted_issuer_keys_reject_unknown_and_malformed_jwk_shapes() {
+    let fixture = fixture();
+    for jwk in [
+        serde_json::json!({"kty":"future-key-family","public":"opaque"}),
+        serde_json::json!({"kty":"EC","crv":"P-256","x":fixture["issuer_public_jwk"]["x"]}),
+        serde_json::json!({"kty":"EC","crv":"future-curve","x":"AA","y":"AA"}),
+    ] {
+        assert!(
+            TrustedSdJwtIssuerKeys::new(vec![ResolvedSdJwtIssuerKey::new(
+                fixture["issuer"].as_str().unwrap(),
+                None,
+                SigningAlgorithm::ES256,
+                jwk.to_string(),
+            )])
+            .is_err()
         );
     }
 }

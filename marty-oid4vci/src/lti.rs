@@ -1,6 +1,6 @@
 //! Generic LTI launch JWT verification. Provider discovery belongs in connectors.
 use crate::error::{Oid4vciError, Oid4vciResult};
-use jsonwebtoken::{decode, decode_header, jwk::Jwk, DecodingKey, Validation};
+use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 fn contains_private_material(value: &Value, depth: usize) -> bool {
@@ -141,6 +141,10 @@ pub fn verify_lti_launch_jwt(
     })?;
     let header = decode_header(id_token)
         .map_err(|e| Oid4vciError::JwtError(format!("Failed to decode LTI JWT header: {e}")))?;
+    if let Some(jwk) = &header.jwk {
+        crate::jose::validate_public_jwk_shape(jwk)
+            .map_err(|_| Oid4vciError::JwtError("Invalid LTI JWT header public JWK".into()))?;
+    }
     let kid = header
         .kid
         .clone()
@@ -161,7 +165,7 @@ pub fn verify_lti_launch_jwt(
         .iter()
         .find(|key| key.get("kid").and_then(Value::as_str) == Some(kid.as_str()))
         .ok_or_else(|| invalid_request(format!("No JWKS entry found for LTI kid {kid}")))?;
-    let jwk: Jwk = serde_json::from_value(jwk_value.clone()).map_err(|e| {
+    let jwk = crate::jose::parse_public_asymmetric_jwk(jwk_value).map_err(|e| {
         invalid_request(format!("Failed to parse JWKS entry for LTI kid {kid}: {e}"))
     })?;
 
@@ -322,6 +326,62 @@ mod tests {
         assert!(error.to_string().contains("private key material"));
         assert!(!error.to_string().contains("forbidden"));
     }
+
+    #[test]
+    fn lti_verification_rejects_unknown_and_malformed_selected_keys() {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"EdDSA","kid":"public-1"}"#);
+        let token = format!("{header}.e30.signature");
+        for mut key in [
+            json!({"kty":"future-key-family","public":"opaque"}),
+            json!({"kty":"OKP","crv":"Ed25519"}),
+            json!({"kty":"EC","crv":"future-curve","x":"AA","y":"AA"}),
+            json!({"kty":"RSA","n":"AQAB"}),
+        ] {
+            key["kid"] = json!("public-1");
+            let error = verify_lti_launch_jwt(
+                &token,
+                "https://lti.example.edu",
+                "client-id",
+                "deployment-id",
+                &json!({"keys": [key]}).to_string(),
+                None,
+                0,
+            )
+            .unwrap_err();
+            assert!(matches!(error, Oid4vciError::InvalidRequest(_)));
+            assert!(error.to_string().contains("Failed to parse JWKS entry"));
+        }
+    }
+    #[test]
+    fn lti_header_jwk_is_checked_before_external_key_selection() {
+        for jwk in [
+            json!({"kty": "future-key-family", "public": "opaque"}),
+            json!({"kty": "RSA", "n": "AQAB"}),
+            json!({"kty": "EC", "crv": "P-256", "x": "AA"}),
+        ] {
+            let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(json!({"alg": "EdDSA", "kid": "public-1", "jwk": jwk}).to_string());
+            let token = format!("{header}.e30.AA");
+            assert!(
+                decode_header(&token).is_ok(),
+                "JWT 11 preserves these shapes"
+            );
+            let error = verify_lti_launch_jwt(
+                &token,
+                "https://lti.example.edu",
+                "client-id",
+                "deployment-id",
+                "external JWKS must not be parsed",
+                None,
+                0,
+            )
+            .unwrap_err();
+            assert!(matches!(error, Oid4vciError::JwtError(_)));
+            assert!(error.to_string().contains("LTI JWT header public JWK"));
+        }
+    }
+
     #[cfg(not(target_family = "wasm"))]
     #[test]
     #[ignore = "requires marked disposable OpenBao Transit"]

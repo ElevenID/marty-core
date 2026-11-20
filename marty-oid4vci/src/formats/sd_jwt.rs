@@ -57,7 +57,7 @@ const SD_JWT_RESERVED_STRUCTURE: &str = "SD-JWT claims contain reserved structur
 #[cfg(any(test, feature = "issuer", feature = "verifier"))]
 const SD_JWT_PRIVATE_CONFIRMATION_JWK: &str =
     "SD-JWT confirmation must contain a public asymmetric JWK only";
-#[cfg(any(test, feature = "issuer", feature = "verifier"))]
+#[cfg(test)]
 const PRIVATE_JWK_MEMBERS: [&str; 9] = ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 #[cfg(any(test, feature = "issuer"))]
 const IETF_ALWAYS_MANAGED_CLAIMS: &[&str] = &["iss", "iat", "jti", "vct"];
@@ -184,19 +184,14 @@ fn validate_sd_jwt_confirmation(confirmation: Option<&serde_json::Value>) -> Oid
     let Some(jwk) = confirmation.get("jwk") else {
         return Ok(());
     };
-    let jwk = jwk.as_object().ok_or_else(|| {
-        Oid4vciError::SdJwtError("SD-JWT confirmation jwk must be a JSON object".into())
-    })?;
-    if jwk.get("kty").and_then(serde_json::Value::as_str) == Some("oct")
-        || PRIVATE_JWK_MEMBERS
-            .iter()
-            .any(|member| jwk.contains_key(*member))
-    {
+    if !jwk.is_object() {
         return Err(Oid4vciError::SdJwtError(
-            SD_JWT_PRIVATE_CONFIRMATION_JWK.into(),
+            "SD-JWT confirmation jwk must be a JSON object".into(),
         ));
     }
-    Ok(())
+    crate::jose::parse_public_asymmetric_jwk(jwk)
+        .map(|_| ())
+        .map_err(|_| Oid4vciError::SdJwtError(SD_JWT_PRIVATE_CONFIRMATION_JWK.into()))
 }
 
 #[cfg(any(test, feature = "issuer"))]
@@ -1684,7 +1679,7 @@ fn validate_key_binding_jwt(
         .cloned()
         .ok_or_else(|| Oid4vciError::SdJwtError("SD-JWT has no cnf.jwk for key binding".into()))
         .and_then(|value| {
-            serde_json::from_value(value)
+            crate::jose::parse_public_asymmetric_jwk(&value)
                 .map_err(|e| Oid4vciError::SdJwtError(format!("Invalid cnf.jwk: {e}")))
         })?;
 
@@ -2442,12 +2437,13 @@ mod tests {
                 "name".into(),
             ],
         );
+        let confirmation = serde_json::json!({"jwk": fixed_public_holder_jwk()});
         let events = RefCell::new(vec![]);
         let prepared = deterministic_preparation(
             &claims,
             SdJwtPreparationOptions {
                 typ: Some("dc+sd-jwt".into()),
-                confirmation: Some(serde_json::json!({"jwk": {"kty": "EC"}})),
+                confirmation: Some(confirmation.clone()),
                 x5c: vec!["Y2VydA".into()],
                 include_nbf: true,
                 ..SdJwtPreparationOptions::default()
@@ -2458,7 +2454,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(&*events.borrow(), &["uuid", "clock", "salt", "salt"]);
-        assert_eq!(prepared.signing_input, "eyJhbGciOiJFUzI1NiIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUva2V5cy8xIiwieDVjIjpbIlkyVnlkQSJdfQ.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiaWF0IjoxNzM1Nzg3MDQ1LCJqdGkiOiJ1cm46dXVpZDowMTIzNDU2Ny04OWFiLTRkZWYtODEyMy00NTY3ODlhYmNkZWYiLCJ2Y3QiOiJFbXBsb3llZUNyZWRlbnRpYWwiLCJzdWIiOiJkaWQ6ZXhhbXBsZTpob2xkZXIiLCJleHAiOjE3MzU3OTA2NDUsImRlcGFydG1lbnQiOiJSZXNlYXJjaCIsIl9zZCI6WyJONzgwSVJNTmI5RGhiVkFIQy1FMEhqckl2WGhFbVcyTXk1VmpMMVUyZWh3IiwiTUNfY2xGdk9tekJSUUEtUkhTMXZMMngzM3hNR0JQQVN6cjNveTNITmNpdyJdLCJfc2RfYWxnIjoic2hhLTI1NiIsIm5iZiI6MTczNTc4NzA0NSwiY25mIjp7Imp3ayI6eyJrdHkiOiJFQyJ9fX0");
+        assert_eq!(prepared.signing_input, "eyJhbGciOiJFUzI1NiIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6Imh0dHBzOi8vaXNzdWVyLmV4YW1wbGUva2V5cy8xIiwieDVjIjpbIlkyVnlkQSJdfQ.eyJpc3MiOiJodHRwczovL2lzc3Vlci5leGFtcGxlIiwiaWF0IjoxNzM1Nzg3MDQ1LCJqdGkiOiJ1cm46dXVpZDowMTIzNDU2Ny04OWFiLTRkZWYtODEyMy00NTY3ODlhYmNkZWYiLCJ2Y3QiOiJFbXBsb3llZUNyZWRlbnRpYWwiLCJzdWIiOiJkaWQ6ZXhhbXBsZTpob2xkZXIiLCJleHAiOjE3MzU3OTA2NDUsImRlcGFydG1lbnQiOiJSZXNlYXJjaCIsIl9zZCI6WyJONzgwSVJNTmI5RGhiVkFIQy1FMEhqckl2WGhFbVcyTXk1VmpMMVUyZWh3IiwiTUNfY2xGdk9tekJSUUEtUkhTMXZMMngzM3hNR0JQQVN6cjNveTNITmNpdyJdLCJfc2RfYWxnIjoic2hhLTI1NiIsIm5iZiI6MTczNTc4NzA0NSwiY25mIjp7Imp3ayI6eyJrdHkiOiJFQyIsImNydiI6IlAtMjU2IiwieCI6ImF4ZlI4dUVzUWtmNHZPYmxZNlJBOG5jRGZZRXQ2ek9nOUtFNVJkaVl3cFkiLCJ5IjoiVC1OQzR2NGFmNXVPNS10S2ZBLWVGaXZPTTFkck1WN095N1pBYURlX1VmVSJ9fX0");
         assert_eq!(prepared.disclosures_suffix, "~WyJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwibmFtZSIsIkFsaWNlIl0~WyJBUUVCQVFFQkFRRUJBUUVCQVFFQkFRIiwiZW1haWwiLCJhbGljZUBleGFtcGxlLmNvbSJd~");
         assert_eq!(
             prepared.credential_id,
@@ -2481,7 +2477,7 @@ mod tests {
         assert_eq!(payload["department"], "Research");
         assert!(payload.get("name").is_none());
         assert!(payload.get("email").is_none());
-        assert_eq!(payload["cnf"], serde_json::json!({"jwk": {"kty": "EC"}}));
+        assert_eq!(payload["cnf"], confirmation);
         assert_eq!(payload["_sd_alg"], "sha-256");
         assert_eq!(payload["_sd"].as_array().unwrap().len(), 2);
         assert_eq!(
@@ -2598,7 +2594,7 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_rejects_every_private_member_and_symmetric_keys_before_sources() {
+    fn confirmation_rejects_private_unknown_and_malformed_keys_before_sources() {
         let claims = deterministic_preparation_claims(CredentialPayloadFormat::IetfSdJwt, vec![]);
         let rejected = PRIVATE_JWK_MEMBERS
             .iter()
@@ -2609,7 +2605,14 @@ mod tests {
                     .insert((*member).to_owned(), serde_json::json!("secret"));
                 jwk
             })
-            .chain([serde_json::json!({"kty":"oct"})]);
+            .chain([
+                serde_json::json!({"kty":"oct"}),
+                serde_json::json!({"kty":"future-key-family","public":"opaque"}),
+                serde_json::json!({"kty":"EC","crv":"P-256","x":"AA"}),
+                serde_json::json!({"kty":"EC","crv":"future-curve","x":"AA","y":"AA"}),
+                serde_json::json!({"kty":"RSA","n":"AQAB"}),
+                serde_json::json!({"kty":"OKP","crv":"Ed25519"}),
+            ]);
 
         for jwk in rejected {
             let mut raw_claims = claims.clone();
@@ -2629,7 +2632,7 @@ mod tests {
                 || panic!("invalid confirmation must precede salt allocation"),
             )
             .err()
-            .expect("private or symmetric confirmation JWK must be rejected");
+            .expect("invalid confirmation JWK must be rejected");
             assert!(error.to_string().contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
 
             let error = prepare_sd_jwt_with_options_and_sources(
@@ -2641,7 +2644,7 @@ mod tests {
                 || panic!("invalid raw confirmation must precede salt allocation"),
             )
             .err()
-            .expect("raw private or symmetric confirmation JWK must be rejected");
+            .expect("invalid raw confirmation JWK must be rejected");
             assert!(error.to_string().contains(SD_JWT_PRIVATE_CONFIRMATION_JWK));
         }
     }

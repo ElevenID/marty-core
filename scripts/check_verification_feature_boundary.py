@@ -280,6 +280,43 @@ def check_repository(root: Path = ROOT) -> None:
         and not oid4vci["dependencies"]["jsonwebtoken"].get("features", []),
         "jsonwebtoken crypto providers must be role-selected rather than globally enabled",
     )
+    forbidden_jwt_routes = {
+        "jsonwebtoken/default",
+        "jsonwebtoken/aws_lc_rs",
+        "jsonwebtoken/rust_crypto",
+    }
+    require(
+        not any(
+            dependency.replace("?/", "/") in forbidden_jwt_routes
+            for dependencies in oid4vci["features"].values()
+            for dependency in dependencies
+        ),
+        "OID4VCI feature routes must not enable a global JWT signing backend",
+    )
+    sd_jwt = oid4vci["dependencies"]["sd-jwt-rs"]
+    sd_jwt_test = oid4vci["dev-dependencies"]["sd-jwt-rs"]
+    require(
+        sd_jwt.get("default-features") is False
+        and not sd_jwt.get("features", [])
+        and sd_jwt.get("git") == "https://github.com/ElevenID/sd-jwt-rust"
+        and len(sd_jwt.get("rev", "")) == 40
+        and all(sd_jwt.get(field) == sd_jwt_test.get(field) for field in ("git", "rev")),
+        "SD-JWT normal and test roles must use one immutable fork with role-selected production features",
+    )
+    locked_packages = load_toml(root / "Cargo.lock")["package"]
+    jwt_edges = []
+    for name in ("marty-oid4vci", "sd-jwt-rs"):
+        selected = [package for package in locked_packages if package["name"] == name]
+        require(len(selected) == 1, f"expected one locked {name} package")
+        jwt_edges.append([
+            dependency
+            for dependency in selected[0].get("dependencies", [])
+            if dependency.split(" ", 1)[0] == "jsonwebtoken"
+        ])
+    require(
+        len(jwt_edges[0]) == 1 and jwt_edges[0] == jwt_edges[1],
+        "OID4VCI and SD-JWT must share one locked JWT provider and public type identity",
+    )
     issuer_features = set(oid4vci["features"]["issuer"])
     verifier_features = set(oid4vci["features"]["verifier"])
     require(

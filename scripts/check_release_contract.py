@@ -309,8 +309,16 @@ PRIVATE_FORKS_FETCH_STEP = r"""      - name: Fetch private Rust dependencies
           PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
         run: python .github/scripts/private-forks.py fetch"""
 
+WASM_SECURITY_PRODUCTION_STEP = """      - name: Check standalone browser production graph
+        run: >-
+          cargo check --locked -p marty-oid4vci
+          --target wasm32-unknown-unknown
+          --no-default-features --features verifier,sd_jwt --lib"""
+
 WASM_SECURITY_TEST_COMMANDS = {
     "oid4vci-wasm-security": (
+        "cargo check --locked -p marty-oid4vci --target wasm32-unknown-unknown "
+        "--no-default-features --features verifier,sd_jwt --lib",
         "cargo test --locked -p marty-oid4vci --target wasm32-unknown-unknown "
         "--no-default-features --features verifier,sd_jwt --test wasm_crypto_provider "
         "--test sd_jwt_multi_digest "
@@ -619,6 +627,14 @@ def check_wasm_security_cache_setup(workflow_text: str | None = None) -> list[st
                 f".github/workflows/ci.yml: {job} must use canonical "
                 "block-style steps"
             )
+        if job == "oid4vci-wasm-security":
+            production_steps = [step for step in steps if "Check standalone browser production graph" in step]
+            if (len(production_steps) != 1
+                    or _normalized_step(production_steps[0]) != WASM_SECURITY_PRODUCTION_STEP):
+                errors.append(
+                    f".github/workflows/ci.yml: {job} must check the exact standalone "
+                    "production dependency graph without test feature unification"
+                )
         observed_run_commands = tuple(
             command for step in steps for command in _step_run_commands(step)
         )

@@ -149,6 +149,62 @@ class VerificationFeatureBoundaryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 check_repository()
 
+    def test_oid4vci_feature_routes_cannot_restore_global_jwt_backends(self) -> None:
+        for feature in ("default", "aws_lc_rs", "rust_crypto"):
+            for dependency in (f"jsonwebtoken/{feature}", f"jsonwebtoken?/{feature}"):
+                with self.subTest(dependency=dependency):
+                    def mutated_manifest(path):
+                        manifest = load_toml(path)
+                        if path == ROOT / "marty-oid4vci" / "Cargo.toml":
+                            manifest["features"]["extra-jwt-provider"] = [dependency]
+                        return manifest
+
+                    with patch(
+                        "check_verification_feature_boundary.load_toml",
+                        side_effect=mutated_manifest,
+                    ):
+                        with self.assertRaisesRegex(ValueError, "global JWT signing backend"):
+                            check_repository()
+
+    def test_sd_jwt_production_features_and_test_source_cannot_diverge(self) -> None:
+        for section, field, value in (
+            ("dependencies", "default-features", True),
+            ("dependencies", "features", ["verifier"]),
+            ("dev-dependencies", "rev", "0" * 40),
+            ("dev-dependencies", "git", "https://example.invalid/sd-jwt-rust"),
+        ):
+            with self.subTest(section=section, field=field):
+                def mutated_manifest(path):
+                    manifest = load_toml(path)
+                    if path == ROOT / "marty-oid4vci" / "Cargo.toml":
+                        manifest[section]["sd-jwt-rs"][field] = value
+                    return manifest
+
+                with patch(
+                    "check_verification_feature_boundary.load_toml",
+                    side_effect=mutated_manifest,
+                ):
+                    with self.assertRaisesRegex(ValueError, "one immutable fork"):
+                        check_repository()
+
+    def test_core_and_fork_cannot_lock_different_jwt_providers(self) -> None:
+        def mutated_manifest(path):
+            manifest = load_toml(path)
+            if path == ROOT / "Cargo.lock":
+                fork = next(package for package in manifest["package"] if package["name"] == "sd-jwt-rs")
+                fork["dependencies"] = [
+                    "jsonwebtoken 9.3.0" if dependency.split(" ", 1)[0] == "jsonwebtoken" else dependency
+                    for dependency in fork["dependencies"]
+                ]
+            return manifest
+
+        with patch(
+            "check_verification_feature_boundary.load_toml",
+            side_effect=mutated_manifest,
+        ):
+            with self.assertRaisesRegex(ValueError, "one locked JWT provider"):
+                check_repository()
+
 
 if __name__ == "__main__":
     unittest.main()
