@@ -306,6 +306,22 @@ class NativeBuildCacheContractTests(unittest.TestCase):
                     any("exact approved test-step configuration" in error for error in errors)
                 )
 
+    def test_standalone_wasm_production_graph_cannot_be_skipped_or_widened(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        step = check_release_contract.WASM_SECURITY_PRODUCTION_STEP
+        for replacement in (
+            "",
+            step.replace("        run:", "        if: false\n        run:"),
+            step.replace("        run:", "        continue-on-error: true\n        run:"),
+            step.replace("--lib", "--tests"),
+            step.replace("--features verifier,sd_jwt", "--features verifier,sd_jwt,issuer"),
+        ):
+            with self.subTest(replacement=replacement):
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow.replace(step, replacement)
+                )
+                self.assertTrue(any("exact standalone" in error for error in errors))
+
     def test_wasm_private_fork_authorization_cannot_be_disabled_or_bypassed(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"

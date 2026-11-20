@@ -45,8 +45,8 @@ serde_json = { workspace = true }
 
 # Crypto and signing
 ssi-jwk.workspace = true
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "ba5a9a154ae530ddcfcc5b52adf3da71e91b1929", default-features = false }
-jsonwebtoken = { version = "10.3", default-features = false }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "9fc75ab0befe6b7f80987acd8b740baead40ee76", default-features = false }
+jsonwebtoken = { version = "11.1", default-features = false }
 
 # ISO 18013-5 mDoc
 isomdl = { workspace = true, optional = true }
@@ -88,10 +88,14 @@ tokio = { workspace = true, optional = true }
 marty-crypto = { workspace = true, default-features = false, features = ["jwk", "ecdsa-verification"] }
 reqwest = { workspace = true, features = ["blocking"] }
 isomdl = { workspace = true, features = ["presentation-verifier", "issuer-planning"] }
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "ba5a9a154ae530ddcfcc5b52adf3da71e91b1929" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "9fc75ab0befe6b7f80987acd8b740baead40ee76" }
 p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
 k256 = { workspace = true, features = ["ecdsa", "sha256"] }
 ssi-jwk = { workspace = true, features = ["ed25519", "secp256r1", "secp256k1", "secp384r1"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# UUID v4 remains available when the fork no longer unifies a browser RNG.
+uuid = { workspace = true, features = ["js"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 criterion = { workspace = true }

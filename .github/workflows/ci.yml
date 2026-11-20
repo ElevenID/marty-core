@@ -174,7 +174,7 @@ jobs:
           kms_public_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,jwk -e features,no-dev)"
           kms_didcomm_public_tree="$(cargo tree --locked -p marty-didcomm --no-default-features --features kms-only,did_jwk -e features,no-dev)"
           kms_emrtd_tree="$(cargo tree --locked -p marty-emrtd-issuance -e features,no-dev)"
-          if grep -Eq 'ecdsa feature "signing"|(p256|p384|p521) feature "ecdsa"|marty-crypto feature "ecdsa-local-signing"' <<<$kms_ecdsa_verification_tree || grep -Eq 'ecdsa feature "signing"|(p256|p384|p521|k256) feature "ecdsa"|ed448-goldilocks-plus|marty-crypto feature "(ecdsa|eddsa)-local-signing"|ssi-(crypto|jwk) feature "(ed25519|secp256r1|secp256k1|secp384r1)"|jsonwebtoken feature "rust_crypto"|sd-jwt-rs feature "verifier"' <<<$kms_issuer_tree; then
+          if grep -Eq 'ecdsa feature "signing"|(p256|p384|p521) feature "ecdsa"|marty-crypto feature "ecdsa-local-signing"' <<<$kms_ecdsa_verification_tree || grep -Eq 'ecdsa feature "signing"|(p256|p384|p521|k256) feature "ecdsa"|ed448-goldilocks-plus|marty-crypto feature "(ecdsa|eddsa)-local-signing"|ssi-(crypto|jwk) feature "(ed25519|secp256r1|secp256k1|secp384r1)"|jsonwebtoken feature "(rust_crypto|aws_lc_rs)"|sd-jwt-rs feature "verifier"' <<<$kms_issuer_tree; then
             printf '%s\n%s\n' "$kms_ecdsa_verification_tree" "$kms_issuer_tree"
             exit 1
           fi
@@ -683,7 +683,7 @@ jobs:
           kms_csca_tree="$(cargo tree --locked -p marty-verification --no-default-features --features kms-only,python,iaca,csca,eudi -e features,no-dev)"
           kms_public_tree="$(cargo tree --locked -p marty-crypto --no-default-features --features kms-only,jwk -e features,no-dev)"
           kms_didcomm_public_tree="$(cargo tree --locked -p marty-didcomm --no-default-features --features kms-only,did_jwk -e features,no-dev)"
-          if grep -Eq 'ecdsa feature "signing"|(p256|p384|p521) feature "ecdsa"|marty-crypto feature "ecdsa-local-signing"' <<<$kms_ecdsa_verification_tree || grep -Eq 'ecdsa feature "signing"|(p256|p384|p521|k256) feature "ecdsa"|ed448-goldilocks-plus|marty-crypto feature "(ecdsa|eddsa)-local-signing"|ssi-(crypto|jwk) feature "(ed25519|secp256r1|secp256k1|secp384r1)"|jsonwebtoken feature "rust_crypto"|sd-jwt-rs feature "verifier"' <<<$kms_issuer_tree; then
+          if grep -Eq 'ecdsa feature "signing"|(p256|p384|p521) feature "ecdsa"|marty-crypto feature "ecdsa-local-signing"' <<<$kms_ecdsa_verification_tree || grep -Eq 'ecdsa feature "signing"|(p256|p384|p521|k256) feature "ecdsa"|ed448-goldilocks-plus|marty-crypto feature "(ecdsa|eddsa)-local-signing"|ssi-(crypto|jwk) feature "(ed25519|secp256r1|secp256k1|secp384r1)"|jsonwebtoken feature "(rust_crypto|aws_lc_rs)"|sd-jwt-rs feature "verifier"' <<<$kms_issuer_tree; then
             printf '%s\n%s\n' "$kms_ecdsa_verification_tree" "$kms_issuer_tree"
             exit 1
           fi
@@ -1009,6 +1009,11 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
         with:
           tool: wasm-bindgen-cli@0.2.126
+      - name: Check standalone browser production graph
+        run: >-
+          cargo check --locked -p marty-oid4vci
+          --target wasm32-unknown-unknown
+          --no-default-features --features verifier,sd_jwt --lib
       - name: Test browser cryptographic provider policy
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner

@@ -8,7 +8,10 @@ use base64::Engine;
 use jsonwebtoken::{
     crypto::verify as verify_jws_signature, decode, decode_header, DecodingKey, Validation,
 };
-use jsonwebtoken::{jwk::Jwk, Algorithm};
+use jsonwebtoken::{
+    jwk::{AlgorithmParameters, Jwk},
+    Algorithm,
+};
 use serde_json::Value;
 
 use crate::bounded_jwt::JOSE_JWT_LIMITS;
@@ -67,7 +70,15 @@ pub(crate) fn decode_unverified_compact_jwt_header(compact_jwt: &str) -> Oid4vci
 /// The values remain untrusted until a protocol validator selects an allowed key
 /// and calls `verify_compact_jwt_with_public_jwk`.
 pub(crate) fn decode_unverified_compact_jwt(compact_jwt: &str) -> Oid4vciResult<(Value, Value)> {
-    crate::bounded_jwt::decode_unverified_compact_jwt(compact_jwt)
+    let (header, claims) = crate::bounded_jwt::decode_unverified_compact_jwt(compact_jwt)?;
+    // `Header::jwk` is optional, so retain its absent/null behavior. An embedded
+    // key is still untrusted, but JWT 11 must not widen its admitted shapes even
+    // when verification will use a separately trusted public key.
+    if let Some(jwk) = header.get("jwk").filter(|value| !value.is_null()) {
+        parse_public_asymmetric_jwk(jwk)
+            .map_err(|_| Oid4vciError::JwtError("Invalid protected header public JWK".into()))?;
+    }
+    Ok((header, claims))
 }
 
 fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
@@ -87,7 +98,12 @@ fn algorithm(name: &str) -> Oid4vciResult<Algorithm> {
     }
 }
 
-pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oid4vciResult<Jwk> {
+/// Parse only the public asymmetric key shapes admitted before JWT 11.
+///
+/// JWT 11 preserves unknown or malformed key parameters in `Other`. Successful
+/// deserialization alone therefore does not establish public-key admission.
+/// Algorithm and profile policy remains with the caller.
+pub(crate) fn parse_public_asymmetric_jwk(value: &Value) -> Oid4vciResult<Jwk> {
     let object = value
         .as_object()
         .ok_or_else(|| Oid4vciError::KeyError("Public JWK must be an object".into()))?;
@@ -99,21 +115,51 @@ pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oi
             "Public JWK contains private key material: {field}"
         )));
     }
-    if let Some(value) = object.get("alg") {
+    if !matches!(
+        object.get("kty").and_then(Value::as_str),
+        Some("EC" | "RSA" | "OKP")
+    ) {
+        return Err(Oid4vciError::KeyError(
+            "Public JWK must contain a known asymmetric key type".into(),
+        ));
+    }
+    let jwk: Jwk = serde_json::from_value(value.clone())
+        .map_err(|error| Oid4vciError::KeyError(format!("Invalid public JWK: {error}")))?;
+    validate_public_jwk_shape(&jwk)?;
+    Ok(jwk)
+}
+
+pub(crate) fn validate_public_jwk_shape(jwk: &Jwk) -> Oid4vciResult<()> {
+    if !matches!(
+        &jwk.algorithm,
+        AlgorithmParameters::EllipticCurve(_)
+            | AlgorithmParameters::RSA(_)
+            | AlgorithmParameters::OctetKeyPair(_)
+    ) {
+        return Err(Oid4vciError::KeyError(
+            "Public JWK must contain supported asymmetric key parameters".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oid4vciResult<Jwk> {
+    let jwk = parse_public_asymmetric_jwk(value)?;
+    if let Some(value) = value.get("alg") {
         if value.as_str() != Some(expected_algorithm) {
             return Err(Oid4vciError::KeyError(
                 "Public JWK alg does not match the JWT algorithm".into(),
             ));
         }
     }
-    if let Some(value) = object.get("use") {
+    if let Some(value) = value.get("use") {
         if value.as_str() != Some("sig") {
             return Err(Oid4vciError::KeyError(
                 "Public JWK use must be sig when present".into(),
             ));
         }
     }
-    if let Some(operations) = object.get("key_ops") {
+    if let Some(operations) = value.get("key_ops") {
         let operations = operations
             .as_array()
             .ok_or_else(|| Oid4vciError::KeyError("Public JWK key_ops must be an array".into()))?;
@@ -123,8 +169,7 @@ pub(crate) fn validate_public_jwk(value: &Value, expected_algorithm: &str) -> Oi
             ));
         }
     }
-    serde_json::from_value(value.clone())
-        .map_err(|error| Oid4vciError::KeyError(format!("Invalid public JWK: {error}")))
+    Ok(jwk)
 }
 
 #[cfg(any(test, feature = "jose-verification"))]
@@ -268,6 +313,179 @@ mod tests {
             &json!({"sub":"wallet","jti":"assertion-1"}),
         );
         (token, jwk.to_string())
+    }
+
+    fn public_curve_vectors() -> Value {
+        serde_json::from_str(include_str!("../tests/fixtures/wasm_provider_public.json"))
+            .expect("fixed public verification vectors")
+    }
+
+    #[test]
+    fn public_jwk_admission_rejects_unknown_and_malformed_key_shapes() {
+        for jwk in [
+            json!({}),
+            json!({"kty": "future-key-family", "public": "opaque"}),
+            json!({"kty": "oct"}),
+            json!({"kty": "EC", "crv": "P-256", "x": "AA"}),
+            json!({"kty": "EC", "crv": "future-curve", "x": "AA", "y": "AA"}),
+            json!({"kty": "RSA", "n": "AQAB"}),
+            json!({"kty": "RSA", "n": 17, "e": "AQAB"}),
+            json!({"kty": "OKP", "crv": "Ed25519"}),
+            json!({"kty": "OKP", "crv": "future-curve", "x": "AA"}),
+        ] {
+            assert!(matches!(
+                validate_public_jwk(&jwk, "ES256"),
+                Err(Oid4vciError::KeyError(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn protected_header_jwk_keeps_known_shapes_and_rejects_parser_fallbacks() {
+        let compact = |header: Value| {
+            format!(
+                "{}.e30.AA",
+                B64.encode(serde_json::to_vec(&header).unwrap())
+            )
+        };
+        let public = json!({
+            "kty": "OKP", "crv": "Ed25519",
+            "x": public_curve_vectors()["ed25519"]["x"]
+        });
+        for header in [
+            json!({"alg": "EdDSA"}),
+            json!({"alg": "EdDSA", "jwk": null}),
+            json!({"alg": "EdDSA", "jwk": public}),
+        ] {
+            let (parsed, claims) = decode_unverified_compact_jwt(&compact(header.clone())).unwrap();
+            assert_eq!(parsed, header);
+            assert_eq!(claims, json!({}));
+        }
+        for jwk in [
+            json!({"kty": "future-key-family", "public": "opaque"}),
+            json!({"kty": "EC", "crv": "P-256", "x": "AA"}),
+            json!({"kty": "RSA", "n": "AQAB"}),
+            json!({"kty": "OKP", "crv": "Ed25519"}),
+        ] {
+            let token = compact(json!({"alg": "EdDSA", "jwk": jwk}));
+            assert!(
+                decode_header(&token).is_ok(),
+                "JWT 11 preserves these shapes"
+            );
+            assert!(decode_unverified_compact_jwt(&token).is_err());
+            let error = verify_compact_jwt_with_public_jwk(&token, &public.to_string(), "EdDSA")
+                .unwrap_err();
+            assert!(error.to_string().contains("protected header public JWK"));
+        }
+    }
+
+    #[test]
+    fn known_public_key_shapes_keep_algorithm_and_usage_metadata_policy() {
+        let vectors = public_curve_vectors();
+        for (algorithm, mut jwk) in [
+            (
+                "ES384",
+                json!({"kty": "EC", "crv": "P-384", "x": vectors["p384"]["x"], "y": vectors["p384"]["y"]}),
+            ),
+            (
+                "EdDSA",
+                json!({"kty": "OKP", "crv": "Ed25519", "x": vectors["ed25519"]["x"]}),
+            ),
+            (
+                "RS256",
+                json!({"kty": "RSA", "n": B64.encode([0xA5; 256]), "e": "AQAB"}),
+            ),
+        ] {
+            assert!(validate_public_jwk(&jwk, algorithm).is_ok());
+            jwk["alg"] = json!(algorithm);
+            jwk["use"] = json!("sig");
+            jwk["key_ops"] = json!(["verify"]);
+            assert!(validate_public_jwk(&jwk, algorithm).is_ok());
+            for (field, value) in [
+                ("alg", json!("HS256")),
+                ("use", json!("enc")),
+                ("key_ops", json!(["sign"])),
+                ("key_ops", json!(["verify", "sign"])),
+            ] {
+                let mut rejected = jwk.clone();
+                rejected[field] = value;
+                assert!(validate_public_jwk(&rejected, algorithm).is_err());
+            }
+            for member in PRIVATE_JWK_FIELDS {
+                let mut rejected = jwk.clone();
+                rejected[*member] = Value::Null;
+                assert!(validate_public_jwk(&rejected, algorithm).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn shared_provider_verifies_public_vectors_and_rejects_algorithm_confusion() {
+        let vectors = public_curve_vectors();
+        for (algorithm, jwk, vector) in [
+            (
+                "ES384",
+                json!({"kty": "EC", "crv": "P-384", "x": vectors["p384"]["x"], "y": vectors["p384"]["y"]}),
+                &vectors["p384"],
+            ),
+            (
+                "EdDSA",
+                json!({"kty": "OKP", "crv": "Ed25519", "x": vectors["ed25519"]["x"]}),
+                &vectors["ed25519"],
+            ),
+        ] {
+            let public = jwk.to_string();
+            let signature = B64.decode(vector["signature"].as_str().unwrap()).unwrap();
+            assert!(verify_detached_signature_with_public_jwk(
+                b"shared browser verification provider",
+                &signature,
+                &public,
+                algorithm,
+            )
+            .unwrap());
+            assert!(!verify_detached_signature_with_public_jwk(
+                b"changed message",
+                &signature,
+                &public,
+                algorithm,
+            )
+            .unwrap());
+            for rejected_algorithm in ["HS256", "none", "ES512", "RS256"] {
+                assert!(verify_detached_signature_with_public_jwk(
+                    b"shared browser verification provider",
+                    &signature,
+                    &public,
+                    rejected_algorithm,
+                )
+                .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn shared_provider_never_enables_local_signing_or_private_key_conversion() {
+        use jsonwebtoken::{errors::ErrorKind, EncodingKey};
+
+        sd_jwt_rs::install_crypto_provider().unwrap();
+        for (algorithm, key) in [
+            (Algorithm::ES256, EncodingKey::from_ec_der(&[0; 48])),
+            (Algorithm::EdDSA, EncodingKey::from_ed_der(&[0; 48])),
+            (Algorithm::RS256, EncodingKey::from_rsa_der(&[0; 48])),
+            (
+                Algorithm::HS256,
+                EncodingKey::from_secret(b"not a credential key"),
+            ),
+        ] {
+            let error = jsonwebtoken::crypto::sign(b"prepared.payload", &key, algorithm)
+                .expect_err("Core must use the verification-only provider");
+            assert!(matches!(error.kind(), ErrorKind::Provider(_)));
+            if algorithm != Algorithm::HS256 {
+                assert!(matches!(
+                    Jwk::from_encoding_key(&key, algorithm).unwrap_err().kind(),
+                    ErrorKind::Provider(_)
+                ));
+            }
+        }
     }
 
     #[test]
