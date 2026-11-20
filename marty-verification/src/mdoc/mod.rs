@@ -5,12 +5,19 @@
 
 mod authentication;
 mod device_response;
+#[cfg(feature = "mdoc-status-verification")]
+mod status_token;
+#[cfg(feature = "mdoc-status-verification")]
+pub use status_token::{
+    verify_mdoc_external_status, MdocExternalStatus, VerifiedMdocExternalStatus,
+};
 
 pub use authentication::{
-    disclosed_claims, parse_valid_device_response, verify_mdoc_issuer, verify_mdoc_issuer_at,
-    verify_mdoc_presentation, verify_mdoc_presentation_at, MdocCertificateTrustFailure,
+    disclosed_claims, parse_valid_device_response, prepare_mdoc_status_requests_at,
+    verify_mdoc_issuer, verify_mdoc_issuer_at, verify_mdoc_presentation,
+    verify_mdoc_presentation_at, AuthenticatedMdocStatusRequest, MdocCertificateTrustFailure,
     MdocDocumentVerificationEvidence, MdocIssuerVerificationResult,
-    MdocPresentationVerificationResult,
+    MdocPresentationVerificationResult, MdocStatusReference,
 };
 
 pub use device_response::{

@@ -32,6 +32,8 @@ ephemeral-session-keys = [
     "p384/ecdh",
 ]
 network-tls-client = ["dep:reqwest"]
+# Explicit bounded external MSO status verification; no transport is installed.
+mdoc-status-verification = ["tokio", "dep:async-trait"]
 aamva-client = ["network-tls-client", "reqwest/form", "reqwest/query", "tokio", "moka"]
 icao-client = ["network-tls-client", "tokio", "moka", "ldap3"]
 eudi-client = ["network-tls-client", "reqwest/stream", "tokio", "moka", "quick-xml"]
@@ -112,6 +114,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 
 # Optional async dependencies
+async-trait = { version = "=0.1.92", optional = true }
 tokio = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 moka = { workspace = true, optional = true }

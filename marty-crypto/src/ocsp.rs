@@ -629,24 +629,6 @@ fn validate_certificate_current_at(certificate: &Certificate, now: u64) -> Crypt
     Ok(())
 }
 
-#[cfg(test)]
-fn validate_ocsp_freshness(
-    produced_at: &OcspGeneralizedTime,
-    this_update: &OcspGeneralizedTime,
-    next_update: Option<&OcspGeneralizedTime>,
-    clock_skew_secs: u64,
-    max_age_without_next_update_secs: u64,
-) -> CryptoResult<()> {
-    validate_ocsp_freshness_at(
-        produced_at,
-        this_update,
-        next_update,
-        clock_skew_secs,
-        max_age_without_next_update_secs,
-        ocsp_unix_now()?,
-    )
-}
-
 fn validate_ocsp_freshness_at(
     produced_at: &OcspGeneralizedTime,
     this_update: &OcspGeneralizedTime,
@@ -1147,22 +1129,11 @@ impl OcspClient {
 
     /// Calculate cache TTL from OCSP response nextUpdate field.
     fn calculate_ttl(&self, result: &OcspCheckResult) -> std::time::Duration {
-        use std::time::Duration;
-
-        if let Some(next_update) = &result.next_update {
-            // Try to parse nextUpdate as RFC 3339 datetime
-            if let Ok(next_update_dt) = chrono::DateTime::parse_from_rfc3339(next_update) {
-                let now = chrono::Utc::now();
-                let next_update_utc = next_update_dt.with_timezone(&chrono::Utc);
-                if next_update_utc > now {
-                    let duration = (next_update_utc - now).num_seconds() as u64;
-                    return Duration::from_secs(duration);
-                }
-            }
-        }
-
-        // Fall back to default TTL
-        Duration::from_secs(self.config.default_cache_ttl_secs)
+        cache_ttl_at(
+            result.next_update.as_deref(),
+            self.config.default_cache_ttl_secs,
+            time::OffsetDateTime::now_utc(),
+        )
     }
 
     /// Clear the cache.
@@ -1184,6 +1155,26 @@ impl Default for OcspClient {
     }
 }
 
+// The client feature is dormant unless an external composition supplies HTTP.
+// Keep TTL policy testable without enabling network or custody functionality.
+#[cfg(any(test, all(feature = "reqwest", feature = "ocsp-client")))]
+fn cache_ttl_at(
+    next_update: Option<&str>,
+    fallback_secs: u64,
+    now: time::OffsetDateTime,
+) -> std::time::Duration {
+    if let Some(next) = next_update.and_then(|value| {
+        time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+    }) {
+        if next > now {
+            if let Ok(seconds) = u64::try_from((next - now).whole_seconds()) {
+                return std::time::Duration::from_secs(seconds);
+            }
+        }
+    }
+    std::time::Duration::from_secs(fallback_secs)
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1191,6 +1182,50 @@ impl Default for OcspClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_ocsp_freshness_is_rejected_without_session_features() {
+        use der::asn1::GeneralizedTime;
+        use std::time::Duration;
+
+        let now = 1_700_000_000;
+        let stale =
+            GeneralizedTime::from_unix_duration(Duration::from_secs(now - 48 * 60 * 60)).unwrap();
+        let produced =
+            GeneralizedTime::from_unix_duration(Duration::from_secs(now - 47 * 60 * 60)).unwrap();
+        assert!(validate_ocsp_freshness_at(
+            &OcspGeneralizedTime(produced),
+            &OcspGeneralizedTime(stale),
+            None,
+            300,
+            24 * 60 * 60,
+            now,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cache_ttl_preserves_fractional_offsets_and_default_fallbacks() {
+        let now =
+            time::OffsetDateTime::from_unix_timestamp_nanos(1_700_000_000_500_000_000).unwrap();
+        for (next, seconds) in [
+            (Some("2023-11-14T22:13:21Z"), 0),
+            (Some("2023-11-14T22:13:20.500000001Z"), 0),
+            (Some("2023-11-14T22:13:23.750Z"), 3),
+            (Some("2023-11-15T03:43:24+05:30"), 3),
+            (Some("2023-11-14T22:13:20.500Z"), 77),
+            (Some("2023-11-14T22:13:20.499999999Z"), 77),
+            (Some("invalid"), 77),
+            (Some("2023-11-14T22:13:24+25:00"), 77),
+            (None, 77),
+        ] {
+            assert_eq!(
+                cache_ttl_at(next, 77, now),
+                std::time::Duration::from_secs(seconds),
+                "{next:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_ocsp_request_builder_basic() {
@@ -1396,27 +1431,6 @@ mod tests_with_public_responses {
             &fixture.leaf,
             &fixture.issuer,
             fixture.valid_at + 8 * 24 * 60 * 60,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn stale_ocsp_freshness_is_rejected() {
-        use der::asn1::GeneralizedTime;
-        use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let stale =
-            GeneralizedTime::from_unix_duration(now - Duration::from_secs(48 * 60 * 60)).unwrap();
-        let produced =
-            GeneralizedTime::from_unix_duration(now - Duration::from_secs(47 * 60 * 60)).unwrap();
-
-        assert!(validate_ocsp_freshness(
-            &OcspGeneralizedTime(produced),
-            &OcspGeneralizedTime(stale),
-            None,
-            300,
-            24 * 60 * 60,
         )
         .is_err());
     }

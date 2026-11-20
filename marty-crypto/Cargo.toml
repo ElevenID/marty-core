@@ -166,7 +166,7 @@ ed448-goldilocks-plus = { workspace = true, optional = true }
 shake = { workspace = true, optional = true }
 
 # Time
-chrono = { workspace = true }
+time = { workspace = true, features = ["parsing"] }
 
 # Encoding
 base64 = { workspace = true }
@@ -191,6 +191,9 @@ aws-lc-rs = { workspace = true, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 hmac = { workspace = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+time = { workspace = true, features = ["wasm-bindgen"] }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.76"

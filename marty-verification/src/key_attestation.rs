@@ -755,9 +755,13 @@ fn validate_certificate_chain(
         check_crl: false,
         check_ocsp: false,
         revocation_mode: "hard_fail".into(),
-        validation_moment: Some(now),
+        validation_moment: None,
         required_key_usage: vec![KeyUsage::DigitalSignature],
-    };
+    }
+    .with_validation_unix_nanos(
+        i128::from(now.timestamp()) * 1_000_000_000 + i128::from(now.timestamp_subsec_nanos()),
+    )
+    .map_err(|_| "Key attestation validation time is out of platform range".to_string())?;
     let mut validator = ChainValidator::with_config(config);
     for root in roots {
         validator

@@ -189,10 +189,38 @@ impl DidResolver {
         Ok(DidResolutionResult {
             document,
             source: source.to_string(),
-            retrieved_at: chrono::Utc::now().to_rfc3339(),
+            retrieved_at: format_retrieved_at(time::OffsetDateTime::now_utc()).map_err(
+                |reason| DidcommError::ResolutionFailed {
+                    did: did.to_owned(),
+                    reason: reason.into(),
+                },
+            )?,
             content_sha256,
         })
     }
+}
+
+/// Preserve the public UTC RFC3339 representation: numeric UTC offset and
+/// absent, millisecond, microsecond or nanosecond fractional precision.
+fn format_retrieved_at(now: time::OffsetDateTime) -> Result<String, &'static str> {
+    let utc = now
+        .checked_to_offset(time::UtcOffset::UTC)
+        .ok_or("UTC retrieval time is outside the supported range")?;
+    let formatted = utc
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|_| "Retrieval time cannot be represented as RFC3339")?;
+    let mut formatted = formatted
+        .strip_suffix('Z')
+        .ok_or("Retrieval time was not formatted in UTC")?
+        .to_owned();
+    if let Some((_, fraction)) = formatted.rsplit_once('.') {
+        let padding = (3 - fraction.len() % 3) % 3;
+        for _ in 0..padding {
+            formatted.push('0');
+        }
+    }
+    formatted.push_str("+00:00");
+    Ok(formatted)
 }
 
 impl Default for DidResolver {
@@ -1327,6 +1355,31 @@ fn valid_public_jwk(jwk: &Jwk) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retrieval_time_preserves_utc_offset_precision_and_pre_epoch_instants() {
+        for (nanos, expected) in [
+            (0, "1970-01-01T00:00:00+00:00"),
+            (120_000_000, "1970-01-01T00:00:00.120+00:00"),
+            (123_400_000, "1970-01-01T00:00:00.123400+00:00"),
+            (123_456_780, "1970-01-01T00:00:00.123456780+00:00"),
+            (1, "1970-01-01T00:00:00.000000001+00:00"),
+            (-1, "1969-12-31T23:59:59.999999999+00:00"),
+            (-1_000_000_000, "1969-12-31T23:59:59+00:00"),
+        ] {
+            let now = time::OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
+            for offset in [
+                time::UtcOffset::UTC,
+                time::UtcOffset::from_hms(5, 30, 0).unwrap(),
+                time::UtcOffset::from_hms(-7, 0, 0).unwrap(),
+            ] {
+                assert_eq!(
+                    super::format_retrieved_at(now.to_offset(offset)).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

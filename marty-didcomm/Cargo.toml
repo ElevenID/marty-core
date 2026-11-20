@@ -41,7 +41,7 @@ zeroize = { workspace = true, optional = true }
 
 # DID document parsing + resolution
 uuid = { workspace = true }
-chrono = { workspace = true }
+time = { workspace = true, features = ["formatting"] }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -57,5 +57,6 @@ tokio = { workspace = true, optional = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+time = { workspace = true, features = ["wasm-bindgen"] }
 uuid = { workspace = true, features = ["js"] }
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"], optional = true }

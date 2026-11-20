@@ -3934,7 +3934,6 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bs58 0.5.1",
- "chrono",
  "ciborium",
  "hex",
  "marty-crypto",
@@ -3950,6 +3949,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "time",
  "tokio",
 ]
 
@@ -3958,7 +3958,6 @@ name = "marty-biometrics"
 version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
- "chrono",
  "console_error_panic_hook",
  "getrandom 0.4.3",
  "hmac 0.12.1",
@@ -3971,6 +3970,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "wasm-bindgen",
@@ -3996,7 +3996,6 @@ dependencies = [
  "base64 0.22.1",
  "bls12_381_plus",
  "cbc",
- "chrono",
  "cipher",
  "cmac",
  "const-oid 0.9.6",
@@ -4028,6 +4027,7 @@ dependencies = [
  "shake",
  "spki 0.7.3",
  "thiserror 2.0.21",
+ "time",
  "wasm-bindgen-test",
  "x25519-dalek",
  "x509-cert",
@@ -4060,7 +4060,6 @@ dependencies = [
  "aes-kw",
  "base64 0.22.1",
  "bs58 0.5.1",
- "chrono",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "marty-crypto",
@@ -4070,6 +4069,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "url",
@@ -4178,6 +4178,7 @@ dependencies = [
  "sha2 0.10.9",
  "ssi-jwk",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tracing",
  "url",
@@ -4283,6 +4284,7 @@ name = "marty-verification"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "bs58 0.4.0",
  "cedar-policy",
@@ -4354,7 +4356,6 @@ dependencies = [
 name = "marty-x509-verification"
 version = "0.2.2"
 dependencies = [
- "chrono",
  "const-oid 0.9.6",
  "der 0.7.10",
  "marty-crypto",
@@ -7599,6 +7600,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
+ "js-sys",
  "num-conv",
  "powerfmt",
  "serde_core",

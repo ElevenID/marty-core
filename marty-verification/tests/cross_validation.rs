@@ -97,7 +97,7 @@ fn verify_with_marty(
     validation_moment: Option<DateTime<Utc>>,
 ) -> (bool, String) {
     let config = ChainValidatorConfig {
-        validation_moment,
+        validation_moment: validation_moment.map(std::time::SystemTime::from),
         required_key_usage: Vec::new(),
         ..Default::default()
     };

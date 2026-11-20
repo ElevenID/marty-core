@@ -53,7 +53,7 @@ fn moment(year: i32) -> chrono::DateTime<Utc> {
 #[test]
 fn accepts_valid_local_chain() {
     let (leaf, root, _) = fixtures();
-    let result = verify_chain_offline(&[leaf, root.clone()], &root, moment(2026)).unwrap();
+    let result = verify_chain_offline(&[leaf, root.clone()], &root, moment(2026).into()).unwrap();
     assert!(result.valid, "{:?}", result.errors);
 }
 
@@ -61,7 +61,7 @@ fn accepts_valid_local_chain() {
 fn rejects_tampered_signature() {
     let (mut leaf, root, _) = fixtures();
     *leaf.last_mut().unwrap() ^= 1; // DER remains parseable; signature changes.
-    let result = verify_chain_offline(&[leaf, root.clone()], &root, moment(2026)).unwrap();
+    let result = verify_chain_offline(&[leaf, root.clone()], &root, moment(2026).into()).unwrap();
     assert!(!result.valid);
     assert!(result
         .errors
@@ -72,7 +72,7 @@ fn rejects_tampered_signature() {
 #[test]
 fn rejects_wrong_trust_anchor() {
     let (leaf, root, other) = fixtures();
-    let result = verify_chain_offline(&[leaf, root], &other, moment(2026)).unwrap();
+    let result = verify_chain_offline(&[leaf, root], &other, moment(2026).into()).unwrap();
     assert!(!result.valid);
     assert!(result.errors.iter().any(|error| error.contains("trust")));
 }
@@ -80,7 +80,7 @@ fn rejects_wrong_trust_anchor() {
 #[test]
 fn rejects_expired_leaf_at_caller_supplied_time() {
     let (leaf, root, _) = fixtures();
-    let result = verify_chain_offline(&[leaf, root.clone()], &root, moment(2027)).unwrap();
+    let result = verify_chain_offline(&[leaf, root.clone()], &root, moment(2027).into()).unwrap();
     assert!(!result.valid);
     assert!(result.errors.iter().any(|error| error.contains("expired")));
 }

@@ -307,8 +307,10 @@ pub fn get_crl_distribution_points(der_data: &[u8]) -> CryptoResult<Vec<String>>
 /// Check if a certificate is expired.
 pub fn is_certificate_expired(der_data: &[u8]) -> CryptoResult<bool> {
     let cert = load_certificate_der(der_data)?;
-    let now = chrono::Utc::now();
+    is_certificate_expired_at(&cert, time::OffsetDateTime::now_utc())
+}
 
+fn is_certificate_expired_at(cert: &Certificate, now: time::OffsetDateTime) -> CryptoResult<bool> {
     let not_after = &cert.tbs_certificate.validity.not_after;
     let expiry = x509_time_to_datetime(not_after)?;
 
@@ -318,23 +320,23 @@ pub fn is_certificate_expired(der_data: &[u8]) -> CryptoResult<bool> {
 /// Check if a certificate is not yet valid.
 pub fn is_certificate_not_yet_valid(der_data: &[u8]) -> CryptoResult<bool> {
     let cert = load_certificate_der(der_data)?;
-    let now = chrono::Utc::now();
+    is_certificate_not_yet_valid_at(&cert, time::OffsetDateTime::now_utc())
+}
 
+fn is_certificate_not_yet_valid_at(
+    cert: &Certificate,
+    now: time::OffsetDateTime,
+) -> CryptoResult<bool> {
     let not_before = &cert.tbs_certificate.validity.not_before;
     let start = x509_time_to_datetime(not_before)?;
 
     Ok(now < start)
 }
 
-/// Convert X.509 Time to chrono DateTime.
-fn x509_time_to_datetime(
-    time: &x509_cert::time::Time,
-) -> CryptoResult<chrono::DateTime<chrono::Utc>> {
+/// Convert the unchanged X.509 UTC wire representation to a maintained instant.
+fn x509_time_to_datetime(time: &x509_cert::time::Time) -> CryptoResult<time::OffsetDateTime> {
     let time_str = format_x509_time(time);
-
-    // Parse ISO 8601 format
-    chrono::DateTime::parse_from_rfc3339(&time_str)
-        .map(|dt| dt.with_timezone(&chrono::Utc))
+    time::OffsetDateTime::parse(&time_str, &time::format_description::well_known::Rfc3339)
         .map_err(|e| CryptoError::parse_error(format!("Failed to parse time: {}", e)))
 }
 
@@ -419,6 +421,53 @@ mod tests {
         ))
         .unwrap();
         hex::decode(vectors[field].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn certificate_clock_comparisons_preserve_inclusive_endpoints_and_nanoseconds() {
+        let der = public_parser_certificate("crl_distribution_certificate_der_hex");
+        let cert = load_certificate_der(&der).unwrap();
+        let start = x509_time_to_datetime(&cert.tbs_certificate.validity.not_before).unwrap();
+        let end = x509_time_to_datetime(&cert.tbs_certificate.validity.not_after).unwrap();
+        for (delta, expired, not_yet_valid) in
+            [(-1, false, true), (0, false, false), (1, true, false)]
+        {
+            assert_eq!(
+                is_certificate_expired_at(&cert, end + time::Duration::nanoseconds(delta)).unwrap(),
+                expired
+            );
+            assert_eq!(
+                is_certificate_not_yet_valid_at(&cert, start + time::Duration::nanoseconds(delta))
+                    .unwrap(),
+                not_yet_valid
+            );
+        }
+    }
+
+    #[test]
+    fn certificate_time_retains_utc_and_generalized_time_wire_values() {
+        for (value, expected, timestamp) in [
+            (
+                x509_cert::time::Time::UtcTime(
+                    der::asn1::UtcTime::from_der(b"\x17\x0d491231235959Z").unwrap(),
+                ),
+                "2049-12-31T23:59:59Z",
+                2_524_607_999,
+            ),
+            (
+                x509_cert::time::Time::GeneralTime(
+                    der::asn1::GeneralizedTime::from_der(b"\x18\x0f20500101000000Z").unwrap(),
+                ),
+                "2050-01-01T00:00:00Z",
+                2_524_608_000,
+            ),
+        ] {
+            assert_eq!(format_x509_time(&value), expected);
+            assert_eq!(
+                x509_time_to_datetime(&value).unwrap().unix_timestamp(),
+                timestamp
+            );
+        }
     }
 
     #[test]

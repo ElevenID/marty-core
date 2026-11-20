@@ -11,9 +11,9 @@
 //! - Key usage verification
 //! - CRL/OCSP revocation checking (optional)
 
-use chrono::{DateTime, Utc};
 use der::{Decode, DecodePem, Encode};
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use x509_cert::Certificate;
 
 use crate::{VerificationError, VerificationResult};
@@ -96,10 +96,39 @@ pub struct ChainValidatorConfig {
     pub check_ocsp: bool,
     /// Revocation mode: "hard_fail", "soft_fail", "none"
     pub revocation_mode: String,
-    /// Validation moment (None = now)
-    pub validation_moment: Option<DateTime<Utc>>,
+    /// Explicit validation moment (None uses the maintained UTC clock).
+    /// Callers using a datetime library must convert to SystemTime or use
+    /// with_validation_unix_nanos for checked conversion.
+    pub validation_moment: Option<SystemTime>,
     /// Required key usages for end-entity certificate.
     pub required_key_usage: Vec<KeyUsage>,
+}
+
+impl ChainValidatorConfig {
+    /// Set an explicit UTC instant without depending on a datetime library.
+    /// Rejects instants outside the platform's SystemTime range without panicking.
+    /// Retains SystemTime precision (100 ns on Windows), including pre-epoch rounding.
+    pub fn with_validation_unix_nanos(mut self, timestamp: i128) -> VerificationResult<Self> {
+        self.validation_moment = Some(system_time_from_unix_nanos(timestamp)?);
+        Ok(self)
+    }
+}
+
+fn system_time_from_unix_nanos(timestamp: i128) -> VerificationResult<SystemTime> {
+    // Split at the preceding whole second, as the previous datetime conversion did.
+    // This preserves platform rounding for pre-epoch subsecond instants as well.
+    let seconds = timestamp.div_euclid(1_000_000_000);
+    let fraction = timestamp.rem_euclid(1_000_000_000) as u32;
+    let magnitude = u64::try_from(seconds.unsigned_abs())
+        .map_err(|_| VerificationError::internal("Validation time is out of platform range"))?;
+    let whole = Duration::from_secs(magnitude);
+    let base = if seconds < 0 {
+        UNIX_EPOCH.checked_sub(whole)
+    } else {
+        UNIX_EPOCH.checked_add(whole)
+    };
+    base.and_then(|moment| moment.checked_add(Duration::new(0, fraction)))
+        .ok_or_else(|| VerificationError::internal("Validation time is out of platform range"))
 }
 
 impl Default for ChainValidatorConfig {
@@ -295,7 +324,12 @@ impl ChainValidator {
         };
 
         // Check validity periods
-        let now = self.config.validation_moment.unwrap_or_else(Utc::now);
+        let now = match self.config.validation_moment {
+            Some(moment) => moment,
+            None => {
+                system_time_from_unix_nanos(time::OffsetDateTime::now_utc().unix_timestamp_nanos())?
+            }
+        };
 
         for (i, cert) in chain.iter().enumerate() {
             if let Err(e) = self.check_validity(cert, now) {
@@ -415,17 +449,15 @@ impl ChainValidator {
         Ok(result)
     }
 
-    fn check_validity(&self, cert: &Certificate, now: DateTime<Utc>) -> Result<(), String> {
+    fn check_validity(&self, cert: &Certificate, now: SystemTime) -> Result<(), String> {
         let not_before = cert.tbs_certificate.validity.not_before.to_system_time();
         let not_after = cert.tbs_certificate.validity.not_after.to_system_time();
 
-        let now_system = std::time::SystemTime::from(now);
-
-        if now_system < not_before {
+        if now < not_before {
             return Err("Certificate not yet valid".to_string());
         }
 
-        if now_system > not_after {
+        if now > not_after {
             return Err("Certificate has expired".to_string());
         }
 
@@ -832,6 +864,70 @@ fn verify_certificate_signature(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_clock_preserves_epoch_and_platform_precision() {
+        for (nanos, windows_nanos) in [
+            (-1_000_000_001, -1_000_000_100),
+            (-123_456_789, -123_456_800),
+            (-1, -100),
+            (0, 0),
+            (1, 0),
+            (123_456_789, 123_456_700),
+        ] {
+            let configured = ChainValidatorConfig {
+                check_crl: true,
+                revocation_mode: "hard_fail".into(),
+                ..Default::default()
+            }
+            .with_validation_unix_nanos(nanos);
+            if nanos < 0 && UNIX_EPOCH.checked_sub(Duration::from_secs(2)).is_none() {
+                assert!(configured.is_err());
+                continue;
+            }
+            let config = configured.unwrap();
+            let moment = config.validation_moment.unwrap();
+            let actual = match moment.duration_since(UNIX_EPOCH) {
+                Ok(value) => i128::try_from(value.as_nanos()).unwrap(),
+                Err(error) => -i128::try_from(error.duration().as_nanos()).unwrap(),
+            };
+            assert_eq!(actual, if cfg!(windows) { windows_nanos } else { nanos });
+            assert!(config.check_crl);
+            assert_eq!(config.revocation_mode, "hard_fail");
+        }
+        for nanos in [i128::MIN, i128::MAX] {
+            assert!(ChainValidatorConfig::default()
+                .with_validation_unix_nanos(nanos)
+                .is_err());
+        }
+        // Explicit SystemTime input never passes through a narrower datetime range.
+        if let Some(moment) = UNIX_EPOCH.checked_add(Duration::from_secs(400_000_000_000)) {
+            let config = ChainValidatorConfig {
+                validation_moment: Some(moment),
+                ..Default::default()
+            };
+            assert_eq!(config.validation_moment, Some(moment));
+        }
+    }
+
+    #[test]
+    fn certificate_validity_keeps_inclusive_endpoints_at_platform_precision() {
+        let cert = Certificate::from_der(include_bytes!(
+            "../../tests/cert_validator/fixtures/nist_pkits/certs/ValidCertificatePathTest1EE.crt"
+        ))
+        .unwrap();
+        let start = cert.tbs_certificate.validity.not_before.to_system_time();
+        let end = cert.tbs_certificate.validity.not_after.to_system_time();
+        let validator = ChainValidator::new();
+        let nano = Duration::from_nanos(if cfg!(windows) { 100 } else { 1 });
+        assert!(validator.check_validity(&cert, start).is_ok());
+        assert!(validator.check_validity(&cert, end).is_ok());
+        assert!(validator.check_validity(&cert, start + nano).is_ok());
+        assert!(validator.check_validity(&cert, end - nano).is_ok());
+        assert!(validator.check_validity(&cert, start - nano).is_err());
+        assert!(validator.check_validity(&cert, end + nano).is_err());
+    }
+
     use marty_crypto_test_support::remote_certificate::{
         RemoteCertificateAlgorithm, RemoteCertificateKey,
     };
@@ -1250,9 +1346,9 @@ mod tests {
         assert!(!result.valid, "Should be expired at current time");
 
         // Validate at past time when cert was valid
-        let past_moment = Utc::now() - chrono::Duration::days(180);
+        let past_moment = time::OffsetDateTime::now_utc() - time::Duration::days(180);
         let config = ChainValidatorConfig {
-            validation_moment: Some(past_moment),
+            validation_moment: Some(past_moment.into()),
             ..Default::default()
         };
 

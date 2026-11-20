@@ -160,7 +160,7 @@ impl PyValidationConfig {
 
 impl PyValidationConfig {
     /// Convert to internal ChainValidatorConfig.
-    pub fn to_chain_validator_config(&self) -> crate::verification::ChainValidatorConfig {
+    pub fn to_chain_validator_config(&self) -> PyResult<crate::verification::ChainValidatorConfig> {
         use crate::verification::KeyUsage;
 
         let required_key_usage: Vec<KeyUsage> = self
@@ -180,18 +180,30 @@ impl PyValidationConfig {
             })
             .collect();
 
-        let validation_moment = self.validation_moment.as_ref().and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(s)
-                .ok()
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-        });
-
-        crate::verification::ChainValidatorConfig {
+        let config = crate::verification::ChainValidatorConfig {
             check_crl: self.check_crl,
             check_ocsp: self.check_ocsp,
             revocation_mode: self.revocation_mode.clone(),
-            validation_moment,
+            validation_moment: None,
             required_key_usage,
+        };
+        match self.validation_moment.as_ref() {
+            None => Ok(config),
+            Some(raw) => {
+                let parsed = chrono::DateTime::parse_from_rfc3339(raw).map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err("validation_moment must be RFC 3339")
+                })?;
+                config
+                    .with_validation_unix_nanos(
+                        i128::from(parsed.timestamp()) * 1_000_000_000
+                            + i128::from(parsed.timestamp_subsec_nanos()),
+                    )
+                    .map_err(|_| {
+                        pyo3::exceptions::PyValueError::new_err(
+                            "validation_moment is out of platform range",
+                        )
+                    })
+            }
         }
     }
 }
@@ -339,7 +351,7 @@ impl PyChainValidator {
         chain_pem: Vec<String>,
         config: &PyValidationConfig,
     ) -> PyResult<PyChainValidationResult> {
-        let rust_config = config.to_chain_validator_config();
+        let rust_config = config.to_chain_validator_config()?;
         let validator = self.inner.configured(rust_config);
 
         let result = validator.validate_chain(&chain_pem).map_err(to_pyerr)?;
@@ -354,14 +366,58 @@ impl PyChainValidator {
     /// Returns:
     ///     A new ChainValidator configured with the given policy
     #[staticmethod]
-    fn with_config(config: &PyValidationConfig) -> Self {
-        let rust_config = config.to_chain_validator_config();
-        Self {
+    fn with_config(config: &PyValidationConfig) -> PyResult<Self> {
+        let rust_config = config.to_chain_validator_config()?;
+        Ok(Self {
             inner: crate::verification::ChainValidator::with_config(rust_config),
-        }
+        })
     }
 
     fn __repr__(&self) -> String {
         "ChainValidator()".to_string()
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    fn config(moment: Option<&str>) -> PyValidationConfig {
+        PyValidationConfig::new(
+            false,
+            false,
+            "hard_fail".into(),
+            moment.map(str::to_owned),
+            vec![],
+            "any".into(),
+            None,
+            10,
+        )
+    }
+
+    #[test]
+    fn supplied_invalid_clock_never_falls_back_or_panics() {
+        let invalid = config(Some("not-a-time"));
+        assert!(invalid.to_chain_validator_config().is_err());
+        assert!(PyChainValidator::with_config(&invalid).is_err());
+        assert!(PyChainValidator::new()
+            .validate_with_config(vec![], &invalid)
+            .is_err());
+        assert!(config(None)
+            .to_chain_validator_config()
+            .unwrap()
+            .validation_moment
+            .is_none());
+    }
+
+    #[test]
+    fn explicit_offset_clocks_select_the_same_instant() {
+        let utc = config(Some("2026-01-01T00:00:00.123456789Z"))
+            .to_chain_validator_config()
+            .unwrap();
+        let offset = config(Some("2026-01-01T05:30:00.123456789+05:30"))
+            .to_chain_validator_config()
+            .unwrap();
+        assert_eq!(utc.validation_moment, offset.validation_moment);
     }
 }

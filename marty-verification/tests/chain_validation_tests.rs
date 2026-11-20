@@ -403,7 +403,7 @@ fn test_point_in_time_validation() {
     // Validate at past time - should pass
     let past_moment = Utc::now() - Duration::days(180);
     let config = ChainValidatorConfig {
-        validation_moment: Some(past_moment),
+        validation_moment: Some(past_moment.into()),
         ..Default::default()
     };
 
