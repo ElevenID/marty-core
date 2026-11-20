@@ -257,8 +257,9 @@ class NativeBuildCacheContractTests(unittest.TestCase):
       - run: >-
           cargo test --locked -p marty-oid4vci
           --target wasm32-unknown-unknown
-          --no-default-features --features verifier
+          --no-default-features --features verifier,sd_jwt
           --test wasm_crypto_provider
+          --test sd_jwt_multi_digest
           -- --nocapture
   crypto-wasm-security:
     steps:
@@ -284,6 +285,26 @@ class NativeBuildCacheContractTests(unittest.TestCase):
 
     def test_checked_in_wasm_security_jobs_provide_sccache(self) -> None:
         self.assertEqual(check_release_contract.check_wasm_security_cache_setup(), [])
+
+    def test_rejects_removed_sd_jwt_wasm_admission_coverage(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        for original, replacement in (
+            ("--features verifier,sd_jwt\n", "--features verifier\n"),
+            ("          --test sd_jwt_multi_digest\n", ""),
+        ):
+            with self.subTest(removed=original.strip()):
+                self.assertEqual(workflow.count(original), 1)
+                errors = check_release_contract.check_wasm_security_cache_setup(
+                    workflow.replace(original, replacement)
+                )
+                self.assertTrue(
+                    any("exact approved Cargo test script" in error for error in errors)
+                )
+                self.assertTrue(
+                    any("exact approved test-step configuration" in error for error in errors)
+                )
 
     def test_wasm_private_fork_authorization_cannot_be_disabled_or_bypassed(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
@@ -1240,6 +1261,7 @@ class CorePreflightSplitContractTests(unittest.TestCase):
                 "cargo test --locked -p marty-oid4vci --test signing_payload_semantics --no-default-features --features kms-only,issuer,jwt_vc_json,sd_jwt,mso_mdoc",
                 "cargo check --locked -p marty-oid4vci --no-default-features --features kms-only,verifier,jwt_vc_json,sd_jwt",
                 "cargo test --locked -p marty-oid4vci --test sd_jwt_verifier_policy --no-default-features --features kms-only,verifier,sd_jwt",
+                "cargo test --locked -p marty-oid4vci --test sd_jwt_multi_digest --no-default-features --features kms-only,verifier,sd_jwt,serde_json/arbitrary_precision,serde_json/raw_value",
                 "cargo test --locked -p marty-crypto --no-default-features --features serde_json/arbitrary_precision,serde_json/raw_value --lib strict_json::tests",
                 "cargo test --locked -p marty-secure-storage --features serde_json/arbitrary_precision,serde_json/raw_value --lib database::tests",
                 "cargo clippy --locked -p marty-oid4vci --no-default-features --lib -- -D warnings",
