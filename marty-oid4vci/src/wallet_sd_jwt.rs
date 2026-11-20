@@ -140,69 +140,6 @@ fn presentation_disclosures(
     Ok(claims)
 }
 
-#[cfg(test)]
-mod presentation_disclosure_tests {
-    use super::presentation_disclosures;
-    use crate::Oid4vciError;
-    use serde_json::json;
-
-    #[test]
-    fn flat_payload_keeps_literal_claim_names_at_top_level() {
-        let names = ["email".to_owned(), "achievement_id".to_owned()];
-        assert_eq!(
-            json!(presentation_disclosures(&json!({"vct": "Badge"}), &names).unwrap()),
-            json!({"email": true, "achievement_id": true})
-        );
-    }
-
-    #[test]
-    fn subject_payload_selects_only_requested_nested_claims() {
-        assert_eq!(
-            json!(presentation_disclosures(
-                &json!({"credentialSubject": {"_sd": []}}),
-                &["email".to_owned()]
-            )
-            .unwrap()),
-            json!({"credentialSubject": {"email": true}})
-        );
-    }
-
-    #[test]
-    fn empty_request_never_selects_the_entire_subject() {
-        assert_eq!(
-            json!(
-                presentation_disclosures(&json!({"credentialSubject": {"_sd": []}}), &[]).unwrap()
-            ),
-            json!({"credentialSubject": {}})
-        );
-        assert!(presentation_disclosures(&json!({"vct": "Badge"}), &[])
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn non_object_subject_fails_instead_of_falling_back_to_flat_claims() {
-        for subject in [
-            json!(null),
-            json!([]),
-            json!("subject"),
-            json!(1),
-            json!(false),
-        ] {
-            let error = presentation_disclosures(
-                &json!({"credentialSubject": subject, "email": "top-level decoy"}),
-                &["email".to_owned()],
-            )
-            .unwrap_err();
-            assert!(matches!(error, Oid4vciError::InvalidRequest(_)));
-            assert_eq!(
-                error.to_string(),
-                "Invalid request: SD-JWT credentialSubject must be an object"
-            );
-        }
-    }
-}
-
 fn verified_holder(
     credential: &str,
     holder_public_jwk_json: &str,
@@ -246,6 +183,12 @@ fn verified_holder(
     )
     .map_err(|_| Oid4vciError::InvalidRequest("SD-JWT issuer verification failed".into()))?;
 
+    // Preserve the wallet's admitted SHA-256 profile after the crypto fork
+    // gains additional algorithms; capability alone is not product admission.
+    crate::formats::sd_jwt::admitted_digest_algorithm(
+        &issuer_context.payload,
+        &[crate::formats::sd_jwt::SdJwtDigestAlgorithm::Sha256],
+    )?;
     validate_sd_jwt_holder_binding(&issuer_context.payload, holder_public_jwk_json)?;
     Ok((holder, issuer_context))
 }
@@ -475,4 +418,67 @@ fn validate_sd_jwt_holder_binding(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod presentation_disclosure_tests {
+    use super::presentation_disclosures;
+    use crate::Oid4vciError;
+    use serde_json::json;
+
+    #[test]
+    fn flat_payload_keeps_literal_claim_names_at_top_level() {
+        let names = ["email".to_owned(), "achievement_id".to_owned()];
+        assert_eq!(
+            json!(presentation_disclosures(&json!({"vct": "Badge"}), &names).unwrap()),
+            json!({"email": true, "achievement_id": true})
+        );
+    }
+
+    #[test]
+    fn subject_payload_selects_only_requested_nested_claims() {
+        assert_eq!(
+            json!(presentation_disclosures(
+                &json!({"credentialSubject": {"_sd": []}}),
+                &["email".to_owned()]
+            )
+            .unwrap()),
+            json!({"credentialSubject": {"email": true}})
+        );
+    }
+
+    #[test]
+    fn empty_request_never_selects_the_entire_subject() {
+        assert_eq!(
+            json!(
+                presentation_disclosures(&json!({"credentialSubject": {"_sd": []}}), &[]).unwrap()
+            ),
+            json!({"credentialSubject": {}})
+        );
+        assert!(presentation_disclosures(&json!({"vct": "Badge"}), &[])
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn non_object_subject_fails_instead_of_falling_back_to_flat_claims() {
+        for subject in [
+            json!(null),
+            json!([]),
+            json!("subject"),
+            json!(1),
+            json!(false),
+        ] {
+            let error = presentation_disclosures(
+                &json!({"credentialSubject": subject, "email": "top-level decoy"}),
+                &["email".to_owned()],
+            )
+            .unwrap_err();
+            assert!(matches!(error, Oid4vciError::InvalidRequest(_)));
+            assert_eq!(
+                error.to_string(),
+                "Invalid request: SD-JWT credentialSubject must be an object"
+            );
+        }
+    }
 }

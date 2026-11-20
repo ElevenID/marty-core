@@ -312,7 +312,8 @@ PRIVATE_FORKS_FETCH_STEP = r"""      - name: Fetch private Rust dependencies
 WASM_SECURITY_TEST_COMMANDS = {
     "oid4vci-wasm-security": (
         "cargo test --locked -p marty-oid4vci --target wasm32-unknown-unknown "
-        "--no-default-features --features verifier --test wasm_crypto_provider "
+        "--no-default-features --features verifier,sd_jwt --test wasm_crypto_provider "
+        "--test sd_jwt_multi_digest "
         "-- --nocapture",
     ),
     "crypto-wasm-security": (
@@ -384,8 +385,9 @@ WASM_SECURITY_TEST_STEPS = {
         run: >-
           cargo test --locked -p marty-oid4vci
           --target wasm32-unknown-unknown
-          --no-default-features --features verifier
+          --no-default-features --features verifier,sd_jwt
           --test wasm_crypto_provider
+          --test sd_jwt_multi_digest
           -- --nocapture""",
     ),
     "crypto-wasm-security": (
