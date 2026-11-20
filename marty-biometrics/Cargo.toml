@@ -99,6 +99,7 @@ ort = { version = "2.0.0-rc.12", optional = true, default-features = false, feat
 ndarray = { version = "0.17", optional = true }
 
 [dev-dependencies]
+getrandom = "0.4"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

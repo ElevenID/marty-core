@@ -319,6 +319,14 @@ mod tests {
 
     const TEST_KEY: &[u8] = b"test-hmac-key-for-liveness-challenges";
 
+    // The fixed clocks below make the timestamp assertions reproducible; the
+    // nonce is independent of those boundaries and comes from fresh OS entropy.
+    fn fresh_nonce() -> String {
+        let mut nonce = [0u8; 32];
+        getrandom::fill(&mut nonce).expect("operating-system entropy for a liveness test nonce");
+        bytes_to_hex(&nonce)
+    }
+
     #[test]
     fn generated_challenges_preserve_legacy_utc_wire_precision() {
         for (nanos, expected) in [
@@ -330,7 +338,7 @@ mod tests {
         ] {
             let now = time::OffsetDateTime::from_unix_timestamp_nanos(nanos).unwrap();
             let challenge = LivenessChallengeBuilder::new("id", "session")
-                .build_at("nonce".into(), now)
+                .build_at(fresh_nonce(), now)
                 .unwrap();
             assert_eq!(challenge.issued_at, expected);
             assert_eq!(
@@ -356,13 +364,13 @@ mod tests {
             assert!(matches!(
                 LivenessChallengeBuilder::new("id", "session")
                     .with_config(config)
-                    .build_at("nonce".into(), now),
+                    .build_at(fresh_nonce(), now),
                 Err(BiometricError::LivenessValidation(_))
             ));
         }
         let near_rfc3339_end = time::OffsetDateTime::from_unix_timestamp(253_402_300_799).unwrap();
         assert!(LivenessChallengeBuilder::new("id", "session")
-            .build_at("nonce".into(), near_rfc3339_end)
+            .build_at(fresh_nonce(), near_rfc3339_end)
             .is_err());
     }
 
@@ -375,7 +383,7 @@ mod tests {
         };
         let mut challenge = LivenessChallengeBuilder::new("id", "session")
             .with_config(config)
-            .build_at("nonce".into(), now)
+            .build_at(fresh_nonce(), now)
             .unwrap();
         sign_challenge(&mut challenge, TEST_KEY);
         assert!(validate_challenge_at(&challenge, TEST_KEY, now).is_ok());
@@ -401,16 +409,17 @@ mod tests {
 
     #[test]
     fn test_challenge_builder() {
+        let nonce = fresh_nonce();
         let challenge = LivenessChallengeBuilder::new("challenge-123", "session-456")
             .add_head_pose("step-1", "left", "Turn your head left", 3000)
             .add_blink("step-2", "Blink twice", 2000)
             .add_phrase("step-3", "Say: Hello World", 5000)
-            .build("random-nonce")
+            .build(nonce.clone())
             .unwrap();
 
         assert_eq!(challenge.challenge_id, "challenge-123");
         assert_eq!(challenge.session_id, "session-456");
-        assert_eq!(challenge.nonce, "random-nonce");
+        assert_eq!(challenge.nonce, nonce);
         assert_eq!(challenge.steps.len(), 3);
         assert!(challenge.signature.is_empty()); // Unsigned
     }
@@ -419,7 +428,7 @@ mod tests {
     fn test_sign_and_validate_challenge() {
         let mut challenge = LivenessChallengeBuilder::new("id", "session")
             .add_blink("step-1", "Blink", 2000)
-            .build("nonce")
+            .build(fresh_nonce())
             .unwrap();
 
         sign_challenge(&mut challenge, TEST_KEY);
@@ -437,7 +446,7 @@ mod tests {
     #[test]
     fn test_validate_expired_challenge() {
         let mut challenge = LivenessChallengeBuilder::new("id", "session")
-            .build("nonce")
+            .build(fresh_nonce())
             .unwrap();
         challenge.expires_at = "2020-01-01T00:00:00Z".to_string();
         sign_challenge(&mut challenge, TEST_KEY);
@@ -449,7 +458,7 @@ mod tests {
     #[test]
     fn test_validate_unsigned_challenge() {
         let challenge = LivenessChallengeBuilder::new("id", "session")
-            .build("nonce")
+            .build(fresh_nonce())
             .unwrap();
 
         let result = validate_challenge(&challenge, TEST_KEY);
@@ -460,7 +469,7 @@ mod tests {
     fn test_validate_wrong_key_rejected() {
         let mut challenge = LivenessChallengeBuilder::new("id", "session")
             .add_blink("step-1", "Blink", 2000)
-            .build("nonce")
+            .build(fresh_nonce())
             .unwrap();
 
         sign_challenge(&mut challenge, TEST_KEY);
@@ -474,13 +483,13 @@ mod tests {
     fn test_validate_tampered_challenge() {
         let mut challenge = LivenessChallengeBuilder::new("id", "session")
             .add_blink("step-1", "Blink", 2000)
-            .build("nonce")
+            .build(fresh_nonce())
             .unwrap();
 
         sign_challenge(&mut challenge, TEST_KEY);
 
         // Tamper with the challenge after signing
-        challenge.nonce = "tampered-nonce".to_string();
+        challenge.nonce.push('!');
 
         let result = validate_challenge(&challenge, TEST_KEY);
         assert!(matches!(result, Err(BiometricError::InvalidSignature)));
@@ -490,7 +499,7 @@ mod tests {
     fn test_validate_corrupt_signature() {
         let mut challenge = LivenessChallengeBuilder::new("id", "session")
             .add_blink("step-1", "Blink", 2000)
-            .build("nonce")
+            .build(fresh_nonce())
             .unwrap();
 
         challenge.signature = "not-valid-hex!!!".to_string();
@@ -503,7 +512,7 @@ mod tests {
     fn test_canonical_bytes() {
         let challenge = LivenessChallengeBuilder::new("id", "session")
             .add_blink("step-1", "Blink", 2000)
-            .build("nonce")
+            .build(fresh_nonce())
             .unwrap();
 
         let bytes1 = challenge_canonical_bytes(&challenge);
