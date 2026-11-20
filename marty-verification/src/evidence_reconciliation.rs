@@ -2,7 +2,7 @@
 //!
 //! Fetching, persistence, audit emission, and issuance remain caller-owned.
 //! This module is the sole owner of action selection, metric classification,
-//! requirement precedence, Canvas account extraction, and stale-receipt reasons.
+//! requirement precedence and stale-receipt reasons.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

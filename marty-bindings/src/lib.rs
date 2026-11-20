@@ -316,44 +316,7 @@ fn base64_url_encode(data: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(data)
 }
 
-// ============================================================================
-// Canvas LTI / Sandbox Hardening
-// ============================================================================
-
-#[pyfunction]
-#[pyo3(signature = (base_url, allow_private_networks=false, allow_http_localhost=false))]
-fn canvas_normalize_base_url(
-    base_url: &str,
-    allow_private_networks: bool,
-    allow_http_localhost: bool,
-) -> PyResult<String> {
-    marty_oid4vci::lti::normalize_canvas_base_url(
-        base_url,
-        allow_private_networks,
-        allow_http_localhost,
-    )
-    .map_err(to_pyerr)
-}
-
-#[pyfunction]
-#[pyo3(signature = (base_url, timeout_seconds=5, allow_private_networks=false, allow_http_localhost=false))]
-fn canvas_probe_lti_platform(
-    base_url: &str,
-    timeout_seconds: u64,
-    allow_private_networks: bool,
-    allow_http_localhost: bool,
-) -> PyResult<String> {
-    let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
-    let probe = rt
-        .block_on(marty_oid4vci::lti::probe_canvas_lti_platform(
-            base_url,
-            timeout_seconds,
-            allow_private_networks,
-            allow_http_localhost,
-        ))
-        .map_err(to_pyerr)?;
-    serde_json::to_string(&probe).map_err(to_pyerr)
-}
+// Generic LTI launch verification
 
 #[pyfunction]
 #[pyo3(signature = (id_token, expected_issuer, expected_client_id, expected_deployment_id, jwks_json, expected_nonce=None, leeway_seconds=120))]
@@ -1939,9 +1902,7 @@ pub fn register_marty_bindings(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(mdoc::openid4vp_mdoc_binding_digests, m)?)?;
 
-    // Canvas LTI / Sandbox Hardening
-    m.add_function(wrap_pyfunction!(canvas_normalize_base_url, m)?)?;
-    m.add_function(wrap_pyfunction!(canvas_probe_lti_platform, m)?)?;
+    // Generic LTI launch verification
     m.add_function(wrap_pyfunction!(lti_verify_launch_jwt, m)?)?;
 
     // OID4VCI Protocol
