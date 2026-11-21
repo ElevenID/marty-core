@@ -398,8 +398,13 @@ pub struct WalletEngine {
 impl WalletEngine {
     /// Create a new wallet engine with default HTTP client settings.
     pub fn new() -> Self {
+        let builder = reqwest::Client::builder();
+        // Cargo can also enable native-tls through DID resolvers. An Android
+        // host opting into platform trust must keep the configured verifier.
+        #[cfg(all(target_os = "android", feature = "android-platform-tls"))]
+        let builder = builder.tls_backend_rustls();
         Self {
-            client: reqwest::Client::builder()
+            client: builder
                 .user_agent("marty-wallet/0.1")
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(std::time::Duration::from_secs(15))
