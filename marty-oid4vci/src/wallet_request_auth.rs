@@ -391,6 +391,21 @@ pub fn authenticate_governed_registered_request(
     snapshot_expires_at: i64,
     now: i64,
 ) -> Oid4vciResult<AuthenticatedPresentationRequest> {
+    validate_registered_snapshot(authority, observed_at, snapshot_expires_at, now)?;
+    authenticate_signed_profile(
+        compact_jws,
+        authority,
+        now,
+        RequestProfile::GovernedRegistered(snapshot_expires_at),
+    )
+}
+
+fn validate_registered_snapshot(
+    authority: &RegisteredVerifierAuthority,
+    observed_at: i64,
+    snapshot_expires_at: i64,
+    now: i64,
+) -> Oid4vciResult<()> {
     validate_registered_authority(authority, now)?;
     if observed_at > now
         || snapshot_expires_at <= now
@@ -399,12 +414,7 @@ pub fn authenticate_governed_registered_request(
     {
         return Err(invalid());
     }
-    authenticate_signed_profile(
-        compact_jws,
-        authority,
-        now,
-        RequestProfile::GovernedRegistered(snapshot_expires_at),
-    )
+    Ok(())
 }
 
 enum RequestProfile {
@@ -666,14 +676,12 @@ impl WalletEngine {
         authority: &GovernedVerifierAuthority,
     ) -> Oid4vciResult<AuthenticatedPresentationRequest> {
         let now = chrono::Utc::now().timestamp();
-        validate_registered_authority(&authority.key_authority(), now)?;
-        if authority.observed_at > now
-            || authority.expires_at <= now
-            || authority.expires_at > authority.observed_at.saturating_add(60)
-            || authority.expires_at > authority.valid_until
-        {
-            return Err(invalid());
-        }
+        validate_registered_snapshot(
+            &authority.key_authority(),
+            authority.observed_at,
+            authority.expires_at,
+            now,
+        )?;
         if input.len() > 64 * 1024 {
             return Err(invalid());
         }
@@ -800,6 +808,29 @@ mod tests {
         let mut changed = claims;
         changed["client_metadata"]["jwks"] = json!({"keys":[]});
         assert!(consent_selection_policy(&changed).is_err());
+    }
+
+    #[test]
+    fn registered_snapshot_requires_current_registration_and_recent_observation() {
+        let now = 2_000_000_000;
+        let mut authority = RegisteredVerifierAuthority {
+            authority_id: "profile/source".into(),
+            revision: "revision-1".into(),
+            client_id: "registered-wallet-verifier".into(),
+            request_key_id: "request-key".into(),
+            public_jwk_json: "{}".into(),
+            response_uris: vec!["https://verifier.example/response".into()],
+            valid_from: now - 60,
+            valid_until: now + 120,
+        };
+        assert!(validate_registered_snapshot(&authority, now, now + 60, now).is_ok());
+        for (observed, expires) in [(now + 1, now + 60), (now - 60, now), (now, now + 61)] {
+            assert!(validate_registered_snapshot(&authority, observed, expires, now).is_err());
+        }
+        authority.valid_until = now + 10;
+        assert!(validate_registered_snapshot(&authority, now, now + 11, now).is_err());
+        authority.client_id = "decentralized_identifier:did:web:verifier.example".into();
+        assert!(validate_registered_snapshot(&authority, now, now + 10, now).is_err());
     }
 
     #[test]
