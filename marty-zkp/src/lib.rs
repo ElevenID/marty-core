@@ -1,9 +1,9 @@
 mod ffi;
 // The C++ bridge calls these libraries directly. Retain their target-native
 // link metadata even though the Rust API does not call their raw bindings.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 extern crate openssl_sys as _;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 extern crate zstd_sys as _;
 #[cfg(feature = "prover")]
 pub mod mdoc_support;
