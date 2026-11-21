@@ -24,10 +24,10 @@ pub struct RegisteredVerifierAuthority {
     pub valid_until: i64,
 }
 
-/// Fresh governed DID authority. Snapshot freshness and signing-key validity
+/// Fresh confirmed verifier authority. Snapshot freshness and signing-key validity
 /// are separate boundaries. Response URIs remain exact registrations.
 #[derive(Clone)]
-pub struct GovernedDidVerifierAuthority {
+pub struct GovernedVerifierAuthority {
     pub authority_id: String,
     pub revision: String,
     pub client_id: String,
@@ -40,7 +40,25 @@ pub struct GovernedDidVerifierAuthority {
     pub expires_at: i64,
 }
 
-impl GovernedDidVerifierAuthority {
+/// Historical name for consumers using managed DID authority.
+pub type GovernedDidVerifierAuthority = GovernedVerifierAuthority;
+
+impl GovernedVerifierAuthority {
+    /// Revalidate retained bytes against the current confirmed registration.
+    pub fn authenticate_registered(
+        &self,
+        jws: &str,
+        now: i64,
+    ) -> Oid4vciResult<AuthenticatedPresentationRequest> {
+        authenticate_governed_registered_request(
+            jws,
+            &self.key_authority(),
+            self.observed_at,
+            self.expires_at,
+            now,
+        )
+    }
+
     fn key_authority(&self) -> RegisteredVerifierAuthority {
         RegisteredVerifierAuthority {
             authority_id: self.authority_id.clone(),
@@ -360,15 +378,62 @@ pub fn authenticate_registered_presentation_request(
     now: i64,
 ) -> Oid4vciResult<AuthenticatedPresentationRequest> {
     validate_registered_authority(authority, now)?;
-    authenticate_signed_profile(compact_jws, authority, now, None)
+    authenticate_signed_profile(compact_jws, authority, now, RequestProfile::Registered)
+}
+
+/// Authenticate an inline OpenID4VP request using a current registered-verifier
+/// snapshot. The signed client_id, enrolled key and exact response URI bind
+/// the verifier. An omitted exp is bounded by signed iat and key validity.
+pub fn authenticate_governed_registered_request(
+    compact_jws: &str,
+    authority: &RegisteredVerifierAuthority,
+    observed_at: i64,
+    snapshot_expires_at: i64,
+    now: i64,
+) -> Oid4vciResult<AuthenticatedPresentationRequest> {
+    validate_registered_snapshot(authority, observed_at, snapshot_expires_at, now)?;
+    authenticate_signed_profile(
+        compact_jws,
+        authority,
+        now,
+        RequestProfile::GovernedRegistered(snapshot_expires_at),
+    )
+}
+
+fn validate_registered_snapshot(
+    authority: &RegisteredVerifierAuthority,
+    observed_at: i64,
+    snapshot_expires_at: i64,
+    now: i64,
+) -> Oid4vciResult<()> {
+    validate_registered_authority(authority, now)?;
+    if observed_at > now
+        || snapshot_expires_at <= now
+        || snapshot_expires_at > observed_at.saturating_add(60)
+        || snapshot_expires_at > authority.valid_until
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+enum RequestProfile {
+    Registered,
+    GovernedDid(i64),
+    GovernedRegistered(i64),
 }
 
 fn authenticate_signed_profile(
     compact_jws: &str,
     authority: &RegisteredVerifierAuthority,
     now: i64,
-    authority_snapshot_expires_at: Option<i64>,
+    profile: RequestProfile,
 ) -> Oid4vciResult<AuthenticatedPresentationRequest> {
+    let governed_registration = matches!(profile, RequestProfile::GovernedRegistered(_));
+    let authority_snapshot_expires_at = match profile {
+        RequestProfile::Registered => None,
+        RequestProfile::GovernedDid(end) | RequestProfile::GovernedRegistered(end) => Some(end),
+    };
     let verified =
         jose::verify_compact_jwt_with_public_jwk(compact_jws, &authority.public_jwk_json, "ES256")?;
     let header = verified.header.as_object().ok_or_else(invalid)?;
@@ -380,7 +445,9 @@ fn authenticate_signed_profile(
     }
     let claims = verified.claims.as_object().ok_or_else(invalid)?;
     if claims.keys().any(|key| {
-        if key == "client_metadata" && authority_snapshot_expires_at.is_some() {
+        if (key == "client_metadata" && authority_snapshot_expires_at.is_some())
+            || (key == "verifier_info" && governed_registration)
+        {
             return false;
         }
         ![
@@ -406,12 +473,44 @@ fn authenticate_signed_profile(
         .get("iat")
         .and_then(Value::as_i64)
         .ok_or_else(invalid)?;
-    let expires = claims
-        .get("exp")
-        .and_then(Value::as_i64)
-        .ok_or_else(invalid)?;
+    let expires = match claims.get("exp") {
+        Some(value) => value.as_i64().ok_or_else(invalid)?,
+        None if governed_registration => issued.saturating_add(900).min(authority.valid_until),
+        None => return Err(invalid()),
+    };
+    // Optional verifier attestations are never used for trust or consent
+    // display. The authenticated registration is the exclusive key source.
+    if let Some(info) = claims.get("verifier_info") {
+        let entries = info
+            .as_array()
+            .filter(|v| !v.is_empty() && v.len() <= 16)
+            .ok_or_else(invalid)?;
+        for entry in entries {
+            let object = entry.as_object().ok_or_else(invalid)?;
+            if object
+                .keys()
+                .any(|k| !["format", "data", "credential_ids"].contains(&k.as_str()))
+                || !object
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .is_some_and(text)
+                || !object
+                    .get("data")
+                    .is_some_and(|v| v.is_object() || v.is_string())
+            {
+                return Err(invalid());
+            }
+            if let Some(ids) = object.get("credential_ids") {
+                text_values(ids, 32)?;
+            }
+        }
+    }
+    let issuer_matches = match claims.get("iss") {
+        Some(value) => value.as_str() == Some(authority.client_id.as_str()),
+        None => governed_registration,
+    };
     if string("client_id")? != authority.client_id
-        || string("iss")? != authority.client_id
+        || !issuer_matches
         || string("aud")? != "https://self-issued.me/v2"
         || string("response_type")? != "vp_token"
         || string("response_mode")? != "direct_post"
@@ -434,7 +533,7 @@ fn authenticate_signed_profile(
         return Err(invalid());
     }
     let selection_policy = if authority_snapshot_expires_at.is_some() {
-        Some(did_selection_policy(&verified.claims)?)
+        Some(consent_selection_policy(&verified.claims)?)
     } else {
         if claims
             .get("dcql_query")
@@ -456,7 +555,7 @@ fn authenticate_signed_profile(
     })
 }
 
-fn did_selection_policy(claims: &Value) -> Oid4vciResult<SdJwtSelectionPolicy> {
+fn consent_selection_policy(claims: &Value) -> Oid4vciResult<SdJwtSelectionPolicy> {
     let query = claims.get("dcql_query").ok_or_else(invalid)?;
     let mut flat = query.clone();
     let credential = flat
@@ -569,6 +668,62 @@ impl WalletEngine {
             .await
     }
 
+    /// Open a signed registered-verifier request by value or by reference.
+    /// Only public-address, bounded HTTPS retrieval is used for references.
+    pub async fn open_governed_registered_request(
+        &self,
+        input: &str,
+        authority: &GovernedVerifierAuthority,
+    ) -> Oid4vciResult<AuthenticatedPresentationRequest> {
+        let now = chrono::Utc::now().timestamp();
+        validate_registered_snapshot(
+            &authority.key_authority(),
+            authority.observed_at,
+            authority.expires_at,
+            now,
+        )?;
+        if input.len() > 64 * 1024 {
+            return Err(invalid());
+        }
+        let query = input.strip_prefix("openid4vp://?").ok_or_else(invalid)?;
+        let uri =
+            url::Url::parse(&format!("https://request.invalid/?{query}")).map_err(|_| invalid())?;
+        if uri.fragment().is_some() {
+            return Err(invalid());
+        }
+        let mut fields = std::collections::BTreeMap::new();
+        for (name, value) in uri.query_pairs() {
+            if fields.insert(name, value).is_some() {
+                return Err(invalid());
+            }
+        }
+        if fields.get("client_id").map(|v| v.as_ref()) != Some(authority.client_id.as_str()) {
+            return Err(invalid());
+        }
+        if let Some(jws) = fields.get("request") {
+            if fields.len() != 2 {
+                return Err(invalid());
+            }
+            return authority.authenticate_registered(jws, now);
+        }
+        let endpoint = crate::wallet::registered_request_endpoint(input, &authority.client_id)?;
+        let (bytes, media) = self.fetch_request_object_body(&endpoint).await?;
+        if !["application/oauth-authz-req+jwt", "application/jwt"]
+            .iter()
+            .any(|allowed| {
+                media
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .eq_ignore_ascii_case(allowed)
+            })
+        {
+            return Err(invalid());
+        }
+        authority.authenticate_registered(&bytes, chrono::Utc::now().timestamp())
+    }
+
     /// Reauthenticate the original approved JWS with fresh governance, rather
     /// than fetching a replacement request that might change during consent.
     pub async fn reauthenticate_governed_did_signed_request(
@@ -589,7 +744,7 @@ impl WalletEngine {
             compact_jws,
             &authority.key_authority(),
             now,
-            Some(authority.expires_at),
+            RequestProfile::GovernedDid(authority.expires_at),
         )
     }
 }
@@ -616,7 +771,7 @@ mod tests {
             "decentralized_identifier:did:web:verifier.example",
             2_000_000_000,
         );
-        let policy = did_selection_policy(&claims).unwrap();
+        let policy = consent_selection_policy(&claims).unwrap();
         assert_eq!(policy.vct_values, Some(vec!["Identity".to_owned()]));
         assert_eq!(policy.issuer_algorithms, ["ES256"]);
         for (pointer, replacement) in [
@@ -648,11 +803,34 @@ mod tests {
         ] {
             let mut changed = claims.clone();
             *changed.pointer_mut(pointer).unwrap() = replacement;
-            assert!(did_selection_policy(&changed).is_err(), "{pointer}");
+            assert!(consent_selection_policy(&changed).is_err(), "{pointer}");
         }
         let mut changed = claims;
         changed["client_metadata"]["jwks"] = json!({"keys":[]});
-        assert!(did_selection_policy(&changed).is_err());
+        assert!(consent_selection_policy(&changed).is_err());
+    }
+
+    #[test]
+    fn registered_snapshot_requires_current_registration_and_recent_observation() {
+        let now = 2_000_000_000;
+        let mut authority = RegisteredVerifierAuthority {
+            authority_id: "profile/source".into(),
+            revision: "revision-1".into(),
+            client_id: "registered-wallet-verifier".into(),
+            request_key_id: "request-key".into(),
+            public_jwk_json: "{}".into(),
+            response_uris: vec!["https://verifier.example/response".into()],
+            valid_from: now - 60,
+            valid_until: now + 120,
+        };
+        assert!(validate_registered_snapshot(&authority, now, now + 60, now).is_ok());
+        for (observed, expires) in [(now + 1, now + 60), (now - 60, now), (now, now + 61)] {
+            assert!(validate_registered_snapshot(&authority, observed, expires, now).is_err());
+        }
+        authority.valid_until = now + 10;
+        assert!(validate_registered_snapshot(&authority, now, now + 11, now).is_err());
+        authority.client_id = "decentralized_identifier:did:web:verifier.example".into();
+        assert!(validate_registered_snapshot(&authority, now, now + 10, now).is_err());
     }
 
     #[test]
@@ -905,6 +1083,34 @@ mod tests {
             "dcql_query":{"credentials":[{"id":"identity","format":"dc+sd-jwt","claims":[{"path":["age"]}]}]}});
         let sign =
             |header: &Value, claims: &Value| jose::sign_test_compact_es256(&signer, header, claims);
+        let mut inline = did_claims(&authority.client_id, now);
+        let members = inline.as_object_mut().unwrap();
+        members.remove("iss");
+        members.remove("exp");
+        members.insert(
+            "verifier_info".into(),
+            json!([{"format":"jwt","data":"opaque"}]),
+        );
+        let signed = sign(&header, &inline);
+        let admit = |jws: &str, clock| {
+            authenticate_governed_registered_request(jws, &authority, now, now + 60, clock)
+        };
+        let accepted = admit(&signed, now).unwrap();
+        assert_eq!(accepted.compact_jws(), signed);
+        assert_eq!(accepted.expires_at(), authority.valid_until);
+        assert!(admit(&signed, now + 60).is_err());
+        for (field, changed) in [
+            ("iss", json!("other")),
+            ("exp", json!("bad")),
+            ("iat", json!(now - 901)),
+            ("response_uri", json!("https://other.example/")),
+            ("verifier_info", json!({})),
+            ("transaction_data", json!([])),
+        ] {
+            let mut rejected = inline.clone();
+            rejected[field] = changed;
+            assert!(admit(&sign(&header, &rejected), now).is_err(), "{field}");
+        }
         let token = sign(&header, &claims);
         let authenticated =
             authenticate_registered_presentation_request(&token, &authority, now).unwrap();
