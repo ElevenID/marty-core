@@ -518,6 +518,11 @@ jobs:
           test -f Cargo.lock
           test -f marty-test-wallet/Cargo.toml
           cargo metadata --locked --no-deps --format-version 1 >/dev/null
+      - name: Link the real Longfellow prover for iOS Simulator
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-ios-sim
+          cargo test --locked --target aarch64-apple-ios-sim -p marty-zkp --no-default-features --features prover --test circuit_identity --no-run
       - name: Run workspace tests with build reuse
         run: >-
           cargo nextest run --locked --workspace
