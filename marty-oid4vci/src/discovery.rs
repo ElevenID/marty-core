@@ -85,7 +85,8 @@ pub struct KeyAttestationRequirements {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofTypeMetadata {
     pub proof_signing_alg_values_supported: Vec<String>,
-    pub key_attestations_required: KeyAttestationRequirements,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_attestations_required: Option<KeyAttestationRequirements>,
 }
 
 /// A Final-spec credential claim descriptor.
@@ -285,14 +286,25 @@ impl TenantDiscoveryPlan {
         &self.proof_policy_requests
     }
 
-    /// Build the tenant document from an explicit result for every planned read.
-    ///
-    /// A resolver response without a required policy is represented by an empty
-    /// [`KeyAttestationRequirements`]. A missing map entry means the I/O phase
-    /// did not complete and fails closed rather than weakening advertised policy.
+    /// Build from the historical constraint-only input. Each supplied result
+    /// retains its previous mandatory-attestation wire representation.
     pub fn build(
         &self,
         resolved_policies: &BTreeMap<ProofPolicyRequest, KeyAttestationRequirements>,
+    ) -> Result<CredentialIssuerMetadata, TenantDiscoveryError> {
+        let policies = resolved_policies
+            .iter()
+            .map(|(request, constraints)| (request.clone(), Some(constraints.clone())))
+            .collect();
+        self.build_with_attestation_policies(&policies)
+    }
+
+    /// Build with the policy owner's explicit decision for every planned read.
+    /// None denotes a policy that does not require an attestation. Some with
+    /// empty constraints still requires one. A missing read is an error.
+    pub fn build_with_attestation_policies(
+        &self,
+        resolved_policies: &BTreeMap<ProofPolicyRequest, Option<KeyAttestationRequirements>>,
     ) -> Result<CredentialIssuerMetadata, TenantDiscoveryError> {
         for request in &self.proof_policy_requests {
             if !resolved_policies.contains_key(request) {
@@ -329,7 +341,7 @@ impl TenantDiscoveryPlan {
         &self,
         template: Option<&TenantCredentialTemplate>,
         credential_format: &str,
-        resolved: &BTreeMap<ProofPolicyRequest, KeyAttestationRequirements>,
+        resolved: &BTreeMap<ProofPolicyRequest, Option<KeyAttestationRequirements>>,
     ) -> Result<BTreeMap<String, ProofTypeMetadata>, TenantDiscoveryError> {
         let issuer_did = match self.variant {
             IssuerVariant::Default => template
@@ -350,7 +362,7 @@ impl TenantDiscoveryPlan {
 
     fn default_configurations(
         &self,
-        resolved: &BTreeMap<ProofPolicyRequest, KeyAttestationRequirements>,
+        resolved: &BTreeMap<ProofPolicyRequest, Option<KeyAttestationRequirements>>,
     ) -> Result<BTreeMap<String, CredentialConfiguration>, TenantDiscoveryError> {
         let mut configurations = BTreeMap::new();
         for template in &self.templates {
@@ -424,7 +436,7 @@ impl TenantDiscoveryPlan {
 
     fn credential_manager_configurations(
         &self,
-        resolved: &BTreeMap<ProofPolicyRequest, KeyAttestationRequirements>,
+        resolved: &BTreeMap<ProofPolicyRequest, Option<KeyAttestationRequirements>>,
     ) -> Result<BTreeMap<String, CredentialConfiguration>, TenantDiscoveryError> {
         let proof_types = self.proof_types(None, "dc+sd-jwt", resolved)?;
         Ok(self
@@ -460,7 +472,7 @@ impl TenantDiscoveryPlan {
 
     fn apple_wallet_configurations(
         &self,
-        resolved: &BTreeMap<ProofPolicyRequest, KeyAttestationRequirements>,
+        resolved: &BTreeMap<ProofPolicyRequest, Option<KeyAttestationRequirements>>,
     ) -> Result<BTreeMap<String, CredentialConfiguration>, TenantDiscoveryError> {
         let proof_types = self.proof_types(None, "mso_mdoc", resolved)?;
         Ok(self
@@ -833,7 +845,7 @@ fn mso_mdoc_proof_types(
 }
 
 fn proof_types_with_requirements(
-    requirements: KeyAttestationRequirements,
+    requirements: Option<KeyAttestationRequirements>,
 ) -> BTreeMap<String, ProofTypeMetadata> {
     BTreeMap::from([(
         "jwt".to_owned(),
@@ -973,7 +985,7 @@ fn trimmed(value: &Option<String>) -> Option<&str> {
 }
 
 fn default_proof_types() -> BTreeMap<String, ProofTypeMetadata> {
-    proof_types_with_requirements(KeyAttestationRequirements::default())
+    proof_types_with_requirements(Some(KeyAttestationRequirements::default()))
 }
 
 fn default_binding_methods() -> Vec<String> {
@@ -1105,6 +1117,24 @@ mod tests {
     }
 
     #[test]
+    fn optional_and_required_attestations_have_distinct_wire_contracts() {
+        let disabled = serde_json::to_value(super::proof_types_with_requirements(None)).unwrap();
+        assert!(disabled["jwt"].get("key_attestations_required").is_none());
+        assert_eq!(
+            disabled["jwt"]["proof_signing_alg_values_supported"],
+            serde_json::json!(["ES256", "EdDSA"])
+        );
+        let required = serde_json::to_value(super::proof_types_with_requirements(Some(
+            KeyAttestationRequirements::default(),
+        )))
+        .unwrap();
+        assert_eq!(
+            required["jwt"]["key_attestations_required"],
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
     fn mso_mdoc_proof_algorithms_are_exactly_es256_and_preserve_requirements() {
         let requirements = KeyAttestationRequirements {
             key_storage: vec!["iso_18045_high".to_owned()],
@@ -1121,12 +1151,15 @@ mod tests {
                 "jwt".to_owned(),
                 ProofTypeMetadata {
                     proof_signing_alg_values_supported: configured_algorithms,
-                    key_attestations_required: requirements.clone(),
+                    key_attestations_required: Some(requirements.clone()),
                 },
             )]);
 
             let filtered = mso_mdoc_proof_types(proof_types);
-            assert_eq!(filtered["jwt"].key_attestations_required, requirements);
+            assert_eq!(
+                filtered["jwt"].key_attestations_required.as_ref(),
+                Some(&requirements)
+            );
             filtered["jwt"].proof_signing_alg_values_supported.clone()
         })
         .collect();
@@ -1490,6 +1523,34 @@ mod tests {
             );
             assert!(configuration.get("claims").is_none());
             assert!(configuration.get("credential_metadata").is_none());
+        }
+    }
+
+    #[test]
+    fn resolved_optional_policy_omits_attestation_for_tenant_credentials() {
+        let plan = documents().plan_organization_issuer_metadata(
+            "org-a",
+            IssuerVariant::CredentialManager,
+            tenant_templates(),
+        );
+        let resolved = plan
+            .proof_policy_requests()
+            .iter()
+            .cloned()
+            .map(|request| (request, None))
+            .collect();
+        let metadata =
+            serde_json::to_value(plan.build_with_attestation_policies(&resolved).unwrap()).unwrap();
+        let configurations = metadata["credential_configurations_supported"]
+            .as_object()
+            .unwrap();
+        assert!(!configurations.is_empty());
+        for credential in configurations.values() {
+            let proof = credential["proof_types_supported"]["jwt"]
+                .as_object()
+                .unwrap();
+            assert!(proof.contains_key("proof_signing_alg_values_supported"));
+            assert!(!proof.contains_key("key_attestations_required"));
         }
     }
 
