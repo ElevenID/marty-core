@@ -1118,13 +1118,13 @@ mod tests {
 
     #[test]
     fn optional_and_required_attestations_have_distinct_wire_contracts() {
-        let disabled = serde_json::to_value(proof_types_with_requirements(None)).unwrap();
+        let disabled = serde_json::to_value(super::proof_types_with_requirements(None)).unwrap();
         assert!(disabled["jwt"].get("key_attestations_required").is_none());
         assert_eq!(
             disabled["jwt"]["proof_signing_alg_values_supported"],
             serde_json::json!(["ES256", "EdDSA"])
         );
-        let required = serde_json::to_value(proof_types_with_requirements(Some(
+        let required = serde_json::to_value(super::proof_types_with_requirements(Some(
             KeyAttestationRequirements::default(),
         )))
         .unwrap();
