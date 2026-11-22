@@ -1,6 +1,6 @@
 #[path = "../src/benchmark_support/selectors.rs"]
 mod selectors;
-use selectors::selector_values;
+use selectors::{parse_named_selector, parse_numeric_selector};
 #[path = "../src/benchmark_support/mdoc_payload.rs"]
 mod mdoc_payload;
 #[path = "support/remote_signature.rs"]
@@ -51,16 +51,20 @@ struct MatrixSelection {
 
 impl MatrixSelection {
     fn from_env() -> Self {
-        Self {
+        Self::try_from_env().unwrap_or_else(|error| error.panic_with_value(true))
+    }
+
+    fn try_from_env() -> Result<Self, selectors::SelectorError> {
+        Ok(Self {
             classes: parse_named_selector(
                 MATRIX_CLASSES_ENV,
                 &MatrixPayloadClass::ALL,
                 MatrixPayloadClass::label,
                 MatrixPayloadClass::parse,
-            ),
-            item_counts: parse_numeric_selector(MATRIX_ITEM_COUNTS_ENV, &ITEM_COUNTS),
-            batch_sizes: parse_numeric_selector(MATRIX_BATCH_SIZES_ENV, &BATCH_SIZES),
-        }
+            )?,
+            item_counts: parse_numeric_selector(MATRIX_ITEM_COUNTS_ENV, &ITEM_COUNTS)?,
+            batch_sizes: parse_numeric_selector(MATRIX_BATCH_SIZES_ENV, &BATCH_SIZES)?,
+        })
     }
 }
 
@@ -71,76 +75,6 @@ fn matrix_enabled() -> bool {
         Err(std::env::VarError::NotUnicode(_)) => {
             panic!("{MATRIX_ENABLE_ENV} must contain Unicode text")
         }
-    }
-}
-
-fn parse_named_selector<T: Copy + Eq>(
-    name: &str,
-    allowed: &[T],
-    label: impl Fn(T) -> &'static str,
-    parse: impl Fn(&str) -> Option<T>,
-) -> Vec<T> {
-    let Some(values) = selector_values(name) else {
-        return allowed.to_vec();
-    };
-    let selected = values
-        .iter()
-        .map(|value| {
-            parse(value).unwrap_or_else(|| {
-                panic!(
-                    "unsupported {name} value '{value}'; expected one of {}",
-                    allowed
-                        .iter()
-                        .copied()
-                        .map(&label)
-                        .collect::<Vec<_>>()
-                        .join(",")
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    assert_unique(name, &selected, |value| label(value).to_owned());
-    selected
-}
-
-fn parse_numeric_selector(name: &str, allowed: &[usize]) -> Vec<usize> {
-    let Some(values) = selector_values(name) else {
-        return allowed.to_vec();
-    };
-    let selected = values
-        .iter()
-        .map(|value| {
-            let parsed = value
-                .parse::<usize>()
-                .unwrap_or_else(|_| panic!("{name} value '{value}' is not an integer"));
-            assert_eq!(
-                parsed.to_string(),
-                *value,
-                "{name} value '{value}' is not canonical"
-            );
-            assert!(
-                allowed.contains(&parsed),
-                "unsupported {name} value '{value}'; expected one of {}",
-                allowed
-                    .iter()
-                    .map(usize::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-            parsed
-        })
-        .collect::<Vec<_>>();
-    assert_unique(name, &selected, |value| value.to_string());
-    selected
-}
-
-fn assert_unique<T: Copy + Eq>(name: &str, values: &[T], label: impl Fn(T) -> String) {
-    for (ordinal, value) in values.iter().copied().enumerate() {
-        assert!(
-            !values[..ordinal].contains(&value),
-            "{name} repeats '{}'",
-            label(value)
-        );
     }
 }
 

@@ -16,7 +16,7 @@ mod native {
         expected_cbor_value, json_value, PayloadClass, LARGE_PORTRAIT_BYTES,
     };
     use crate::remote_signature;
-    use crate::selectors::try_selector_values as selector_values;
+    use crate::selectors::{parse_named_selector, parse_numeric_selector};
     use std::{
         collections::{HashMap, HashSet},
         env,
@@ -111,78 +111,6 @@ mod native {
                 Err(format!("{ENABLE_ENV} must contain Unicode text"))
             }
         }
-    }
-
-    fn parse_named_selector<T: Copy + Eq>(
-        name: &str,
-        allowed: &[T],
-        label: impl Fn(T) -> &'static str,
-        parse: impl Fn(&str) -> Option<T>,
-    ) -> Result<Vec<T>, String> {
-        let Some(values) = selector_values(name)? else {
-            return Ok(allowed.to_vec());
-        };
-        let selected = values
-            .iter()
-            .map(|value| {
-                parse(value).ok_or_else(|| {
-                    format!(
-                        "unsupported {name} value '{value}'; expected one of {}",
-                        allowed
-                            .iter()
-                            .copied()
-                            .map(&label)
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        ensure_unique(name, &selected, |value| label(value).to_owned())?;
-        Ok(selected)
-    }
-
-    fn parse_numeric_selector(name: &str, allowed: &[usize]) -> Result<Vec<usize>, String> {
-        let Some(values) = selector_values(name)? else {
-            return Ok(allowed.to_vec());
-        };
-        let selected = values
-            .iter()
-            .map(|value| {
-                let parsed = value
-                    .parse::<usize>()
-                    .map_err(|_| format!("{name} value '{value}' is not an integer"))?;
-                if parsed.to_string() != *value {
-                    return Err(format!("{name} value '{value}' is not canonical"));
-                }
-                if !allowed.contains(&parsed) {
-                    return Err(format!(
-                        "unsupported {name} value '{value}'; expected one of {}",
-                        allowed
-                            .iter()
-                            .map(usize::to_string)
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    ));
-                }
-                Ok(parsed)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        ensure_unique(name, &selected, |value| value.to_string())?;
-        Ok(selected)
-    }
-
-    fn ensure_unique<T: Copy + Eq>(
-        name: &str,
-        values: &[T],
-        label: impl Fn(T) -> String,
-    ) -> Result<(), String> {
-        for (ordinal, value) in values.iter().copied().enumerate() {
-            if values[..ordinal].contains(&value) {
-                return Err(format!("{name} repeats '{}'", label(value)));
-            }
-        }
-        Ok(())
     }
 
     fn parse_bounded_setting(
