@@ -37,7 +37,7 @@ mod native {
         PayloadClass, LARGE_PORTRAIT_BYTES,
     };
     use crate::remote_signature;
-    use crate::selectors::selector_values;
+    use crate::selectors::{parse_named_selector, parse_numeric_selector};
     use std::{
         alloc::{GlobalAlloc, Layout, System},
         collections::{HashMap, HashSet},
@@ -137,16 +137,20 @@ mod native {
 
     impl Selection {
         fn from_env() -> Self {
-            Self {
+            Self::try_from_env().unwrap_or_else(|error| error.panic_with_value(false))
+        }
+
+        fn try_from_env() -> Result<Self, crate::selectors::SelectorError> {
+            Ok(Self {
                 classes: parse_named_selector(
                     CLASSES_ENV,
                     &PayloadClass::ALL,
                     PayloadClass::label,
                     PayloadClass::parse,
-                ),
-                item_counts: parse_numeric_selector(ITEM_COUNTS_ENV, &ITEM_COUNTS),
-                batch_sizes: parse_numeric_selector(BATCH_SIZES_ENV, &BATCH_SIZES),
-            }
+                )?,
+                item_counts: parse_numeric_selector(ITEM_COUNTS_ENV, &ITEM_COUNTS)?,
+                batch_sizes: parse_numeric_selector(BATCH_SIZES_ENV, &BATCH_SIZES)?,
+            })
         }
 
         fn case_count(&self) -> usize {
@@ -251,72 +255,6 @@ mod native {
             "{RUN_LABEL_ENV} may contain only ASCII letters, digits, '.', '_', and '-'"
         );
         value
-    }
-
-    fn parse_named_selector<T: Copy + Eq>(
-        name: &str,
-        allowed: &[T],
-        label: impl Fn(T) -> &'static str,
-        parse: impl Fn(&str) -> Option<T>,
-    ) -> Vec<T> {
-        let Some(values) = selector_values(name) else {
-            return allowed.to_vec();
-        };
-        let selected = values
-            .iter()
-            .map(|value| {
-                parse(value).unwrap_or_else(|| {
-                    panic!(
-                        "unsupported {name} value; expected one of {}",
-                        allowed
-                            .iter()
-                            .copied()
-                            .map(&label)
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        assert_unique(name, &selected, |value| label(value).to_owned());
-        selected
-    }
-
-    fn parse_numeric_selector(name: &str, allowed: &[usize]) -> Vec<usize> {
-        let Some(values) = selector_values(name) else {
-            return allowed.to_vec();
-        };
-        let selected = values
-            .iter()
-            .map(|value| {
-                let parsed = value
-                    .parse::<usize>()
-                    .unwrap_or_else(|_| panic!("{name} value is not an integer"));
-                assert_eq!(parsed.to_string(), *value, "{name} value is not canonical");
-                assert!(
-                    allowed.contains(&parsed),
-                    "unsupported {name} value; expected one of {}",
-                    allowed
-                        .iter()
-                        .map(usize::to_string)
-                        .collect::<Vec<_>>()
-                        .join(",")
-                );
-                parsed
-            })
-            .collect::<Vec<_>>();
-        assert_unique(name, &selected, |value| value.to_string());
-        selected
-    }
-
-    fn assert_unique<T: Copy + Eq>(name: &str, values: &[T], label: impl Fn(T) -> String) {
-        for (ordinal, value) in values.iter().copied().enumerate() {
-            assert!(
-                !values[..ordinal].contains(&value),
-                "{name} repeats '{}'",
-                label(value)
-            );
-        }
     }
 
     fn reset_counters() {
